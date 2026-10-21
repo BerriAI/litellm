@@ -430,3 +430,47 @@ def test_bounded_tool_call_id_round_trips_to_gemini(client_keeps_provider_fields
     assert len(replayed_signatures) == 1
     assert (replayed_signatures[0] == LONG_SIGNATURE) is client_keeps_provider_fields
     assert replayed_signatures[0]
+
+
+def test_tool_result_with_bare_id_matches_call_whose_id_the_client_re_signed():
+    bare_id: Final = "call_601401"
+    with respx.mock:
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "candidates": [
+                        {"content": {"role": "model", "parts": [{"text": "Sunny"}]}, "finishReason": "STOP", "index": 0}
+                    ],
+                    "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 1, "totalTokenCount": 10},
+                },
+            )
+        )
+        litellm.completion(
+            model="gemini/gemini-3.5-flash",
+            messages=[
+                USER_TURN,
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": encode_tool_call_id_with_signature(bare_id, LONG_SIGNATURE),
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": bare_id, "content": '{"temp_c": 21}'},
+            ],
+            tools=[WEATHER_TOOL],
+            api_key="test-gemini-key",
+            thought_signature_in_tool_call_id=False,
+        )
+        sent_body: Final = json.loads(route.calls.last.request.content)
+
+    parts: Final = list(chain.from_iterable(turn["parts"] for turn in sent_body["contents"]))
+    function_calls: Final = [part for part in parts if "function_call" in part]
+    function_responses: Final = [part["function_response"] for part in parts if "function_response" in part]
+    assert [part["thoughtSignature"] for part in function_calls] == [LONG_SIGNATURE]
+    assert [response["name"] for response in function_responses] == ["get_weather"]
