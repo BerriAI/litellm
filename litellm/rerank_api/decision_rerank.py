@@ -177,14 +177,14 @@ def _score(outcome: _Outcome, refusal_policy: Literal["error", "zero"]) -> float
     return answer.probability
 
 
-def _result(outcome: _Outcome, score: float, return_documents: bool) -> RerankResponseResult:
+def _result(index: int, text: str, score: float, return_documents: bool) -> RerankResponseResult:
     if return_documents:
         return RerankResponseResult(
-            index=outcome.document.index,
+            index=index,
             relevance_score=score,
-            document={"text": outcome.document.text},
+            document={"text": text},
         )
-    return RerankResponseResult(index=outcome.document.index, relevance_score=score)
+    return RerankResponseResult(index=index, relevance_score=score)
 
 
 def _is_refusal(response: OpenAIDecisionResponse) -> bool:
@@ -226,47 +226,34 @@ def _choice_scores(outcome: _Outcome, request: _Request) -> tuple[float, ...] | 
     return scores
 
 
-def _ranked_results(outcomes: Sequence[_Outcome], request: _Request) -> tuple[RerankResponseResult, ...]:
-    if request.decision_rerank.strategy == "multiple_choice":
-        if not outcomes:
-            return ()
-        scores: Final = _choice_scores(outcomes[0], request)
-        if isinstance(scores, Exception):
-            return ()
-        return tuple(
-            _result(
-                _Outcome(replace(outcomes[0].document, index=index, text=_text(document))),
-                score,
-                bool(request.return_documents),
-            )
-            for index, (document, score) in enumerate(zip(request.documents, scores, strict=True))
-        )
-    scored: Final = tuple((outcome, _score(outcome, request.decision_rerank.refusal_policy)) for outcome in outcomes)
-    return tuple(
-        _result(outcome, score, bool(request.return_documents)) for outcome, score in scored if isinstance(score, float)
-    )
-
-
-def _failure(outcomes: Sequence[_Outcome], request: _Request) -> Exception | None:
+def _scores(outcomes: Sequence[_Outcome], request: _Request) -> tuple[float | Exception, ...]:
     if request.decision_rerank.strategy == "multiple_choice":
         scores: Final = _choice_scores(outcomes[0], request) if outcomes else ()
-        return scores if isinstance(scores, Exception) else None
-    return next(
-        (
-            score
-            for outcome in outcomes
-            if isinstance(
-                score := _score(outcome, request.decision_rerank.refusal_policy),
-                Exception,
-            )
-        ),
-        None,
+        return (scores,) if isinstance(scores, Exception) else scores
+    return tuple(_score(outcome, request.decision_rerank.refusal_policy) for outcome in outcomes)
+
+
+def _ranked_results(
+    outcomes: Sequence[_Outcome], request: _Request, scores: Sequence[float | Exception]
+) -> tuple[RerankResponseResult, ...]:
+    if request.decision_rerank.strategy == "multiple_choice":
+        return tuple(
+            _result(index, _text(request.documents[index]), score, bool(request.return_documents))
+            for index, score in enumerate(scores)
+            if isinstance(score, float)
+        )
+    return tuple(
+        _result(outcome.document.index, outcome.document.text, score, bool(request.return_documents))
+        for outcome, score in zip(outcomes, scores, strict=True)
+        if isinstance(score, float)
     )
 
 
-def _response(outcomes: Sequence[_Outcome], request: _Request) -> DecisionRerankResponse:
+def _response(
+    outcomes: Sequence[_Outcome], request: _Request, scores: Sequence[float | Exception]
+) -> DecisionRerankResponse:
     responses: Final = tuple(outcome.response for outcome in outcomes if outcome.response is not None)
-    results: Final = _ranked_results(outcomes, request)
+    results: Final = _ranked_results(outcomes, request, scores)
     ordered: Final = sorted(results, key=lambda result: (-result["relevance_score"], result["index"]))
     return DecisionRerankResponse(
         results=ordered[: request.top_n],
@@ -306,8 +293,11 @@ def _finish(
     model: str,
     provider: str,
 ) -> DecisionRerankResponse:
-    response: Final = _response(outcomes, request)
-    failure: Final = _failure(outcomes, request) or (_timeout(model, provider) if timed_out else None)
+    scores: Final = _scores(outcomes, request)
+    response: Final = _response(outcomes, request, scores)
+    failure: Final = next((score for score in scores if isinstance(score, Exception)), None) or (
+        _timeout(model, provider) if timed_out else None
+    )
     if failure is not None:
         _record_partial(response, logging_obj)
         raise failure
@@ -348,11 +338,24 @@ async def _arerank(
     tasks: Final = tuple(asyncio.create_task(_asend(document, deadline, semaphore)) for document in documents)
     try:
         _, pending = await asyncio.wait(tasks, timeout=max(0.0, deadline - time.monotonic()))
-        outcomes: Final = tuple(task.result() for task in tasks if task.done() and not task.cancelled())
+        outcomes: Final = tuple(
+            _Outcome(
+                document,
+                error=litellm.APIConnectionError(
+                    message="Decision rerank provider request was cancelled",
+                    model=model,
+                    llm_provider=provider,
+                ),
+            )
+            if task.cancelled()
+            else task.result()
+            for document, task in zip(documents, tasks, strict=True)
+            if task.done()
+        )
         return _finish(outcomes, request, logging_obj, bool(pending), model, provider)
     except asyncio.CancelledError:
         outcomes_on_cancel: Final = tuple(task.result() for task in tasks if task.done() and not task.cancelled())
-        _record_partial(_response(outcomes_on_cancel, request), logging_obj)
+        _record_partial(_response(outcomes_on_cancel, request, _scores(outcomes_on_cancel, request)), logging_obj)
         raise
     finally:
         for task in tasks:
@@ -381,7 +384,9 @@ def _prepare_document(
         text=text,
         call=prepare_call(
             model=model,
-            fields=OpenAIDecisionRequestFields(
+            fields=_choice_fields(request)
+            if request.decision_rerank.strategy == "multiple_choice"
+            else OpenAIDecisionRequestFields(
                 input=json.dumps({"query": request.query, "passage": text}, ensure_ascii=False),
                 questions=(
                     {
@@ -402,8 +407,8 @@ def _prepare_document(
     )
 
 
-def _prepare_choice(document: _DocumentCall, request: _Request) -> _DocumentCall:
-    fields: Final = OpenAIDecisionRequestFields(
+def _choice_fields(request: _Request) -> OpenAIDecisionRequestFields:
+    return OpenAIDecisionRequestFields(
         input=json.dumps(
             {
                 "query": request.query,
@@ -418,21 +423,6 @@ def _prepare_choice(document: _DocumentCall, request: _Request) -> _DocumentCall
                 "instructions": "Which passage is the most relevant to the query?",
                 "choices": tuple({"value": f"p{index}"} for index in range(len(request.documents))),
             },
-        ),
-    )
-    call: Final = document.call
-    return replace(
-        document,
-        call=prepare_call(
-            model=call.model,
-            fields=fields,
-            safety_identifier=request.safety_identifier,
-            api_key=call.api_key,
-            api_base=call.api_base,
-            timeout=request.timeout,
-            custom_llm_provider=call.custom_llm_provider,
-            extra_headers=call.headers,
-            kwargs=call.litellm_params,
         ),
     )
 
@@ -483,9 +473,23 @@ def rerank_with_decisions(
         kwargs=kwargs,
     )
     documents: Final = (
-        (_prepare_choice(prepare(0, request.documents[0]), request),)
+        (prepare(0, request.documents[0]),)
         if request.decision_rerank.strategy == "multiple_choice"
         else tuple(prepare(index, document) for index, document in enumerate(request.documents))
+    )
+    logging_obj.pre_call(  # pyright: ignore[reportUnknownMemberType]  # Logging accepts the logical rerank request
+        input=request.query,
+        api_key=documents[0].call.api_key,
+        additional_args={
+            "complete_input_dict": {
+                "model": model,
+                **request.model_dump(
+                    mode="json", exclude={"extra_headers", "safety_identifier", "timeout"}, exclude_none=True
+                ),
+            },
+            "api_base": documents[0].call.api_base,
+            "headers": dict(documents[0].call.headers),
+        },
     )
     if is_async:
         return _arerank(documents, request, logging_obj, model, provider)

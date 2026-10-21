@@ -1613,7 +1613,7 @@ def completion_cost(
                 custom_cost_per_token=custom_cost_per_token,
             ),
             litellm_logging_obj,
-            custom_llm_provider,
+            pricing_provider or custom_llm_provider,
             bool(custom_pricing or custom_cost_per_token is not None),
         )
     try:
