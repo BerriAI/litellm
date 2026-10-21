@@ -1502,6 +1502,7 @@ class _RoundRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.logged: tuple[StandardLoggingPayload, ...] = ()
+        self.results: tuple[object, ...] = ()
         self.failed: tuple[StandardLoggingPayload, ...] = ()
         self.hooked: tuple[object, ...] = ()
 
@@ -1509,6 +1510,7 @@ class _RoundRecorder(CustomLogger):
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
         self.logged = (*self.logged, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+        self.results = (*self.results, response_obj)
 
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
@@ -2919,13 +2921,22 @@ async def _open_bridged_stream_auto_execute(logging_obj: Logging) -> object:
     )
 
 
-def _assert_one_bridged_row_bills_both_rounds_once(
-    logged: tuple[StandardLoggingPayload, ...], client: ResponsesAPIResponse
-) -> None:
+def _assert_logged_as_the_final_chat_answer_with_both_rounds_usage(recorder: _RoundRecorder, answer: str) -> None:
+    assert len(recorder.results) == 1
+    logged: Final = recorder.results[0]
+    assert isinstance(logged, ModelResponse)
+    assert logged.choices[0].message.content == answer
+    usage: Final[object] = getattr(logged, "usage", None)
+    assert isinstance(usage, Usage)
+    assert (usage.prompt_tokens, usage.completion_tokens) == (533 + 470, 40 + 4)
+
+
+def _assert_one_bridged_row_bills_both_rounds_once(recorder: _RoundRecorder, client: ResponsesAPIResponse) -> None:
     charged_once: Final = _bridged_round_cost(533, 40) + _bridged_round_cost(470, 4) - _FIXED_MARGIN
-    assert len(logged) == 1
-    row: Final = logged[0]
-    assert _output_types(row["response"]["output"]) == _output_types(client.output)
+    assert len(recorder.logged) == 1
+    row: Final = recorder.logged[0]
+    _assert_logged_as_the_final_chat_answer_with_both_rounds_usage(recorder, "PING")
+    assert row["id"] == client.id
     assert "message" in _output_types(client.output)
     assert (row["prompt_tokens"], row["completion_tokens"]) == (533 + 470, 40 + 4)
     assert row["cache_hit"] is False
@@ -2953,7 +2964,7 @@ async def test_bridged_stream_auto_execute_logs_the_final_response_billed_for_bo
     await _settle(lambda: len(recorder.logged) > 0)
 
     assert _output_types(_final_response(events).output) == ("mcp_call", "message")
-    _assert_one_bridged_row_bills_both_rounds_once(recorder.logged, _final_response(events))
+    _assert_one_bridged_row_bills_both_rounds_once(recorder, _final_response(events))
 
 
 @pytest.mark.asyncio
@@ -2981,7 +2992,7 @@ async def test_bridged_stream_auto_execute_logs_the_provider_usage_of_both_round
     assert len(recorder.logged) == 1
     row: Final = recorder.logged[0]
     usage: Final = row["metadata"]["usage_object"]
-    assert "output" in row["response"]
+    assert "choices" in row["response"]
     assert (row["prompt_tokens"], row["completion_tokens"]) == (533 + 10 + 5 + 470 + 3 + 7, 40 + 4)
     assert (usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"]) == (10 + 3, 5 + 7)
     assert usage["prompt_tokens_details"]["cache_creation_token_details"]["ephemeral_5m_input_tokens"] == 10 + 3
@@ -3008,7 +3019,7 @@ async def test_bridged_stream_auto_execute_bills_both_rounds_with_one_fixed_marg
         )
     await _settle(lambda: len(recorder.logged) > 0)
 
-    _assert_one_bridged_row_bills_both_rounds_once(recorder.logged, _final_response(events, "response.incomplete"))
+    _assert_one_bridged_row_bills_both_rounds_once(recorder, _final_response(events, "response.incomplete"))
 
 
 @pytest.mark.asyncio
@@ -3037,7 +3048,7 @@ async def test_bridged_stream_auto_execute_deferred_for_a_post_call_guardrail_lo
     await _settle(lambda: len(recorder.logged) > 0)
 
     assert logged_before_release == ()
-    _assert_one_bridged_row_bills_both_rounds_once(recorder.logged, _final_response(events))
+    _assert_one_bridged_row_bills_both_rounds_once(recorder, _final_response(events))
 
 
 @pytest.mark.asyncio
@@ -3075,13 +3086,9 @@ async def test_bridged_stream_auto_execute_blocked_by_a_post_call_guardrail_bill
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("stop", "client_output"),
-    (("end_turn", ("mcp_call", "message")), ("max_tokens", ("message",))),
-    ids=("completed", "incomplete"),
-)
+@pytest.mark.parametrize("stop", ("end_turn", "max_tokens"), ids=("completed", "incomplete"))
 async def test_bridged_stream_auto_execute_bills_both_rounds_when_the_caller_stops_reading_after_the_answer_text(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stop: str, client_output: tuple[str, ...]
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stop: str
 ):
     _serve_responses(
         respx_mock, monkeypatch, (_bridged_echo_call_round(), _bridged_echo_answer_round(stop)), _ANTHROPIC_MESSAGES_URL
@@ -3101,7 +3108,7 @@ async def test_bridged_stream_auto_execute_bills_both_rounds_when_the_caller_sto
     await _settle(lambda: len(recorder.logged) > 0)
 
     assert len(recorder.logged) == 1
-    assert _output_types(recorder.logged[0]["response"]["output"]) == client_output
+    _assert_logged_as_the_final_chat_answer_with_both_rounds_usage(recorder, "PING")
     assert (recorder.logged[0]["prompt_tokens"], recorder.logged[0]["completion_tokens"]) == (533 + 470, 40 + 4)
     assert recorder.logged[0]["response_cost"] == pytest.approx(
         _bridged_round_cost(533, 40) + _bridged_round_cost(470, 4)
