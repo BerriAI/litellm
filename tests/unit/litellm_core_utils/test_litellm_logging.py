@@ -407,14 +407,16 @@ class _InputEventRecorder(CustomLogger):
         self._label = label
         self.events = events
 
-    def log_pre_api_call(self, model, messages, kwargs) -> None:
+    def log_pre_api_call(self, model: object, messages: object, kwargs: object) -> None:
         self.events.append(f"{self._label} pre")
 
-    def log_post_api_call(self, kwargs, response_obj, start_time, end_time) -> None:
+    def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
         self.events.append(f"{self._label} post")
 
 
-def test_input_events_reach_the_replacement_and_not_the_global_callback_it_replaced(logging_obj, monkeypatch):
+def test_input_events_reach_the_replacement_and_not_the_global_callback_it_replaced(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
     events: Final[list[str]] = []
     monkeypatch.setattr(litellm, "input_callback", [_InputEventRecorder("global", events)])
     logging_obj.replace_global_callback(_InputEventRecorder("replacement", events))
