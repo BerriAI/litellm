@@ -48,6 +48,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     with_litellm_call_id,
 )
+from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
 from litellm.router import Router
 
@@ -420,7 +421,7 @@ async def count_tokens(
         log_llm_api_exception(e, litellm_call_id)
         return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
     else:
-        return {"input_tokens": token_response.total_tokens}
+        return {"input_tokens": token_response.total_tokens, **count_source_fields(token_response)}
 
 
 @router.post(

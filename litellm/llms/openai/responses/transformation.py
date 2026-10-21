@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
@@ -23,9 +23,12 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.llms.openai.chat.gpt_5_transformation import (
+    is_gpt_reasoning_series_name,
+    unsupported_reasoning_effort_message,
+)
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
 from litellm.responses.litellm_completion_transformation.tool_search import (
@@ -279,6 +282,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return supports_none_reasoning_effort(model=model, custom_llm_provider=None)
 
     @staticmethod
+    def _effort_level_is_disabled(model: str, level: str) -> bool:
+        """Whether the model's cost-map row turns this effort level off.
+
+        The same row the chat gate reads, so a level the row refuses is refused on both wires
+        and a new model needs its row, not code. This surface stays opt-out for every level,
+        xhigh included, since it never refused a level the row omits; max is the exception, a
+        level the row cannot gate because the same model takes it here and refuses it on chat.
+        Azure overrides this so a bare deployment name reads the azure/ entry.
+        """
+        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+        return OpenAIGPT5Config.row_disables_reasoning_effort_level(model, level)
+
+    @staticmethod
     def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
         """Whether this request's reasoning effort ends up as "none", the one condition
         under which a non-default temperature is accepted.
@@ -352,6 +369,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        return dict(
+            self.map_openai_params_for_deployment(
+                response_api_optional_params, model, drop_params, declared_reasoning_efforts=()
+            )
+        )
+
+    def map_openai_params_for_deployment(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str],
+    ) -> Mapping[str, object]:
         """No mapping applied since inputs are in OpenAI spec already.
 
         GPT-5 models have restrictions on temperature and top_p (only temperature=1
@@ -384,7 +415,26 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         lookup_name: Final = self._model_map_lookup_name(model)
         if self._is_gpt_5_model(model=lookup_name):
             reasoning: Final = params.get("reasoning") or {}
-            effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+            requested_effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+            if (
+                isinstance(reasoning, dict)
+                and isinstance(requested_effort, str)
+                and requested_effort not in declared_reasoning_efforts
+                and self._effort_level_is_disabled(lookup_name, requested_effort)
+            ):
+                if not (drop_params or litellm.drop_params):
+                    raise litellm.UnsupportedParamsError(
+                        message=unsupported_reasoning_effort_message("reasoning.effort", requested_effort, model),
+                        status_code=400,
+                    )
+                remaining: Final = reasoning.copy()
+                remaining.pop("effort", None)
+                if remaining:
+                    params["reasoning"] = remaining
+                else:
+                    params.pop("reasoning", None)
+            forwarded_reasoning: Final = params.get("reasoning")
+            effort: Final = forwarded_reasoning.get("effort") if isinstance(forwarded_reasoning, dict) else None
             supports_none: Final = self._supports_reasoning_effort_none(model=lookup_name)
             effort_is_none: Final = supports_none and self._effort_resolves_to_none(lookup_name, effort)
 
@@ -831,10 +881,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             or "https://api.openai.com/v1"
         )
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
-        return f"{api_base}/responses"
+        return join_api_base(api_base, "responses")
 
     def transform_streaming_response(
         self,
@@ -1061,7 +1108,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         order: Literal["asc", "desc"] = "desc",
     ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
-        url: Final = f"{api_base}/{encoded_response_id}/input_items"
+        url: Final = join_api_base(api_base, f"{encoded_response_id}/input_items")
         params: Final[dict[str, object]] = {}
         if after is not None:
             params["after"] = after
@@ -1102,7 +1149,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         - POST /v1/responses/{response_id}/cancel
         """
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
-        url: Final = f"{api_base}/{encoded_response_id}/cancel"
+        url: Final = join_api_base(api_base, f"{encoded_response_id}/cancel")
         data: Final[dict] = {}
         return url, data
 

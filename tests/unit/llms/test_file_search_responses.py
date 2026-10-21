@@ -573,11 +573,11 @@ class TestEmulatedFileSearchHandler:
 
     def test_H1_file_search_replaced_with_function_tool(self):
         from litellm.responses.file_search.emulated_handler import (
-            _replace_file_search_tools,
+            replace_file_search_tools,
         )
 
         tools = [{"type": "file_search", "vector_store_ids": ["vs_abc", "vs_def"]}]
-        new_tools, vs_ids = _replace_file_search_tools(tools)
+        new_tools, vs_ids = replace_file_search_tools(tools)
 
         assert vs_ids == ["vs_abc", "vs_def"]
         assert len(new_tools) == 1
@@ -590,14 +590,14 @@ class TestEmulatedFileSearchHandler:
 
     def test_H2_non_file_search_tools_preserved(self):
         from litellm.responses.file_search.emulated_handler import (
-            _replace_file_search_tools,
+            replace_file_search_tools,
         )
 
         tools = [
             {"type": "web_search"},
             {"type": "file_search", "vector_store_ids": ["vs_abc"]},
         ]
-        new_tools, vs_ids = _replace_file_search_tools(tools)
+        new_tools, vs_ids = replace_file_search_tools(tools)
 
         assert len(new_tools) == 2  # web_search + generated function tool
         assert new_tools[0]["type"] == "web_search"
@@ -605,22 +605,22 @@ class TestEmulatedFileSearchHandler:
 
     def test_H3_no_file_search_tools_returns_unchanged(self):
         from litellm.responses.file_search.emulated_handler import (
-            _replace_file_search_tools,
+            replace_file_search_tools,
         )
 
         tools = [{"type": "web_search"}]
-        new_tools, vs_ids = _replace_file_search_tools(tools)
+        new_tools, vs_ids = replace_file_search_tools(tools)
 
         assert vs_ids == []
         assert new_tools == [{"type": "web_search"}]
 
     def test_H4_empty_vector_store_ids_no_function_tool(self):
         from litellm.responses.file_search.emulated_handler import (
-            _replace_file_search_tools,
+            replace_file_search_tools,
         )
 
         tools = [{"type": "file_search", "vector_store_ids": []}]
-        new_tools, vs_ids = _replace_file_search_tools(tools)
+        new_tools, vs_ids = replace_file_search_tools(tools)
 
         assert vs_ids == []
         assert new_tools == []  # no function tool added without store IDs

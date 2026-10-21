@@ -35,6 +35,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.passthrough.main import raise_for_provider_status
 from litellm.llms.bedrock.common_utils import BedrockError
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
@@ -370,6 +371,7 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
+                upstream_headers_filter=mock.ANY,
             )
 
     @pytest.mark.asyncio
@@ -469,6 +471,7 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
+                upstream_headers_filter=mock.ANY,
             )
 
     @pytest.mark.parametrize(
@@ -564,6 +567,7 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://{default_location}-aiplatform.googleapis.com/v1/projects/{default_project}/locations/{default_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {default_credentials}"},
                 is_streaming_request=False,
+                upstream_headers_filter=mock.ANY,
             )
 
     @pytest.mark.asyncio
@@ -2514,6 +2518,48 @@ class TestBedrockAgentRuntimePassthroughVirtualKeyLeak:
         assert self._names_matching(upstream, "x-forwarded-key") == []
         assert self._names_matching(upstream, "x-operator-token") == []
         assert upstream["x-request-id"] == "trace-2"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_agent_runtime_region_lookup_leaves_the_event_loop_free(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    for ambient in TestBedrockAgentRuntimePassthroughVirtualKeyLeak.AMBIENT_AWS_ENV:
+        monkeypatch.delenv(ambient, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ak")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "sk")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    vault: Final = host_in_loop_probing_vault(monkeypatch, "AWS_REGION_NAME")
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": b'{"retrievalQuery": {"text": "hi"}}', "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/bedrock/knowledgebases/KB1234567/retrieve",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+        },
+        receive=receive,
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        retrieve: Final = upstream.post(
+            "https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases/KB1234567/retrieve"
+        ).mock(return_value=httpx.Response(200, json={"retrievalResults": []}))
+        _ = await bedrock_proxy_route(
+            endpoint="knowledgebases/KB1234567/retrieve",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-caller"),
+        )
+
+    assert vault.read.is_set()
+    assert not vault.read_on_loop.is_set()
+    assert retrieve.calls.last.request.headers["authorization"].startswith("AWS4-HMAC-SHA256")
 
 
 class TestLLMPassthroughFactoryProxyRoute:
