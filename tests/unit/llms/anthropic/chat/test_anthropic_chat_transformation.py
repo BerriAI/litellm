@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 import respx
+from httpx import Headers
 
 import litellm
 from litellm.constants import (
@@ -1331,7 +1332,6 @@ def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(fiel
     assert ([tool["name"] for tool in optional_params.get("tools", [])] == ["json_tool_call"]) is not native
 
 
-
 @pytest.mark.parametrize(
     ("model", "thinking_params"),
     [
@@ -1344,7 +1344,13 @@ def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(fiel
             {"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]},
         ),
     ],
-    ids=["adaptive-thinking", "reasoning-effort", "reasoning-effort-none", "model-without-forced-tools", "caller-tools"],
+    ids=[
+        "adaptive-thinking",
+        "reasoning-effort",
+        "reasoning-effort-none",
+        "model-without-forced-tools",
+        "caller-tools",
+    ],
 )
 def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(model, thinking_params):
     optional_params: Final = AnthropicConfig().map_openai_params(
@@ -1369,6 +1375,7 @@ def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(m
 
     assert "output_format" in optional_params
     assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
+
 
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
     monkeypatch: pytest.MonkeyPatch,
@@ -6868,6 +6875,9 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
 
 
+
+
+
 def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call():
     thinking_block: Final = {"type": "thinking", "thinking": "The user wants a greeting.", "signature": "sig-1"}
     body: Final = _json_mode_message_body("tool_use", None)
@@ -6878,3 +6888,27 @@ def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call():
     assert message.reasoning_content == thinking_block["thinking"]
     assert [block["signature"] for block in message.thinking_blocks] == [thinking_block["signature"]]
 
+
+def _json_mode_message_body(stop_reason: str, stop_details: dict | None) -> dict:
+    return {
+        "id": "msg_json_mode",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-fable-5",
+        "stop_reason": stop_reason,
+        "stop_details": stop_details,
+        "usage": {"input_tokens": 12, "output_tokens": 8},
+        "content": [
+            {"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": "Hello"}}
+        ],
+    }
+
+
+def _transform_json_mode_body(body: dict) -> litellm.ModelResponse:
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=body,
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=True,
+        prefix_prompt=None,
+    )

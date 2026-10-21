@@ -34,9 +34,7 @@ class TestBedrockFilesTransformation:
         transformation = BedrockJsonlFilesTransformation()
 
         # Load input JSONL file
-        input_file_path = os.path.join(
-            os.path.dirname(__file__), "input_batch_completions.jsonl"
-        )
+        input_file_path = os.path.join(os.path.dirname(__file__), "input_batch_completions.jsonl")
 
         # Read and parse the JSONL content
         openai_jsonl_content = []
@@ -124,28 +122,20 @@ class TestBedrockFilesTransformation:
         model_input = record["modelInput"]
 
         # Must have inferenceConfig with maxTokens, NOT top-level max_tokens
-        assert (
-            "inferenceConfig" in model_input
-        ), "Nova modelInput must contain inferenceConfig"
+        assert "inferenceConfig" in model_input, "Nova modelInput must contain inferenceConfig"
         assert model_input["inferenceConfig"]["maxTokens"] == 50
         assert model_input["inferenceConfig"]["temperature"] == 0.7
-        assert (
-            "max_tokens" not in model_input
-        ), "max_tokens must NOT be at the top level for Nova"
-        assert (
-            "temperature" not in model_input
-        ), "temperature must NOT be at the top level for Nova"
+        assert "max_tokens" not in model_input, "max_tokens must NOT be at the top level for Nova"
+        assert "temperature" not in model_input, "temperature must NOT be at the top level for Nova"
 
         # Must have messages
         assert "messages" in model_input
 
         # Nova Pro rejects empty additionalModelRequestFields / system — they must be absent
-        assert (
-            "additionalModelRequestFields" not in model_input
-        ), "Nova: empty additionalModelRequestFields must be omitted, not serialized as {}"
-        assert (
-            "system" not in model_input
-        ), "Nova: empty system must be omitted, not serialized as []"
+        assert "additionalModelRequestFields" not in model_input, (
+            "Nova: empty additionalModelRequestFields must be omitted, not serialized as {}"
+        )
+        assert "system" not in model_input, "Nova: empty system must be omitted, not serialized as []"
 
     def test_nova_batch_jsonl_omits_empty_converse_fields(self):
         """
@@ -218,10 +208,7 @@ class TestBedrockFilesTransformation:
         config = BedrockFilesConfig()
 
         # 1x1 transparent PNG
-        img_b64 = (
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4"
-            "2mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
-        )
+        img_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
 
         openai_jsonl_content = [
             {
@@ -237,9 +224,7 @@ class TestBedrockFilesTransformation:
                                 {"type": "text", "text": "Describe this image."},
                                 {
                                     "type": "image_url",
-                                    "image_url": {
-                                        "url": "data:image/png;base64," + img_b64
-                                    },
+                                    "image_url": {"url": "data:image/png;base64," + img_b64},
                                 },
                             ],
                         }
@@ -277,16 +262,10 @@ class TestBedrockFilesTransformation:
                 # Verify Converse image format
                 assert "format" in block["image"], "Image block must have format field"
                 assert "source" in block["image"], "Image block must have source field"
-                assert (
-                    "bytes" in block["image"]["source"]
-                ), "Image source must have bytes field"
+                assert "bytes" in block["image"]["source"], "Image source must have bytes field"
             # Must NOT have OpenAI-style image_url
-            assert (
-                "image_url" not in block
-            ), "image_url must not appear in Converse format"
-            assert (
-                block.get("type") != "image_url"
-            ), "type=image_url must not appear in Converse format"
+            assert "image_url" not in block, "image_url must not appear in Converse format"
+            assert block.get("type") != "image_url", "type=image_url must not appear in Converse format"
 
         assert has_text, "Should have a text content block"
         assert has_image, "Should have an image content block"
@@ -371,9 +350,7 @@ class TestBedrockFilesTransformation:
         )
 
         assert "us-gov-west-1" in url, f"Expected us-gov-west-1 in URL but got: {url}"
-        assert (
-            "us-west-2" not in url
-        ), f"us-west-2 must not appear when s3_region_name is set, got: {url}"
+        assert "us-west-2" not in url, f"us-west-2 must not appear when s3_region_name is set, got: {url}"
         assert "litellm-batch-352026" in url
 
     def test_get_complete_file_url_sanitizes_untrusted_filename(self):
@@ -405,9 +382,7 @@ class TestBedrockFilesTransformation:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         config = BedrockFilesConfig()
-        object_name = config._get_s3_object_name_from_batch_jsonl(
-            [{"body": {"model": "bedrock/../../secret:model"}}]
-        )
+        object_name = config._get_s3_object_name_from_batch_jsonl([{"body": {"model": "bedrock/../../secret:model"}}])
 
         assert object_name.startswith("litellm-bedrock-files-")
         assert object_name.endswith(".jsonl")
@@ -462,9 +437,9 @@ class TestBedrockFilesTransformation:
                 litellm_params=litellm_params,
             )
 
-        assert (
-            captured_optional_params.get("aws_region_name") == "us-gov-west-1"
-        ), "s3_region_name must be forwarded as aws_region_name for SigV4 signing"
+        assert captured_optional_params.get("aws_region_name") == "us-gov-west-1", (
+            "s3_region_name must be forwarded as aws_region_name for SigV4 signing"
+        )
 
     def test_s3_region_name_wins_over_aws_region_name_for_signing(self):
         """
@@ -518,9 +493,9 @@ class TestBedrockFilesTransformation:
                 litellm_params=litellm_params,
             )
 
-        assert (
-            captured_optional_params.get("aws_region_name") == "us-gov-west-1"
-        ), "s3_region_name must override aws_region_name for SigV4 signing"
+        assert captured_optional_params.get("aws_region_name") == "us-gov-west-1", (
+            "s3_region_name must override aws_region_name for SigV4 signing"
+        )
 
     def _signed_upload_request(self, litellm_params: dict) -> dict:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -1115,9 +1090,9 @@ class TestBedrockFilesEmbeddingTransformation:
                     }
                 ]
             )
-            assert result[0]["modelInput"] == {
-                "inputText": "Hi"
-            }, f"model id {model_id} did not route to Titan v2 embedding path"
+            assert result[0]["modelInput"] == {"inputText": "Hi"}, (
+                f"model id {model_id} did not route to Titan v2 embedding path"
+            )
 
     def test_pretokenized_input_list_of_ints_raises(self):
         """`input: List[int]` (pre-tokenized) is rejected, not silently mis-shaped."""
@@ -1187,7 +1162,6 @@ class TestBedrockFilesEmbeddingTransformation:
         assert "messages" in result[0]["modelInput"]
         assert "inputText" not in result[0]["modelInput"]
 
-
     def test_titan_v2_marker_boundary_rejects_lookalikes(self):
         """The marker must end at `:`, `/`, or end-of-string to avoid false positives."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -1198,9 +1172,9 @@ class TestBedrockFilesEmbeddingTransformation:
             "bedrock/amazon.titan-embed-text-v2-experimental:0",
             "bedrock/amazon.titan-embed-text-v2foo",
         ):
-            assert not BedrockFilesConfig._is_titan_v2_embed_model(
-                model
-            ), f"{model} unexpectedly matched the Titan v2 marker"
+            assert not BedrockFilesConfig._is_titan_v2_embed_model(model), (
+                f"{model} unexpectedly matched the Titan v2 marker"
+            )
 
         # Real Titan v2 ids that MUST match
         for model in (
@@ -1209,9 +1183,9 @@ class TestBedrockFilesEmbeddingTransformation:
             "us.amazon.titan-embed-text-v2:0",
             "arn:aws:bedrock:us-east-1:123:foundation-model/amazon.titan-embed-text-v2:0",
         ):
-            assert BedrockFilesConfig._is_titan_v2_embed_model(
-                model
-            ), f"{model} unexpectedly missed the Titan v2 marker"
+            assert BedrockFilesConfig._is_titan_v2_embed_model(model), (
+                f"{model} unexpectedly missed the Titan v2 marker"
+            )
 
     def test_titan_v2_accepted_when_registry_schema_field_matches(self, mocker):
         """Registry-driven happy path: nested
@@ -1221,13 +1195,9 @@ class TestBedrockFilesEmbeddingTransformation:
 
         mocker.patch(
             "litellm.get_model_info",
-            return_value={
-                "provider_specific_entry": {"bedrock_invocation_schema": "titan_v2"}
-            },
+            return_value={"provider_specific_entry": {"bedrock_invocation_schema": "titan_v2"}},
         )
-        assert BedrockFilesConfig._is_titan_v2_embed_model(
-            "amazon.titan-embed-text-v2:0"
-        )
+        assert BedrockFilesConfig._is_titan_v2_embed_model("amazon.titan-embed-text-v2:0")
 
     def test_titan_v2_rejected_when_registry_schema_field_differs(self, mocker):
         """Registry resolves with a different schema value (e.g. a hypothetical
@@ -1237,19 +1207,13 @@ class TestBedrockFilesEmbeddingTransformation:
 
         mocker.patch(
             "litellm.get_model_info",
-            return_value={
-                "provider_specific_entry": {"bedrock_invocation_schema": "cohere_v3"}
-            },
+            return_value={"provider_specific_entry": {"bedrock_invocation_schema": "cohere_v3"}},
         )
         # Even though the model id looks like Titan v2, the registry says
         # otherwise and we trust it.
-        assert not BedrockFilesConfig._is_titan_v2_embed_model(
-            "amazon.titan-embed-text-v2:0"
-        )
+        assert not BedrockFilesConfig._is_titan_v2_embed_model("amazon.titan-embed-text-v2:0")
 
-    def test_titan_v2_falls_back_to_marker_when_registry_lacks_schema_field(
-        self, mocker
-    ):
+    def test_titan_v2_falls_back_to_marker_when_registry_lacks_schema_field(self, mocker):
         """Registry resolves but the entry has no
         `provider_specific_entry.bedrock_invocation_schema` field yet (e.g.
         a stale local registry) -> fall through to substring."""
@@ -1260,9 +1224,7 @@ class TestBedrockFilesEmbeddingTransformation:
             "litellm.get_model_info",
             return_value={"mode": "embedding"},
         )
-        assert BedrockFilesConfig._is_titan_v2_embed_model(
-            "amazon.titan-embed-text-v2:0"
-        )
+        assert BedrockFilesConfig._is_titan_v2_embed_model("amazon.titan-embed-text-v2:0")
 
         # provider_specific_entry present but missing the schema key
         mocker.patch(
@@ -1272,9 +1234,7 @@ class TestBedrockFilesEmbeddingTransformation:
                 "provider_specific_entry": {"unrelated": "value"},
             },
         )
-        assert BedrockFilesConfig._is_titan_v2_embed_model(
-            "amazon.titan-embed-text-v2:0"
-        )
+        assert BedrockFilesConfig._is_titan_v2_embed_model("amazon.titan-embed-text-v2:0")
 
     def test_titan_v2_accepted_when_registry_silent(self, mocker):
         """Marker-only match is fine for ids the registry can't resolve
@@ -1282,9 +1242,7 @@ class TestBedrockFilesEmbeddingTransformation:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         mocker.patch("litellm.get_model_info", side_effect=Exception("not mapped"))
-        assert BedrockFilesConfig._is_titan_v2_embed_model(
-            "us.amazon.titan-embed-text-v2:0"
-        )
+        assert BedrockFilesConfig._is_titan_v2_embed_model("us.amazon.titan-embed-text-v2:0")
         assert BedrockFilesConfig._is_titan_v2_embed_model(
             "arn:aws:bedrock:us-east-1:123:foundation-model/amazon.titan-embed-text-v2:0"
         )
@@ -1296,87 +1254,49 @@ class TestBedrockFilesEmbeddingTransformation:
         # Happy path: returns the nested field's string value
         mocker.patch(
             "litellm.get_model_info",
-            return_value={
-                "provider_specific_entry": {"bedrock_invocation_schema": "titan_v2"}
-            },
+            return_value={"provider_specific_entry": {"bedrock_invocation_schema": "titan_v2"}},
         )
-        assert (
-            BedrockFilesConfig._lookup_provider_specific_field(
-                "anything", "bedrock_invocation_schema"
-            )
-            == "titan_v2"
-        )
+        assert BedrockFilesConfig._lookup_provider_specific_field("anything", "bedrock_invocation_schema") == "titan_v2"
 
         # Registry raises -> None
         mocker.patch("litellm.get_model_info", side_effect=Exception("not mapped"))
-        assert (
-            BedrockFilesConfig._lookup_provider_specific_field("anything", "any")
-            is None
-        )
+        assert BedrockFilesConfig._lookup_provider_specific_field("anything", "any") is None
 
         # Registry returns non-dict -> None
         mocker.patch("litellm.get_model_info", return_value="not a dict")
-        assert (
-            BedrockFilesConfig._lookup_provider_specific_field("anything", "any")
-            is None
-        )
+        assert BedrockFilesConfig._lookup_provider_specific_field("anything", "any") is None
 
         # Registry returns dict without provider_specific_entry -> None
         mocker.patch("litellm.get_model_info", return_value={"mode": "embedding"})
-        assert (
-            BedrockFilesConfig._lookup_provider_specific_field(
-                "anything", "bedrock_invocation_schema"
-            )
-            is None
-        )
+        assert BedrockFilesConfig._lookup_provider_specific_field("anything", "bedrock_invocation_schema") is None
 
         # provider_specific_entry exists but isn't a dict -> None
         mocker.patch(
             "litellm.get_model_info",
             return_value={"provider_specific_entry": "not a dict"},
         )
-        assert (
-            BedrockFilesConfig._lookup_provider_specific_field(
-                "anything", "bedrock_invocation_schema"
-            )
-            is None
-        )
+        assert BedrockFilesConfig._lookup_provider_specific_field("anything", "bedrock_invocation_schema") is None
 
         # provider_specific_entry dict missing the requested field -> None
         mocker.patch(
             "litellm.get_model_info",
             return_value={"provider_specific_entry": {"unrelated": "x"}},
         )
-        assert (
-            BedrockFilesConfig._lookup_provider_specific_field(
-                "anything", "bedrock_invocation_schema"
-            )
-            is None
-        )
+        assert BedrockFilesConfig._lookup_provider_specific_field("anything", "bedrock_invocation_schema") is None
 
         # Non-string nested value -> None
         mocker.patch(
             "litellm.get_model_info",
             return_value={"provider_specific_entry": {"bedrock_invocation_schema": 42}},
         )
-        assert (
-            BedrockFilesConfig._lookup_provider_specific_field(
-                "anything", "bedrock_invocation_schema"
-            )
-            is None
-        )
+        assert BedrockFilesConfig._lookup_provider_specific_field("anything", "bedrock_invocation_schema") is None
 
         # Empty-string nested value -> None
         mocker.patch(
             "litellm.get_model_info",
             return_value={"provider_specific_entry": {"bedrock_invocation_schema": ""}},
         )
-        assert (
-            BedrockFilesConfig._lookup_provider_specific_field(
-                "anything", "bedrock_invocation_schema"
-            )
-            is None
-        )
+        assert BedrockFilesConfig._lookup_provider_specific_field("anything", "bedrock_invocation_schema") is None
 
     def test_classify_batch_record_helper(self):
         """Helper classifies by `url` first, then by body shape."""
@@ -1384,28 +1304,18 @@ class TestBedrockFilesEmbeddingTransformation:
         from litellm.types.llms.bedrock import BedrockBatchRecordKind
 
         assert (
-            BedrockFilesConfig._classify_batch_record(
-                {"url": "/v1/embeddings", "body": {"input": "x"}}
-            )
+            BedrockFilesConfig._classify_batch_record({"url": "/v1/embeddings", "body": {"input": "x"}})
             is BedrockBatchRecordKind.EMBEDDING
         )
         # body-only fallback
-        assert (
-            BedrockFilesConfig._classify_batch_record({"body": {"input": "x"}})
-            is BedrockBatchRecordKind.EMBEDDING
-        )
+        assert BedrockFilesConfig._classify_batch_record({"body": {"input": "x"}}) is BedrockBatchRecordKind.EMBEDDING
         # chat shape
         assert (
-            BedrockFilesConfig._classify_batch_record(
-                {"url": "/v1/chat/completions", "body": {"messages": []}}
-            )
+            BedrockFilesConfig._classify_batch_record({"url": "/v1/chat/completions", "body": {"messages": []}})
             is BedrockBatchRecordKind.CHAT
         )
         # ambiguous body without any recognized key is treated as chat
-        assert (
-            BedrockFilesConfig._classify_batch_record({"body": {}})
-            is BedrockBatchRecordKind.CHAT
-        )
+        assert BedrockFilesConfig._classify_batch_record({"body": {}}) is BedrockBatchRecordKind.CHAT
 
     @pytest.mark.parametrize("body", ["not a mapping", ["messages"], 7, None], ids=["str", "list", "int", "missing"])
     def test_classify_batch_record_falls_back_to_chat_for_non_mapping_body(self, body):
@@ -1445,7 +1355,6 @@ class TestBedrockFilesEmbeddingTransformation:
         transformer, corrupting the modelInput.
         """
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
-
         from litellm.types.llms.bedrock import BedrockBatchRecordKind
 
         # Direct helper assertion
@@ -1483,9 +1392,7 @@ class TestBedrockFilesEmbeddingTransformation:
         )
 
         model_input = result[0]["modelInput"]
-        assert (
-            "inputText" not in model_input
-        ), "explicit chat URL must not produce an embedding-shaped modelInput"
+        assert "inputText" not in model_input, "explicit chat URL must not produce an embedding-shaped modelInput"
 
     def test_coerce_embedding_input_helper_isolated(self):
         """Direct coverage of the extracted input-normalization helper."""
@@ -1495,9 +1402,7 @@ class TestBedrockFilesEmbeddingTransformation:
 
         # Happy paths
         assert BedrockFilesConfig._coerce_embedding_input_to_string("hello") == "hello"
-        assert (
-            BedrockFilesConfig._coerce_embedding_input_to_string(["hello"]) == "hello"
-        )
+        assert BedrockFilesConfig._coerce_embedding_input_to_string(["hello"]) == "hello"
 
         # Error paths
         with pytest.raises(ValueError, match="missing required `input`"):
@@ -1525,22 +1430,16 @@ class TestBedrockFilesEmbeddingTransformation:
 
         # /v1/completions (legacy completions endpoint)
         assert (
-            BedrockFilesConfig._classify_batch_record(
-                {"url": "/v1/completions", "body": {"input": "x"}}
-            )
+            BedrockFilesConfig._classify_batch_record({"url": "/v1/completions", "body": {"input": "x"}})
             is BedrockBatchRecordKind.TEXT_COMPLETION
         )
         assert (
-            BedrockFilesConfig._classify_batch_record(
-                {"url": "/v1/responses", "body": {"input": "x"}}
-            )
+            BedrockFilesConfig._classify_batch_record({"url": "/v1/responses", "body": {"input": "x"}})
             is BedrockBatchRecordKind.RESPONSES
         )
         # Arbitrary unknown url - caller's explicit signal still wins
         assert (
-            BedrockFilesConfig._classify_batch_record(
-                {"url": "/v1/moderations", "body": {"input": "x"}}
-            )
+            BedrockFilesConfig._classify_batch_record({"url": "/v1/moderations", "body": {"input": "x"}})
             is BedrockBatchRecordKind.CHAT
         )
 
@@ -1692,7 +1591,10 @@ class TestBedrockBatchNonChatEndpointRecords:
         assert model_input["messages"][0]["content"] == [{"type": "text", "text": "Weather in Paris?"}]
         tool = model_input["tools"][0]
         function = tool.get("function", tool)
-        assert (function["name"], function.get("parameters", function.get("input_schema"))) == ("get_weather", parameters)
+        assert (function["name"], function.get("parameters", function.get("input_schema"))) == (
+            "get_weather",
+            parameters,
+        )
 
     @pytest.mark.parametrize(
         ("url", "body"),
@@ -1850,9 +1752,7 @@ class TestBedrockBatchNonChatEndpointRecords:
             "embedding",
         ]
         for record in result[:3]:
-            assert record["modelInput"]["messages"] == [
-                {"role": "user", "content": [{"type": "text", "text": "hi"}]}
-            ]
+            assert record["modelInput"]["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
         assert result[3]["modelInput"] == {"inputText": "hi"}
 
     @pytest.mark.parametrize(
@@ -1897,9 +1797,7 @@ class TestBedrockBatchNonChatEndpointRecords:
             }
         )
 
-        assert model_input["messages"] == [
-            {"role": "user", "content": [{"type": "text", "text": "from messages"}]}
-        ]
+        assert model_input["messages"] == [{"role": "user", "content": [{"type": "text", "text": "from messages"}]}]
 
 
 class TestBedrockBatchAnthropicRowParams:
@@ -1980,7 +1878,10 @@ class TestBedrockBatchAnthropicRowParams:
     @pytest.mark.parametrize(
         ("url", "body"),
         [
-            ("/v1/chat/completions", {"messages": [{"role": "user", "content": "17 * 23?"}], "reasoning_effort": "low"}),
+            (
+                "/v1/chat/completions",
+                {"messages": [{"role": "user", "content": "17 * 23?"}], "reasoning_effort": "low"},
+            ),
             ("/v1/responses", {"input": "17 * 23?", "reasoning": {"effort": "low"}}),
         ],
         ids=["chat", "responses"],
@@ -2140,16 +2041,24 @@ class TestBedrockFileDeletion:
         with respx.mock, closing(HTTPHandler()) as client:
             route: Final = respx.delete(self.URL).mock(return_value=httpx.Response(204))
             deleted: Final = litellm.file_delete(
-                file_id=self.S3_URI, custom_llm_provider="bedrock", client=client,
-                aws_access_key_id="AKIAEXAMPLE", aws_secret_access_key="test-secret", aws_region_name="us-west-2",
+                file_id=self.S3_URI,
+                custom_llm_provider="bedrock",
+                client=client,
+                aws_access_key_id="AKIAEXAMPLE",
+                aws_secret_access_key="test-secret",
+                aws_region_name="us-west-2",
             )
         assert route.call_count == 1
         request: Final = route.calls[0].request
         assert request.content == b""
-        signed: Final = AWSRequest(method="DELETE", url=self.URL, headers={
-            "X-Amz-Date": request.headers["X-Amz-Date"],
-            "X-Amz-Content-SHA256": request.headers["X-Amz-Content-SHA256"],
-        })
+        signed: Final = AWSRequest(
+            method="DELETE",
+            url=self.URL,
+            headers={
+                "X-Amz-Date": request.headers["X-Amz-Date"],
+                "X-Amz-Content-SHA256": request.headers["X-Amz-Content-SHA256"],
+            },
+        )
         signed.context["timestamp"] = request.headers["X-Amz-Date"]
         auth: Final = S3SigV4Auth(Credentials("AKIAEXAMPLE", "test-secret"), "s3", "us-west-2")
         signature: Final = auth.signature(auth.string_to_sign(signed, auth.canonical_request(signed)), signed)
@@ -2177,15 +2086,22 @@ class TestBedrockFileDeletion:
 
                 with pytest.raises(BedrockError, match="AccessDenied"):
                     await litellm.afile_delete(
-                        file_id=self.S3_URI, custom_llm_provider="bedrock", client=client,
-                        aws_access_key_id="AKIAEXAMPLE", aws_secret_access_key="test-secret", aws_region_name="us-west-2",
+                        file_id=self.S3_URI,
+                        custom_llm_provider="bedrock",
+                        client=client,
+                        aws_access_key_id="AKIAEXAMPLE",
+                        aws_secret_access_key="test-secret",
+                        aws_region_name="us-west-2",
                     )
         assert route.call_count == 1
 
-    @pytest.mark.parametrize("file_id, message", [
-        ("s3://other-bucket/litellm-bedrock-files-model-abc.jsonl", "configured storage bucket"),
-        ("s3://my-bucket/private/data.jsonl", "LiteLLM-managed"),
-    ])
+    @pytest.mark.parametrize(
+        "file_id, message",
+        [
+            ("s3://other-bucket/litellm-bedrock-files-model-abc.jsonl", "configured storage bucket"),
+            ("s3://my-bucket/private/data.jsonl", "LiteLLM-managed"),
+        ],
+    )
     def test_delete_rejects_untrusted_objects_before_signing(
         self, file_id: str, message: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2233,11 +2149,7 @@ class TestBedrockFileContentTransformation:
         assert params == {}
 
         signed_headers = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]
-        content_hashes = {
-            value
-            for name, value in signed_headers.items()
-            if name.lower() == "x-amz-content-sha256"
-        }
+        content_hashes = {value for name, value in signed_headers.items() if name.lower() == "x-amz-content-sha256"}
         assert content_hashes == {hashlib.sha256(b"").hexdigest()}, (
             "GET has no payload, so the content hash must be the empty-body hash."
             " The header name is matched case-insensitively because botocore picks"
@@ -2260,9 +2172,7 @@ class TestBedrockFileContentTransformation:
         unified_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
             "application/json", "unified-id", "", self.S3_URI, "model-id"
         )
-        encoded_file_id = (
-            base64.urlsafe_b64encode(unified_file_id.encode()).decode().rstrip("=")
-        )
+        encoded_file_id = base64.urlsafe_b64encode(unified_file_id.encode()).decode().rstrip("=")
 
         url, _ = BedrockFilesConfig().transform_file_content_request(
             file_content_request={"file_id": encoded_file_id},
@@ -2280,15 +2190,12 @@ class TestBedrockFileContentTransformation:
 
         with pytest.raises(BedrockError, match="configured storage bucket") as rejection:
             BedrockFilesConfig().transform_file_content_request(
-                file_content_request={
-                    "file_id": "s3://other-bucket/litellm-batch-outputs/job/x.jsonl.out"
-                },
+                file_content_request={"file_id": "s3://other-bucket/litellm-batch-outputs/job/x.jsonl.out"},
                 optional_params={},
                 litellm_params=self._litellm_params(),
             )
 
         assert rejection.value.status_code == 400
-
 
     def test_transform_file_content_request_rejects_unmanaged_key(self, monkeypatch):
         from litellm.llms.bedrock.common_utils import BedrockError
@@ -2305,7 +2212,6 @@ class TestBedrockFileContentTransformation:
 
         assert rejection.value.status_code == 400
 
-
     def test_extract_s3_uri_rejects_non_managed_file_id(self):
         """A file id that is neither an s3:// URI nor a unified id must be rejected."""
         from litellm.llms.bedrock.files.transformation import (
@@ -2315,9 +2221,7 @@ class TestBedrockFileContentTransformation:
         with pytest.raises(ValueError, match="managed LiteLLM S3 file id"):
             extract_s3_uri_from_file_id("file-1234567890")
 
-    def test_transform_file_content_request_requires_configured_bucket(
-        self, monkeypatch
-    ):
+    def test_transform_file_content_request_requires_configured_bucket(self, monkeypatch):
         """Without a server-configured bucket (env or snapshot), the request must fail
         before any S3 call rather than guessing a bucket from the file id."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -2354,9 +2258,7 @@ class TestBedrockFileContentTransformation:
 
         from litellm.types.router import CredentialLiteLLMParams
 
-        snapshot = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(
-            exclude_none=True
-        )
+        snapshot = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(exclude_none=True)
         params = self._litellm_params()
         params["_litellm_internal_model_credentials"] = MappingProxyType(snapshot)
         return params
@@ -2373,19 +2275,12 @@ class TestBedrockFileContentTransformation:
         monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
 
         url, _ = BedrockFilesConfig().transform_file_content_request(
-            file_content_request={
-                "file_id": "s3://out-bucket/litellm-batch-outputs/job/in.jsonl.out"
-            },
+            file_content_request={"file_id": "s3://out-bucket/litellm-batch-outputs/job/in.jsonl.out"},
             optional_params={},
-            litellm_params=self._trusted(
-                s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
-            ),
+            litellm_params=self._trusted(s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"),
         )
 
-        assert (
-            url
-            == "https://s3.us-west-2.amazonaws.com/out-bucket/litellm-batch-outputs/job/in.jsonl.out"
-        )
+        assert url == "https://s3.us-west-2.amazonaws.com/out-bucket/litellm-batch-outputs/job/in.jsonl.out"
 
     def test_output_bucket_falls_back_to_env(self, monkeypatch):
         """The output bucket resolves from AWS_S3_OUTPUT_BUCKET_NAME when not in
@@ -2396,17 +2291,12 @@ class TestBedrockFileContentTransformation:
         monkeypatch.setenv("AWS_S3_OUTPUT_BUCKET_NAME", "env-out-bucket")
 
         url, _ = BedrockFilesConfig().transform_file_content_request(
-            file_content_request={
-                "file_id": "s3://env-out-bucket/litellm-batch-outputs/job/in.jsonl.out"
-            },
+            file_content_request={"file_id": "s3://env-out-bucket/litellm-batch-outputs/job/in.jsonl.out"},
             optional_params={},
             litellm_params=self._litellm_params(),
         )
 
-        assert (
-            url
-            == "https://s3.us-west-2.amazonaws.com/env-out-bucket/litellm-batch-outputs/job/in.jsonl.out"
-        )
+        assert url == "https://s3.us-west-2.amazonaws.com/env-out-bucket/litellm-batch-outputs/job/in.jsonl.out"
 
     def test_input_bucket_still_validates_when_output_bucket_set(self, monkeypatch):
         """Adding output-bucket support must not break retrieval of input-bucket
@@ -2417,19 +2307,12 @@ class TestBedrockFileContentTransformation:
         monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
 
         url, _ = BedrockFilesConfig().transform_file_content_request(
-            file_content_request={
-                "file_id": "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out"
-            },
+            file_content_request={"file_id": "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out"},
             optional_params={},
-            litellm_params=self._trusted(
-                s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
-            ),
+            litellm_params=self._trusted(s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"),
         )
 
-        assert (
-            url
-            == "https://s3.us-west-2.amazonaws.com/in-bucket/litellm-batch-outputs/job/in.jsonl.out"
-        )
+        assert url == "https://s3.us-west-2.amazonaws.com/in-bucket/litellm-batch-outputs/job/in.jsonl.out"
 
     def test_rejects_bucket_outside_input_and_output(self, monkeypatch):
         """A file id whose bucket is neither the input nor the output bucket is
@@ -2442,17 +2325,12 @@ class TestBedrockFileContentTransformation:
 
         with pytest.raises(BedrockError, match="configured storage bucket") as rejection:
             BedrockFilesConfig().transform_file_content_request(
-                file_content_request={
-                    "file_id": "s3://other-bucket/litellm-batch-outputs/job/x.jsonl.out"
-                },
+                file_content_request={"file_id": "s3://other-bucket/litellm-batch-outputs/job/x.jsonl.out"},
                 optional_params={},
-                litellm_params=self._trusted(
-                    s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
-                ),
+                litellm_params=self._trusted(s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"),
             )
 
         assert rejection.value.status_code == 400
-
 
     def test_sign_request_without_botocore_raises_helpful_error(self, monkeypatch):
         """A missing botocore must surface an actionable 'install boto3' error
@@ -2479,9 +2357,7 @@ class TestBedrockFileContentTransformation:
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
         litellm_params = self._litellm_params()
-        litellm_params["_litellm_internal_model_credentials"] = MappingProxyType(
-            {"s3_bucket_name": "my-bucket"}
-        )
+        litellm_params["_litellm_internal_model_credentials"] = MappingProxyType({"s3_bucket_name": "my-bucket"})
 
         url, _ = BedrockFilesConfig().transform_file_content_request(
             file_content_request={"file_id": self.S3_URI},
@@ -2521,9 +2397,10 @@ class TestBedrockFileContentTransformation:
             s3_endpoint_url="https://bucket.vpce-abc.s3.us-east-1.vpce.amazonaws.com",
         )
 
-        assert BedrockFilesConfig()._s3_request_target(
-            optional_params={}, litellm_params=lp
-        ).endpoint_url == "https://bucket.vpce-abc.s3.us-east-1.vpce.amazonaws.com"
+        assert (
+            BedrockFilesConfig()._s3_request_target(optional_params={}, litellm_params=lp).endpoint_url
+            == "https://bucket.vpce-abc.s3.us-east-1.vpce.amazonaws.com"
+        )
 
     def test_validate_environment_merges_and_pops_signed_get_headers(self):
         from litellm.llms.bedrock.files.transformation import (
@@ -2531,9 +2408,7 @@ class TestBedrockFileContentTransformation:
             BedrockFilesConfig,
         )
 
-        litellm_params = {
-            S3_SIGNED_REQUEST_HEADERS_PARAM: {"Authorization": "AWS4-HMAC-SHA256 test"}
-        }
+        litellm_params = {S3_SIGNED_REQUEST_HEADERS_PARAM: {"Authorization": "AWS4-HMAC-SHA256 test"}}
 
         headers = BedrockFilesConfig().validate_environment(
             headers={"x-custom": "kept"},
@@ -2599,9 +2474,7 @@ class TestBedrockFileContentTransformation:
         monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
 
         with respx.mock:
-            route = respx.get(self.EXPECTED_URL).mock(
-                return_value=httpx.Response(200, content=b'{"recordId": "x"}')
-            )
+            route = respx.get(self.EXPECTED_URL).mock(return_value=httpx.Response(200, content=b'{"recordId": "x"}'))
 
             response = litellm.file_content(
                 file_id=self.S3_URI,
@@ -2629,9 +2502,7 @@ class TestBedrockFileContentTransformation:
         litellm.in_memory_llm_clients_cache.flush_cache()
 
         with respx.mock:
-            route = respx.get(self.EXPECTED_URL).mock(
-                return_value=httpx.Response(200, content=b'{"recordId": "x"}')
-            )
+            route = respx.get(self.EXPECTED_URL).mock(return_value=httpx.Response(200, content=b'{"recordId": "x"}'))
 
             response = await litellm.afile_content(
                 file_id=self.S3_URI,
@@ -2640,11 +2511,7 @@ class TestBedrockFileContentTransformation:
             )
 
         assert route.called
-        assert (
-            route.calls[0]
-            .request.headers["Authorization"]
-            .startswith("AWS4-HMAC-SHA256")
-        )
+        assert route.calls[0].request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
         assert response.content == b'{"recordId": "x"}'
 
 
@@ -2678,9 +2545,7 @@ class TestBedrockFilesS3SignatureEncoding:
         headers: Mapping[str, str],
     ) -> str:
         sent = {name.lower(): value for name, value in headers.items()}
-        signed_names = (
-            sent["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
-        )
+        signed_names = sent["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
         request = AWSRequest(
             method=method,
             url=url,
@@ -2688,12 +2553,8 @@ class TestBedrockFilesS3SignatureEncoding:
             headers={name: sent[name] for name in signed_names if name in sent},
         )
         request.context["timestamp"] = sent["x-amz-date"]
-        signer = signer_cls(
-            Credentials(self.ACCESS_KEY, self.SECRET_KEY), "s3", self.REGION
-        )
-        return signer.signature(
-            signer.string_to_sign(request, signer.canonical_request(request)), request
-        )
+        signer = signer_cls(Credentials(self.ACCESS_KEY, self.SECRET_KEY), "s3", self.REGION)
+        return signer.signature(signer.string_to_sign(request, signer.canonical_request(request)), request)
 
     def _assert_signed_the_way_s3_reads_it(
         self,
@@ -2704,12 +2565,8 @@ class TestBedrockFilesS3SignatureEncoding:
     ) -> None:
         assert "%20" in url, "the object key must reach the wire percent-encoded"
         sent_signature = headers["Authorization"].split("Signature=")[1].strip()
-        assert sent_signature == self._signature_under(
-            S3SigV4Auth, method, url, body, headers
-        )
-        assert sent_signature != self._signature_under(
-            SigV4Auth, method, url, body, headers
-        )
+        assert sent_signature == self._signature_under(S3SigV4Auth, method, url, body, headers)
+        assert sent_signature != self._signature_under(SigV4Auth, method, url, body, headers)
 
     def test_create_file_signs_spaced_object_key_the_way_s3_does(self) -> None:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -2743,9 +2600,7 @@ class TestBedrockFilesS3SignatureEncoding:
             headers=signed["headers"],
         )
 
-    def test_file_content_signs_spaced_object_key_the_way_s3_does(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_file_content_signs_spaced_object_key_the_way_s3_does(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from litellm.llms.bedrock.files.transformation import (
             S3_SIGNED_REQUEST_HEADERS_PARAM,
             BedrockFilesConfig,
@@ -2759,9 +2614,7 @@ class TestBedrockFilesS3SignatureEncoding:
         }
 
         url, _ = BedrockFilesConfig().transform_file_content_request(
-            file_content_request={
-                "file_id": "s3://my-bucket/LLM AI Projects/litellm-bedrock-files-model-abc.jsonl"
-            },
+            file_content_request={"file_id": "s3://my-bucket/LLM AI Projects/litellm-bedrock-files-model-abc.jsonl"},
             optional_params={},
             litellm_params=litellm_params,
         )
@@ -3092,7 +2945,6 @@ class TestBedrockFileDeletionTransformation:
 
         assert rejection.value.status_code == 400
 
-
     def test_transform_delete_file_request_rejects_unmanaged_key(self, monkeypatch):
         from litellm.llms.bedrock.common_utils import BedrockError
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -3107,7 +2959,6 @@ class TestBedrockFileDeletionTransformation:
             )
 
         assert rejection.value.status_code == 400
-
 
     def test_transform_delete_file_response_echoes_the_deleted_id(self):
         import httpx
