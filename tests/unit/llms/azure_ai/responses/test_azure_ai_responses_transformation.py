@@ -447,38 +447,43 @@ OTHER_AGENT_EXTRA_BODIES = [
 ]
 
 
+CALLER_PLACEMENTS = [
+    pytest.param(lambda fields: {"extra_body": {**fields, "store": False}}, id="extra_body"),
+    pytest.param(lambda fields: {**fields, "extra_body": {"store": False}}, id="openai_sdk_extra_body_top_level"),
+]
+
+
 @pytest.mark.asyncio
 @respx.mock
-@pytest.mark.parametrize("extra_body", OTHER_AGENT_EXTRA_BODIES)
-async def test_router_aresponses_rejects_another_agent_in_extra_body_without_drop_params(extra_body):
+@pytest.mark.parametrize("placement", CALLER_PLACEMENTS)
+@pytest.mark.parametrize("caller_fields", OTHER_AGENT_EXTRA_BODIES)
+async def test_router_aresponses_rejects_another_agent_without_drop_params(caller_fields, placement):
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$")
 
     with pytest.raises(litellm.UnsupportedParamsError, match="support-agent"):
-        await _support_agent_router().aresponses(model="support-agent", input="What is 2+2?", extra_body=extra_body)
+        await _support_agent_router().aresponses(model="support-agent", input="What is 2+2?", **placement(caller_fields))
 
     assert not route.called
 
 
 @pytest.mark.asyncio
 @respx.mock
+@pytest.mark.parametrize("placement", CALLER_PLACEMENTS)
 @pytest.mark.parametrize(
-    "extra_body,drop_params",
+    "caller_fields,drop_params",
     [
-        *((extra_body, True) for extra_body in OTHER_AGENT_EXTRA_BODIES),
+        *((caller_fields, True) for caller_fields in OTHER_AGENT_EXTRA_BODIES),
         ({"agent": {"type": "agent_reference", "name": "support-agent"}}, None),
         ({"agent_reference": {"type": "agent_reference", "name": "support-agent"}}, None),
     ],
 )
-async def test_router_aresponses_sends_only_the_deployment_agent(extra_body, drop_params):
+async def test_router_aresponses_sends_only_the_deployment_agent(caller_fields, drop_params, placement):
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
         return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
     )
 
     await _support_agent_router().aresponses(
-        model="support-agent",
-        input="What is 2+2?",
-        extra_body={**extra_body, "store": False},
-        drop_params=drop_params,
+        model="support-agent", input="What is 2+2?", drop_params=drop_params, **placement(caller_fields)
     )
 
     body = json.loads(route.calls.last.request.content)

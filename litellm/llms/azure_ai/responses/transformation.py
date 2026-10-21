@@ -95,6 +95,26 @@ def _agent_reference(model: str) -> FoundryAgentReference:
     return FoundryAgentReference(type="agent_reference", name=name)
 
 
+def _deployment_agent(
+    model: str, caller_fields: Mapping[str, object], litellm_params: GenericLiteLLMParams
+) -> FoundryAgentReference:
+    deployment_agent: Final = _agent_reference(model)
+    other_agents: Final = tuple(
+        key for key in _CALLER_AGENT_KEYS if key in caller_fields and caller_fields[key] != deployment_agent
+    )
+    if other_agents and not (litellm.drop_params is True or litellm_params.drop_params is True):
+        raise UnsupportedParamsError(
+            message=(
+                f"This model entry always calls Foundry agent {deployment_agent['name']!r}, so `{other_agents[0]}` "
+                "in the request cannot pick another agent or version. Remove it, call the model entry for that "
+                "agent, or set `drop_params: true` to drop it"
+            ),
+            llm_provider=LlmProviders.AZURE_AI.value,
+            model=model,
+        )
+    return deployment_agent
+
+
 _INPUT_ITEMS: Final = TypeAdapter(list[object])
 
 
@@ -167,7 +187,7 @@ class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
                 if isinstance(instructions, str) and instructions
                 else {}
             ),
-            "agent_reference": _agent_reference(model),
+            "agent_reference": _deployment_agent(model, litellm_params.model_extra or {}, litellm_params),
         }
 
     def transform_extra_body(
@@ -177,21 +197,7 @@ class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
         model: str,
         litellm_params: GenericLiteLLMParams,
     ) -> Mapping[str, object]:
-        deployment_agent: Final = _agent_reference(model)
-        other_agents: Final = tuple(
-            key for key in _CALLER_AGENT_KEYS if key in extra_body and extra_body[key] != deployment_agent
-        )
-        if other_agents and not (litellm.drop_params is True or litellm_params.drop_params is True):
-            raise UnsupportedParamsError(
-                message=(
-                    f"This model entry always calls Foundry agent {deployment_agent['name']!r}, so `{other_agents[0]}` "
-                    "in the request cannot pick another agent or version. Remove it, call the model entry for that "
-                    "agent, or set `drop_params: true` to drop it"
-                ),
-                llm_provider=LlmProviders.AZURE_AI.value,
-                model=model,
-            )
         return {
             **{key: value for key, value in extra_body.items() if key not in _CALLER_AGENT_KEYS},
-            "agent_reference": deployment_agent,
+            "agent_reference": _deployment_agent(model, extra_body, litellm_params),
         }
