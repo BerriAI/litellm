@@ -38,8 +38,8 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     (they require async I/O) and injected at construction time.
     """
 
-    def __init__(self, access_token: str, project: str, location: str) -> None:
-        super().__init__()
+    def __init__(self, access_token: str, project: str, location: str, drop_params: bool = False) -> None:
+        super().__init__(drop_params=drop_params)
         self._access_token = access_token
         self._project = project
         self._location = location
@@ -261,4 +261,5 @@ def vertex_realtime_config(
         access_token=access_token,
         project=project,
         location=VertexBase.get_vertex_region(vertex_region=location, model=model),
+        drop_params=drop_params,
     )

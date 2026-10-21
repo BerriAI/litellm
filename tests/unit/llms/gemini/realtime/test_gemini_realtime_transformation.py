@@ -1983,6 +1983,42 @@ def test_gemini_transcribe_live_coerces_audio_modality_to_text(modalities, patch
     assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
 
 
+@pytest.mark.parametrize("model", ["gemini-3.5-transcribe-live", "gemini/gemini-3.5-transcribe-live"])
+def test_gemini_transcribe_live_synthetic_session_created_reports_text_output(
+    model, patch_gemini_transcribe_live_cost_map_entry
+):
+    session = GeminiRealtimeConfig().transform_session_created_event(model, "sess_transcribe")["session"]
+
+    assert session["modalities"] == ["text"]
+
+
+@pytest.mark.parametrize("modalities", [["audio"], ["audio", "text"]])
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_gemini_transcribe_live_audio_output_is_rejected_unless_drop_params(
+    modalities, drop_params, patch_gemini_transcribe_live_cost_map_entry
+):
+    rejection = GeminiRealtimeConfig(drop_params=drop_params).setup_session_update_rejection(
+        "gemini-3.5-transcribe-live", {"output_modalities": modalities}, setup_sent=False
+    )
+
+    assert (rejection is None) is drop_params
+    assert rejection is None or rejection.param == "session.output_modalities"
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_gemini_provider_realtime_config_carries_drop_params(drop_params):
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    model = "gemini-live-2.5-flash-native-audio"
+    config = ProviderConfigManager.get_provider_realtime_config(
+        model=model, provider=LlmProviders.GEMINI, drop_params=drop_params
+    )
+
+    rejection = config.setup_session_update_rejection(model, {"modalities": ["text"]}, setup_sent=False)
+    assert (rejection is None) is drop_params
+
+
 def test_gemini_chat_model_with_text_output_modalities_keeps_audio_eager_setup(
     patch_gemini_transcribe_live_cost_map_entry,
 ):

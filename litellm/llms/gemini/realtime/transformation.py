@@ -14,7 +14,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeSessionUpdateRejection
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -154,8 +154,9 @@ def _system_instruction_text(system_instruction: HttpxContentType | None) -> str
 class GeminiRealtimeConfig(BaseRealtimeConfig):
     _TOOL_CALL_ID_TO_NAME_MAX = 256  # LRU cap for call_id→name mapping
 
-    def __init__(self):
+    def __init__(self, drop_params: bool = False):
         super().__init__()
+        self.drop_params = drop_params
         self._tool_call_id_to_name: OrderedDict[str, str] = OrderedDict()
         # Gemini Live sometimes emits usageMetadata in a standalone frame between
         # turns; buffer it here so the next response.done carries the token counts.
@@ -468,6 +469,47 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return tuple(str(modality).upper() for modality in _JSON_ARRAY.validate_python(value))
 
     @staticmethod
+    def _unsupported_response_modalities(model: str, requested: tuple[str, ...]) -> tuple[str, ...]:
+        unknown: Final = tuple(modality for modality in requested if modality not in _GEMINI_LIVE_RESPONSE_MODALITIES)
+        if unknown:
+            return unknown
+        if GeminiRealtimeConfig._is_audio_only_live_model(model) and frozenset(requested) == frozenset(("TEXT",)):
+            return ("TEXT",)
+        if GeminiRealtimeConfig._is_text_only_live_model(model) and "AUDIO" in requested:
+            return ("AUDIO",)
+        return ()
+
+    def setup_session_update_rejection(
+        self, model: str, session: Mapping[str, object], *, setup_sent: bool
+    ) -> RealtimeSessionUpdateRejection | None:
+        if self.drop_params:
+            return None
+        if setup_sent:
+            return RealtimeSessionUpdateRejection(
+                code="session_update_not_applied",
+                message=(
+                    "Gemini Live takes its session configuration once, with the first conversation content, "
+                    "so this session.update was not applied. Send session.update before the first content, "
+                    "or set drop_params to drop it instead"
+                ),
+                param="session",
+            )
+        param: Final = "output_modalities" if "output_modalities" in session else "modalities"
+        unsupported: Final = GeminiRealtimeConfig._unsupported_response_modalities(
+            model, GeminiRealtimeConfig._requested_response_modalities(session.get(param))
+        )
+        if not unsupported:
+            return None
+        return RealtimeSessionUpdateRejection(
+            code="invalid_value",
+            message=(
+                f"Invalid value for 'session.{param}': {model} cannot produce "
+                f"{', '.join(modality.lower() for modality in unsupported)} output. Set drop_params to drop it instead"
+            ),
+            param=f"session.{param}",
+        )
+
+    @staticmethod
     def _coerce_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
         """Drop modalities Gemini Live cannot produce at all, swap the ones this
         model cannot (TEXT to AUDIO for audio-only models, AUDIO to TEXT for
@@ -708,10 +750,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         logging_session_id: str,
         session_configuration_request: str | None = None,
     ) -> OpenAIRealtimeStreamSessionEvents:
-        if session_configuration_request:
-            session_configuration_request_dict: BidiGenerateContentSetup = _parse_setup(session_configuration_request)
-        else:
-            session_configuration_request_dict = {}
+        session_configuration_request_dict: Final = _parse_setup(
+            session_configuration_request or self.session_configuration_request(model)
+        )
 
         _model: Final = session_configuration_request_dict.get("model") or model
         generation_config: Final = session_configuration_request_dict.get("generationConfig", {}) or {}

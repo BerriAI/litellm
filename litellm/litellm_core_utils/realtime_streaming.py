@@ -148,7 +148,7 @@ def _merge_session_fields(
             )
         return update[key]
 
-    return MappingProxyType({key: merged_value(key) for key in (*base, *update)})
+    return MappingProxyType({key: merged_value(key) for key in dict.fromkeys((*base, *update))})
 
 
 def _session_update_frame(session: Mapping[str, object]) -> str:
@@ -639,10 +639,29 @@ class RealTimeStreaming:
                 self._usage_meter.observe_client_event(sent_event)
         return True
 
-    def _holds_session_updates_until_first_content(self) -> bool:
-        if self.provider_config is None or self.session_configuration_request is not None:
+    def _builds_setup_lazily(self) -> bool:
+        if self.provider_config is None:
             return False
         return self.provider_config.builds_setup_from_session_update() and not self._uses_deferred_backend_setup()
+
+    def _holds_session_updates_until_first_content(self) -> bool:
+        return self.session_configuration_request is None and self._builds_setup_lazily()
+
+    async def _rejected_setup_session_update(self, message: str) -> bool:
+        provider_config: Final = self.provider_config
+        if provider_config is None or not self._builds_setup_lazily():
+            return False
+        client_event: Final = _decode_json_object(message)
+        session: Final = client_event.get("session")
+        rejection: Final = provider_config.setup_session_update_rejection(
+            self.model,
+            _SESSION_FIELDS.validate_python(session) if isinstance(session, Mapping) else _NO_SESSION_FIELDS,
+            setup_sent=self.session_configuration_request is not None,
+        )
+        if rejection is None:
+            return False
+        await self.websocket.send_text(json.dumps(rejection.error_event(client_event.get("event_id"))))
+        return True
 
     def _held_session_update_message(self) -> str:
         return _session_update_frame(self._held_session_update or _NO_SESSION_FIELDS)
@@ -1222,6 +1241,9 @@ class RealTimeStreaming:
                                 break
                     finally:
                         self._flushing_pending_messages_until_setup = False
+                if self.session_created_sent_to_client and self._builds_setup_lazily():
+                    await self._maybe_send_guardrail_turn_detection_update()
+                    continue
                 if self.session_created_sent_to_client:
                     # A synthetic session.created (with placeholder defaults) was
                     # already forwarded to the client when we connected.  The
@@ -1779,6 +1801,8 @@ class RealTimeStreaming:
                 # ``_maybe_send_guardrail_turn_detection_update`` would retry.
                 if msg_type == "session.update" and self.provider_config is None:
                     await self._send_session_gate_once()
+                if msg_type == "session.update" and await self._rejected_setup_session_update(message):
+                    continue
                 if self._holds_session_updates_until_first_content():
                     if msg_type == "session.update":
                         await self._hold_session_update(message)

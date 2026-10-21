@@ -2766,7 +2766,7 @@ def _realtime_logging_obj():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "model, session, backend_modality, client_modality, backend_turn",
+    "model, session, backend_modality, client_modality, backend_turn, drop_params",
     [
         (
             "gemini-live-2.5-flash",
@@ -2774,27 +2774,29 @@ def _realtime_logging_obj():
             "TEXT",
             "text",
             [_GEMINI_LIVE_TEXT_TURN],
+            False,
         ),
-        ("gemini-live-2.5-flash", {"modalities": ["text"]}, "TEXT", "text", [_GEMINI_LIVE_TEXT_TURN]),
+        ("gemini-live-2.5-flash", {"modalities": ["text"]}, "TEXT", "text", [_GEMINI_LIVE_TEXT_TURN], False),
         (
             "gemini-live-2.5-flash-native-audio",
             {"type": "realtime", "output_modalities": ["text"]},
             "AUDIO",
             "audio",
             [],
+            True,
         ),
     ],
 )
 async def test_async_realtime_vertex_first_session_update_builds_the_only_setup(
-    model, session, backend_modality, client_modality, backend_turn, monkeypatch
+    model, session, backend_modality, client_modality, backend_turn, drop_params: bool, monkeypatch
 ):
     """Regression for text-only Vertex Live sessions answered in audio: the
     connect-time default setup (AUDIO) used to go out before the client's
     session.update, and Gemini accepts only one setup per connection, so the
     requested modality was dropped and billed at the audio rate. The setup now
     goes out on the client's first message, built from session.update when that
-    comes first. An audio-only model still gets AUDIO, and the client learns the
-    downgrade from session.updated."""
+    comes first. Under drop_params an audio-only model still gets AUDIO, and the
+    client learns the downgrade from session.updated."""
     from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
@@ -2825,7 +2827,7 @@ async def test_async_realtime_vertex_first_session_update_builds_the_only_setup(
                 websocket=client_ws,
                 logging_obj=_realtime_logging_obj(),
                 provider_config=VertexAIRealtimeConfig(
-                    access_token="fake-token", project="fake-project", location="us-central1"
+                    access_token="fake-token", project="fake-project", location="us-central1", drop_params=drop_params
                 ),
                 headers={},
             ),

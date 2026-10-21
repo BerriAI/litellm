@@ -179,6 +179,25 @@ def test_vertex_audio_only_live_model_coerces_text_modality_to_audio(
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_vertex_realtime_config_carries_drop_params(drop_params, patch_native_audio_cost_map_entry):
+    from litellm.llms.vertex_ai.realtime.transformation import vertex_realtime_config
+
+    cfg: Final = vertex_realtime_config(
+        _NATIVE_AUDIO_MODEL,
+        access_token="tok",
+        resolve_access_token=AsyncMock(return_value="tok"),
+        project="my-proj",
+        location="us-central1",
+        drop_params=drop_params,
+    )
+
+    rejection: Final = cfg.setup_session_update_rejection(
+        _NATIVE_AUDIO_MODEL, {"modalities": ["text"]}, setup_sent=False
+    )
+    assert (rejection is None) is drop_params
+
+
 def test_vertex_session_update_normalizes_ga_remapped_fields(
     patch_native_audio_cost_map_entry,
 ):
