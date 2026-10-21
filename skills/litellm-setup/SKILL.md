@@ -24,7 +24,7 @@ Ask everything in one message, with defaults the user can accept by saying "go":
 
 Then follow the steps for their answers. Plain routing skips steps 3 and 6. The quickstart is steps 2, 3, 8, and 9. uv with their own Postgres skips step 3
 
-In the same message, say that someone who would rather answer prompts can run `litellm --setup` in a separate terminal window after step 4, not through Claude Code. Never run it yourself, since it needs a real terminal and without one prints "Setup cancelled." and writes nothing. It writes `litellm_config.yaml` in the current folder with the keys inline (keep it out of git) and offers to start the proxy. When the user is done, skip to step 8 and run it against their proxy, reading the master key from that file into a shell variable without printing it
+In the same message, say that someone who picks uv and would rather answer prompts can run `litellm --setup` in a separate terminal window once LiteLLM is installed, not through Claude Code. Never run it yourself, since it needs a real terminal and without one prints "Setup cancelled." and writes nothing. It writes `litellm_config.yaml` in the current folder with the keys inline (keep it out of git) and offers to start the proxy. When the user is done, skip to step 8 and run it against their proxy, reading the master key from that file into a shell variable without printing it
 
 ## 2. Check prerequisites
 
