@@ -16,7 +16,6 @@ from litellm.litellm_core_utils.fallback_generalizations import match_capability
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
-from litellm.types.utils import LlmProviders
 
 REPO_ROOT = Path(__file__).parents[2]
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
@@ -679,12 +678,10 @@ def unregistered_providers(rows: Mapping[str, object]) -> list[str]:
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_every_cost_map_provider_is_registered(path: Path):
-    supported_providers: Final = frozenset(provider.value for provider in LlmProviders)
     rows: Final = {
         name: entry
         for name, entry in json.loads(path.read_text()).items()
-        if isinstance(entry, dict)
-        and entry.get("litellm_provider", "").split("-", 1)[0] in supported_providers
+        if isinstance(entry, dict) and entry.get("litellm_provider") != "openinfer"
     }
     assert rows
     assert unregistered_providers(rows) == [], (
