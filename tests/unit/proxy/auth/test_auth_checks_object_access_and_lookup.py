@@ -1551,37 +1551,24 @@ async def test_get_team_db_check_does_not_call_new_team_if_exists(mock_new_team,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "prisma_client,vector_store_registry,expected_result",
-    [
-        (None, MagicMock(), True),  # No prisma client
-        (MagicMock(), None, True),  # No vector store registry
-        (MagicMock(), MagicMock(), True),  # No vector stores to run
-    ],
-)
-async def test_vector_store_access_check_early_returns(prisma_client, vector_store_registry, expected_result):
+@pytest.mark.parametrize("prisma_client", [None, MagicMock()], ids=["no-prisma-client", "no-vector-stores-to-run"])
+async def test_vector_store_access_check_early_returns(prisma_client):
     """Test vector_store_access_check returns True for early exit conditions"""
     request_body = {"messages": [{"role": "user", "content": "test"}]}
 
-    if vector_store_registry:
-        vector_store_registry.get_vector_store_ids_to_run.return_value = None
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
-        patch("litellm.vector_store_registry", vector_store_registry),
-    ):
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma_client):
         result = await vector_store_access_check(
             request_body=request_body,
             team_object=None,
             valid_token=None,
         )
 
-    assert result == expected_result
+    assert result is True
 
 
 @pytest.mark.asyncio
 async def test_vector_store_access_check_skips_db_lookup_when_no_vector_stores_requested():
-    """Registry returns [] (not None) for plain requests; no object permission DB lookup should happen."""
+    """A plain request names no vector store, so no object permission DB lookup should happen."""
     valid_token = UserAPIKeyAuth(token="test-token", object_permission_id="perm-123")
     team_object = MagicMock()
     team_object.object_permission_id = "team-permission"
@@ -1590,16 +1577,8 @@ async def test_vector_store_access_check_skips_db_lookup_when_no_vector_stores_r
     find_unique = AsyncMock()
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = find_unique
 
-    mock_vector_store_registry = MagicMock()
-    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = []
-
-    with (
-        patch(  # test-quality-ok: production auth reads these module globals; no dependency injection seam exists
-            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
-        ),
-        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
-            "litellm.vector_store_registry", mock_vector_store_registry
-        ),
+    with patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
     ):
         result = await vector_store_access_check(
             request_body={"messages": [{"role": "user", "content": "test"}]},
