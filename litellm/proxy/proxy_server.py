@@ -10384,6 +10384,7 @@ async def async_data_generator(
     request: Request | None = None,
     *,
     responses_stream_errors: bool = False,
+    dispatched_call_type: str | None = None,
 ):
     verbose_proxy_logger.debug("inside generator")
     stream_completed = False
@@ -10599,6 +10600,7 @@ async def async_data_generator(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=request_data,
+            dispatched_call_type=dispatched_call_type,
         )
         client_error: Final[Exception] = e if replacement is None else replacement
         verbose_proxy_logger.debug(
