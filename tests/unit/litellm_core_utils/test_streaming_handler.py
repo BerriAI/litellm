@@ -13,8 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from openai.types.chat import ChatCompletionChunk
-from pydantic import BaseModel
-
+from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
@@ -36,6 +35,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StreamingChoices,
+    StandardLoggingPayload,
     Usage,
 )
 from litellm.utils import ModelResponseListIterator
@@ -4263,6 +4263,68 @@ def test_record_partial_usage_for_failure_stashes_usage_and_cost():
     assert stashed.completion_tokens == 1
     assert stashed.total_tokens == 31
     assert isinstance(logging_obj.model_call_details["response_cost"], float)
+
+
+class _FailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: tuple[tuple[int, int], ...] = ()
+        self.logged: asyncio.Event = asyncio.Event()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"])
+        self.failures = (*self.failures, (payload["prompt_tokens"], payload["completion_tokens"]))
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+async def test_log_stream_failure_bills_the_dropped_attempt_even_after_the_router_discards_its_usage() -> None:
+    """The dropped attempt's failure log is queued, and the router discards the stashed usage as it opens the
+    fallback hop before that log runs. The log must still bill what the dropped attempt consumed, and the shared
+    logging object must not be marked as already failed, since the hop's own failure still has to reach the
+    integrations."""
+    recorder: Final = _FailureRecorder()
+    logging_obj: Final = Logging(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="partial-usage-copy",
+        function_id="1245",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-5.6",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-partial-copy",
+            created=1742056047,
+            model="gpt-5.6",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="The", role="assistant"))],
+            usage=Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
+        )
+    ]
+
+    with pytest.raises(MidStreamFallbackError):
+        wrapper._log_stream_failure_and_raise(httpx.ReadError("connection dropped"))
+    logging_obj.carry_failed_attempt_usage()
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+
+    assert recorder.failures == ((30, 1),)
+    assert logging_obj.model_call_details.get("has_logged_async_failure") is not True
 
 
 def test_record_partial_usage_for_failure_noop_without_chunks():

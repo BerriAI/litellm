@@ -1,5 +1,5 @@
 import traceback
-from collections.abc import Coroutine, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, Protocol
@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
@@ -87,12 +88,31 @@ class PassThroughStreamingHandler:
         )
         try:
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                async_coroutine=litellm_logging_obj.dispatch_failure_handlers(
-                    exception, traceback.format_exc(), prefer_async_handlers=True
-                )
+                async_coroutine=litellm_logging_obj.dispatch_attempt_failure_handlers(exception, traceback.format_exc())
             )
         except Exception as e:
             verbose_proxy_logger.error("Error scheduling stream failure logging: %s", e)
+
+    @staticmethod
+    async def _schedule_stream_end_logging(
+        litellm_logging_obj: LiteLLMLoggingObj,
+        endpoint_type: EndpointType,
+        request_body: Mapping[str, object],
+        raw_bytes: Sequence[bytes],
+        error_event: tuple[str, str, int] | None,
+        success_logging: Callable[[], Coroutine[None, None, None]],
+    ) -> None:
+        if error_event is None:
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=success_logging())
+            return
+        error_type, message, status_code = error_event
+        await PassThroughStreamingHandler.schedule_stream_failure_logging(
+            litellm_logging_obj=litellm_logging_obj,
+            endpoint_type=endpoint_type,
+            request_body=dict(request_body),
+            raw_bytes=raw_bytes,
+            exception=anthropic_error_frame_exception(error_type, message, status_code, str(litellm_logging_obj.model)),
+        )
 
     @staticmethod
     def _record_partial_usage_for_failure(
@@ -276,17 +296,13 @@ class PassThroughStreamingHandler:
                     else PassThroughStreamingHandler._error_frame_closed_at(endpoint_type, raw_bytes)
                 )
                 try:
-                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                        async_coroutine=(
-                            _build_logging_coroutine()
-                            if superseded_error_event is None
-                            else AnthropicPassthroughLoggingHandler.log_error_frame_as_failure(
-                                attempt_logging_obj=litellm_logging_obj.attempt_scoped_copy(),
-                                request_body=resolved_request_body,
-                                all_chunks=tuple(raw_bytes),
-                                error_event=superseded_error_event,
-                            )
-                        )
+                    await PassThroughStreamingHandler._schedule_stream_end_logging(
+                        litellm_logging_obj=litellm_logging_obj,
+                        endpoint_type=endpoint_type,
+                        request_body=resolved_request_body,
+                        raw_bytes=tuple(raw_bytes),
+                        error_event=superseded_error_event,
+                        success_logging=_build_logging_coroutine,
                     )
                 except Exception as e:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
@@ -295,10 +311,6 @@ class PassThroughStreamingHandler:
 
     @staticmethod
     def _error_frame_closed_at(endpoint_type: EndpointType, raw_bytes: Sequence[bytes]) -> tuple[str, str, int] | None:
-        """The provider `event: error` frame of a stream the router closed because a retry or fallback took the
-        request over. That attempt is logged as its own failure, on a copy taken now so the retry's rebinding of
-        the shared logging object never reaches it. A stream that ran to its end or that the client closed keeps
-        logging through the success route, so its usage is still billed."""
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             closing_superseded_attempt,
             parse_anthropic_error_event,

@@ -23,7 +23,7 @@ import pytest
 import respx
 from fastapi import HTTPException
 from opentelemetry import trace
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import APIConnectionError, Router
@@ -93,7 +93,7 @@ from litellm.llms.base_llm.vector_store.transformation import(
     LiteLLMVectorStoreEmbeddingExecutor,
     RouterVectorStoreEmbeddingExecutor,
 )
-from litellm.types.utils import CallTypes, CredentialItem
+from litellm.types.utils import CallTypes, CredentialItem, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
@@ -16726,6 +16726,7 @@ class _AnthropicMessagesFakeByteStream:
         self._hidden_params = {"additional_headers": {"x-amzn-requestid": "req-1"}}
         self.closed = False
         self.closed_as_superseded = False
+        self.close_contexts: tuple[bool, ...] = ()
 
     def __aiter__(self):
         return self
@@ -16736,6 +16737,7 @@ class _AnthropicMessagesFakeByteStream:
         return self._chunks.pop(0)
 
     async def aclose(self) -> None:
+        self.close_contexts = (*self.close_contexts, closing_superseded_attempt())
         self.closed_as_superseded = self.closed_as_superseded or closing_superseded_attempt()
         self.closed = True
 
@@ -17979,6 +17981,51 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
     assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
 
 
+class _AnthropicMessagesRetryStashRecorder:
+    def __init__(self) -> None:
+        self.observed: tuple[Usage | None, ...] = ()
+
+    def record(self, usage: Usage | None) -> None:
+        self.observed = (*self.observed, usage)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_opens_without_the_superseded_attempts_partial_usage() -> None:
+    """The dropped attempt's usage stays available for terminal billing without reaching the retry's success log."""
+    router: Final = _anthropic_messages_retry_router(num_retries=1)
+    logging_obj: Final = LiteLLMLogging(
+        model="glm",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="retry-own-usage",
+        function_id="retry-own-usage",
+    )
+    partial_usage: Final = Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53)
+    logging_obj.record_partial_usage_for_failure(partial_usage, 0.01)
+    stash_recorder: Final = _AnthropicMessagesRetryStashRecorder()
+    usage_adapter: Final = TypeAdapter(Usage | None)
+
+    def retry_stream() -> _AnthropicMessagesFakeByteStream:
+        stash_recorder.record(
+            usage_adapter.validate_python(logging_obj.model_call_details.get("combined_usage_object"))
+        )
+        return _anthropic_messages_retried_stream()
+
+    provider: Final = _AnthropicMessagesScriptedProvider(_anthropic_messages_dropped_before_content, retry_stream)
+
+    stream: Final = await _anthropic_messages_stream_through_router(
+        router, provider, litellm_logging_obj=logging_obj
+    )
+    body: Final = tuple([chunk async for chunk in stream])
+
+    assert stash_recorder.observed == (None,)
+    assert body == (_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong"))
+    assert "response_cost" not in logging_obj.model_call_details
+    assert logging_obj.model_call_details["failed_attempts_usage"] == ((partial_usage, 0.01),)
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_superseded_stream_is_closed_before_the_retry_opens():
     """Both attempts log through the request's one logging object, so the superseded attempt's end-of-stream
@@ -18001,6 +18048,7 @@ async def test_anthropic_messages_superseded_stream_is_closed_before_the_retry_o
 
     assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
     assert superseded_closed_when_retry_opened == [True]
+    assert superseded.close_contexts[0] is True
 
 
 @pytest.mark.asyncio

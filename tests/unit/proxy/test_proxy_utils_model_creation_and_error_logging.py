@@ -1,5 +1,8 @@
+import asyncio
 import datetime as real_datetime
 import smtplib
+import traceback
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -11,8 +14,15 @@ from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.bug_report import ISSUE_URL_BASE
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
+from litellm.proxy.utils import (
+    PrismaClient,
+    ProxyLogging,
+    _failure_fields_to_lift,
+    handle_exception_on_proxy,
+)
+from litellm.router_utils.fallback_event_handlers import carry_superseded_attempt_usage
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -2472,8 +2482,679 @@ def test_attempts_already_summed_into_the_final_row_are_not_lifted_again():
 
     lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
 
-    assert lifted["combined_usage_object"].prompt_tokens == 24
+    current_only_logging_obj: Final = _dispatched_failure_logging_obj(
+        FAILURE_USAGE_MODEL,
+        get_litellm_params(
+            metadata={
+                "attempted_retries": 1,
+                "model_info": {"id": "dep-lit145-final"},
+                "previous_models": (
+                    {"deployment_id": "dep-lit145-final", "exception_type": "Timeout", "attempted_retries": 0},
+                ),
+            }
+        ),
+    )
+    current_only: Final = _failure_fields_to_lift(
+        {"litellm_logging_obj": current_only_logging_obj}, provider_billed=True
+    )
+    current_only_usage: Final = current_only["combined_usage_object"]
+
+    assert current_only_usage.prompt_tokens > 0
+    assert lifted["combined_usage_object"].prompt_tokens == 24 + current_only_usage.prompt_tokens
     assert "billed_failed_attempts" not in lifted
+
+
+def test_carry_superseded_attempt_usage_without_stashed_usage_preserves_failure_estimate() -> None:
+    request_start: Final = real_datetime.datetime(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model=FAILURE_USAGE_MODEL,
+        messages=ONE_USER_MESSAGE,
+        stream=False,
+        call_type="acompletion",
+        start_time=request_start,
+        litellm_call_id="call-lit145-no-stashed-usage",
+        function_id="fn-lit145-no-stashed-usage",
+    )
+    logging_obj.pre_call(input=ONE_USER_MESSAGE, api_key="sk-test", model=FAILURE_USAGE_MODEL)
+    logging_obj.model_call_details["call_type"] = "acompletion"
+    logging_obj.model_call_details["messages"] = ONE_USER_MESSAGE
+
+    try:
+        try:
+            raise httpx.ReadTimeout("no bytes in time")
+        except httpx.ReadTimeout as cause:
+            raise litellm.Timeout("Request timed out.", model=FAILURE_USAGE_MODEL, llm_provider="openai") from cause
+    except litellm.Timeout as timeout:
+        logging_obj.failure_handler(
+            timeout,
+            traceback.format_exc(),
+            request_start,
+            request_start + real_datetime.timedelta(seconds=1),
+        )
+
+    assert "combined_usage_object" not in logging_obj.model_call_details
+    request_data: Final = {"litellm_logging_obj": logging_obj}
+    before: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+
+    carry_superseded_attempt_usage(request_data)
+
+    after: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+    before_usage: Final = before.get("combined_usage_object")
+    after_usage: Final = after.get("combined_usage_object")
+    assert before_usage is not None
+    assert after_usage is not None
+    assert after_usage == before_usage
+    assert before["response_cost"] > 0
+    assert after["response_cost"] == before["response_cost"]
+
+
+@pytest.mark.asyncio
+async def test_dropped_stream_failure_attribution_reaches_terminal_spend_row() -> None:
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+
+    request_start: Final = real_datetime.datetime(2026, 1, 1)
+    model: Final = "deployment-model"
+    logging_obj: Final = Logging(
+        model=model,
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        call_type="acompletion",
+        start_time=request_start,
+        litellm_call_id="call-lit145-attribution",
+        function_id="fn-lit145-attribution",
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-id"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "custom_llm_provider": "openai",
+        "first_api_call_start_time": request_start,
+        "current_attempt_api_call_start_time": request_start,
+    }
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model=model,
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-attribution",
+            created=1742056047,
+            model=model,
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="The"))],
+            usage=Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
+        )
+    ]
+    exception: Final = httpx.ReadError("connection dropped")
+
+    with pytest.raises(MidStreamFallbackError):
+        wrapper._log_stream_failure_and_raise(exception)
+    await wrapper.wait_for_failure_logging(timeout=10)
+
+    request_data: Final = {"litellm_logging_obj": logging_obj}
+    lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+    terminal_kwargs: Final = {
+        key: value
+        for key, value in {**request_data, **lifted}.items()
+        if key != "litellm_logging_obj"
+    }
+    row: Final = get_logging_payload(
+        kwargs=terminal_kwargs,
+        response_obj=exception,
+        start_time=request_start,
+        end_time=request_start + real_datetime.timedelta(seconds=1),
+    )
+
+    assert row["model_id"] == "deployment-id"
+    assert row["custom_llm_provider"] == "openai"
+    assert row["model"] == model
+
+
+class _ReplaceSharedFailurePayload(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logging_obj: Logging | None = None
+        self.replaced: asyncio.Event = asyncio.Event()
+        self.started: asyncio.Event = asyncio.Event()
+        self.release: asyncio.Event = asyncio.Event()
+        self.pause_until_released: bool = False
+        self.replacement_payload: object | None = None
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: real_datetime.datetime,
+        end_time: real_datetime.datetime,
+    ) -> None:
+        from pydantic import TypeAdapter
+
+        from litellm.types.utils import StandardLoggingPayload
+
+        payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"])
+        self.started.set()
+        if self.pause_until_released:
+            await self.release.wait()
+        logging_obj: Final = self.logging_obj
+        if logging_obj is None:
+            return
+        replacement: Final = self.replacement_payload or TypeAdapter(StandardLoggingPayload).validate_python(
+            {
+                **payload,
+                "model_id": "newer-deployment-id",
+                "custom_llm_provider": "newer-provider",
+                "model": "newer-model",
+            }
+        )
+        logging_obj.model_call_details = {
+            **logging_obj.model_call_details,
+            "standard_logging_object": replacement,
+        }
+        self.replaced.set()
+
+
+class _OrderedAttemptFailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempt_a_started: asyncio.Event = asyncio.Event()
+        self.attempt_b_started: asyncio.Event = asyncio.Event()
+        self.release_attempt_a: asyncio.Event = asyncio.Event()
+        self.release_attempt_b: asyncio.Event = asyncio.Event()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: real_datetime.datetime,
+        end_time: real_datetime.datetime,
+    ) -> None:
+        from pydantic import TypeAdapter
+
+        from litellm.types.utils import StandardLoggingPayload
+
+        payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"])
+        if payload["model_id"] == "deployment-a":
+            self.attempt_a_started.set()
+            await self.release_attempt_a.wait()
+            return
+        if payload["model_id"] == "deployment-b":
+            self.attempt_b_started.set()
+            await self.release_attempt_b.wait()
+
+
+class _PausedBaselineFailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started: asyncio.Event = asyncio.Event()
+        self.release: asyncio.Event = asyncio.Event()
+        self.standard_logging_object: object | None = None
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: real_datetime.datetime,
+        end_time: real_datetime.datetime,
+    ) -> None:
+        self.standard_logging_object = kwargs.get("standard_logging_object")
+        self.started.set()
+        await self.release.wait()
+
+
+@pytest.mark.asyncio
+async def test_latest_dropped_attempt_publishes_its_payload_after_earlier_dispatch_finishes() -> None:
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.utils import Usage
+
+    request_start: Final = real_datetime.datetime(2026, 1, 1)
+    marker_a: Final = request_start
+    marker_b: Final = request_start + real_datetime.timedelta(seconds=1)
+    recorder: Final = _OrderedAttemptFailureRecorder()
+    logging_obj: Final = Logging(
+        model="deployment-model-a",
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        call_type="acompletion",
+        start_time=request_start,
+        litellm_call_id="call-lit145-attempt-order",
+        function_id="fn-lit145-attempt-order",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="deployment-model-a",
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-a"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "custom_llm_provider": "openai",
+        "first_api_call_start_time": request_start,
+        "current_attempt_api_call_start_time": marker_a,
+        "combined_usage_object": Usage(prompt_tokens=4, completion_tokens=1, total_tokens=5),
+        "response_cost": 0.001,
+    }
+
+    attempt_a: Final = asyncio.create_task(
+        logging_obj.dispatch_attempt_failure_handlers(httpx.ReadError("attempt A dropped"), "")
+    )
+    await asyncio.wait_for(recorder.attempt_a_started.wait(), timeout=10)
+
+    logging_obj.carry_failed_attempt_usage()
+    logging_obj.update_environment_variables(
+        model="deployment-model-b",
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-b"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "model": "deployment-model-b",
+        "custom_llm_provider": "anthropic",
+        "current_attempt_api_call_start_time": marker_b,
+        "combined_usage_object": Usage(prompt_tokens=7, completion_tokens=2, total_tokens=9),
+        "response_cost": 0.002,
+    }
+
+    attempt_b: Final = asyncio.create_task(
+        logging_obj.dispatch_attempt_failure_handlers(httpx.ReadError("attempt B dropped"), "")
+    )
+    await asyncio.wait_for(recorder.attempt_b_started.wait(), timeout=10)
+    recorder.release_attempt_a.set()
+    await attempt_a
+    recorder.release_attempt_b.set()
+    await attempt_b
+
+    request_data: Final = {"litellm_logging_obj": logging_obj}
+    lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+    terminal_kwargs: Final = {
+        key: value
+        for key, value in {**request_data, **lifted}.items()
+        if key != "litellm_logging_obj"
+    }
+    row: Final = get_logging_payload(
+        kwargs=terminal_kwargs,
+        response_obj=httpx.ReadError("attempt B dropped"),
+        start_time=request_start,
+        end_time=request_start + real_datetime.timedelta(seconds=1),
+    )
+
+    assert row["model_id"] == "deployment-b"
+    assert row["custom_llm_provider"] == "anthropic"
+    assert row["model"] == "deployment-model-b"
+
+
+@pytest.mark.asyncio
+async def test_dropped_attempt_attribution_is_published_while_failure_callback_is_paused() -> None:
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.utils import Usage
+
+    request_start: Final = real_datetime.datetime(2026, 1, 1)
+    marker_a: Final = request_start
+    failure: Final = httpx.ReadError("attempt A dropped")
+    recorder: Final = _OrderedAttemptFailureRecorder()
+    logging_obj: Final = Logging(
+        model="deployment-model-a",
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        call_type="acompletion",
+        start_time=request_start,
+        litellm_call_id="call-lit145-attempt-paused",
+        function_id="fn-lit145-attempt-paused",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="deployment-model-a",
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-a"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "custom_llm_provider": "openai",
+        "first_api_call_start_time": request_start,
+        "current_attempt_api_call_start_time": marker_a,
+        "combined_usage_object": Usage(prompt_tokens=4, completion_tokens=1, total_tokens=5),
+        "response_cost": 0.001,
+    }
+
+    attempt: Final = asyncio.create_task(logging_obj.dispatch_attempt_failure_handlers(failure, ""))
+    await asyncio.wait_for(recorder.attempt_a_started.wait(), timeout=10)
+
+    request_data: Final = {"litellm_logging_obj": logging_obj}
+    lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+    terminal_kwargs: Final = {
+        key: value
+        for key, value in {**request_data, **lifted}.items()
+        if key != "litellm_logging_obj"
+    }
+    row: Final = get_logging_payload(
+        kwargs=terminal_kwargs,
+        response_obj=failure,
+        start_time=request_start,
+        end_time=request_start + real_datetime.timedelta(seconds=1),
+    )
+
+    try:
+        assert row["model_id"] == "deployment-a"
+        assert row["custom_llm_provider"] == "openai"
+        assert row["model"] == "deployment-model-a"
+        assert row["prompt_tokens"] == 4
+        assert row["completion_tokens"] == 1
+    finally:
+        recorder.release_attempt_a.set()
+        await attempt
+
+
+@pytest.mark.asyncio
+async def test_failed_attempt_publishes_baseline_reason_after_invalidation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pydantic import TypeAdapter
+
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.hooks.autorouter_baseline_cache import AutoRouterBaselineCache, CapturedBaselineObservation
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.router import Router
+    from litellm.types.utils import CallTypes, StandardLoggingPayload, Usage
+    from tests.unit.proxy.hooks.test_autorouter_baseline_cache import _MODELS, _kwargs
+
+    request_start: Final = real_datetime.datetime(2026, 1, 1)
+    marker: Final = request_start
+    model: Final = "deployment-model-a"
+    router: Final = Router(model_list=_MODELS, disable_cooldowns=True)
+    baseline_cache: Final = AutoRouterBaselineCache(
+        None,
+        router=lambda: router,
+        clock=lambda: request_start.timestamp() + 10,
+    )
+    recorder: Final = _PausedBaselineFailureRecorder()
+    logging_obj: Final = Logging(
+        model=model,
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        call_type=CallTypes.anthropic_messages.value,
+        start_time=request_start,
+        litellm_call_id="call-lit145-baseline-failure",
+        function_id="fn-lit145-baseline-failure",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-a"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "custom_llm_provider": "openai",
+        "first_api_call_start_time": request_start,
+        "current_attempt_api_call_start_time": marker,
+        "combined_usage_object": Usage(prompt_tokens=4, completion_tokens=1, total_tokens=5),
+        "response_cost": 0.001,
+    }
+    await baseline_cache.async_pre_call_deployment_hook(_kwargs(logging_obj), CallTypes.anthropic_messages)
+    assert logging_obj.baseline_cache_context is not None
+
+    failure: Final = httpx.ReadError("attempt A dropped")
+    attempt: Final = asyncio.create_task(logging_obj.dispatch_attempt_failure_handlers(failure, ""))
+    try:
+        await asyncio.wait_for(recorder.started.wait(), timeout=10)
+        request_data: Final = {"litellm_logging_obj": logging_obj}
+        lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+        terminal_kwargs: Final = {
+            key: value
+            for key, value in {**request_data, **lifted}.items()
+            if key != "litellm_logging_obj"
+        }
+        row: Final = get_logging_payload(
+            kwargs=terminal_kwargs,
+            response_obj=failure,
+            start_time=request_start,
+            end_time=request_start + real_datetime.timedelta(seconds=1),
+        )
+
+        assert row["model_id"] == "deployment-a"
+        assert row["custom_llm_provider"] == "openai"
+        assert row["model"] == model
+        assert row["prompt_tokens"] == 4
+        assert row["completion_tokens"] == 1
+        lifted_payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(lifted["standard_logging_object"])
+        callback_payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(
+            recorder.standard_logging_object
+        )
+
+        def baseline_reason(payload: StandardLoggingPayload) -> str:
+            encoded: Final = payload["autorouter_baseline_observation"]
+            assert isinstance(encoded, str)
+            return CapturedBaselineObservation.model_validate_json(encoded).observation.reason or ""
+
+        assert baseline_reason(lifted_payload) == "failed_request"
+        assert baseline_reason(callback_payload) == "failed_request"
+    finally:
+        recorder.release.set()
+        await attempt
+
+
+@pytest.mark.asyncio
+async def test_queued_stale_attempt_dispatch_does_not_publish_over_current_attempt() -> None:
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.utils import Usage
+
+    request_start: Final = real_datetime.datetime(2026, 1, 1)
+    marker_a: Final = request_start
+    marker_b: Final = request_start + real_datetime.timedelta(seconds=1)
+    recorder: Final = _OrderedAttemptFailureRecorder()
+    logging_obj: Final = Logging(
+        model="deployment-model-a",
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        call_type="acompletion",
+        start_time=request_start,
+        litellm_call_id="call-lit145-stale-attempt",
+        function_id="fn-lit145-stale-attempt",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="deployment-model-a",
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-a"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "custom_llm_provider": "openai",
+        "first_api_call_start_time": request_start,
+        "current_attempt_api_call_start_time": marker_a,
+        "combined_usage_object": Usage(prompt_tokens=4, completion_tokens=1, total_tokens=5),
+        "response_cost": 0.001,
+    }
+    failure_a: Final = httpx.ReadError("attempt A dropped")
+    coro_a: Final = logging_obj.dispatch_attempt_failure_handlers(failure_a, "")
+
+    logging_obj.carry_failed_attempt_usage()
+    logging_obj.update_environment_variables(
+        model="deployment-model-b",
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-b"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "model": "deployment-model-b",
+        "custom_llm_provider": "anthropic",
+        "current_attempt_api_call_start_time": marker_b,
+        "combined_usage_object": Usage(prompt_tokens=7, completion_tokens=2, total_tokens=9),
+        "response_cost": 0.002,
+    }
+    failure_b: Final = httpx.ReadError("attempt B dropped")
+    coro_b: Final = logging_obj.dispatch_attempt_failure_handlers(failure_b, "")
+
+    task_a: Final = asyncio.create_task(coro_a)
+    task_b: Final = asyncio.create_task(coro_b)
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(recorder.attempt_a_started.wait(), recorder.attempt_b_started.wait()),
+            timeout=10,
+        )
+        request_data: Final = {"litellm_logging_obj": logging_obj}
+        lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+        terminal_kwargs: Final = {
+            key: value
+            for key, value in {**request_data, **lifted}.items()
+            if key != "litellm_logging_obj"
+        }
+        row: Final = get_logging_payload(
+            kwargs=terminal_kwargs,
+            response_obj=failure_b,
+            start_time=request_start,
+            end_time=request_start + real_datetime.timedelta(seconds=1),
+        )
+
+        assert row["model_id"] == "deployment-b"
+        assert row["custom_llm_provider"] == "anthropic"
+        assert row["model"] == "deployment-model-b"
+    finally:
+        recorder.release_attempt_a.set()
+        recorder.release_attempt_b.set()
+        await asyncio.gather(task_a, task_b)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queued_start", [False, True], ids=["running-start", "queued-start"])
+async def test_dropped_stream_failure_does_not_overwrite_newer_terminal_payload(queued_start: bool) -> None:
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.utils import Delta, ModelResponseStream, StandardLoggingPayload, StreamingChoices, Usage
+    from pydantic import TypeAdapter
+
+    request_start: Final = real_datetime.datetime(2026, 1, 1)
+    model: Final = "deployment-model"
+    recorder: Final = _ReplaceSharedFailurePayload()
+    logging_obj: Final = Logging(
+        model=model,
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        call_type="acompletion",
+        start_time=request_start,
+        litellm_call_id="call-lit145-identity",
+        function_id="fn-lit145-identity",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    recorder.logging_obj = logging_obj
+    initial_payload: Final = {
+        "model_id": "older-deployment-id",
+        "custom_llm_provider": "older-provider",
+        "model": "older-model",
+    }
+    logging_obj.update_environment_variables(
+        model=model,
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-id"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "custom_llm_provider": "openai",
+        "first_api_call_start_time": request_start,
+        "current_attempt_api_call_start_time": request_start,
+        "standard_logging_object": initial_payload,
+    }
+
+    def assert_newer_payload_attribution() -> None:
+        request_data: Final = {"litellm_logging_obj": logging_obj}
+        lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+        terminal_kwargs: Final = {
+            key: value
+            for key, value in {**request_data, **lifted}.items()
+            if key != "litellm_logging_obj"
+        }
+        row: Final = get_logging_payload(
+            kwargs=terminal_kwargs,
+            response_obj=exception,
+            start_time=request_start,
+            end_time=request_start + real_datetime.timedelta(seconds=1),
+        )
+
+        assert row["model_id"] == "newer-deployment-id"
+        assert row["custom_llm_provider"] == "newer-provider"
+        assert row["model"] == "newer-model"
+
+    exception: Final = httpx.ReadError("connection dropped")
+    if queued_start:
+        dispatch: Final = logging_obj.dispatch_attempt_failure_handlers(exception, "")
+        logging_obj._failure_handler_helper_fn(
+            exception=httpx.ReadError("newer failure"),
+            traceback_exception="",
+            start_time=request_start,
+            end_time=request_start + real_datetime.timedelta(seconds=1),
+        )
+        replacement_base: Final = logging_obj.model_call_details["standard_logging_object"]
+        replacement_payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(
+            {
+                **replacement_base,
+                "model_id": "newer-deployment-id",
+                "custom_llm_provider": "newer-provider",
+                "model": "newer-model",
+            }
+        )
+        recorder.pause_until_released = True
+        recorder.replacement_payload = replacement_payload
+        logging_obj.model_call_details = {
+            **logging_obj.model_call_details,
+            "standard_logging_object": replacement_payload,
+        }
+        assert logging_obj.model_call_details["current_attempt_api_call_start_time"] == request_start
+
+        task: Final = asyncio.create_task(dispatch)
+        try:
+            await asyncio.wait_for(recorder.started.wait(), timeout=10)
+            assert_newer_payload_attribution()
+        finally:
+            recorder.release.set()
+            await task
+
+        await asyncio.wait_for(recorder.replaced.wait(), timeout=10)
+        assert_newer_payload_attribution()
+        return
+
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model=model,
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-identity",
+            created=1742056047,
+            model=model,
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="The"))],
+            usage=Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
+        )
+    ]
+
+    with pytest.raises(MidStreamFallbackError):
+        wrapper._log_stream_failure_and_raise(exception)
+    await wrapper.wait_for_failure_logging(timeout=10)
+    await asyncio.wait_for(recorder.replaced.wait(), timeout=10)
+    assert_newer_payload_attribution()
 
 
 def test_a_timed_out_attempt_from_the_group_a_fallback_left_is_still_billed():
@@ -2653,6 +3334,47 @@ def test_a_request_that_timed_out_at_a_provider_bills_its_input_at_the_input_rat
     expected_input_cost, _ = litellm.cost_per_token(model=FAILURE_USAGE_MODEL, prompt_tokens=usage.prompt_tokens)
     assert expected_input_cost > 0
     assert response_cost == pytest.approx(expected_input_cost)
+
+
+@pytest.mark.parametrize(
+    "current_attempt_api_call_start_time",
+    [None, 1700000001.0],
+    ids=["retry-not-dispatched", "retry-dispatched"],
+)
+def test_a_retry_failure_bills_input_only_for_dispatched_attempts(
+    current_attempt_api_call_start_time: float | None,
+) -> None:
+    from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_fields_to_lift
+    from litellm.types.utils import Usage
+
+    prior_usage: Final = Usage(prompt_tokens=4, completion_tokens=2, total_tokens=6)
+    estimated_retry_usage: Final = _estimate_dispatched_failure_usage(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None)
+    assert estimated_retry_usage is not None
+
+    lifted: Final = _failure_fields_to_lift(
+        {
+            "litellm_logging_obj": _LoggingObj(
+                {
+                    "first_api_call_start_time": 1700000000.0,
+                    "current_attempt_api_call_start_time": current_attempt_api_call_start_time,
+                    "failed_attempts_usage": ((prior_usage, 0.25),),
+                    "call_type": "acompletion",
+                    "model": FAILURE_USAGE_MODEL,
+                    "messages": ONE_USER_MESSAGE,
+                }
+            )
+        }
+    )
+
+    usage: Final = lifted["combined_usage_object"]
+    assert isinstance(usage, Usage)
+    expected_retry_tokens: Final = (
+        estimated_retry_usage.prompt_tokens if current_attempt_api_call_start_time is not None else 0
+    )
+    assert usage.prompt_tokens == prior_usage.prompt_tokens + expected_retry_tokens
+    assert usage.completion_tokens == prior_usage.completion_tokens
+    assert usage.total_tokens == prior_usage.total_tokens + expected_retry_tokens
+    assert lifted["response_cost"] == 0.25
 
 
 @pytest.mark.parametrize(
