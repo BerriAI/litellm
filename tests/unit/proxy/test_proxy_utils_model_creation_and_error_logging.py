@@ -2624,6 +2624,25 @@ class _OrderedAttemptFailureRecorder(CustomLogger):
             await self.release_attempt_b.wait()
 
 
+class _PausedBaselineFailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started: asyncio.Event = asyncio.Event()
+        self.release: asyncio.Event = asyncio.Event()
+        self.standard_logging_object: object | None = None
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: real_datetime.datetime,
+        end_time: real_datetime.datetime,
+    ) -> None:
+        self.standard_logging_object = kwargs.get("standard_logging_object")
+        self.started.set()
+        await self.release.wait()
+
+
 @pytest.mark.asyncio
 async def test_latest_dropped_attempt_publishes_its_payload_after_earlier_dispatch_finishes() -> None:
     from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
@@ -2768,6 +2787,96 @@ async def test_dropped_attempt_attribution_is_published_while_failure_callback_i
         assert row["completion_tokens"] == 1
     finally:
         recorder.release_attempt_a.set()
+        await attempt
+
+
+@pytest.mark.asyncio
+async def test_failed_attempt_publishes_baseline_reason_after_invalidation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pydantic import TypeAdapter
+
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.hooks.autorouter_baseline_cache import AutoRouterBaselineCache, CapturedBaselineObservation
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.router import Router
+    from litellm.types.utils import CallTypes, StandardLoggingPayload, Usage
+    from tests.unit.proxy.hooks.test_autorouter_baseline_cache import _MODELS, _kwargs
+
+    request_start: Final = real_datetime.datetime(2026, 1, 1)
+    marker: Final = request_start
+    model: Final = "deployment-model-a"
+    router: Final = Router(model_list=_MODELS, disable_cooldowns=True)
+    baseline_cache: Final = AutoRouterBaselineCache(
+        None,
+        router=lambda: router,
+        clock=lambda: request_start.timestamp() + 10,
+    )
+    recorder: Final = _PausedBaselineFailureRecorder()
+    logging_obj: Final = Logging(
+        model=model,
+        messages=ONE_USER_MESSAGE,
+        stream=True,
+        call_type=CallTypes.anthropic_messages.value,
+        start_time=request_start,
+        litellm_call_id="call-lit145-baseline-failure",
+        function_id="fn-lit145-baseline-failure",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "deployment-a"}}),
+    )
+    logging_obj.model_call_details = {
+        **logging_obj.model_call_details,
+        "custom_llm_provider": "openai",
+        "first_api_call_start_time": request_start,
+        "current_attempt_api_call_start_time": marker,
+        "combined_usage_object": Usage(prompt_tokens=4, completion_tokens=1, total_tokens=5),
+        "response_cost": 0.001,
+    }
+    await baseline_cache.async_pre_call_deployment_hook(_kwargs(logging_obj), CallTypes.anthropic_messages)
+    assert logging_obj.baseline_cache_context is not None
+
+    failure: Final = httpx.ReadError("attempt A dropped")
+    attempt: Final = asyncio.create_task(logging_obj.dispatch_attempt_failure_handlers(failure, ""))
+    try:
+        await asyncio.wait_for(recorder.started.wait(), timeout=10)
+        request_data: Final = {"litellm_logging_obj": logging_obj}
+        lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+        terminal_kwargs: Final = {
+            key: value
+            for key, value in {**request_data, **lifted}.items()
+            if key != "litellm_logging_obj"
+        }
+        row: Final = get_logging_payload(
+            kwargs=terminal_kwargs,
+            response_obj=failure,
+            start_time=request_start,
+            end_time=request_start + real_datetime.timedelta(seconds=1),
+        )
+
+        assert row["model_id"] == "deployment-a"
+        assert row["custom_llm_provider"] == "openai"
+        assert row["model"] == model
+        assert row["prompt_tokens"] == 4
+        assert row["completion_tokens"] == 1
+        lifted_payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(lifted["standard_logging_object"])
+        callback_payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(
+            recorder.standard_logging_object
+        )
+
+        def baseline_reason(payload: StandardLoggingPayload) -> str:
+            encoded: Final = payload["autorouter_baseline_observation"]
+            assert isinstance(encoded, str)
+            return CapturedBaselineObservation.model_validate_json(encoded).observation.reason or ""
+
+        assert baseline_reason(lifted_payload) == "failed_request"
+        assert baseline_reason(callback_payload) == "failed_request"
+    finally:
+        recorder.release.set()
         await attempt
 
 

@@ -605,6 +605,7 @@ class Logging(LiteLLMLoggingBaseClass):
     classifier_input: Mapping[str, JsonValue] | None = None
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
+    _on_failure_payload_built: "Callable[[], None] | None" = None
 
     @property
     def _defer_async_logging(self) -> bool:
@@ -2409,17 +2410,19 @@ class Logging(LiteLLMLoggingBaseClass):
         attempt_marker: Final = self.model_call_details.get("current_attempt_api_call_start_time")
         attempt: Final = self.attempt_scoped_copy()
 
+        def publish() -> None:
+            attempt_payload: Final = attempt.model_call_details.get("standard_logging_object")
+            current_marker: Final = self.model_call_details.get("current_attempt_api_call_start_time")
+            if (
+                attempt_payload is not None
+                and self.model_call_details.get("standard_logging_object") is shared_payload
+                and same_attempt_marker(current_marker, attempt_marker)
+            ):
+                self.model_call_details["standard_logging_object"] = attempt_payload
+
+        attempt._on_failure_payload_built = publish
+
         async def dispatch() -> None:
-            if attempt.should_run_logging(event_type="async_failure"):
-                attempt._failure_handler_helper_fn(exception=exception, traceback_exception=traceback_exception)
-                attempt_payload: Final = attempt.model_call_details.get("standard_logging_object")
-                current_marker: Final = self.model_call_details.get("current_attempt_api_call_start_time")
-                if (
-                    attempt_payload is not None
-                    and self.model_call_details.get("standard_logging_object") is shared_payload
-                    and same_attempt_marker(current_marker, attempt_marker)
-                ):
-                    self.model_call_details["standard_logging_object"] = attempt_payload
             await attempt.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True)
 
         return dispatch()
@@ -4364,7 +4367,8 @@ class Logging(LiteLLMLoggingBaseClass):
             start_time=start_time,
             end_time=end_time,
         )
-
+        if self._on_failure_payload_built is not None:
+            self._on_failure_payload_built()
         callbacks: Final = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
             global_callbacks=litellm._async_failure_callback,
