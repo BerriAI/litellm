@@ -1599,6 +1599,56 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
     assert cost == pytest.approx(3 * 0.001)
 
 
+def test_rerank_completion_cost_uses_the_provider_reported_cost():
+    model: Final = "jina_ai/reranker-missing-from-the-cost-map"
+    assert litellm.model_cost.get(model) is None
+    response: Final = RerankResponse(
+        id="provider_reported_rerank_cost",
+        results=[{"index": 0, "relevance_score": 0.9}],
+        meta={"billed_units": {"search_units": 1, "cost": 0.001}},
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response, model=model, custom_llm_provider="jina_ai", call_type="arerank"
+    )
+
+    assert cost == pytest.approx(0.001)
+
+
+def test_rerank_custom_pricing_wins_over_the_provider_reported_cost():
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "semantic-ranker-reported-cost-test",
+                "litellm_params": {
+                    "model": "vertex_ai/semantic-ranker-reported-cost-test",
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-east5",
+                },
+                "model_info": {"input_cost_per_query": 0.002},
+            },
+        ]
+    )
+    response: Final = RerankResponse(
+        id="custom_priced_rerank_with_reported_cost",
+        results=[{"index": 0, "relevance_score": 0.9}],
+        meta={"billed_units": {"search_units": 3, "cost": 0.5}},
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="vertex_ai/semantic-ranker-reported-cost-test",
+        custom_llm_provider="vertex_ai",
+        call_type="arerank",
+        custom_pricing=True,
+        router_model_id=router.model_list[0]["model_info"]["id"],
+    )
+
+    assert cost == pytest.approx(3 * 0.002)
+
+
 @pytest.mark.parametrize(
     "model",
     (

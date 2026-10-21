@@ -56,6 +56,7 @@ class OptionalRerankParams(TypedDict, total=False):
 class RerankBilledUnits(TypedDict, total=False):
     search_units: int | None
     total_tokens: int | None
+    cost: ReadOnly[float | None]
 
 
 class RerankTokens(TypedDict, total=False):

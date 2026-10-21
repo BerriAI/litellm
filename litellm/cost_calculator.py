@@ -1874,6 +1874,7 @@ def completion_cost(
                         rerank_billed_units = RerankBilledUnits(
                             search_units=billed_units.get("search_units"),
                             total_tokens=billed_units.get("total_tokens"),
+                            cost=None if custom_pricing else billed_units.get("cost"),
                         )
 
                         search_units = billed_units.get("search_units") or 1  # cohere charges per request by default.
@@ -2671,6 +2672,10 @@ def rerank_cost(
     Returns
     - float or None: cost of response OR none if error.
     """
+    provider_reported_cost: Final = billed_units.get("cost") if billed_units is not None else None
+    if provider_reported_cost is not None:
+        return provider_reported_cost, 0.0
+
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
 
     try:
