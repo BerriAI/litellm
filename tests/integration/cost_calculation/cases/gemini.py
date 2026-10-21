@@ -3437,6 +3437,14 @@ GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY: Final = _gemini_case(
         spend=0.02018016, input_cost=0.0086112, output_cost=0.01156896, prompt_tokens=1840, completion_tokens=412
     ),
 )
+GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_FLEX: Final = _gemini_case(
+    GEMINI_GEMINI_3_8_FLASH_SERVICE_TIER_FLEX,
+    "gemini-gemini-3.1-pro-preview-service_tier_flex",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini-3.1-pro-preview",
+    ExactExpected(spend=0.0056056, input_cost=0.002392, output_cost=0.0032136, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={"serviceTier": "flex"},
+)
 GEMINI_GEMINI_4_ARGON_TOOL_CALL: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_TOOL_CALL, "gemini-gemini-4-argon-tool_call", "gemini/gemini-4-argon",
     "gemini-4-argon", ExactExpected(spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412)
@@ -3575,6 +3583,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_GEMINI_3_1_PRO_PREVIEW_REASONING,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_TOOL_CALL,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY,
+    GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_FLEX,
     *(pair.bridged for pair in GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES),
     *(pair.bridged for pair in GEMINI_GEMINI_3_8_FLASH_ROUTE_BRIDGES),
     *(pair.bridged for pair in GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES),
