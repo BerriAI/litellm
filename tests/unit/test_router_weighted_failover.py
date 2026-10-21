@@ -1008,3 +1008,7 @@ async def test_failover_reaches_healthy_sibling_when_affinity_pins_failed_deploy
     ]
 
     assert [response._hidden_params["model_id"] for response in responses] == ["B", "B"]
+    assert [response._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] for response in responses] == [
+        1,
+        0,
+    ]

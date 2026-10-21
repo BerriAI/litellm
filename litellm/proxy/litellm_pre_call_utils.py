@@ -355,6 +355,8 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "fallback_depth",
     "_target_order",
     "attempted_targets",
+    "_excluded_deployment_ids",
+    "_retry_skipped_deployment_ids",
     "proxy_server_request",
     "standard_logging_object",
     "secret_fields",

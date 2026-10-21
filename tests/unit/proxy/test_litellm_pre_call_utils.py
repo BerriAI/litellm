@@ -1109,6 +1109,8 @@ async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection
         ("fallback_depth", True),
         ("_target_order", 2),
         ("attempted_targets", ["forged"]),
+        ("_excluded_deployment_ids", ["pinned-deployment"]),
+        ("_retry_skipped_deployment_ids", ["pinned-deployment"]),
     ],
 )
 async def test_add_litellm_data_to_request_strips_forged_fallback_hop_state(

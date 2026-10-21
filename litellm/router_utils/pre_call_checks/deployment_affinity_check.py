@@ -16,7 +16,6 @@ import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, cast
 
-from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
@@ -31,6 +30,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.common_utils import deployment_ids_failed_in_request
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
 
@@ -38,8 +38,6 @@ from litellm.types.utils import CallTypes
 class DeploymentAffinityCacheValue(TypedDict, closed=True):
     model_id: ReadOnly[str]
 
-
-_DEPLOYMENT_IDS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
 
 VALID_MODEL_GROUP_AFFINITY_FLAGS: Final = frozenset(
     {
@@ -330,24 +328,6 @@ class DeploymentAffinityCheck(CustomLogger):
             return stored
         return None
 
-    @staticmethod
-    def _deployment_ids(value: object) -> tuple[str, ...]:
-        if value is None:
-            return ()
-        try:
-            return _DEPLOYMENT_IDS_ADAPTER.validate_python(value)
-        except ValidationError:
-            return ()
-
-    @classmethod
-    def _deployment_ids_failed_in_request(cls, request_kwargs: Mapping[str, object]) -> frozenset[str]:
-        return frozenset(
-            (
-                *cls._deployment_ids(request_kwargs.get("_excluded_deployment_ids")),
-                *cls._deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids")),
-            )
-        )
-
     def _set_local_pin(self, cache_key: str, value: object, ttl_seconds: int) -> None:
         set_local_affinity_pin(self.cache, cache_key, value, ttl_seconds)
 
@@ -426,7 +406,7 @@ class DeploymentAffinityCheck(CustomLogger):
         session_affinity_active: Final = (
             enable_session_id or self._get_marker_session_affinity_ttl(request_kwargs=request_kwargs) is not None
         )
-        failed_deployment_ids: Final = self._deployment_ids_failed_in_request(
+        failed_deployment_ids: Final = deployment_ids_failed_in_request(
             cast(Mapping[str, object], request_kwargs)  # cast-ok: request kwargs keys are param names
         )
         user_key: Final = (
@@ -450,7 +430,9 @@ class DeploymentAffinityCheck(CustomLogger):
                 elif isinstance(session_cache_result, str):
                     session_model_id = session_cache_result
 
-                if session_model_id and session_model_id not in failed_deployment_ids:
+                if session_model_id in failed_deployment_ids:
+                    await self.cache.async_delete_cache(key=session_cache_key)
+                elif session_model_id:
                     session_deployment: Final = self._find_deployment_by_model_id(
                         healthy_deployments=typed_healthy_deployments,
                         model_id=session_model_id,
@@ -485,6 +467,8 @@ class DeploymentAffinityCheck(CustomLogger):
             # Backwards / safety: allow raw string values.
             model_id = cache_result
 
+        if model_id in failed_deployment_ids:
+            await self.cache.async_delete_cache(key=cache_key)
         if not model_id or model_id in failed_deployment_ids:
             return typed_healthy_deployments
 

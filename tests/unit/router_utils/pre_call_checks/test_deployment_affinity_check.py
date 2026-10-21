@@ -9,6 +9,7 @@ import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -1266,3 +1267,35 @@ async def test_retry_reaches_healthy_sibling_when_affinity_pins_deployment_that_
     ]
 
     assert [response._hidden_params["model_id"] for response in responses] == ["B", "B"]
+    assert [response._hidden_params["additional_headers"]["x-litellm-attempted-retries"] for response in responses] == [
+        1,
+        0,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_pin_holds_even_after_its_deployment_failed():
+    callback: Final = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=60,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=True,
+    )
+    healthy_deployments: Final = [
+        {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}, "model_info": {"id": "A"}},
+        {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}, "model_info": {"id": "B"}},
+    ]
+
+    assert await callback.async_filter_deployments(
+        model="gpt-4o",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={
+            "previous_response_id": ResponsesAPIRequestUtils._build_responses_api_response_id(
+                custom_llm_provider="openai", model_id="A", response_id="resp_upstream"
+            ),
+            "_excluded_deployment_ids": ["A"],
+            "metadata": {"user_api_key_hash": "hashed-key"},
+        },
+        parent_otel_span=None,
+    ) == [healthy_deployments[0]]
