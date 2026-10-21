@@ -78,16 +78,22 @@ def stop_pool_when_reloader_exits(reloader: BaseProcess, pool_should_exit: threa
     pool_should_exit.set()
 
 
+class ReloadWorkerPool(Multiprocess):
+    def handle_quit(self) -> None:
+        LOGGER.info("Received SIGQUIT, exiting.")
+        self.should_exit.set()
+
+
 def _run_worker_pool(config: Config, sockets: Sequence[socket] | None) -> None:
     shared_sockets: Final = list(sockets or ())
     pool: Final = (
-        Multiprocess(
+        ReloadWorkerPool(
             config=config,
             target=Server(config=config).run,  # pyright: ignore[reportCallIssue]  # Older uvicorn versions require target
             sockets=shared_sockets,
         )
         if "target" in signature(Multiprocess).parameters
-        else Multiprocess(config=config, sockets=shared_sockets)
+        else ReloadWorkerPool(config=config, sockets=shared_sockets)
     )
     reloader: Final = multiprocessing.parent_process()
     if reloader is not None:

@@ -48,6 +48,20 @@ async def app(scope, receive, send):
     await send({"type": "http.response.start", "status": 200, "headers": []})
     await send({"type": "http.response.body", "body": str(os.getpid()).encode()})
 """
+CORE_DUMP_SECONDS: Final = 3
+SLOW_CORE_DUMP_ON_QUIT: Final = f"""
+import os
+import signal
+import subprocess
+
+
+def freeze_until_killed(signum, frame):
+    subprocess.Popen(("sh", "-c", f"sleep {CORE_DUMP_SECONDS}; kill -9 {{os.getpid()}}"))
+    os.kill(os.getpid(), signal.SIGSTOP)
+
+
+signal.signal(signal.SIGQUIT, freeze_until_killed)
+"""
 POOL_RUNNER: Final = """import sys
 
 sys.path.insert(0, sys.argv[1])
@@ -193,14 +207,14 @@ def _wait_for_log(log: Path, process: subprocess.Popen[bytes], seen: Callable[[s
     raise AssertionError(log.read_text())
 
 
-def _start_pool(app_dir: Path, port: int, log: Path) -> subprocess.Popen[bytes]:
+def _start_pool(app_dir: Path, port: int, log: Path, runner: str = POOL_RUNNER) -> subprocess.Popen[bytes]:
     with log.open("wb") as output:
         return subprocess.Popen(
             (
                 sys.executable,
                 "-I",
                 "-c",
-                POOL_RUNNER,
+                runner,
                 str(app_dir),
                 str(port),
                 str(WORKER_HEALTHCHECK_SECONDS),
@@ -282,6 +296,31 @@ def test_the_pool_stops_and_frees_the_port_when_the_reloader_dies(
         process.wait(timeout=POOL_TIMEOUT_SECONDS)
         deadline: Final = time.monotonic() + POOL_TIMEOUT_SECONDS
         while psutil.pid_exists(pool_parent) or not _port_refuses_connections(port):
+            assert time.monotonic() < deadline, log.read_text()
+            time.sleep(0.2)
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+
+
+@pytest.mark.skipif(
+    not multi_worker_reload_supported(), reason="uvicorn<0.50.0 cannot stop a worker pool on a startup failure"
+)
+@pytest.mark.timeout(3 * POOL_TIMEOUT_SECONDS)
+def test_ctrl_backslash_frees_the_port_without_waiting_out_the_worker_healthcheck_when_core_dumps_are_slow(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "reload_pool_app.py").write_text(PID_APP + SLOW_CORE_DUMP_ON_QUIT)
+    log: Final = tmp_path / "reload.log"
+    port: Final = _free_port()
+    process: Final = _start_pool(tmp_path, port, log, runner=SLOW_CORE_DUMP_ON_QUIT + POOL_RUNNER)
+    try:
+        workers: Final = _next_pool(log, process, port, frozenset())
+        pool_parent: Final = psutil.Process(min(workers)).ppid()
+        os.killpg(process.pid, signal.SIGQUIT)
+        deadline: Final = time.monotonic() + WORKER_HEALTHCHECK_SECONDS / 2
+        while process.poll() is None or psutil.pid_exists(pool_parent) or not _port_refuses_connections(port):
             assert time.monotonic() < deadline, log.read_text()
             time.sleep(0.2)
     finally:
