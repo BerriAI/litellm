@@ -8677,10 +8677,10 @@ def speech(
         # set API KEY
         api_key = (
             api_key
-            or dynamic_api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
             or litellm.api_key
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
+            or dynamic_api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
         )
 
         organization = (
@@ -8763,11 +8763,11 @@ def speech(
 
             api_key = (
                 api_key
-                or dynamic_api_key
                 or litellm.api_key
                 or litellm.azure_key
                 or get_secret("AZURE_OPENAI_API_KEY")
                 or get_secret("AZURE_API_KEY")
+                or dynamic_api_key
             )
 
             azure_ad_token: Final[str | None] = optional_params.get("extra_body", {}).pop(

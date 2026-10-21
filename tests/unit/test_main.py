@@ -4999,11 +4999,33 @@ def _clear_global_tts_keys(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(litellm, attribute, None)
 
 
-def test_speech_openai_compatible_sends_the_provider_scoped_key(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+def _set_or_clear_env(monkeypatch: pytest.MonkeyPatch, values: dict[str, str | None]) -> None:
+    for name, value in values.items():
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+
+@pytest.mark.parametrize(
+    ("provider_key", "openai_key", "sent_authorization"),
+    [
+        ("hosted-vllm-scoped-key", None, "Bearer hosted-vllm-scoped-key"),
+        ("hosted-vllm-scoped-key", "generic-openai-key", "Bearer generic-openai-key"),
+        (None, "generic-openai-key", "Bearer generic-openai-key"),
+        (None, None, "Bearer fake-api-key"),
+    ],
+    ids=["provider-key-alone", "generic-key-still-wins", "generic-key-beats-placeholder", "placeholder-when-unset"],
+)
+def test_speech_openai_compatible_falls_back_to_the_provider_scoped_key(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_key: str | None,
+    openai_key: str | None,
+    sent_authorization: str,
 ):
     _clear_global_tts_keys(monkeypatch)
-    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "hosted-vllm-scoped-key")
+    _set_or_clear_env(monkeypatch, {"HOSTED_VLLM_API_KEY": provider_key, "OPENAI_API_KEY": openai_key})
     route: Final = respx_mock.post("https://vllm.internal/v1/audio/speech").mock(
         return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"})
     )
@@ -5014,14 +5036,22 @@ def test_speech_openai_compatible_sends_the_provider_scoped_key(
 
     assert response.content == TTS_AUDIO
     assert route.call_count == 1
-    assert route.calls.last.request.headers["authorization"] == "Bearer hosted-vllm-scoped-key"
+    assert route.calls.last.request.headers["authorization"] == sent_authorization
 
 
-def test_speech_azure_sends_the_provider_scoped_key(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    ("generic_azure_key", "sent_api_key"),
+    [(None, "azure-ai-scoped-key"), ("generic-azure-key", "generic-azure-key")],
+    ids=["provider-key-alone", "generic-key-still-wins"],
+)
+def test_speech_azure_falls_back_to_the_provider_scoped_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, generic_azure_key: str | None, sent_api_key: str
+):
     _clear_global_tts_keys(monkeypatch)
-    monkeypatch.setenv("AZURE_AI_API_KEY", "azure-ai-scoped-key")
-    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "legacy-azure-openai-key")
-    monkeypatch.setenv("AZURE_API_KEY", "legacy-azure-key")
+    _set_or_clear_env(
+        monkeypatch,
+        {"AZURE_AI_API_KEY": "azure-ai-scoped-key", "AZURE_OPENAI_API_KEY": None, "AZURE_API_KEY": generic_azure_key},
+    )
     route: Final = respx_mock.post(
         url__regex=r"https://foundry\.internal/openai/deployments/tts-1/audio/speech\?api-version=.+"
     ).mock(return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"}))
@@ -5036,7 +5066,7 @@ def test_speech_azure_sends_the_provider_scoped_key(respx_mock: respx.MockRouter
 
     assert response.content == TTS_AUDIO
     assert route.call_count == 1
-    assert route.calls.last.request.headers["api-key"] == "azure-ai-scoped-key"
+    assert route.calls.last.request.headers["api-key"] == sent_api_key
 
 
 def test_speech_keeps_an_explicitly_passed_api_key_over_the_provider_scoped_one(
