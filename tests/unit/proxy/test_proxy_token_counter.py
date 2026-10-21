@@ -3892,3 +3892,50 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     ]
     assert [sorted(message) for message in messages if isinstance(message, dict)] == [["content", "role"]] * 3
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_local_fallback_handles_tool_addition_and_removal():
+    """When Anthropic provider token count is unavailable, the local estimate should handle
+    tool_addition and tool_removal blocks without raising ValueError / 500, and include the added tool schemas."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    tool_def = {
+        "name": "get_weather",
+        "description": "Get current weather",
+        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "tool_addition",
+                    "tool": {
+                        "type": "tool_definition",
+                        "definition": tool_def,
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "What is the weather in Paris?"},
+    ]
+
+    response = await proxy_server.count_request_tokens(
+        request=TokenCountRequest(model="claude-3-5-sonnet-20241022", messages=messages),
+        call_endpoint=False,
+        messages_format="anthropic",
+    )
+
+    assert response.count_source == "local_estimate"
+    assert response.total_tokens > 0
+
+    text_only_response = await proxy_server.count_request_tokens(
+        request=TokenCountRequest(
+            model="claude-3-5-sonnet-20241022",
+            messages=[{"role": "system", "content": []}, {"role": "user", "content": "What is the weather in Paris?"}],
+        ),
+        call_endpoint=False,
+        messages_format="anthropic",
+    )
+    assert response.total_tokens > text_only_response.total_tokens

@@ -2321,3 +2321,109 @@ def test_get_modified_max_tokens_leaves_a_gemini_4_long_decode_budget_alone(monk
         )
         == 200_000
     )
+
+
+def test_token_counter_anthropic_tool_addition_and_removal() -> None:
+    """Anthropic mid-conversation tool changes: tool_addition derives the effective tool set
+    and tool_removal drops tools, with the tool schemas counted via the tool definitions."""
+    from litellm.litellm_core_utils.token_counter import apply_mid_conversation_tool_changes
+
+    tool_def = {
+        "name": "get_weather",
+        "description": "Get current weather",
+        "input_schema": {
+            "type": "object",
+            "properties": {"location": {"type": "string", "description": "City name"}},
+            "required": ["location"],
+        },
+    }
+
+    messages_with_addition = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "tool_addition",
+                    "tool": {
+                        "type": "tool_definition",
+                        "definition": tool_def,
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "What is the weather in Paris?"},
+    ]
+
+    cleaned, effective_tools = apply_mid_conversation_tool_changes(messages_with_addition, None)
+    assert cleaned == [{"role": "system", "content": []}, {"role": "user", "content": "What is the weather in Paris?"}]
+    assert effective_tools == [tool_def]
+
+    # Count via token_counter with mid-conversation addition
+    count_from_addition = token_counter_new(model="claude-3-5-sonnet-20241022", messages=messages_with_addition)
+
+    # Direct equivalent: empty system message and tools passed explicitly
+    direct_count = token_counter_new(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "system", "content": []}, {"role": "user", "content": "What is the weather in Paris?"}],
+        tools=[tool_def],
+    )
+    assert count_from_addition == direct_count
+
+    # Now add tool_removal
+    messages_with_removal = [
+        *messages_with_addition,
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "tool_removal",
+                    "tool": {"type": "tool_reference", "name": "get_weather"},
+                }
+            ],
+        },
+        {"role": "user", "content": "Thanks!"},
+    ]
+
+    cleaned_rem, effective_tools_rem = apply_mid_conversation_tool_changes(messages_with_removal, None)
+    assert effective_tools_rem is None
+    count_with_removal = token_counter_new(model="claude-3-5-sonnet-20241022", messages=messages_with_removal)
+    direct_count_no_tools = token_counter_new(
+        model="claude-3-5-sonnet-20241022",
+        messages=[
+            {"role": "system", "content": []},
+            {"role": "user", "content": "What is the weather in Paris?"},
+            {"role": "system", "content": []},
+            {"role": "user", "content": "Thanks!"},
+        ],
+        tools=None,
+    )
+    assert count_with_removal == direct_count_no_tools
+
+
+def test_token_counter_content_list_with_tool_addition_does_not_raise() -> None:
+    """_count_content_list should safely ignore tool_addition and tool_removal without raising ValueError."""
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    def count_fn(s: str) -> int:
+        return len(s.split())
+
+    tokens = _count_content_list(
+        count_function=count_fn,
+        content_list=[
+            {"type": "text", "text": "Hello world"},
+            {
+                "type": "tool_addition",
+                "tool": {
+                    "type": "tool_definition",
+                    "definition": {"name": "test_tool", "input_schema": {"type": "object"}},
+                },
+            },
+            {
+                "type": "tool_removal",
+                "tool": {"type": "tool_reference", "name": "test_tool"},
+            },
+        ],
+        use_default_image_token_count=False,
+        default_token_count=None,
+    )
+    assert tokens == 2
