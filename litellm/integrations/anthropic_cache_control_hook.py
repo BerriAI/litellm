@@ -13,7 +13,7 @@ import copy
 import itertools
 import os
 import re
-from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Container, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
@@ -73,6 +73,7 @@ CACHE_BREAKPOINT_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION: Final = (5, 6)
 _GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
 _FINE_TUNED_BASE_PATTERN: Final = re.compile(r"^ft:([^:]+)")
+_O_SERIES_PATTERN: Final = re.compile(r"^o\d+(?:-|$)")
 OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
     {"text", "image", "image_url", "file", "input_audio", "input_text", "input_image", "input_file"}
 )
@@ -147,22 +148,21 @@ def openai_prompt_cache_breakpoint_support(model: str, custom_llm_provider: str 
 
 
 def _named_model_breakpoint_support(model: str) -> bool | None:
-    version_match: Final = _GPT_VERSION_PATTERN.match(model.rsplit("/", 1)[-1].lower())
+    bare_model: Final = model.rsplit("/", 1)[-1].lower()
+    if _O_SERIES_PATTERN.match(bare_model) is not None:
+        return False
+    version_match: Final = _GPT_VERSION_PATTERN.match(bare_model)
     if version_match is None:
-        return False if next(_model_map_entries(model), None) is not None else None
+        return None
     version: Final = (int(version_match.group(1)), int(version_match.group(2) or 0))
     return version >= OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION
 
 
-def _model_map_entries(model: str) -> Iterator[Mapping[str, object]]:
+def _model_map_prompt_cache_breakpoint_flag(model: str) -> bool | None:
     import litellm
 
     entries: Final = (litellm.model_cost.get(key) for key in (model, model.rsplit("/", 1)[-1]))
-    return (entry for entry in entries if isinstance(entry, dict))
-
-
-def _model_map_prompt_cache_breakpoint_flag(model: str) -> bool | None:
-    flags: Final = (entry.get("supports_prompt_cache_breakpoint") for entry in _model_map_entries(model))
+    flags: Final = (entry.get("supports_prompt_cache_breakpoint") for entry in entries if isinstance(entry, dict))
     return next((flag is True for flag in flags if flag is not None), None)
 
 
