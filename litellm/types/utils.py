@@ -20,7 +20,7 @@ from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
     FileTypes as FileTypes,
 )
-from openai.types.batch_usage import BatchUsage
+from openai.types.batch_usage import BatchUsage, InputTokensDetails, OutputTokensDetails
 from openai.types.chat.chat_completion import ChatCompletion as ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
@@ -4747,6 +4747,20 @@ def _chat_usage_from_batch_usage(batch_usage: BatchUsage) -> Usage:
     )
 
 
+def _batch_usage_from_chat_usage(usage: Usage) -> BatchUsage:
+    cached_tokens: Final = usage.prompt_tokens_details.cached_tokens if usage.prompt_tokens_details else None
+    reasoning_tokens: Final = (
+        usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else None
+    )
+    return BatchUsage(
+        input_tokens=usage.prompt_tokens,
+        input_tokens_details=InputTokensDetails(cached_tokens=cached_tokens or 0),
+        output_tokens=usage.completion_tokens,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=reasoning_tokens or 0),
+        total_tokens=usage.total_tokens,
+    )
+
+
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
 
@@ -4765,6 +4779,10 @@ class LiteLLMBatch(Batch):
     def _usage_from_batch_usage(cls, value: object) -> object:
         batch_usage: Final = _parse_batch_usage(value)
         return value if batch_usage is None else _chat_usage_from_batch_usage(batch_usage)
+
+    @field_serializer("usage", when_used="json")
+    def _serialize_usage_as_batch_usage(self, usage: Usage | None) -> BatchUsage | None:
+        return _batch_usage_from_chat_usage(usage) if isinstance(usage, Usage) else usage
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator

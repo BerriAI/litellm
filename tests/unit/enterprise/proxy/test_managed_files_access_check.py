@@ -378,5 +378,5 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
         assert claim_data["status"] == "complete"
         persisted_batch: Final = json.loads(claim_data["file_object"])
         assert persisted_batch["status"] == "completed"
-        assert persisted_batch["usage"]["prompt_tokens"] == 10
-        assert persisted_batch["usage"]["completion_tokens"] == 5
+        assert persisted_batch["usage"]["input_tokens"] == 10
+        assert persisted_batch["usage"]["output_tokens"] == 5

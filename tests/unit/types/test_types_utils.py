@@ -31,6 +31,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     all_litellm_params,
     is_decisions_model_mode,
+    Usage,
     text_tokens_without_nested_reasoning,
 )
 
@@ -1028,6 +1029,19 @@ _PROVIDER_BATCH_USAGE: Final = {
 }
 
 
+def _batch_token_counts(batch: LiteLLMBatch) -> tuple[int, int, int, int | None, int | None]:
+    assert batch.usage is not None
+    assert batch.usage.prompt_tokens_details is not None
+    assert batch.usage.completion_tokens_details is not None
+    return (
+        batch.usage.prompt_tokens,
+        batch.usage.completion_tokens,
+        batch.usage.total_tokens,
+        batch.usage.prompt_tokens_details.cached_tokens,
+        batch.usage.completion_tokens_details.reasoning_tokens,
+    )
+
+
 @pytest.mark.parametrize(
     "usage",
     (
@@ -1041,16 +1055,8 @@ _PROVIDER_BATCH_USAGE: Final = {
 def test_batch_usage_reads_token_counts_from_the_provider_batch_usage(usage: dict[str, object]) -> None:
     batch: Final = LiteLLMBatch.model_validate({**_BATCH_FIELDS, "usage": usage})
 
+    assert _batch_token_counts(batch) == (21, 543, 564, 5, 448)
     assert batch.usage is not None
-    assert batch.usage.prompt_tokens_details is not None
-    assert batch.usage.completion_tokens_details is not None
-    assert (
-        batch.usage.prompt_tokens,
-        batch.usage.completion_tokens,
-        batch.usage.total_tokens,
-        batch.usage.prompt_tokens_details.cached_tokens,
-        batch.usage.completion_tokens_details.reasoning_tokens,
-    ) == (21, 543, 564, 5, 448)
     assert (batch.usage.input_tokens, batch.usage.output_tokens) == (21, 543)
 
 
@@ -1061,3 +1067,33 @@ def test_batch_usage_keeps_chat_shaped_usage_as_is() -> None:
 
     assert batch.usage is not None
     assert (batch.usage.prompt_tokens, batch.usage.completion_tokens, batch.usage.total_tokens) == (28, 8, 36)
+
+
+@pytest.mark.parametrize(
+    "usage",
+    (
+        pytest.param(_PROVIDER_BATCH_USAGE, id="provider_batch_usage"),
+        pytest.param(
+            Usage(
+                prompt_tokens=21,
+                completion_tokens=543,
+                total_tokens=564,
+                prompt_tokens_details={"cached_tokens": 5},
+                completion_tokens_details={"reasoning_tokens": 448},
+            ),
+            id="billed_chat_usage",
+        ),
+    ),
+)
+def test_batch_json_carries_the_provider_batch_usage_shape(usage: dict[str, object] | Usage) -> None:
+    batch: Final = LiteLLMBatch.model_validate({**_BATCH_FIELDS, "usage": usage})
+    dumped: Final = batch.model_dump_json()
+
+    assert json.loads(dumped)["usage"] == _PROVIDER_BATCH_USAGE
+    assert _batch_token_counts(LiteLLMBatch.model_validate_json(dumped)) == (21, 543, 564, 5, 448)
+
+
+def test_batch_json_keeps_usage_that_skipped_validation() -> None:
+    batch: Final = LiteLLMBatch.model_validate(_BATCH_FIELDS).model_copy(update={"usage": {"prompt_tokens": 3}})
+
+    assert json.loads(batch.model_dump_json(warnings=False))["usage"] == {"prompt_tokens": 3}
