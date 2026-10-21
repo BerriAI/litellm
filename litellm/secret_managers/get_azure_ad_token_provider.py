@@ -1,11 +1,14 @@
 import os
 from collections.abc import Callable
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
+
+if TYPE_CHECKING:
+    from azure.core.credentials import TokenProvider
 
 
 def infer_credential_type_from_environment() -> AzureCredentialType:
@@ -57,9 +60,11 @@ def get_azure_ad_token_provider(
     from azure import identity
     from azure.identity import (
         CertificateCredential,
+        ChainedTokenCredential,
         ClientSecretCredential,
         DefaultAzureCredential,
         ManagedIdentityCredential,
+        WorkloadIdentityCredential,
         get_bearer_token_provider,
     )
 
@@ -72,9 +77,7 @@ def get_azure_ad_token_provider(
         else None or os.environ.get("AZURE_CREDENTIAL") or infer_credential_type_from_environment()
     )
     verbose_logger.info("For Azure AD Token Provider, choosing credential type: %s", cred)
-    credential: (
-        ClientSecretCredential | ManagedIdentityCredential | CertificateCredential | DefaultAzureCredential | Any | None
-    ) = None
+    credential: TokenProvider | None = None
     if cred == AzureCredentialType.ClientSecretCredential:
         credential = ClientSecretCredential(
             client_id=os.environ["AZURE_CLIENT_ID"],
@@ -101,6 +104,28 @@ def get_azure_ad_token_provider(
         # DefaultAzureCredential doesn't require explicit environment variables
         # It automatically discovers credentials from the environment (managed identity, CLI, etc.)
         credential = DefaultAzureCredential()
+    elif cred == AzureCredentialType.DeploymentIdentityCredential:
+        # DefaultAzureCredential cannot express this: excluding its developer credentials still
+        # leaves one managed identity link, which AZURE_CLIENT_ID pins to a user assigned identity,
+        # so a host running as a system assigned identity never gets asked
+        workload_client_id: Final = os.environ.get("AZURE_CLIENT_ID")
+        workload_tenant_id: Final = os.environ.get("AZURE_TENANT_ID")
+        workload_token_file: Final = os.environ.get("AZURE_FEDERATED_TOKEN_FILE")
+        credential = ChainedTokenCredential(
+            *(
+                (
+                    WorkloadIdentityCredential(
+                        client_id=workload_client_id,
+                        tenant_id=workload_tenant_id,
+                        token_file_path=workload_token_file,
+                    ),
+                )
+                if workload_client_id and workload_tenant_id and workload_token_file
+                else ()
+            ),
+            *((ManagedIdentityCredential(client_id=workload_client_id),) if workload_client_id else ()),
+            ManagedIdentityCredential(),
+        )
     else:
         cred_cls: Final = getattr(identity, cred)
         credential = cred_cls()

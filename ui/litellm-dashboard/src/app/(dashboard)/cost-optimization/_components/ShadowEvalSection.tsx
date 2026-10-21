@@ -87,17 +87,25 @@ const targetStatus = (job: ShadowEvalJob, target: ShadowEvalJobTarget): string =
 
 const jobRouters = (job: ShadowEvalJob): string => (job.router_names ?? [job.router_name]).join(", ");
 
+const jobModelScope = (job: ShadowEvalJob): React.ReactNode =>
+  job.models && job.models.length > 0 ? (
+    <>
+      {" "}
+      on <span className="font-mono text-xs">{job.models.join(", ")}</span>
+    </>
+  ) : null;
+
 const jobHeadline = (job: ShadowEvalJob): React.ReactNode =>
   job.direction === "reverse" ? (
     <>
       Comparing <span className="font-mono text-xs">{jobRouters(job)}</span> to{" "}
       <span className="font-mono text-xs">{job.baseline_model}</span> on {job.shadow_percentage}% of{" "}
-      <span className="font-mono text-xs">{shadowedTargetsLabel(job)}</span> traffic
+      <span className="font-mono text-xs">{shadowedTargetsLabel(job)}</span> traffic{jobModelScope(job)}
     </>
   ) : (
     <>
       Shadowing {job.shadow_percentage}% of <span className="font-mono text-xs">{shadowedTargetsLabel(job)}</span>{" "}
-      traffic via <span className="font-mono text-xs">{jobRouters(job)}</span>
+      traffic{jobModelScope(job)} via <span className="font-mono text-xs">{jobRouters(job)}</span>
     </>
   );
 
