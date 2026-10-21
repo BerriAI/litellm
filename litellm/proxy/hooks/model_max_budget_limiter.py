@@ -1,11 +1,13 @@
 import asyncio
+import functools
 import json
+import re
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final, cast  # noqa: TID251  # untyped callback payload requires explicit narrowing
+from typing import Final, TypeAlias, cast  # noqa: TID251  # untyped callback payload requires explicit narrowing
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -16,8 +18,15 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
+from litellm.proxy.hooks.model_budget_shared_windows import (
+    PROXY_SHARED_WINDOWS,
+    LocalTTLCache,
+    SharedWindow,
+    SharedWindows,
+)
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
 from litellm.router_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
+from litellm.router_utils.pattern_match_deployments import PatternUtils
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import BudgetConfig, StandardLoggingPayload
 
@@ -42,6 +51,10 @@ _LEGACY_REQUEST_MODEL_SCOPES: Final = frozenset({Litellm_EntityType.KEY, Litellm
 _PROCESS_STARTED_AT: Final = time.monotonic()
 
 _LATEST_RESET_AT: Final = datetime(9999, 12, 31, tzinfo=timezone.utc).timestamp()
+
+_GLOB_WILDCARD: Final = "*"
+
+ModelAccessGroups: TypeAlias = Callable[[str], Collection[str]]
 
 _BUDGET_START_TIME_KEY_PREFIXES: Final = MappingProxyType(
     {
@@ -131,36 +144,100 @@ def model_budget_start_time_cache_key(
     return f"{_BUDGET_START_TIME_KEY_PREFIXES[entity_type]}:{entity_id}:{budget_model}:{budget_duration}"
 
 
-def resolve_model_budget(model: str, model_max_budget: Mapping[str, object]) -> ResolvedModelBudget | None:
-    """Find the `model_max_budget` entry that governs `model`, or None."""
-    for candidate in _budget_model_candidates(model):
-        raw_budget_config = model_max_budget.get(candidate)
-        if raw_budget_config is None:
-            continue
-        if (budget_config := _usable_budget_config(raw_budget_config)) is None:
-            # An entry that will not validate cannot be keyed, so it cannot be
-            # enforced or incremented. Skip to the next candidate rather than
-            # raising: raising would abort every other scope's increment and turn
-            # a config typo into a 500, and stopping here would let one malformed
-            # specific entry disable a perfectly good bare-family budget beside
-            # it. The candidate chain already falls through an ABSENT entry, and
-            # an unparseable one is indistinguishable from absent to enforcement.
-            # `validate_model_max_budget` rejects these on the write path, so
-            # reaching here means config.yaml or a direct DB edit.
-            verbose_proxy_logger.warning(
-                "Ignoring unusable model_max_budget entry for %s; it cannot be enforced or tracked",
-                candidate,
-            )
-            continue
-        return ResolvedModelBudget(budget_model=candidate, budget_config=budget_config)
-    return None
+def proxy_model_access_groups(model: str) -> frozenset[str]:
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except ImportError:
+        return frozenset()
+    if llm_router is None:
+        return frozenset()
+    return frozenset(llm_router.get_model_access_groups(model_name=model))
 
 
-def team_model_budget_applies(model: str, key_model_max_budget: Mapping[str, object] | None) -> bool:
+def resolve_model_budget(
+    model: str,
+    model_max_budget: Mapping[str, object],
+    model_access_groups: ModelAccessGroups = proxy_model_access_groups,
+) -> ResolvedModelBudget | None:
+    """Find the `model_max_budget` entry that governs `model`, or None.
+
+    An entry named after the model wins, then one named after a model access
+    group serving it, then the most specific glob (`claude-opus*`). Every model
+    an access group or glob entry covers draws from that entry's one counter.
+    """
+    resolved: Final = (
+        _usable_entry(entry=entry, raw_budget_config=model_max_budget[entry])
+        for entry in _governing_entry_names(
+            model=model, model_max_budget=model_max_budget, model_access_groups=model_access_groups
+        )
+    )
+    return next((entry for entry in resolved if entry is not None), None)
+
+
+def _governing_entry_names(
+    model: str,
+    model_max_budget: Mapping[str, object],
+    model_access_groups: ModelAccessGroups,
+) -> Iterator[str]:
+    candidates: Final = _budget_model_candidates(model)
+    yield from (candidate for candidate in candidates if candidate in model_max_budget)
+    group_entries: Final = tuple(
+        sorted(entry for entry in model_max_budget if _GLOB_WILDCARD not in entry and entry not in candidates)
+    )
+    if group_entries:
+        groups: Final = model_access_groups(model)
+        yield from (entry for entry in group_entries if entry in groups)
+    yield from sorted(
+        (entry for entry in model_max_budget if _GLOB_WILDCARD in entry and _glob_matches(entry, candidates)),
+        key=_glob_precedence,
+        reverse=True,
+    )
+
+
+def _glob_matches(pattern: str, names: Iterable[str]) -> bool:
+    regex: Final = _glob_regex(pattern)
+    return any(regex.fullmatch(name) for name in names)
+
+
+@functools.lru_cache(maxsize=1024)
+def _glob_regex(pattern: str) -> re.Pattern[str]:
+    return re.compile(re.escape(pattern).replace(re.escape(_GLOB_WILDCARD), ".*"))
+
+
+def _glob_precedence(pattern: str) -> tuple[tuple[int, int], str]:
+    return PatternUtils.calculate_pattern_specificity(pattern), pattern
+
+
+def _usable_entry(entry: str, raw_budget_config: object) -> ResolvedModelBudget | None:
+    if (budget_config := _usable_budget_config(raw_budget_config)) is None:
+        # An entry that will not validate cannot be keyed, so it cannot be
+        # enforced or incremented. Skip to the next candidate rather than
+        # raising: raising would abort every other scope's increment and turn
+        # a config typo into a 500, and stopping here would let one malformed
+        # specific entry disable a perfectly good bare-family budget beside
+        # it. The candidate chain already falls through an ABSENT entry, and
+        # an unparseable one is indistinguishable from absent to enforcement.
+        # `validate_model_max_budget` rejects these on the write path, so
+        # reaching here means config.yaml or a direct DB edit.
+        verbose_proxy_logger.warning(
+            "Ignoring unusable model_max_budget entry for %s; it cannot be enforced or tracked",
+            entry,
+        )
+        return None
+    return ResolvedModelBudget(budget_model=entry, budget_config=budget_config)
+
+
+def team_model_budget_applies(
+    model: str,
+    key_model_max_budget: Mapping[str, object] | None,
+    model_access_groups: ModelAccessGroups = proxy_model_access_groups,
+) -> bool:
     """A key entry that spend-gates `model` overrides the team cap: it is then gated on and billed to the key alone."""
     if not key_model_max_budget:
         return True
-    resolved: Final = resolve_model_budget(model=model, model_max_budget=key_model_max_budget)
+    resolved: Final = resolve_model_budget(
+        model=model, model_max_budget=key_model_max_budget, model_access_groups=model_access_groups
+    )
     return resolved is None or not _spend_gated(resolved.budget_config)
 
 
@@ -208,6 +285,7 @@ async def build_model_max_budget_usage(
     model_max_budget: Mapping[str, object] | None,
     cache: DualCache | None,
     now: datetime | None = None,
+    shared_windows: SharedWindows = PROXY_SHARED_WINDOWS,
 ) -> dict[str, dict[str, object]]:
     """Current-window spend per configured budget model, as `/key/info` and `/user/info` report it.
 
@@ -231,17 +309,18 @@ async def build_model_max_budget_usage(
     )
     if not budgets:
         return {}
+    spend_keys: Final = tuple(
+        model_budget_spend_cache_key(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            budget_model=budget_model,
+            budget_duration=budget_config.budget_duration,
+        )
+        for budget_model, budget_config in budgets
+    )
     windows: Final = await _read_windows(
         cache=cache,
-        spend_keys=tuple(
-            model_budget_spend_cache_key(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                budget_model=budget_model,
-                budget_duration=budget_config.budget_duration,
-            )
-            for budget_model, budget_config in budgets
-        ),
+        spend_keys=spend_keys,
         start_time_keys=tuple(
             model_budget_start_time_cache_key(
                 entity_type=entity_type,
@@ -253,19 +332,55 @@ async def build_model_max_budget_usage(
         ),
     )
     current_time: Final = (now or datetime.now(timezone.utc)).timestamp()
+    shared: Final = tuple(
+        [
+            (
+                await _open_shared_window(
+                    shared_windows=shared_windows,
+                    spend_key=spend_key,
+                    budget_duration=budget_config.budget_duration,
+                    now=current_time,
+                )
+                if cache.redis_cache is None
+                else None
+            )
+            for spend_key, (_, budget_config) in zip(spend_keys, budgets, strict=True)
+        ]
+    )
+    readings: Final = tuple(
+        _fuller_reading(local=window, shared=shared_window)
+        for window, shared_window in zip(windows, shared, strict=True)
+    )
     return {
         budget_model: {
-            "current_spend": round(window.current_spend, 4),
+            "current_spend": round(reading.current_spend, 4),
             "budget_limit": budget_config.max_budget,
             "time_period": budget_config.budget_duration,
             "budget_reset_at": _window_reset_at(
-                started_at=window.started_at,
+                started_at=reading.started_at,
                 budget_duration=budget_config.budget_duration,
                 now=current_time,
             ),
         }
-        for (budget_model, budget_config), window in zip(budgets, windows, strict=True)
+        for (budget_model, budget_config), reading in zip(budgets, readings, strict=True)
     }
+
+
+async def _open_shared_window(
+    shared_windows: SharedWindows, spend_key: str, budget_duration: str | None, now: float
+) -> SharedWindow | None:
+    if budget_duration is None:
+        return None
+    window: Final = await shared_windows.read(spend_key=spend_key, budget_duration=budget_duration)
+    if window is None or not window.is_open(budget_duration=budget_duration, now=now):
+        return None
+    return window
+
+
+def _fuller_reading(local: _WindowReading, shared: SharedWindow | None) -> _WindowReading:
+    if shared is None or shared.spend <= local.current_spend:
+        return local
+    return _WindowReading(current_spend=shared.spend, started_at=shared.started_at)
 
 
 @with_service_target("model_budgets")
@@ -337,13 +452,18 @@ def _as_float(value: object) -> float | None:
 def _resolve_entity_model_budgets(
     model: str,
     entity_budgets: Iterable[tuple[Litellm_EntityType, str | None, object]],
+    model_access_groups: ModelAccessGroups,
 ) -> tuple[tuple[Litellm_EntityType, str, ResolvedModelBudget], ...]:
     """Drop the scopes that do not budget `model`, keeping only what can be incremented."""
     return tuple(
         (entity_type, entity_id, resolved)
         for entity_type, entity_id, model_max_budget in entity_budgets
         if entity_id is not None and isinstance(model_max_budget, Mapping) and model_max_budget
-        for resolved in (resolve_model_budget(model=model, model_max_budget=model_max_budget),)
+        for resolved in (
+            resolve_model_budget(
+                model=model, model_max_budget=model_max_budget, model_access_groups=model_access_groups
+            ),
+        )
         if resolved is not None and resolved.budget_config.budget_duration is not None
     )
 
@@ -367,9 +487,17 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     Example: key=$LITELLM_API_KEY, model=gpt-4o, max_budget=100, time_period=1d
     """
 
-    def __init__(self, dual_cache: DualCache, clock: Callable[[], float] = time.time):
+    def __init__(
+        self,
+        dual_cache: DualCache,
+        clock: Callable[[], float] = time.time,
+        model_access_groups: ModelAccessGroups = proxy_model_access_groups,
+        shared_windows: SharedWindows = PROXY_SHARED_WINDOWS,
+    ):
         self.dual_cache = dual_cache
         self._clock = clock
+        self._model_access_groups = model_access_groups
+        self._shared_windows = shared_windows
         self.redis_increment_operation_queue = []
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
@@ -471,7 +599,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         Raises:
             BudgetExceededError: If the team has exceeded the model budget
         """
-        if not team_model_budget_applies(model=model, key_model_max_budget=key_model_max_budget):
+        if not team_model_budget_applies(
+            model=model, key_model_max_budget=key_model_max_budget, model_access_groups=self._model_access_groups
+        ):
             return True
         return await self._is_entity_within_model_budget(
             entity_type=Litellm_EntityType.TEAM,
@@ -509,7 +639,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> bool:
         if not model_max_budget:
             return True
-        resolved: Final = resolve_model_budget(model=model, model_max_budget=model_max_budget)
+        resolved: Final = resolve_model_budget(
+            model=model, model_max_budget=model_max_budget, model_access_groups=self._model_access_groups
+        )
         if resolved is None:
             verbose_proxy_logger.debug("Model %s not found in %s model_max_budget", model, entity_type.value)
             return True
@@ -523,6 +655,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             entity_id=entity_id,
             model=model,
             resolved=resolved,
+            max_budget=max_budget,
         )
         if current_spend >= max_budget:
             raise litellm.BudgetExceededError(
@@ -540,12 +673,16 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         entity_id: str | None,
         model: str,
         resolved: ResolvedModelBudget,
+        max_budget: float,
     ) -> float:
         """Spend charged to this budget in the current window, legacy counter included.
 
         A counter that was never written is zero spend, not unknown spend. The
         distinction only shows up at a zero-dollar cap, where skipping the
         comparison would let the strictest possible limit admit every request.
+
+        Without Redis each replica's counter holds only its own share, so the
+        window every replica adds to in the database is the floor.
         """
         spend_key: Final = model_budget_spend_cache_key(
             entity_type=entity_type,
@@ -559,10 +696,21 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             model=model,
             resolved=resolved,
         )
-        current_spend: Final = _as_spend(await self._cached_spend(spend_key))
-        if legacy_spend_key is None or legacy_spend_key == spend_key:
-            return current_spend
-        return current_spend + _as_spend(await self._cached_spend(legacy_spend_key))
+        counted: Final = _as_spend(await self._cached_spend(spend_key))
+        local_spend: Final = (
+            counted
+            if legacy_spend_key is None or legacy_spend_key == spend_key
+            else counted + _as_spend(await self._cached_spend(legacy_spend_key))
+        )
+        if local_spend >= max_budget or self.dual_cache.redis_cache is not None:
+            return local_spend
+        shared: Final = await _open_shared_window(
+            shared_windows=self._shared_windows,
+            spend_key=spend_key,
+            budget_duration=resolved.budget_config.budget_duration,
+            now=self._clock(),
+        )
+        return local_spend if shared is None else max(local_spend, shared.spend)
 
     async def _cached_spend(self, spend_key: str) -> float | None:
         redis_cache: Final = self.dual_cache.redis_cache
@@ -643,6 +791,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                         key_model_max_budget=(
                             key_model_max_budget if isinstance(key_model_max_budget, Mapping) else None
                         ),
+                        model_access_groups=self._model_access_groups,
                     )
                     else None
                 ),
@@ -667,7 +816,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             ),
         )
 
-        resolved_budgets: Final = _resolve_entity_model_budgets(model=model, entity_budgets=entity_budgets)
+        resolved_budgets: Final = _resolve_entity_model_budgets(
+            model=model, entity_budgets=entity_budgets, model_access_groups=self._model_access_groups
+        )
         if not resolved_budgets:
             verbose_proxy_logger.debug(
                 "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: "
@@ -721,16 +872,60 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             ttl_seconds=duration_in_seconds(budget_duration),
         ):
             return
+        start_time_key: Final = model_budget_start_time_cache_key(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            budget_model=resolved.budget_model,
+            budget_duration=budget_duration,
+        )
         await self._increment_spend_for_key(
             budget_config=resolved.budget_config,
             spend_key=spend_key,
-            start_time_key=model_budget_start_time_cache_key(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                budget_model=resolved.budget_model,
-                budget_duration=budget_duration,
-            ),
+            start_time_key=start_time_key,
             response_cost=response_cost,
+        )
+        await self._share_spend(
+            spend_key=spend_key,
+            start_time_key=start_time_key,
+            budget_duration=budget_duration,
+            response_cost=response_cost,
+        )
+
+    async def _share_spend(
+        self, spend_key: str, start_time_key: str, budget_duration: str, response_cost: float
+    ) -> None:
+        """Without Redis, add this charge to the window every replica reads.
+
+        A replica joins the window that is already open rather than its own, so
+        all of them roll over together and none resets the others' spend.
+        """
+        if self.dual_cache.redis_cache is not None:
+            return
+        now: Final = self._clock()
+        shared: Final = await _open_shared_window(
+            shared_windows=self._shared_windows,
+            spend_key=spend_key,
+            budget_duration=budget_duration,
+            now=now,
+        )
+        if shared is not None:
+            _join_window(
+                local=self.dual_cache.in_memory_cache,
+                spend_key=spend_key,
+                start_time_key=start_time_key,
+                window=shared,
+                budget_duration=budget_duration,
+                now=now,
+            )
+        await self._shared_windows.add(
+            spend_key=spend_key,
+            budget_duration=budget_duration,
+            started_at=await self._get_or_set_budget_start_time(
+                start_time_key=start_time_key,
+                current_time=now,
+                ttl_seconds=budget_window_seconds(now, budget_duration),
+            ),
+            spend=response_cost,
         )
 
     async def _claim_batch_charge(self, spend_key: str, batch_id: str, ttl_seconds: int) -> bool:
@@ -739,6 +934,16 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
         )
         return polls == 1
+
+
+def _join_window(
+    local: LocalTTLCache, spend_key: str, start_time_key: str, window: SharedWindow, budget_duration: str, now: float
+) -> None:
+    remaining: Final = window.started_at + budget_window_seconds(window.started_at, budget_duration) - now
+    local.set_cache(key=start_time_key, value=window.started_at, ttl=remaining)
+    counted: Final = local.get_cache(key=spend_key)
+    if counted is not None:
+        local.set_cache(key=spend_key, value=counted, ttl=remaining)
 
 
 PROXY_VirtualKeyModelMaxBudgetLimiter = _PROXY_VirtualKeyModelMaxBudgetLimiter
