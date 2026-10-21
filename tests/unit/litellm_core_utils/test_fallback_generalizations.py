@@ -625,8 +625,8 @@ def test_shipped_version_boundaries(shipped_cost_map, model, provider, adaptive,
     assert info.get("supports_mid_conversation_system") is mid_conversation, model
 
 
-def test_shipped_claude_version_regex_excludes_undelimited_41(shipped_cost_map):
-    unmatched = match_capability_generalizations("github_copilot/claude-opus-41")
+def test_shipped_claude_version_regex_excludes_two_digit_major(shipped_cost_map):
+    unmatched = match_capability_generalizations("github_copilot/claude-opus-42")
     assert unmatched is None or "supports_adaptive_thinking" not in unmatched
     assert unmatched is None or "supports_mid_conversation_system" not in unmatched
 
@@ -741,8 +741,8 @@ def test_shipped_adaptive_rule_gates_on_version_not_pricing(shipped_cost_map):
     non_adaptive = "us.anthropic.claude-opus-4-20250514"
     assert adaptive not in litellm.model_cost
     assert non_adaptive not in litellm.model_cost
-    assert AnthropicModelInfo._is_adaptive_thinking_model(adaptive, "anthropic") is True
-    assert AnthropicModelInfo._is_adaptive_thinking_model(non_adaptive, "anthropic") is False
+    assert AnthropicModelInfo.is_adaptive_thinking_model(adaptive, "anthropic") is True
+    assert AnthropicModelInfo.is_adaptive_thinking_model(non_adaptive, "anthropic") is False
 
 
 def test_shipped_rules_resolve_unmapped_future_bedrock_claude_with_both_flags(shipped_cost_map):
@@ -970,19 +970,16 @@ def test_shipped_tool_search_rule_version_boundaries(shipped_cost_map, model, pr
 
 def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipped_cost_map):
     """A mapped Claude 4.5+ entry with no supports_tool_search key gets it from the rule
-    on Anthropic direct, Vertex and Bedrock, a mapped pre-4.5 entry stays without one,
-    and Azure Foundry and reseller copies of the same model are not touched."""
+    on Anthropic direct, Azure Foundry, Vertex and Bedrock, a mapped pre-4.5 entry stays
+    without one, and reseller copies of the same model are not touched."""
     for key, model, provider in (
         ("claude-opus-4-7", "claude-opus-4-7", "anthropic"),
+        ("azure_ai/claude-opus-5", "claude-opus-5", "azure_ai"),
         ("vertex_ai/claude-opus-5", "claude-opus-5", "vertex_ai"),
     ):
         assert "supports_tool_search" not in litellm.model_cost[key]
         assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_tool_search"] is True
 
-    assert "supports_tool_search" not in litellm.model_cost["azure_ai/claude-opus-5"]
-    azure_opus_5_info = litellm.get_model_info("claude-opus-5", custom_llm_provider="azure_ai")
-    assert azure_opus_5_info.get("supports_tool_search") is None
-
     assert match_fill_missing_generalizations("claude-opus-5", "bedrock")["supports_tool_search"] is True
-    assert "supports_tool_search" not in match_fill_missing_generalizations("claude-opus-5", "azure_ai")
+    assert match_fill_missing_generalizations("claude-opus-5", "azure_ai")["supports_tool_search"] is True
     assert match_fill_missing_generalizations("claude-opus-5", "perplexity") is None

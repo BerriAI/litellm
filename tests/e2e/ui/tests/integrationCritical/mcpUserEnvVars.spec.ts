@@ -9,8 +9,9 @@ import { randomUUID } from "node:crypto";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
 import { captureRequestBody } from "../../helpers/roundTrip";
+import { masterKey } from "../../helpers/traffic";
 
-const master = process.env.LITELLM_MASTER_KEY ?? "sk-integration-master";
+const master = masterKey();
 const headers = { Authorization: `Bearer ${master}` };
 const TOKEN = "USER_TOKEN";
 

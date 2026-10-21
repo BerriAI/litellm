@@ -4,7 +4,7 @@ import "prosemirror-view/style/prosemirror.css";
 
 import { useDebouncer } from "@tanstack/react-pacer/debouncer";
 import { ProseMirror, ProseMirrorDoc, reactKeys, useEditorEventCallback } from "@handlewithcare/react-prosemirror";
-import { Check, Copy, CornerDownLeft, type LucideIcon, Search } from "lucide-react";
+import { Check, Copy, CornerDownLeft, Loader2, type LucideIcon, Search } from "lucide-react";
 import { Schema } from "prosemirror-model";
 import { EditorState, Plugin, TextSelection, type Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
@@ -232,10 +232,12 @@ function Root<F extends string>({
 
 export type SearchBoxInputProps = ComponentProps<"div"> & {
   placeholder: string;
+  /** Results for the current query are loading: the search icon becomes a spinner. */
+  busy?: boolean;
 };
 
 /** The bordered field holding the editor; shows `placeholder` while the query is empty. */
-function Input({ placeholder, className, ...props }: SearchBoxInputProps) {
+function Input({ placeholder, busy = false, className, ...props }: SearchBoxInputProps) {
   const { text } = useSearchBox();
   return (
     <div
@@ -246,7 +248,15 @@ function Input({ placeholder, className, ...props }: SearchBoxInputProps) {
       )}
       {...props}
     >
-      <Search className="size-3.5 shrink-0 text-muted-foreground" />
+      {busy ? (
+        <Loader2
+          role="status"
+          aria-label="Loading results"
+          className="size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
+        />
+      ) : (
+        <Search className="size-3.5 shrink-0 text-muted-foreground" />
+      )}
       <div className="relative flex min-w-0 flex-1">
         <ProseMirrorDoc />
         {!text && (

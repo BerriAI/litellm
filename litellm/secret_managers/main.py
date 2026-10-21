@@ -3,29 +3,38 @@ import base64
 import os
 import time
 import traceback
+from collections.abc import Callable
+from dataclasses import dataclass
+from functools import lru_cache
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.secret_managers.dispatch import get_secret_from_manager
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
+from litellm.secret_managers.secret_manager_handler import get_secret_from_manager
+from litellm.types.llms.base import LiteLLMBaseModel
 
 oidc_cache: Final = DualCache()
 
 _PARSED_LITERAL: Final = TypeAdapter(object)
 
 
+@lru_cache(maxsize=128)
+def _cached_azure_oidc_token_provider(audience: str) -> Callable[[], str]:
+    return get_azure_ad_token_provider(azure_scope=audience)
+
+
 _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS: Final = 60
 
 
-class _OidcTokenClaims(BaseModel):
+class _OidcTokenClaims(LiteLLMBaseModel):
     exp: float | None = None
 
 
@@ -81,7 +90,7 @@ def _resolve_oidc_file_path(requested_path: str) -> str:
     if not os.path.isabs(requested_path):
         raise OidcPathNotAllowedError(
             "oidc/file path must be absolute. Use the format "
-            "'oidc/file//var/run/secrets/<name>' (note the leading slash "
+            "'oidc/file//<absolute path>' (note the leading slash "
             "after 'oidc/file/')."
         )
     resolved: Final = os.path.realpath(requested_path)
@@ -156,6 +165,59 @@ def get_secret_str(
     return value
 
 
+LOCAL_OIDC_SECRET_PREFIXES: Final = ("oidc/file/", "oidc/env/")
+
+
+@dataclass(frozen=True, slots=True)
+class UnresolvableSecretReference:
+    kind: str
+    reason: str
+
+
+_OIDC_PROVIDERS: Final = frozenset({"google", "circleci", "circleci_v2", "github", "azure", "file", "env", "env_path"})
+
+
+def oidc_reference_kind(reference: str) -> str:
+    provider: Final = reference.removeprefix("oidc/").split("/", 1)[0]
+    return f"oidc/{provider}" if provider in _OIDC_PROVIDERS else "oidc/<unknown kind>"
+
+
+def resolve_local_oidc_reference(value: str) -> str | UnresolvableSecretReference:
+    """Only local kinds resolve, since request paths must not do network I/O, and ``oidc/env_path/`` is
+    excluded because it bypasses the ``oidc/file/`` credential-directory allowlist."""
+    if not value.startswith(LOCAL_OIDC_SECRET_PREFIXES):
+        return value
+    kind: Final = oidc_reference_kind(value)
+    try:
+        secret: Final = get_secret_str(value)
+    except (OSError, ValueError) as exc:
+        return _logged_unresolvable(value, kind, _unresolvable_reason(kind, exc))
+    if not secret:
+        return _logged_unresolvable(value, kind, "it resolved to an empty value")
+    return secret
+
+
+def _logged_unresolvable(reference: str, kind: str, reason: str) -> UnresolvableSecretReference:
+    verbose_logger.warning(
+        "Secret reference %s could not be resolved: %s", reference.replace("\r", "").replace("\n", ""), reason
+    )
+    return UnresolvableSecretReference(kind=kind, reason=reason)
+
+
+def _unresolvable_reason(kind: str, exc: OSError | ValueError) -> str:
+    match exc:
+        case UnicodeDecodeError():
+            return "the file is not UTF-8 text"
+        case OidcPathNotAllowedError():
+            return str(exc)
+        case OSError(strerror=str() as strerror):
+            return strerror
+        case _ if kind == "oidc/env":
+            return "the environment variable is not set"
+        case _:
+            return "the file could not be read"
+
+
 def normalize_nonempty_secret_str(val: str | None) -> str | None:
     """
     Strip whitespace and treat None, '', and whitespace-only strings as unset.
@@ -205,7 +267,7 @@ def get_secret(
 
     # Example: oidc/google/https://bedrock-runtime.us-east-1.amazonaws.com/model/stability.stable-diffusion-xl-v1/invoke
     if secret_name.startswith("oidc/"):
-        secret_name_split: Final = secret_name.replace("oidc/", "")
+        secret_name_split: Final = secret_name.removeprefix("oidc/")
         oidc_provider, oidc_aud = secret_name_split.split("/", 1)
         oidc_aud = "/".join(secret_name_split.split("/")[1:])
         # TODO: Add caching for HTTP requests
@@ -282,7 +344,7 @@ def get_secret(
                 verbose_logger.warning(
                     "AZURE_FEDERATED_TOKEN_FILE not found in environment will use Azure AD token provider"
                 )
-                azure_token_provider: Final = get_azure_ad_token_provider(azure_scope=oidc_aud)
+                azure_token_provider: Final = _cached_azure_oidc_token_provider(oidc_aud)
                 try:
                     oidc_token = azure_token_provider()
                     if oidc_token is None:

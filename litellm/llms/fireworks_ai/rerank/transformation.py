@@ -8,12 +8,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.fireworks_ai.common_utils import FireworksAIMixin
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.rerank import (
     RerankBilledUnits,
     RerankResponse,
@@ -24,7 +25,7 @@ from litellm.types.rerank import (
 )
 
 
-class _FireworksAIUsageFields(BaseModel):
+class _FireworksAIUsageFields(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     total_tokens: int | None = 0
@@ -32,7 +33,7 @@ class _FireworksAIUsageFields(BaseModel):
     completion_tokens: int | None = 0
 
 
-class _FireworksAIResultFields(BaseModel):
+class _FireworksAIResultFields(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, hide_input_in_errors=True)
 
     index: int | float | str

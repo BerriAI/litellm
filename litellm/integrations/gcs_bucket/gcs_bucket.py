@@ -10,13 +10,14 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
+from litellm.integrations.batch_line_item_objects import batch_line_items_ndjson, batch_line_items_object_name
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.litellm_core_utils.cloud_storage_security import (
     sanitize_cloud_object_component,
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardBatchLineItemsPayload, StandardLoggingPayload
 
 if TYPE_CHECKING:
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -26,8 +27,8 @@ else:
 
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def __init__(self, bucket_name: str | None = None) -> None:
-        from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import premium_user
+        from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 
         self.batch_size = int(os.getenv("GCS_BATCH_SIZE", GCS_DEFAULT_BATCH_SIZE))
         self.flush_interval = int(os.getenv("GCS_FLUSH_INTERVAL", GCS_DEFAULT_FLUSH_INTERVAL_SECONDS))
@@ -52,8 +53,8 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
 
     #### ASYNC ####
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import premium_user
+        from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 
         if premium_user is not True:
             raise ValueError(
@@ -94,6 +95,20 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
 
         except Exception as e:
             verbose_logger.exception("GCS Bucket logging error: %s", e)
+
+    async def async_log_batch_line_items(self, payload: StandardBatchLineItemsPayload) -> None:
+        """Write one part of a batch's lines as an NDJSON object under batch_line_items/ in the default bucket."""
+        gcs_logging_config: Final = await self.get_gcs_logging_config()
+        headers: Final = await self.construct_request_headers(
+            vertex_instance=gcs_logging_config["vertex_instance"],
+            service_account_json=gcs_logging_config["path_service_account"],
+        )
+        await self._log_json_data_on_gcs(
+            headers=headers,
+            bucket_name=gcs_logging_config["bucket_name"],
+            object_name=batch_line_items_object_name(payload),
+            logging_payload=await asyncio.to_thread(batch_line_items_ndjson, payload),
+        )
 
     def _drain_queue_batch(self) -> list[GCSLogQueueItem]:
         """

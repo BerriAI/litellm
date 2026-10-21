@@ -1,6 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock
 
 import pytest
@@ -58,7 +59,7 @@ def _response(payload: dict, status_code: int = 200) -> Response:
 def _mock_post(guardrail: LLMShieldProxyGuardrail, *payloads: dict) -> AsyncMock:
     """Queues one shield response per expected call."""
     mock = AsyncMock(side_effect=[_response(p) for p in payloads])
-    guardrail.async_handler.post = mock  # type: ignore[method-assign]
+    guardrail.async_handler.post = mock
     return mock
 
 
@@ -115,7 +116,7 @@ class _FakeShield:
 def _shielded(vault: dict[str, str]) -> tuple[LLMShieldProxyGuardrail, _FakeShield]:
     guardrail = _guardrail(event_hook="post_call")
     shield = _FakeShield(vault)
-    guardrail.async_handler.post = shield.post  # type: ignore[method-assign]
+    guardrail.async_handler.post = shield.post
     return guardrail, shield
 
 
@@ -861,7 +862,7 @@ class TestRequestCoverage:
         assert redact_mock.call_args_list[0].kwargs["json"]["texts"] == ["ops@example.com"]
         assert data["tools"][0]["function"]["parameters"]["properties"]["to"]["enum"] == ["[EMAIL_1]"]
 
-        guardrail.async_handler.post = shield.post  # type: ignore[method-assign]
+        guardrail.async_handler.post = shield.post
         call = SimpleNamespace(function=SimpleNamespace(name="notify", arguments='{"to": "[EMAIL_1]"}'))
         reply = ModelResponse(choices=[Choices(message=Message(content=None, tool_calls=None))])
         reply.choices[0].message.tool_calls = [call]
@@ -1919,7 +1920,7 @@ class TestProxyWiring:
             return _response({"texts": restored})
 
         guardrail = _guardrail(event_hook=["pre_call", "post_call"], default_on=False)
-        guardrail.async_handler.post = shield  # type: ignore[method-assign]
+        guardrail.async_handler.post = shield
         cache = InMemoryCache()
         monkeypatch.setattr(litellm, "callbacks", [guardrail])
         monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
@@ -1975,6 +1976,20 @@ class TestProxyWiring:
 
 
 class TestStreamUsage:
+    @pytest.mark.asyncio
+    async def test_trailing_flush_survives_a_usage_chunk_with_no_choices(self):
+        guardrail, _ = _shielded({"[EMAIL_1]": "a@example.com"})
+        held: Final = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="Mail [EMAI"))])
+        usage_chunk: Final = ModelResponseStream(
+            choices=[], usage=Usage(prompt_tokens=5, completion_tokens=7, total_tokens=12)
+        )
+
+        out: Final = await _restore_stream(guardrail, [held, usage_chunk])
+
+        assert out[1] is not None and out[1].choices == []
+        assert [chunk.choices[0].delta.content for chunk in out[2:]] == ["[EMAI"]
+        assert all(getattr(chunk, "usage", None) is None for chunk in out[2:])
+
     @pytest.mark.asyncio
     async def test_trailing_flush_does_not_repeat_usage(self):
         """With n>=2 and include_usage, the last chunk carries usage; a flush copied from it must not.
