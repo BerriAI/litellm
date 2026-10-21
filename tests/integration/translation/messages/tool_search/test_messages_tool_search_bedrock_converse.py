@@ -54,7 +54,7 @@ GPT_6_1_SOL_TOOL_SEARCH_TEST_CASE: Final = TranslationTestCase(
         "cache": {"no-cache": True},
     },
     expected_provider_endpoint="/model/global.openai.gpt-6.1-sol/converse",
-    expected_provider_headers={"authorization": "Bearer synthetic-bedrock-key", "content-type": "application/json"},
+    expected_provider_headers={"authorization": "Bearer synthetic-agent-key", "content-type": "application/json"},
     expected_provider_request={
         "additionalModelRequestFields": {"reasoning": {"effort": "low"}},
         "inferenceConfig": {"maxTokens": 1024},
