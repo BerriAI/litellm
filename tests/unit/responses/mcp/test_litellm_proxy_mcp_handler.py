@@ -1553,12 +1553,14 @@ async def test_toolset_gateway_url_scopes_a_team_granted_toolset_for_a_key_witho
     [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
     ids=["internal_user", "proxy_admin", "proxy_admin_viewer"],
 )
-async def test_toolset_gateway_url_skips_a_toolset_the_team_does_not_grant(monkeypatch, owner_role):
+async def test_toolset_gateway_url_lists_nothing_beyond_a_toolset_the_team_does_not_grant(
+    monkeypatch: pytest.MonkeyPatch, owner_role: LitellmUserRoles
+):
     kwargs: Final = await _tools_listing_kwargs_for_toolset_url(
         monkeypatch, team_toolset_id="ts-other", owner_role=owner_role
     )
     assert kwargs["user_api_key_auth"].object_permission is None
-    assert kwargs["mcp_servers"] is None
+    assert kwargs["mcp_servers"] == ["team-toolset"]
 
 
 @pytest.mark.asyncio

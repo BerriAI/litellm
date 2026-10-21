@@ -4092,8 +4092,8 @@ class MCPRequestHandler:
         """Whether this principal's admin-view role grants the unscoped MCP resolution, whatever
         credential carries it (admin key, dashboard session, or OAuth-admitted session subject).
 
-        A virtual key on a real team never qualifies: its team bounds its MCP access whoever owns it, as it
-        bounds the key's model access. Two more bounds disqualify, one per ownership of the row. A CREDENTIAL's
+        A credential on a real team never qualifies, a virtual key or a ``lite login`` session alike: its team
+        bounds its MCP access whoever owns it, as it bounds the credential's model access. Two more bounds disqualify, one per ownership of the row. A CREDENTIAL's
         explicit ``object_permission.mcp_servers`` scope wins even for admins, including the empty list. An
         admitted subject's object_permission is the user's own row, whose ``mcp_servers`` column is [] by DB
         default, so for that shape the row binds through the entitlement ceiling instead (any non-empty

@@ -118,19 +118,14 @@ class TestApplyToolsetScope:
         [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
         ids=["proxy_admin", "proxy_admin_viewer"],
     )
-    async def test_admin_owned_team_key_without_the_toolset_grant_is_denied(self, owner_role):
+    async def test_admin_owned_team_key_without_the_toolset_grant_is_denied(self, owner_role: LitellmUserRoles):
         from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
 
         team_key: Final = UserAPIKeyAuth(
             api_key="sk-test", team_id="team-a", user_role=owner_role, object_permission=None
         )
-        with patch(
-            "litellm.proxy._experimental.mcp_server.server."
-            "global_mcp_server_manager.resolve_toolset_tool_permissions",
-            new=AsyncMock(return_value={"server-a": ["tool1"]}),
-        ):
-            with pytest.raises(HTTPException) as exc_info:
-                await apply_toolset_scope(team_key, "toolset-123", granted=_granted_through_team("toolset-other"))
+        with pytest.raises(HTTPException) as exc_info:
+            await apply_toolset_scope(team_key, "toolset-123", granted=_granted_through_team("toolset-other"))
 
         assert exc_info.value.status_code == 403
 
