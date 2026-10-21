@@ -13,6 +13,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -161,6 +162,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         """Google AI Studio Gemini 3.5+ accepts ``id`` on functionResponses; Vertex AI rejects it."""
         return True
 
+    def _rejects_vad_tuning_with_detection_off(self) -> bool:
+        """Google AI Studio closes the socket (1007) on padding or silence tuning next to ``disabled: true``."""
+        return True
+
     @staticmethod
     def _usage_detail_alias(details: Mapping[str, int | None] | None, defaults: dict[str, int]) -> dict[str, int]:
         if not isinstance(details, dict):
@@ -208,7 +213,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # so the API key must remain as a query parameter here. This is an accepted
         # limitation; httpx is not used for WebSocket so MaskedHTTPStatusError
         # already covers the main leak vector.
-        return f"{api_base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={api_key}"
+        live_url: Final = join_api_base(
+            api_base, "ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+        )
+        return f"{live_url}?key={api_key}"
 
     def map_model_turn_event(self, model_turn: HttpxContentType) -> OpenAIRealtimeEventTypes:
         """
@@ -279,10 +287,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         OpenAI ``semantic_vad`` has no Gemini Live equivalent — return an empty
         dict so callers omit ``realtimeInputConfig`` (mapping it with
-        ``disabled: true`` breaks native-audio sessions).
+        ``disabled: true`` breaks native-audio sessions). An explicit
+        ``create_response: false`` maps to detection off alone where the backend
+        rejects tuning next to ``disabled: true``.
         """
         if isinstance(value, dict) and value.get("type") == "semantic_vad" and "create_response" not in value:
             return AutomaticActivityDetection()
+        auto_response_off: Final = "create_response" in value and value["create_response"] is False
+        if auto_response_off and self._rejects_vad_tuning_with_detection_off():
+            return AutomaticActivityDetection(disabled=True)
 
         automatic_activity_dection: Final = AutomaticActivityDetection()
         if "create_response" in value and isinstance(value["create_response"], bool):

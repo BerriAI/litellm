@@ -14,6 +14,54 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 
 FIXED_TIME: Final[datetime] = datetime(2025, 1, 1, 12, 0, 0)
 
+
+def test_reused_ollama_ids_have_distinct_response_and_spend_ids() -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    body: Final = {
+        "id": "chatcmpl-0",
+        "system_fingerprint": "fp_ollama",
+        "model": "gpt-oss:20b",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+        "provider_specific_fields": {"extra": "preserved"},
+    }
+    responses: Final = [
+        convert_to_model_response_object(response_object=body, model_response_object=ModelResponse()) for _ in range(2)
+    ]
+    assert len({response.id for response in responses}) == 2
+    for response in responses:
+        assert response.id != "chatcmpl-0"
+        assert response.provider_specific_fields == {"extra": "preserved", "original_response_id": "chatcmpl-0"}
+        logged: Final = get_logging_payload(
+            kwargs={"call_type": "acompletion", "litellm_call_id": "same-client-call-id", "response_cost": 0.01},
+            response_obj=response,
+            start_time=FIXED_TIME,
+            end_time=FIXED_TIME,
+        )
+        assert logged["request_id"] == response.id
+        reparsed: Final = convert_to_model_response_object(
+            response_object=response.model_dump(), model_response_object=ModelResponse()
+        )
+        assert reparsed.id == response.id
+    assert body["id"] == "chatcmpl-0"
+    assert body["provider_specific_fields"] == {"extra": "preserved"}
+
+
+@pytest.mark.parametrize("fingerprint", [None, "fp_openai", "fp_ollama_other"])
+def test_non_ollama_fingerprints_keep_provider_response_ids(fingerprint: str | None) -> None:
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-0",
+            "system_fingerprint": fingerprint,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}],
+        },
+        model_response_object=ModelResponse(),
+    )
+    assert response.id == "chatcmpl-0"
+    assert response.model_dump().get("provider_specific_fields") is None
+
+
 OPENAI_CUSTOM_TOOL_CALL_RESPONSE = {
     "id": "chatcmpl-abc",
     "created": 1784657740,

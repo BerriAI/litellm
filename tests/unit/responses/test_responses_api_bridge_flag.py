@@ -6,18 +6,28 @@ Includes file_search emulation: the flag must be forwarded on inner aresponses
 calls so routed requests do not hit a custom api_base /v1/responses endpoint.
 """
 
+import copy
 import json
+from collections.abc import Mapping
 from importlib import import_module
-from typing import Final
+from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
 import httpx
 import openai
 import pytest
 import respx
+from pydantic import JsonValue
 
 import litellm
+from litellm import Router
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.responses.bridge_check import (
+    backend_serves_chat_completions,
+    bridge_reasoning_effort,
+    deployment_routing_mode,
+    responses_api_bridge_check,
+)
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -48,12 +58,8 @@ class TestUseResponsesApiBridgeFlag:
     @patch.object(
         import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"
     )
-    @patch.object(
-        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
-    )
-    def test_bridge_used_when_use_chat_completions_api_true(
-        self, mock_get_config, mock_bridge_handler
-    ):
+    @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
+    def test_bridge_used_when_use_chat_completions_api_true(self, mock_get_config, mock_bridge_handler):
         """When use_chat_completions_api=True, the bridge handler should be called."""
         mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
         mock_bridge_handler.return_value = MagicMock()
@@ -70,9 +76,7 @@ class TestUseResponsesApiBridgeFlag:
     @patch.object(
         import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"
     )
-    @patch.object(
-        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
-    )
+    @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
     def test_provider_affinity_header_is_forwarded_through_bridge(self, mock_get_config, mock_bridge_handler):
         mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
         mock_bridge_handler.return_value = MagicMock()
@@ -94,12 +98,8 @@ class TestUseResponsesApiBridgeFlag:
     @patch.object(
         import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"
     )
-    @patch.object(
-        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
-    )
-    def test_bridge_used_when_model_uses_chat_completions_prefix(
-        self, mock_get_config, mock_bridge_handler
-    ):
+    @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
+    def test_bridge_used_when_model_uses_chat_completions_prefix(self, mock_get_config, mock_bridge_handler):
         """`openai/chat_completions/<name>` normalizes to `openai/<name>` and uses the bridge."""
         mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
         mock_bridge_handler.return_value = MagicMock()
@@ -115,12 +115,8 @@ class TestUseResponsesApiBridgeFlag:
         assert mock_bridge_handler.call_args.kwargs["model"].endswith("my-custom-model")
 
     @patch.object(import_module("litellm.responses.main").base_llm_http_handler, "response_api_handler")
-    @patch.object(
-        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
-    )
-    def test_native_forwarding_when_flag_absent(
-        self, mock_get_config, mock_native_handler
-    ):
+    @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
+    def test_native_forwarding_when_flag_absent(self, mock_get_config, mock_native_handler):
         """When use_chat_completions_api is not set, openai/ models should use
         native responses API forwarding (existing behavior)."""
         mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
@@ -137,9 +133,7 @@ class TestUseResponsesApiBridgeFlag:
     @patch.object(
         import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"
     )
-    @patch.object(
-        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
-    )
+    @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
     def test_flag_does_not_leak_into_kwargs(self, mock_get_config, mock_bridge_handler):
         """use_chat_completions_api should be popped and not passed to the bridge handler."""
         mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
@@ -159,12 +153,8 @@ class TestUseResponsesApiBridgeFlag:
     @patch.object(
         import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"
     )
-    @patch.object(
-        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
-    )
-    def test_bridge_used_when_provider_config_none(
-        self, mock_get_config, mock_bridge_handler
-    ):
+    @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
+    def test_bridge_used_when_provider_config_none(self, mock_get_config, mock_bridge_handler):
         """When the provider has no native responses API config (returns None),
         the bridge should be used regardless of the flag (existing behavior)."""
         mock_get_config.return_value = None
@@ -179,12 +169,8 @@ class TestUseResponsesApiBridgeFlag:
         mock_bridge_handler.assert_called_once()
 
     @patch("litellm.acompletion")
-    @patch.object(
-        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
-    )
-    async def test_allowed_openai_params_forwarded_through_bridge(
-        self, mock_get_config, mock_acompletion
-    ):
+    @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
+    async def test_allowed_openai_params_forwarded_through_bridge(self, mock_get_config, mock_acompletion):
         """allowed_openai_params is a named param of responses(), so it must be
         explicitly forwarded to the bridge; otherwise litellm.acompletion raises
         UnsupportedParamsError for params the caller explicitly allowed."""
@@ -212,9 +198,7 @@ class TestUseResponsesApiBridgeFlag:
         )
 
         mock_acompletion.assert_called_once()
-        assert mock_acompletion.call_args.kwargs.get("allowed_openai_params") == [
-            "reasoning_effort"
-        ]
+        assert mock_acompletion.call_args.kwargs.get("allowed_openai_params") == ["reasoning_effort"]
 
     @pytest.mark.parametrize(
         ("model", "upstream_url", "use_chat_completions_api", "allowed_openai_params", "expected_chat_template_kwargs"),
@@ -287,9 +271,7 @@ class TestUseResponsesApiBridgeFlag:
         assert request_body["messages"] == [{"role": "user", "content": "Hello"}]
         assert response.output[0].content[0].text == "Answer"
 
-    def test_bridge_drops_client_metadata_even_when_allowed_openai_params_names_it(
-        self, respx_mock: respx.MockRouter
-    ):
+    def test_bridge_drops_client_metadata_even_when_allowed_openai_params_names_it(self, respx_mock: respx.MockRouter):
         upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
             return_value=httpx.Response(
                 status_code=200,
@@ -441,12 +423,8 @@ class TestUseResponsesApiBridgeFlag:
         assert "chat_template_kwargs" not in json.loads(request.read())
 
     @patch.object(import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses")
-    @patch.object(
-        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
-    )
-    async def test_bridge_flag_forwarded_to_file_search_emulation(
-        self, mock_get_config, mock_call_aresponses
-    ):
+    @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
+    async def test_bridge_flag_forwarded_to_file_search_emulation(self, mock_get_config, mock_call_aresponses):
         """When use_chat_completions_api=True and file_search tool is present,
         the flag should be forwarded to the inner aresponses call in the
         file_search emulation path."""
@@ -458,12 +436,8 @@ class TestUseResponsesApiBridgeFlag:
             id="resp_123",
             model="openai/my-custom-model",
             created_at=1234567890,
-            output=[
-                {"type": "message", "content": [{"type": "text", "text": "Answer"}]}
-            ],
-            usage=ResponseAPIUsage(
-                input_tokens=10, output_tokens=5, total_tokens=15
-            ),
+            output=[{"type": "message", "content": [{"type": "text", "text": "Answer"}]}],
+            usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
         )
         mock_call_aresponses.return_value = mock_response
 
@@ -478,17 +452,15 @@ class TestUseResponsesApiBridgeFlag:
         # Verify _call_aresponses was called with use_chat_completions_api=True
         mock_call_aresponses.assert_called_once()
         call_kwargs = mock_call_aresponses.call_args.kwargs
-        assert (
-            call_kwargs.get("use_chat_completions_api") is True
-        ), "use_chat_completions_api should be forwarded to inner aresponses call"
+        assert call_kwargs.get("use_chat_completions_api") is True, (
+            "use_chat_completions_api should be forwarded to inner aresponses call"
+        )
 
     @patch.object(
         import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"
     )
     @patch("litellm.vector_stores.main.asearch")
-    @patch.object(
-        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
-    )
+    @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
     async def test_bridge_flag_prevents_native_responses_endpoint_call(
         self, mock_get_config, mock_asearch, mock_bridge_handler
     ):
@@ -512,9 +484,7 @@ class TestUseResponsesApiBridgeFlag:
                     "arguments": '{"queries": ["test query"]}',
                 }
             ],
-            usage=ResponseAPIUsage(
-                input_tokens=10, output_tokens=5, total_tokens=15
-            ),
+            usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
         )
         second_response = ResponsesAPIResponse(
             id="resp_second",
@@ -526,9 +496,7 @@ class TestUseResponsesApiBridgeFlag:
                     "content": [{"type": "text", "text": "Final answer"}],
                 }
             ],
-            usage=ResponseAPIUsage(
-                input_tokens=20, output_tokens=10, total_tokens=30
-            ),
+            usage=ResponseAPIUsage(input_tokens=20, output_tokens=10, total_tokens=30),
         )
         mock_bridge_handler.side_effect = [first_response, second_response]
 
@@ -547,8 +515,7 @@ class TestUseResponsesApiBridgeFlag:
         )
 
         assert mock_bridge_handler.call_count == 2, (
-            "Bridge handler should be called twice: initial function-tool call "
-            "and follow-up with tool results"
+            "Bridge handler should be called twice: initial function-tool call and follow-up with tool results"
         )
         for call in mock_bridge_handler.call_args_list:
             all_kwargs = call.kwargs if call.kwargs else {}
@@ -558,12 +525,8 @@ class TestUseResponsesApiBridgeFlag:
 
     @patch.object(import_module("litellm.responses.main").base_llm_http_handler, "response_api_handler")
     @patch("litellm.vector_stores.main.asearch")
-    @patch.object(
-        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
-    )
-    async def test_without_bridge_flag_uses_native_endpoint(
-        self, mock_get_config, mock_asearch, mock_native_handler
-    ):
+    @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
+    async def test_without_bridge_flag_uses_native_endpoint(self, mock_get_config, mock_asearch, mock_native_handler):
         """Without the bridge flag, openai/ with native config uses the native handler."""
         mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
         mock_asearch.return_value = []
@@ -577,9 +540,7 @@ class TestUseResponsesApiBridgeFlag:
                     "content": [{"type": "text", "text": "Native response"}],
                 }
             ],
-            usage=ResponseAPIUsage(
-                input_tokens=10, output_tokens=5, total_tokens=15
-            ),
+            usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
         )
 
         result = await litellm.aresponses(
@@ -607,3 +568,287 @@ class TestUseResponsesApiBridgeFlag:
 
         assert exc_info.value.param == "stream_chunk_size"
         send.assert_not_called()
+
+
+# Deployment-pinned routing mode (deployment_routing_mode / responses_api_bridge_check)
+_CHAT: Final[Mapping[str, JsonValue]] = {"id": "dep-1", "mode": "chat"}
+_RESPONSES: Final[Mapping[str, JsonValue]] = {"id": "dep-1", "mode": "responses"}
+
+
+def _pin_shared_mode(monkeypatch: pytest.MonkeyPatch, model: str, mode: str) -> None:
+    cost_map: Final = cast(dict[str, dict[str, object]], litellm.model_cost)
+    monkeypatch.setitem(cost_map, model, {**cost_map.get(model, {}), "mode": mode})
+
+
+@pytest.mark.parametrize(
+    "deployment_model_info, custom_llm_provider, expected",
+    [
+        (_CHAT, "bedrock_mantle", "chat"),
+        (_RESPONSES, "bedrock_mantle", "responses"),
+        (_CHAT, "openai", "chat"),
+        (_CHAT, "chatgpt", None),
+        (_CHAT, "github_copilot", None),
+        ({"id": "dep-1", "mode": "embedding"}, "bedrock_mantle", None),
+        ({"id": "dep-1"}, "bedrock_mantle", None),
+        (None, "bedrock_mantle", None),
+    ],
+)
+def test_deployment_routing_mode_pins_chat_or_responses_except_on_responses_only_backends(
+    deployment_model_info: Mapping[str, JsonValue] | None, custom_llm_provider: str, expected: str | None
+) -> None:
+    assert deployment_routing_mode(deployment_model_info, custom_llm_provider) == expected
+
+
+def test_a_chat_pinned_mantle_deployment_stays_on_chat_completions_while_the_shared_row_says_responses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model: Final = "bedrock_mantle/openai.gpt-5.6-sol"
+    _pin_shared_mode(monkeypatch, model, "responses")
+    shared_info, _ = responses_api_bridge_check(model=model, custom_llm_provider="bedrock_mantle")
+    pinned_info, pinned_model = responses_api_bridge_check(
+        model=model, custom_llm_provider="bedrock_mantle", deployment_model_info=_CHAT
+    )
+    assert shared_info["mode"] == "responses"
+    assert (pinned_info["mode"], pinned_model) == ("chat", model)
+
+
+def test_a_chat_pinned_chatgpt_alias_still_bridges_to_the_responses_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    _pin_shared_mode(monkeypatch, "chatgpt/gpt-5.4", "responses")
+    info, _ = responses_api_bridge_check(model="gpt-5.4", custom_llm_provider="chatgpt", deployment_model_info=_CHAT)
+    assert info["mode"] == "responses"
+
+
+_FUNCTION_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+def test_a_chat_pin_cannot_pull_gpt_5_4_function_tool_calls_off_the_responses_api(custom_llm_provider: str) -> None:
+    """Chat Completions rejects function tools while reasoning is on for gpt-5.4+, so the capability rule
+    must still bridge the request even when the deployment pins ``mode: chat``."""
+    info, model = responses_api_bridge_check(
+        model="gpt-5.4",
+        custom_llm_provider=custom_llm_provider,
+        tools=[_FUNCTION_TOOL],
+        api_base="https://example.openai.azure.com" if custom_llm_provider == "azure" else None,
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], model) == ("responses", "gpt-5.4")
+
+
+@pytest.mark.parametrize("model", ["openai.gpt-5.6-terra", "us-east-1/openai.gpt-5.6-terra"])
+@pytest.mark.parametrize("reasoning_effort", [None, "low"])
+def test_a_chat_pinned_mantle_deployment_sends_function_tools_to_the_responses_api(
+    model: str, reasoning_effort: str | None
+) -> None:
+    """Mantle Chat Completions rejects function tools on gpt-5.4+ unless reasoning is off, so a ``mode: chat``
+    pin cannot keep a tool call there."""
+    info, routed_model = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider="bedrock_mantle",
+        tools=[_FUNCTION_TOOL],
+        reasoning_effort=reasoning_effort,
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], routed_model) == ("responses", model)
+
+
+@pytest.mark.parametrize(
+    "reasoning_effort, reasoning_summary",
+    [("low", "auto"), ({"effort": "low", "summary": "auto"}, None)],
+)
+def test_a_chat_pinned_mantle_deployment_sends_a_reasoning_summary_to_the_responses_api(
+    reasoning_effort: str | Mapping[str, JsonValue], reasoning_summary: str | None
+) -> None:
+    info, _ = responses_api_bridge_check(
+        model="openai.gpt-5.6-terra",
+        custom_llm_provider="bedrock_mantle",
+        reasoning_effort=reasoning_effort,
+        reasoning_summary=reasoning_summary,
+        deployment_model_info=_CHAT,
+    )
+    assert info["mode"] == "responses"
+
+
+def test_a_chat_pinned_mantle_deployment_sends_web_search_to_the_responses_api() -> None:
+    info, model = responses_api_bridge_check(
+        model="openai.gpt-5.6-terra",
+        custom_llm_provider="bedrock_mantle",
+        web_search_options={"search_context_size": "medium"},
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], model) == ("responses", "openai.gpt-5.6-terra")
+
+
+@pytest.mark.parametrize(
+    "model, reasoning_effort",
+    [
+        ("openai.gpt-5.6-terra", "none"),
+        ("openai.gpt-oss-120b", "low"),
+        ("openai.gpt-oss-safeguard-120b", "low"),
+    ],
+)
+def test_a_chat_pinned_mantle_tool_call_stays_on_chat_completions_when_chat_accepts_it(
+    model: str, reasoning_effort: str
+) -> None:
+    info, routed_model = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider="bedrock_mantle",
+        tools=[_FUNCTION_TOOL],
+        reasoning_effort=reasoning_effort,
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], routed_model) == ("chat", model)
+
+
+def test_a_chat_pin_cannot_pull_xai_web_search_off_the_responses_api() -> None:
+    info, model = responses_api_bridge_check(
+        model="grok-4",
+        custom_llm_provider="xai",
+        web_search_options={"search_context_size": "medium"},
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], model) == ("responses", "grok-4")
+
+
+@pytest.mark.parametrize(
+    "model, custom_llm_provider, api_base",
+    [
+        ("responses/my-azure-deployment", "azure", "https://example.openai.azure.com"),
+        ("responses/gpt-5.4", "openai", None),
+    ],
+)
+def test_a_chat_pin_does_not_override_an_explicit_responses_prefix(
+    model: str, custom_llm_provider: str, api_base: str | None
+) -> None:
+    info, sent_model = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], sent_model) == ("responses", model.removeprefix("responses/"))
+
+
+def test_a_chat_pinned_responses_prefixed_router_deployment_reaches_the_responses_api(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    """The router registers a ``mode: chat`` row under the deployment's own ``responses/gpt-5.6`` name,
+    so the prefix has to win over that row too, or the request goes to Chat Completions as ``responses/gpt-5.6``."""
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    responses_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-5.6",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "prefixed-chat",
+                "litellm_params": {
+                    "model": "openai/responses/gpt-5.6",
+                    "custom_llm_provider": "openai",
+                    "api_key": "sk-test",
+                },
+                "model_info": {"id": "prefixed-chat-id", "mode": "chat"},
+            }
+        ]
+    )
+
+    response: Final = router.completion(model="prefixed-chat", messages=[{"role": "user", "content": "Say ok"}])
+
+    assert json.loads(responses_route.calls[0].request.read())["model"] == "gpt-5.6"
+    assert response.choices[0].message.content == "ok"
+
+
+def test_a_chat_pin_keeps_a_plain_gpt_5_4_chat_request_on_chat_completions() -> None:
+    """Without tools or a reasoning summary nothing forces the Responses API, so the deployment's own
+    mode decides and the shared ``responses`` row is left alone."""
+    shared_mode = litellm.model_cost["gpt-5.4"]["mode"]
+    info, model = responses_api_bridge_check(model="gpt-5.4", custom_llm_provider="openai", deployment_model_info=_CHAT)
+    assert (info["mode"], model) == ("chat", "gpt-5.4")
+    assert litellm.model_cost["gpt-5.4"]["mode"] == shared_mode
+
+
+@pytest.mark.parametrize(
+    "model, custom_llm_provider",
+    [
+        ("gpt-5.1-codex", "azure"),
+        ("o3-pro", "openai"),
+        ("gpt-5.4-pro", "openai"),
+        ("eu/gpt-5-codex", "azure"),
+        ("us/gpt-5.4-pro", "azure"),
+        ("databricks-gpt-5-3-codex", "databricks"),
+    ],
+)
+def test_a_chat_pin_cannot_pull_a_responses_only_model_off_the_responses_api(
+    model: str, custom_llm_provider: str
+) -> None:
+    """These rows list only ``/v1/responses`` in ``supported_endpoints``, or are ``responses`` rows with no
+    endpoint list at all, so a deployment pin to chat has nowhere to send the request and the bridge keeps it."""
+    cost_map: Final = cast(dict[str, dict[str, object]], litellm.model_cost)
+    assert not backend_serves_chat_completions(
+        cost_map[model if custom_llm_provider == "openai" else f"{custom_llm_provider}/{model}"]
+    )
+    info, routed_model = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base="https://example.openai.azure.com" if custom_llm_provider == "azure" else None,
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], routed_model) == ("responses", model)
+
+
+@pytest.mark.parametrize(
+    "shared_model_info, expected",
+    [
+        ({}, True),
+        ({"mode": "chat"}, True),
+        ({"mode": "responses"}, False),
+        ({"supported_endpoints": ["/v1/chat/completions", "/v1/responses"]}, True),
+        ({"supported_endpoints": ["/v1/responses", "/v1/batch"]}, False),
+        ({"supported_endpoints": "/v1/chat/completions"}, True),
+    ],
+)
+def test_backend_serves_chat_completions_reads_the_shared_row(
+    shared_model_info: Mapping[str, JsonValue], expected: bool
+) -> None:
+    assert backend_serves_chat_completions(shared_model_info) is expected
+
+
+@pytest.mark.parametrize(
+    "extra_body, expected",
+    [
+        ({"reasoning_effort": {"effort": "low", "summary": "auto"}}, {"effort": "low", "summary": "auto"}),
+        ({"reasoning_effort": "low"}, "low"),
+        ({"reasoning_effort": 5}, None),
+        ({"reasoning_effort": ["low"]}, None),
+        ({}, None),
+        ("reasoning_effort=low", None),
+        (None, None),
+    ],
+    ids=["dict", "string", "int", "list", "absent", "not-a-mapping", "no-extra-body"],
+)
+def test_bridge_reasoning_effort_reads_only_a_string_or_mapping_effort_nested_in_extra_body(
+    extra_body: JsonValue, expected: JsonValue
+) -> None:
+    assert bridge_reasoning_effort(None, extra_body) == expected

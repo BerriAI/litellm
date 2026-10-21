@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig, JsonModeRequest
@@ -12,6 +12,9 @@ from .common_utils import (
     filter_claude_platform_request_body,
     resolve_unsupported_override,
 )
+
+if TYPE_CHECKING:
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
 
 class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
@@ -96,7 +99,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "ModelResponseIterator":
         return self.get_model_response_iterator_for_request(
             streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode, optional_params={}
         )
@@ -107,7 +110,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         sync_stream: bool,
         json_mode: bool | None,
         optional_params: Mapping[str, object],
-    ) -> object:
+    ) -> "ModelResponseIterator":
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
         return ModelResponseIterator(

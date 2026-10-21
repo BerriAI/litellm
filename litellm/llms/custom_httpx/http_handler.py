@@ -797,9 +797,11 @@ class AsyncHTTPHandler:
                 )
             if response.is_redirect or response.is_error:
                 return httpx.Response(response.status_code, headers=response.headers, request=response.request)
-            if response.headers.get("content-encoding", "identity").lower() != "identity":
+            content_encoding: Final = header_value(response.headers, "content-encoding")
+            if ("identity" if content_encoding is None else content_encoding).lower() != "identity":
                 raise HTTPResponseLimitError("Response size limits require an uncompressed response")
-            if int(response.headers.get("content-length", "0")) > max_bytes:
+            content_length: Final = header_value(response.headers, "content-length")
+            if int("0" if content_length is None else content_length) > max_bytes:
                 raise HTTPResponseLimitError("Response exceeds the configured size limit")
             with BytesIO() as body:
                 async for chunk in response.aiter_bytes(chunk_size=65536):

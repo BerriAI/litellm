@@ -45,6 +45,7 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME: Final = "tool_permission"
+_DECODED_ARGUMENTS: Final = TypeAdapter(object)
 _REQUEST_DATA: Final = TypeAdapter(object)
 
 
@@ -326,7 +327,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         parsed_arguments: object = {}
         try:
             if isinstance(arguments, str):
-                parsed_arguments = json.loads(arguments)
+                parsed_arguments = _DECODED_ARGUMENTS.validate_python(json.loads(arguments))
             elif isinstance(arguments, dict):
                 parsed_arguments = arguments
             else:
@@ -970,7 +971,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return
 
         self._modify_response_with_permission_errors(anthropic_response, anthropic_denials)
-        for sse_chunk in anthropic_sse_chunks_from_response(anthropic_response):
+        for sse_chunk in anthropic_sse_chunks_from_response(anthropic_response, all_chunks, keep_explanations=True):
             yield sse_chunk
 
     def _check_assembled_stream(

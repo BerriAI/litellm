@@ -131,21 +131,51 @@ def test_single_upstream_http_status_is_truthful(tag, status_code, expected):
 
 
 @pytest.mark.asyncio
-async def test_cancelled_fetch_is_a_classified_fault_not_a_healthy_empty_server():
-    """A cancelled per-server fetch must not masquerade as ok(tool_count=0): cancellation was already
-    suppressed before the outcome plumbing existed, so it stays suppressed, but as an internal fault
-    the outcome reporting can see."""
+@pytest.mark.parametrize("cancel_message", [None, "client disconnected"])
+async def test_cancelled_fetch_propagates_instead_of_masquerading_as_a_healthy_empty_server(cancel_message: str | None):
+    """A cancelled per-server fetch must not masquerade as ok(tool_count=0), and it is not an upstream
+    fault either: the caller cancelled it (a sibling server already answered, or the request went
+    away), so the cancellation propagates instead of being logged as a listing failure."""
     import asyncio
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 
     manager = MCPServerManager()
     client = MagicMock()
-    client.list_tools = AsyncMock(side_effect=asyncio.CancelledError())
+    started = asyncio.Event()
+
+    async def list_tools(raise_on_error: bool = False) -> list[object]:
+        started.set()
+        await asyncio.Event().wait()
+        return []
+
+    client.list_tools = list_tools
+    listing = asyncio.create_task(manager._fetch_tools_with_timeout(client, "cancelled_srv"))
+    await started.wait()
+    listing.cancel(cancel_message)
+
+    with pytest.raises(asyncio.CancelledError):
+        await listing
+
+
+@pytest.mark.asyncio
+async def test_client_side_cancelled_error_is_a_classified_fault_not_a_cancellation():
+    """The MCP client raises its own CancelledError when a session's teardown outlives its cleanup
+    budget while the listing task keeps running. That is one server's fault, so it classifies as an
+    internal listing failure instead of cancelling the aggregate listing around it."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.experimental_mcp_client.client import SESSION_CLEANUP_TIMEOUT_MESSAGE
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager = MCPServerManager()
+    client = MagicMock()
+    client.list_tools = AsyncMock(side_effect=asyncio.CancelledError(SESSION_CLEANUP_TIMEOUT_MESSAGE))
 
     with pytest.raises(MCPServerListError) as exc_info:
-        await manager._fetch_tools_with_timeout(client, "cancelled_srv")
+        await manager._fetch_tools_with_timeout(client, "slow_teardown_srv")
 
     assert exc_info.value.fault.tag == "internal"
 
@@ -296,3 +326,288 @@ def test_managed_scope_step_up_only_accepts_unambiguous_bearer_challenges(status
     wrapped = RuntimeError("transport failure")
     wrapped.__cause__ = cause
     assert upstream_insufficient_scope(wrapped) == expected
+
+
+def _rate_limited_error(retry_after: str | None = None) -> httpx.HTTPStatusError:
+    request: Final = httpx.Request("POST", "https://mcp.example.com/mcp")
+    headers: Final = {"retry-after": retry_after} if retry_after is not None else {}
+    return httpx.HTTPStatusError(
+        "rate limited",
+        request=request,
+        response=httpx.Response(429, headers=headers, request=request),
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_upstream_rate_limit_backs_off_then_reraises() -> None:
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
+
+    sleeps: Final[list[float]] = []
+    calls: Final[list[httpx.HTTPStatusError]] = []
+    failure: Final = _rate_limited_error()
+
+    async def record(delay: float) -> None:
+        sleeps.append(delay)
+
+    async def always_limited() -> None:
+        calls.append(failure)
+        raise failure
+
+    expected_error: Final = pytest.raises(httpx.HTTPStatusError)
+    with expected_error as exc_info:
+        await retry_upstream_rate_limit(
+            always_limited,
+            "srv",
+            max_retries=3,
+            base_delay=0.5,
+            max_delay=5.0,
+            sleep=record,
+            jitter=lambda: 0.0,
+        )
+
+    assert exc_info.value is failure
+    assert sleeps == [0.5, 1.0, 2.0]
+    assert len(calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_retry_upstream_rate_limit_honors_retry_after_up_to_cap() -> None:
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
+
+    sleeps: Final[list[float]] = []
+
+    async def record(delay: float) -> None:
+        sleeps.append(delay)
+
+    async def always_limited() -> None:
+        raise _rate_limited_error("120")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await retry_upstream_rate_limit(
+            always_limited,
+            "srv",
+            max_retries=3,
+            base_delay=0.5,
+            max_delay=5.0,
+            sleep=record,
+            jitter=lambda: 0.0,
+        )
+
+    assert sleeps == [5.0, 5.0, 5.0]
+
+
+@pytest.mark.asyncio
+async def test_retry_upstream_rate_limit_parses_http_date_retry_after() -> None:
+    import email.utils
+    import time
+
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
+
+    sleeps: Final[list[float]] = []
+    attempts: Final[list[None]] = []
+
+    async def record(delay: float) -> None:
+        sleeps.append(delay)
+
+    async def limited() -> str:
+        attempts.append(None)
+        if len(attempts) == 1:
+            raise _rate_limited_error(email.utils.formatdate(time.time() + 3, usegmt=True))
+        raise _rate_limited_error("abc")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await retry_upstream_rate_limit(
+            limited,
+            "srv",
+            max_retries=3,
+            base_delay=0.5,
+            max_delay=5.0,
+            sleep=record,
+            jitter=lambda: 0.0,
+        )
+
+    assert 0 < sleeps[0] <= 3.5
+    assert sleeps[1:] == [1.0, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_retry_upstream_rate_limit_passes_through_non_429() -> None:
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
+
+    sleeps: Final[list[float]] = []
+    calls = 0
+    failure: Final = ValueError("broken")
+
+    async def record(delay: float) -> None:
+        sleeps.append(delay)
+
+    async def broken() -> None:
+        nonlocal calls
+        calls += 1
+        raise failure
+
+    expected_error: Final = pytest.raises(ValueError, match="broken")
+    with expected_error as exc_info:
+        await retry_upstream_rate_limit(
+            broken, "srv", max_retries=3, base_delay=0.5, max_delay=5.0, sleep=record, jitter=lambda: 0.0
+        )
+
+    assert exc_info.value is failure
+    assert calls == 1
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_retry_upstream_rate_limit_negative_max_retries_is_a_single_attempt() -> None:
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
+
+    sleeps: Final[list[float]] = []
+    calls = 0
+    failure: Final = _rate_limited_error("0")
+
+    async def record(delay: float) -> None:
+        sleeps.append(delay)
+
+    async def always_limited() -> None:
+        nonlocal calls
+        calls += 1
+        raise failure
+
+    expected_error: Final = pytest.raises(httpx.HTTPStatusError)
+    with expected_error as exc_info:
+        await retry_upstream_rate_limit(
+            always_limited,
+            "srv",
+            max_retries=-1,
+            base_delay=0.5,
+            max_delay=5.0,
+            sleep=record,
+            jitter=lambda: 0.0,
+        )
+
+    assert exc_info.value is failure
+    assert calls == 1
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_retry_deadline_skips_sleep_that_would_pass_deadline() -> None:
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
+
+    now: Final[list[float]] = [100.0]
+    sleeps: Final[list[float]] = []
+    calls = 0
+    failure: Final = _rate_limited_error()
+
+    async def record(delay: float) -> None:
+        sleeps.append(delay)
+
+    async def always_limited() -> None:
+        nonlocal calls
+        calls += 1
+        raise failure
+
+    expected_error: Final = pytest.raises(httpx.HTTPStatusError)
+    with expected_error as exc_info:
+        await retry_upstream_rate_limit(
+            always_limited,
+            "srv",
+            max_retries=3,
+            base_delay=2.0,
+            max_delay=5.0,
+            sleep=record,
+            jitter=lambda: 0.0,
+            deadline_seconds=1.0,
+            clock=lambda: now[0],
+        )
+
+    assert exc_info.value is failure
+    assert calls == 1
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_retry_attempt_is_interrupted_at_deadline() -> None:
+    import anyio
+
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
+
+    calls = 0
+    failure: Final = _rate_limited_error("0")
+
+    async def fetch() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise failure
+        await anyio.sleep(5)
+
+    expected_error: Final = pytest.raises(httpx.HTTPStatusError)
+    with anyio.fail_after(5):
+        with expected_error as exc_info:
+            await retry_upstream_rate_limit(
+                fetch, "srv", max_retries=3, base_delay=0.0, max_delay=5.0, deadline_seconds=0.2
+            )
+
+    assert exc_info.value is failure
+
+
+@pytest.mark.asyncio
+async def test_retry_deadline_does_not_bound_first_attempt() -> None:
+    import anyio
+
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
+
+    async def slow() -> str:
+        await anyio.sleep(0.15)
+        return "tools"
+
+    result: Final = await retry_upstream_rate_limit(
+        slow, "srv", max_retries=3, base_delay=0.5, max_delay=5.0, deadline_seconds=0.05
+    )
+
+    assert result == "tools"
+
+
+@pytest.mark.asyncio
+async def test_retry_upstream_rate_limit_never_retries_cancellation() -> None:
+    import asyncio
+
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import retry_upstream_rate_limit
+
+    sleeps: Final[list[float]] = []
+    calls = 0
+
+    async def record(delay: float) -> None:
+        sleeps.append(delay)
+
+    async def cancelled() -> None:
+        nonlocal calls
+        calls += 1
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await retry_upstream_rate_limit(
+            cancelled, "srv", max_retries=3, base_delay=0.5, max_delay=5.0, sleep=record, jitter=lambda: 0.0
+        )
+
+    assert calls == 1
+    assert sleeps == []
+
+
+def test_listing_failed_outright_only_when_every_server_faulted_non_auth() -> None:
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+        ServerListOk,
+        listing_failed_outright,
+    )
+
+    assert not listing_failed_outright({})
+    assert listing_failed_outright({"a": ServerListFault(tag="upstream_error", status_code=429)})
+    assert listing_failed_outright(
+        {"a": ServerListFault(tag="timeout"), "b": ServerListFault(tag="rate_limited", status_code=429)}
+    )
+    assert not listing_failed_outright(
+        {"a": ServerListFault(tag="upstream_error", status_code=500), "b": ServerListOk(tool_count=2)}
+    )
+    assert not listing_failed_outright({"a": ServerListFault(tag="auth_required", status_code=401)})
+    assert not listing_failed_outright({"a": ServerListFault(tag="forbidden", status_code=403)})

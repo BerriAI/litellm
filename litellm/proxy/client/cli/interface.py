@@ -8,8 +8,9 @@ from typing import Final, TypeAlias
 import click
 
 from litellm._logging import verbose_logger
+from litellm.proxy.common_utils.banner import show_banner
 
-from .commands.auth import context_secret_vault
+from .commands.auth import cli_context_obj, context_secret_vault
 
 ShellScope: TypeAlias = tuple[str, ...]
 SHELL_WORD: Final = re.compile(r"""(?P<prefix>[\w-]+=)?(?P<quoted>"[^"]*"|'[^']*')(?P<rest>\S*)|\S+""")
@@ -115,12 +116,10 @@ def show_commands():
 
 def setup_shell(ctx: click.Context):
     """Set up the interactive shell with banner and initial info."""
-    from litellm.proxy.common_utils.banner import show_banner
-
     show_banner()
 
     # Show server connection info
-    base_url: Final = ctx.obj.get("base_url")
+    base_url: Final = cli_context_obj(ctx).get("base_url")
     click.secho(f"Connected to LiteLLM server: {base_url}\n", fg="green")
 
     show_commands()
@@ -137,8 +136,6 @@ def handle_special_commands(user_input: str) -> bool:
         return True
     elif user_input.lower() == "clear":
         click.clear()
-        from litellm.proxy.common_utils.banner import show_banner
-
         show_banner()
         show_commands()
         return True

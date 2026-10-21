@@ -38,6 +38,7 @@ class BatchLineItemSource:
     cost_provider: BatchFileProvider
     model_info: ModelInfo | None
     metadata: StandardBatchLineItemMetadata
+    vertex_location: str | None = None
 
 
 def line_item_metadata(attribution: Mapping[str, object]) -> StandardBatchLineItemMetadata:
@@ -140,7 +141,11 @@ def _line_item(
     source: BatchLineItemSource, custom_id: str | None, request: Mapping[str, object] | None, entry: dict[str, object]
 ) -> StandardBatchLineItem:
     priced: Final = batch_cost_and_usage(
-        (entry,), source.cost_provider, model_name=source.model, model_info=source.model_info
+        (entry,),
+        source.cost_provider,
+        model_name=source.model,
+        model_info=source.model_info,
+        vertex_location=source.vertex_location,
     )
     succeeded: Final = priced.successful_requests > 0
     return StandardBatchLineItem(

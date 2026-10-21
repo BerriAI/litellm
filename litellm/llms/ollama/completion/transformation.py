@@ -16,13 +16,14 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_ollama_image,
-    custom_prompt,
     ollama_pt,
+    render_custom_prompt_template,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
     inline_remote_image_urls,
 )
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -437,11 +438,8 @@ class OllamaConfig(BaseConfig):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            ollama_prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
+            ollama_prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="ollama"
             )
         elif text_completion_request:  # handle `/completions` requests
             ollama_prompt = get_str_from_messages(messages=messages)
@@ -503,10 +501,7 @@ class OllamaConfig(BaseConfig):
 
         Some providers need `model` in `api_base`
         """
-        clean_api_base: Final = (api_base or "http://localhost:11434").rstrip("/")
-        if clean_api_base.endswith("/api/generate"):
-            return clean_api_base
-        return f"{clean_api_base}/api/generate"
+        return ensure_api_route(api_base or "http://localhost:11434", "api/generate")
 
     def get_model_response_iterator(
         self,

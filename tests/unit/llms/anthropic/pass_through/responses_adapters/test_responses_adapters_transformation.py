@@ -9,7 +9,8 @@ from typing import Any, Dict, Final, List
 from unittest.mock import MagicMock
 
 import pytest
-
+from openai.types.responses import ResponseInputImageParam
+from pydantic import TypeAdapter
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -400,7 +401,9 @@ class TestTranslateMessagesToResponsesInput:
         ]
         result = _translate_messages(messages)
         assert len(result) == 1
-        assert result[0]["content"] == [{"type": "input_image", "image_url": "data:image/png;base64,abc123"}]
+        assert result[0]["content"] == [
+            {"type": "input_image", "image_url": "data:image/png;base64,abc123", "detail": "auto"}
+        ]
 
     def test_user_url_image(self):
         """User message with URL image source becomes input_image with the URL."""
@@ -416,7 +419,9 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [{"type": "input_image", "image_url": "https://example.com/img.jpg"}]
+        assert result[0]["content"] == [
+            {"type": "input_image", "image_url": "https://example.com/img.jpg", "detail": "auto"}
+        ]
 
     def test_user_base64_image_empty_data_skipped(self):
         """Base64 image with empty data is skipped (no URL can be formed)."""
@@ -745,6 +750,7 @@ class TestTranslateMessagesToResponsesInput:
         assert result[0]["content"][1] == {
             "type": "input_image",
             "image_url": "https://example.com/cat.jpg",
+            "detail": "auto",
         }
 
     def test_unknown_image_source_type_skipped(self):
@@ -1753,6 +1759,24 @@ class TestToolResultImages:
             and any(part.get("type") == "input_image" for part in item.get("content", []))
         )
 
+    def test_every_bridged_image_is_a_valid_responses_input_image(self):
+        image: Final = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}
+        messages: Final = [
+            {"role": "user", "content": [{"type": "text", "text": "what is this?"}, image]},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_01", "name": "read", "input": {}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": [image]}],
+            },
+        ]
+        parts: Final = self._input_images(_ADAPTER.translate_messages_to_responses_input(messages))
+        assert len(parts) == 2
+        for part in parts:
+            TypeAdapter(ResponseInputImageParam).validate_python(part)
+
     def test_base64_image_survives(self):
         items = self._translate(
             [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}]
@@ -1812,7 +1836,7 @@ class TestToolResultImages:
 
         assert self._image_message(items)["content"] == [
             {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
-            {"type": "input_image", "image_url": self.DATA_URI},
+            {"type": "input_image", "image_url": self.DATA_URI, "detail": "auto"},
         ]
 
     def test_sibling_user_blocks_stay_out_of_boundary_message(self):
@@ -1825,7 +1849,7 @@ class TestToolResultImages:
 
         assert self._image_message(items)["content"] == [
             {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
-            {"type": "input_image", "image_url": self.DATA_URI},
+            {"type": "input_image", "image_url": self.DATA_URI, "detail": "auto"},
         ]
         assert any(
             part == {"type": "input_text", "text": "what changed?"}
@@ -1976,7 +2000,7 @@ class TestToolResultDocuments:
         )
         assert image_message["content"] == [
             {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
-            {"type": "input_image", "image_url": f"data:image/png;base64,{self.PNG_B64}"},
+            {"type": "input_image", "image_url": f"data:image/png;base64,{self.PNG_B64}", "detail": "auto"},
         ]
 
 
@@ -2146,6 +2170,7 @@ class TestPromptCacheBreakpointToResponses:
                     {
                         "type": "input_image",
                         "image_url": "https://example.com/a.png",
+                        "detail": "auto",
                         "prompt_cache_breakpoint": self.EXPLICIT,
                     },
                 ],
@@ -2238,10 +2263,15 @@ class TestPromptCacheBreakpointToResponses:
             "output": f"r\n{TOOL_RESULT_IMAGE_PLACEHOLDER}",
         }
         *_, first_screenshot, last_screenshot = screenshots["content"]
-        assert first_screenshot == {"type": "input_image", "image_url": "data:image/png;base64,Zmlyc3Q="}
+        assert first_screenshot == {
+            "type": "input_image",
+            "image_url": "data:image/png;base64,Zmlyc3Q=",
+            "detail": "auto",
+        }
         assert last_screenshot == {
             "type": "input_image",
             "image_url": "data:image/png;base64,bGFzdA==",
+            "detail": "auto",
             "prompt_cache_breakpoint": self.EXPLICIT,
         }
 
@@ -2249,6 +2279,7 @@ class TestPromptCacheBreakpointToResponses:
     MARKED_SCREENSHOT_PART: Final = {
         "type": "input_image",
         "image_url": "data:image/png;base64,c2hvdA==",
+        "detail": "auto",
         "prompt_cache_breakpoint": EXPLICIT,
     }
     LOG_OUTPUT: Final = {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok"}
@@ -2320,7 +2351,7 @@ class TestPromptCacheBreakpointToResponses:
             }
         ]
 
-    SCREENSHOT_PART: Final = {"type": "input_image", "image_url": "data:image/png;base64,c2hvdA=="}
+    SCREENSHOT_PART: Final = {"type": "input_image", "image_url": "data:image/png;base64,c2hvdA==", "detail": "auto"}
     MARKED_LOG_TEXT: Final = {"type": "text", "text": "build ok", "prompt_cache_breakpoint": EXPLICIT}
     LOG_TEXT_WITH_SCREENSHOT: Final = f"build ok\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
 

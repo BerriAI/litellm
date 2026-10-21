@@ -8,6 +8,7 @@ from typing import Final, Literal
 import httpx
 from pydantic import Field
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.embedding.transformation import (
     BaseEmbeddingConfig,
     LiteLLMLoggingObj,
@@ -101,11 +102,11 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
     def deployment_url(self) -> str:
         with httpx.Client(timeout=30) as client:
             valid_deployments: Final = []
-            deployments: Final = client.get(self.base_url + "/lm/deployments", headers=self.headers).json()
+            deployments: Final = client.get(join_api_base(self.base_url, "lm/deployments"), headers=self.headers).json()
             for deployment in deployments.get("resources", []):
                 if deployment["scenarioId"] == "orchestration":
                     config_details = client.get(
-                        self.base_url + f"/lm/configurations/{deployment['configurationId']}",
+                        join_api_base(self.base_url, f"lm/configurations/{deployment['configurationId']}"),
                         headers=self.headers,
                     ).json()
                     if config_details["executableId"] == "orchestration":
@@ -144,7 +145,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        url: Final = self.deployment_url.rstrip("/") + "/v2/embeddings"
+        url: Final = join_api_base(self.deployment_url, "v2/embeddings")
         return url
 
     def transform_embedding_request(

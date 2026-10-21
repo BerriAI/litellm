@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -75,6 +76,7 @@ else:
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
@@ -628,7 +630,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             return None
         tool_call_names: Final = get_tool_call_names(optional_params.get("tools", []))
         try:
-            json_content: Final[object] = json.loads(content)
+            json_content: Final[object] = _DECODED_JSON.validate_python(json.loads(content))
             if (
                 isinstance(json_content, dict)
                 and json_content.get("type") == "function"
@@ -806,7 +808,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if endpoint in api_base:
             return api_base
 
-        return f"{api_base}/{endpoint}"
+        return join_api_base(api_base, endpoint)
 
     def validate_environment(
         self,
@@ -895,7 +897,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> object:
         return OpenAIChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -957,9 +959,11 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 )
             choices = chunk.get("choices", [])
             choices = self._map_reasoning_to_reasoning_content(choices)
+            fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 
             kwargs: Final[dict[str, Any]] = {
                 "id": chunk.get("id"),
+                "system_fingerprint": fingerprint,
                 "object": "chat.completion.chunk",
                 "created": chunk.get("created"),
                 "model": chunk.get("model"),

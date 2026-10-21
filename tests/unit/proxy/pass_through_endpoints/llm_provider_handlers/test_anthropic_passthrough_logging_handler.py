@@ -5,11 +5,10 @@ from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
-import litellm
 import pytest
 from pydantic import ValidationError
 
-
+import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.pass_through.stream_assembly import extract_sse_data
@@ -2642,6 +2641,7 @@ class TestRecordPartialUsageForFailure:
 
         assert "combined_usage_object" not in logging_obj.model_call_details
         assert "response_cost" not in logging_obj.model_call_details
+
 
 
 @pytest.mark.parametrize(

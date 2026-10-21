@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
 
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -91,7 +91,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "GroqChatCompletionStreamingHandler":
         return GroqChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -324,8 +324,9 @@ class GroqChatConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
 
+        original_service_tier: Final[object] = getattr(model_response, "service_tier")
         mapped_service_tier: Final[Literal["auto", "default", "flex"]] = self._map_groq_service_tier(
-            original_service_tier=getattr(model_response, "service_tier")
+            original_service_tier=original_service_tier
         )
         setattr(model_response, "service_tier", mapped_service_tier)
         self._add_web_search_usage(model_response=model_response)
@@ -356,7 +357,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
             verbose_logger.info("Groq executed_tools entries did not match the expected shape; not billed: %s", e)
             return ()
 
-    def _map_groq_service_tier(self, original_service_tier: str | None) -> Literal["auto", "default", "flex"]:
+    def _map_groq_service_tier(self, original_service_tier: object) -> Literal["auto", "default", "flex"]:
         """
         Ensure groq service tier is OpenAI compatible.
         """
