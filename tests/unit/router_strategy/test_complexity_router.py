@@ -14412,7 +14412,9 @@ class TestContextWindowEscalation:
         assert "context_escalation" in result.routing_decision["signals"]
 
     @staticmethod
-    def _base_model_tier_router(small: dict[str, object], base_window: int) -> ComplexityRouter:
+    def _base_model_tier_router(
+        small: dict[str, object], base_window: int, **overrides: object
+    ) -> ComplexityRouter:
         litellm_router: Final = Router(
             model_list=[
                 {"model_name": "small-model", **small},
@@ -14424,39 +14426,41 @@ class TestContextWindowEscalation:
             ]
         )
         return ComplexityRouter(
-            model_name="test-router", litellm_router_instance=litellm_router, complexity_router_config=_tier_config()
+            model_name="test-router",
+            litellm_router_instance=litellm_router,
+            complexity_router_config=_tier_config(**overrides),
         )
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("local_model_cost_map")
     @pytest.mark.parametrize(
-        "arn",
-        [
-            _BEDROCK_PROFILE_ARN,
-            "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:provisioned-model/abc123xyz",
-            "bedrock/llama/arn:aws:bedrock:us-west-2:000000000000:imported-model/abc123xyz",
-        ],
+        "overrides",
+        [{}, {"adaptive": True, "session_affinity": True, "deployment_affinity": True}],
+        ids=["fixed", "adaptive"],
     )
     @pytest.mark.parametrize("declared_in", ["model_info", "litellm_params"])
-    async def test_a_bedrock_arn_window_declared_only_through_base_model_escalates_too(
-        self, arn: str, declared_in: str
+    async def test_an_inference_profile_window_declared_only_through_base_model_escalates_too(
+        self, overrides: dict[str, object], declared_in: str
     ):
         base_window: Final = litellm.get_model_info(model=_LLAMA_BASE_MODEL)["max_input_tokens"]
         assert base_window is not None
         router: Final = self._base_model_tier_router(
             {
                 "litellm_params": {
-                    "model": arn,
+                    "model": _BEDROCK_PROFILE_ARN,
                     "mock_response": "ok",
                     **({"base_model": _LLAMA_BASE_MODEL} if declared_in == "litellm_params" else {}),
                 },
                 "model_info": {"base_model": _LLAMA_BASE_MODEL} if declared_in == "model_info" else {},
             },
             base_window,
+            **overrides,
         )
 
         result: Final = await router.async_pre_routing_hook(
-            model="test-router", request_kwargs={}, messages=_turns_past(base_window)
+            model="test-router",
+            request_kwargs={"metadata": {"session_id": "long-session"}},
+            messages=_turns_past(base_window),
         )
 
         assert result is not None
@@ -14466,9 +14470,19 @@ class TestContextWindowEscalation:
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("local_model_cost_map")
-    @pytest.mark.parametrize("own_window", ["declared", "registered", "not_a_bedrock_arn"])
-    async def test_base_model_never_overrides_an_own_window_or_reaches_a_non_arn_route(
-        self, own_window: str, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("own_window", "model"),
+        [
+            ("declared", _BEDROCK_PROFILE_ARN),
+            ("registered", _BEDROCK_PROFILE_ARN),
+            (None, "openai/a-model-the-cost-map-does-not-know"),
+            (None, "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:provisioned-model/abc123xyz"),
+            (None, "bedrock/llama/arn:aws:bedrock:us-west-2:000000000000:imported-model/abc123xyz"),
+        ],
+        ids=["declared", "registered", "not_a_bedrock_arn", "provisioned_model", "imported_model"],
+    )
+    async def test_base_model_never_overrides_an_own_window_or_reaches_a_non_profile_route(
+        self, own_window: str | None, model: str, monkeypatch: pytest.MonkeyPatch
     ):
         base_window: Final = litellm.get_model_info(model=_LLAMA_BASE_MODEL)["max_input_tokens"]
         assert base_window is not None
@@ -14480,14 +14494,7 @@ class TestContextWindowEscalation:
             )
         router: Final = self._base_model_tier_router(
             {
-                "litellm_params": {
-                    "model": (
-                        "openai/a-model-the-cost-map-does-not-know"
-                        if own_window == "not_a_bedrock_arn"
-                        else _BEDROCK_PROFILE_ARN
-                    ),
-                    "mock_response": "ok",
-                },
+                "litellm_params": {"model": model, "mock_response": "ok"},
                 "model_info": {
                     "base_model": _LLAMA_BASE_MODEL,
                     **({"max_input_tokens": base_window * 8} if own_window == "declared" else {}),

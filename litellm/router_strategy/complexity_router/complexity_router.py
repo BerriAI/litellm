@@ -1283,13 +1283,15 @@ def _declared_base_model(deployment: Mapping[str, object]) -> str | None:
             return None
 
 
-def _bedrock_arn_base_model_window(deployment: Mapping[str, object]) -> int | None:
-    from litellm.llms.bedrock.common_utils import is_bedrock_arn
+def _inference_profile_base_model_window(deployment: Mapping[str, object]) -> int | None:
+    from litellm.llms.bedrock.common_utils import is_bedrock_application_inference_profile_arn
     from litellm.router import exact_base_model_max_input_tokens
 
     base_model: Final = _declared_base_model(deployment)
     match deployment:
-        case {"litellm_params": {"model": str() as model}} if base_model is not None and is_bedrock_arn(model):
+        case {"litellm_params": {"model": str() as model}} if (
+            base_model is not None and is_bedrock_application_inference_profile_arn(model)
+        ):
             return exact_base_model_max_input_tokens(base_model)
         case _:
             return None
@@ -1304,9 +1306,14 @@ class _RequestContextFit(NamedTuple):
     facts: Mapping[str, tuple[int | None, bool]]
     needed: int | None
     buffer: float
+    compaction_owned: frozenset[str] = frozenset()
 
     def accepts(self, model: str) -> bool:
-        return self.needed is None or _window_can_hold(self.facts.get(model, (None, True))[0], self.needed, self.buffer)
+        return (
+            self.needed is None
+            or model in self.compaction_owned
+            or _window_can_hold(self.facts.get(model, (None, True))[0], self.needed, self.buffer)
+        )
 
 
 class _ContextWindowPlacement(NamedTuple):
@@ -3414,7 +3421,14 @@ class ComplexityRouter(CustomLogger):
 
     def _deployment_window(self, group: str, deployment: Mapping[str, object]) -> int | None:
         window: Final = self._deployment_limit(group, deployment, "max_input_tokens")
-        return window if window is not None else _bedrock_arn_base_model_window(deployment)
+        return window if window is not None else _inference_profile_base_model_window(deployment)
+
+    def _window_hidden_from_compaction(self, group: str) -> bool:
+        return any(
+            _inference_profile_base_model_window(deployment) is not None
+            and self._deployment_limit(group, deployment, "max_input_tokens") is None
+            for deployment in self._group_deployments(group)
+        )
 
     def _deployment_limit(
         self, group: str, deployment: Mapping[str, object], key: Literal["max_input_tokens", "max_output_tokens"]
@@ -3528,15 +3542,19 @@ class ComplexityRouter(CustomLogger):
         resolved_messages: Sequence[Mapping[str, object]] | None,
         request_kwargs: Mapping[str, object],
     ) -> _RequestContextFit:
-        if (
-            compaction_pending(request_kwargs)
-            or not self.config.enable_context_window_escalation
-            or not resolved_messages
-        ):
+        if not self.config.enable_context_window_escalation or not resolved_messages:
             return _RequestContextFit(EMPTY_MAPPING, None, self.config.context_window_escalation_buffer)
         names: Final = frozenset(model for pool in self._tier_pools().values() for model in pool) | frozenset(
             (self.config.default_model,) if self.config.default_model else ()
         )
+        compacting: Final = compaction_pending(request_kwargs)
+        compaction_owned: Final = (
+            frozenset(name for name in names if not self._window_hidden_from_compaction(name))
+            if compacting
+            else frozenset[str]()
+        )
+        if compacting and compaction_owned == names:
+            return _RequestContextFit(EMPTY_MAPPING, None, self.config.context_window_escalation_buffer)
         facts: Final = MappingProxyType({name: self._group_window_facts(name) for name in names})
         known: Final = tuple(window for window, _ in facts.values() if window is not None)
         buffer: Final = self.config.context_window_escalation_buffer
@@ -3544,7 +3562,7 @@ class ComplexityRouter(CustomLogger):
             min(known) * buffer
         )
         needed: Final = await self._counted_request_tokens(resolved_messages, request_kwargs) if needs_count else None
-        return _RequestContextFit(facts=facts, needed=needed, buffer=buffer)
+        return _RequestContextFit(facts=facts, needed=needed, buffer=buffer, compaction_owned=compaction_owned)
 
     async def _context_window_placement(
         self,
@@ -3558,11 +3576,7 @@ class ComplexityRouter(CustomLogger):
         (the placement stands). Only a real tokenizer count ever moves a request, escalation
         lands only on groups whose every deployment declares a fitting window, and a group
         with no resolvable window is never moved on faith in either direction."""
-        if (
-            compaction_pending(request_kwargs)
-            or not self.config.enable_context_window_escalation
-            or not resolved_messages
-        ):
+        if not self.config.enable_context_window_escalation or not resolved_messages:
             return None
         pools: Final = self._tier_pools()
         pool: Final = pool_override if pool_override is not None else tuple(pools.get(_tier_name(tier), ()))
@@ -3571,7 +3585,7 @@ class ComplexityRouter(CustomLogger):
         fit: Final = context_fit or await self._request_context_fit(resolved_messages, request_kwargs)
         if fit.needed is None:
             return None
-        return self._placement_for_tokens(tier=tier, pool=pool, pools=pools, facts=fit.facts, needed=fit.needed)
+        return self._placement_for_tokens(tier=tier, pool=pool, pools=pools, fit=fit, needed=fit.needed)
 
     def _placement_for_tokens(
         self,
@@ -3579,28 +3593,21 @@ class ComplexityRouter(CustomLogger):
         tier: ComplexityTier | str,
         pool: tuple[str, ...],
         pools: Mapping[str, list[str]],
-        facts: Mapping[str, tuple[int | None, bool]],
+        fit: _RequestContextFit,
         needed: int,
     ) -> _ContextWindowPlacement | None:
         buffer: Final = self.config.context_window_escalation_buffer
-        in_tier: Final = tuple(
-            group for group in pool if _window_can_hold(facts.get(group, (None, True))[0], needed, buffer)
-        )
+        in_tier: Final = tuple(group for group in pool if fit.accepts(group))
         if in_tier and len(in_tier) == len(pool):
             return None
-        holdable: Final = frozenset(
-            group
-            for tier_pool in pools.values()
-            for group in tier_pool
-            if _window_can_hold(facts.get(group, (None, True))[0], needed, buffer)
-        )
+        holdable: Final = frozenset(group for tier_pool in pools.values() for group in tier_pool if fit.accepts(group))
         if in_tier:
             return _ContextWindowPlacement(tier=tier, allowed_models=in_tier, holdable_models=holdable)
         for name in self.config.tier_names()[self._active_tier_severity(tier) + 1 :]:
             proven = tuple(
                 group
                 for group in pools.get(name, ())
-                if _group_provably_fits(facts.get(group, (None, True)), needed, buffer)
+                if _group_provably_fits(fit.facts.get(group, (None, True)), needed, buffer)
             )
             if proven:
                 return _ContextWindowPlacement(

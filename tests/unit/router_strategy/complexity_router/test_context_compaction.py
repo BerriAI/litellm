@@ -342,6 +342,41 @@ async def test_a_bedrock_arn_tier_windowed_only_through_base_model_is_never_comp
     assert response.choices[0].message.content == "profile answer"
 
 
+async def test_an_armed_compactor_does_not_keep_an_oversized_history_on_an_inference_profile_tier(
+    wire: tuple[respx.Route, respx.Route],
+) -> None:
+    base_model: Final = "meta.llama3-8b-instruct-v1:0"
+    base_window: Final = litellm.get_model_info(model=base_model)["max_input_tokens"]
+    assert base_window is not None
+    router: Final = make_router(settings={
+        "enable_context_window_escalation": True,
+        "tiers": {"SIMPLE": "profile", "MEDIUM": "wide", "COMPLEX": "large", "REASONING": "large"},
+    })
+    router.add_deployment(Deployment(
+        model_name="profile", litellm_params={
+            "model": "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/abc123xyz",
+            "mock_response": "profile answer",
+        }, model_info={"id": "profile-answer", "base_model": base_model},
+    ))
+    router.add_deployment(Deployment(
+        model_name="wide", litellm_params={
+            "model": "openai/wide-answer", "api_base": "https://answer.test/v1", "api_key": "answer-test",
+        }, model_info={"id": "wide-answer", "max_input_tokens": 32000, "max_output_tokens": 64},
+    ))
+    compactor, answer = wire
+    answer.mock(side_effect=partial(answer_reply, expected_model="wide-answer"))
+    payload: Final = {"messages": [
+        {"role": "user", "content": "Project code MAPLE-47. Background detail. " * (base_window // 7)},
+        {"role": "assistant", "content": "Recorded"},
+        {"role": "user", "content": "Answer with the project code"},
+    ]}
+    counted: Final = router._count_pre_call_check_tokens(payload["messages"], None, payload)
+    assert base_window < counted < 32000 * ContextCompactionConfig().trigger_ratio - 64
+    response: Final = await invoke(router, "chat", payload)
+    assert compactor.call_count == 0 and answer.call_count == 1
+    assert "MAPLE-47" in str(response)
+
+
 @pytest.mark.parametrize(
     ("surface", "failure"),
     [(surface, failure) for surface in ("chat", "messages", "responses") for failure in ("unsigned", "oversized", "provider")]
