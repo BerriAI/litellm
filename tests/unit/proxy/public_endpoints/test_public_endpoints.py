@@ -438,9 +438,16 @@ def _decisions_provider_entry(provider: str) -> ProviderCreateInfo:
     return entry
 
 
-@pytest.mark.parametrize("display_name,provider", (("TypeSafe", LlmProviders.TYPESAFE), ("Nace", LlmProviders.NACE)))
-def test_decisions_provider_fields(display_name: str, provider: LlmProviders) -> None:
-    entry: Final = _decisions_provider_entry(display_name)
+@pytest.mark.parametrize(
+    ("provider_key", "display_name", "provider"),
+    (
+        ("TypeSafe", "TypeSafe", LlmProviders.TYPESAFE),
+        ("Nace", "Nace", LlmProviders.NACE),
+        ("EU_JEV", "eu/jev", LlmProviders.EU_JEV),
+    ),
+)
+def test_decisions_provider_fields(provider_key: str, display_name: str, provider: LlmProviders) -> None:
+    entry: Final = _decisions_provider_entry(provider_key)
 
     assert entry.provider_display_name == display_name
     assert entry.litellm_provider == provider.value

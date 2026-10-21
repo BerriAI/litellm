@@ -392,9 +392,11 @@ def test_eu_jev_decision_is_priced_from_its_registry_row():
 
 
 # eu-jev.com/docs (read 2026-10-21): an omitted model and the legacy names answer with the current release,
-# which a future eu/jev release reports under a version the registry does not list yet.
-@pytest.mark.parametrize("request_body", [{}, {"model": "jeff-latest"}, {"model": "jeff-1.0.0"}])
-def test_eu_jev_current_release_requests_are_priced_as_the_latest_alias(request_body: dict[str, object]) -> None:
+# which a future eu/jev release reports under a version the registry does not list yet, and a caller may pin it.
+@pytest.mark.parametrize(
+    "request_body", [{}, {"model": "jeff-latest"}, {"model": "jeff-1.0.0"}, {"model": "eu-jeff-99.0.0"}]
+)
+def test_eu_jev_release_without_its_own_row_is_priced_as_the_latest_alias(request_body: dict[str, object]) -> None:
     unlisted_release: Final = "eu-jeff-99.0.0"
     assert f"eu_jev/{unlisted_release}" not in litellm.model_cost
     response = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(

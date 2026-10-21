@@ -2162,7 +2162,7 @@ def _extract_model_candidates_from_request(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _dedupe_model_candidates((f"{provider}/{decision_model}",))
     if route.rstrip("/") == "/eu_jev/v1/systemone":
-        from litellm.llms.eu_jev import eu_jev_registry_model
+        from litellm.llms.eu_jev.common_utils import eu_jev_registry_model
 
         requested_model: Final = TypeAdapter(Mapping[str, object]).validate_python(request_data).get("model")
         if requested_model is not None and not isinstance(requested_model, str):

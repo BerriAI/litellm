@@ -8325,6 +8325,19 @@ class TestTypeSafePassthroughRoute:
         )
 
 
+class _RecordsPreCallModel(CustomLogger):
+    def __init__(self, switch_to: str | None = None) -> None:
+        super().__init__()
+        self.switch_to: Final = switch_to
+        self.models: Final[list[object]] = []
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: str
+    ) -> dict | None:
+        self.models.append(data.get("model"))
+        return None if self.switch_to is None else {**data, "model": self.switch_to}
+
+
 class TestEuJevPassthroughRoute:
     @pytest.fixture
     def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
@@ -8350,6 +8363,38 @@ class TestEuJevPassthroughRoute:
             sent: Final = route.calls.last.request
             assert sent.headers["authorization"] == "Bearer eu-jev-test-key"
             assert json.loads(sent.content) == body
+
+    @pytest.mark.parametrize(
+        ("body", "hook_model"),
+        [
+            ({"state": "x"}, "eu_jev/eu-jeff-latest"),
+            ({"model": "jeff-latest", "state": "x"}, "eu_jev/eu-jeff-latest"),
+            ({"model": "eu-jeff-1.0.0", "state": "x"}, "eu_jev/eu-jeff-1.0.0"),
+        ],
+    )
+    def test_pre_call_hooks_see_the_model_key_limits_name_while_upstream_gets_the_client_body(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, body: dict[str, str], hook_model: str
+    ) -> None:
+        recorder: Final = _RecordsPreCallModel()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json=body)
+
+        assert response.status_code == 200
+        assert recorder.models == [hook_model]
+        assert json.loads(route.calls.last.request.content) == body
+
+    def test_forwards_the_release_a_pre_call_hook_switched_to(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [_RecordsPreCallModel(switch_to="eu_jev/eu-jeff-1.0.0")])
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"model": "jeff-latest", "state": "x"})
+
+        assert response.status_code == 200
+        assert json.loads(route.calls.last.request.content) == {"model": "eu-jeff-1.0.0", "state": "x"}
 
     def test_forwards_query_params_to_the_decision_endpoint(self, client: TestClient) -> None:
         with respx.mock(assert_all_called=True) as upstream:

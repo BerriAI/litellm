@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,  # pyright: ignore[reportUnknownVariableType]  # legacy helper has an untyped signature
 )
-from litellm.llms.eu_jev import eu_jev_registry_model
+from litellm.llms.eu_jev.common_utils import EU_JEV_LATEST_MODEL, eu_jev_registry_model
 from litellm.llms.laya.common_utils import laya_response_model
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelResponse, StandardPassThroughResponseObject, Usage
@@ -91,8 +91,13 @@ class TypeSafePassthroughLoggingHandler:
         usage: Final = response.usage or _TypeSafeUsage()
         input_tokens: Final = usage.input_tokens
         output_tokens: Final = usage.output_tokens
+        candidate_models: Final = (
+            (response_model, registry_request_model, EU_JEV_LATEST_MODEL)
+            if custom_llm_provider == "eu_jev"
+            else (response_model, registry_request_model)
+        )
         candidate_model_keys: Final = tuple(
-            f"{custom_llm_provider}/{model}" for model in (response_model, registry_request_model) if model is not None
+            f"{custom_llm_provider}/{model}" for model in candidate_models if model is not None
         )
         pricing: Final = _pricing_for(candidate_model_keys)
         response_cost: Final = (

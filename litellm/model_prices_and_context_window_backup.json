@@ -72270,10 +72270,7 @@
         "max_input_tokens": 32768,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://eu-jev.com/docs",
-        "supported_endpoints": [
-            "/v1/systemone"
-        ]
+        "source": "https://eu-jev.com/docs"
     },
     "eu_jev/eu-jeff-latest": {
         "input_cost_per_token": 4.15e-08,
@@ -72281,10 +72278,7 @@
         "max_input_tokens": 32768,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://eu-jev.com/docs",
-        "supported_endpoints": [
-            "/v1/systemone"
-        ]
+        "source": "https://eu-jev.com/docs"
     },
     "wandb/deepseek-ai/DeepSeek-V4.1-Flash": {
         "cache_read_input_token_cost": 3e-08,
