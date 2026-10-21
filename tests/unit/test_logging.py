@@ -31,7 +31,7 @@ from litellm._logging import (
     StdoutLogTruncationFilter,
     _get_uvicorn_json_log_config,
     _initialize_loggers_with_handler,
-    _parse_json_logs_env,
+    _parse_env_flag,
     _plain_log_format,
     _stdout_truncation_marker,
     print_startup_message,
@@ -1442,9 +1442,9 @@ def test_level_routing_handler_falls_back_to_stderr_when_stdout_is_unusable(monk
         (None, False),
     ],
 )
-def test_parse_json_logs_env_enables_only_on_true(value, want):
+def test_parse_env_flag_enables_only_on_true(value: str | None, want: bool):
     """JSON_LOGS=false / 0 must not enable JSON logs (LIT-5558)."""
-    assert _parse_json_logs_env(value) is want
+    assert _parse_env_flag(value) is want
 
 
 def test_plain_log_format_survives_none_streams():
@@ -1836,6 +1836,23 @@ def test_print_startup_message_prints_plain_mode_text_unchanged(monkeypatch, cap
     out, err = capfd.readouterr()
     assert out == "\n\033[1;32mLiteLLM: Proxy initialized with Config, Set models:\033[0m\n\n"
     assert err == ""
+
+
+@pytest.mark.parametrize("json_logs", [False, True])
+def test_print_startup_message_writes_nothing_when_suppressed(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], json_logs: bool
+):
+    """suppress_startup_output turns the startup messages off in plain and JSON mode alike, for operators
+    whose log pipeline wants only the logger's own lines."""
+    monkeypatch.setattr(litellm, "json_logs", json_logs)
+    monkeypatch.setattr(litellm, "suppress_startup_output", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    if json_logs:
+        turn_on_json()
+
+    print_startup_message("\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m\n\033[32m    web-search (tavily)\033[0m")
+
+    assert capfd.readouterr() == ("", "")
 
 
 def test_print_startup_message_is_one_json_record_in_json_mode(monkeypatch, capfd):

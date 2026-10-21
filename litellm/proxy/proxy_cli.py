@@ -215,9 +215,10 @@ def _print_enforce_prisma_migration_check_notice() -> None:
 def _print_or_hold_enforce_prisma_migration_check_notice(
     *, reads_config_file: bool, returns_before_config: bool
 ) -> Callable[[], None] | None:
-    """Print the notice now, or, while a config file can still switch json_logs on, return a printer
-    to call once it is read; a boot that fails before that prints the held notice on the way out."""
-    if not reads_config_file or litellm.json_logs or returns_before_config:
+    """Print the notice now, or, while a config file can still switch json_logs or suppress_startup_output
+    on, return a printer to call once it is read; a boot that fails before that prints the held notice on
+    the way out."""
+    if not reads_config_file or returns_before_config:
         _print_enforce_prisma_migration_check_notice()
         return None
     print_once: Final = functools.cache(_print_enforce_prisma_migration_check_notice)
@@ -1329,6 +1330,15 @@ def run_server(
                 os.environ["JSON_LOGS"] = "true"
 
                 litellm.turn_on_json()
+            if (
+                litellm_settings is not None
+                and "suppress_startup_output" in litellm_settings
+                and litellm_settings["suppress_startup_output"] is True
+            ):
+                import litellm
+
+                litellm.suppress_startup_output = True
+                os.environ["LITELLM_SUPPRESS_STARTUP_OUTPUT"] = "true"
             if held_prisma_notice is not None:
                 held_prisma_notice()
             ### GENERAL SETTINGS ###

@@ -642,8 +642,8 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
         super().emit(record)
 
 
-def _parse_json_logs_env(value: str | None) -> bool:
-    """Strict opt-in parse for the JSON_LOGS env var: only "true" (any case) enables JSON logs.
+def _parse_env_flag(value: str | None) -> bool:
+    """Strict opt-in parse for a boolean env var such as JSON_LOGS: only "true" (any case) enables it.
 
     Matches the reader in litellm-proxy-extras/_logging.py. The previous
     bool(os.getenv(...)) treated any non-empty value, including "false" and "0",
@@ -656,7 +656,8 @@ def resolve_log_level(log_level: str) -> int:
     return getattr(logging, log_level.upper())
 
 
-json_logs: Final = _parse_json_logs_env(os.getenv("JSON_LOGS"))
+json_logs: Final = _parse_env_flag(os.getenv("JSON_LOGS"))
+suppress_startup_output: Final = _parse_env_flag(os.getenv("LITELLM_SUPPRESS_STARTUP_OUTPUT"))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: Final[int] = resolve_log_level(log_level)
@@ -904,14 +905,17 @@ _ANSI_ESCAPE: Final = re.compile(r"\x1b\[[0-9;]*m")
 def print_startup_message(message: str) -> None:
     """Write a boot-time message meant for the operator's terminal.
 
-    Plain mode prints it unchanged, colors and spacing included. With JSON logs on, every line of
-    stdout is read by a log pipeline, so the message goes out as one INFO record of the proxy logger
-    instead, on stdout like the print whatever handlers the logging config gave that logger, with the
-    ANSI color codes and surrounding blank lines removed, located at the caller and emitted at any log
-    level; a blank spacer produces no record.
+    LITELLM_SUPPRESS_STARTUP_OUTPUT or litellm_settings.suppress_startup_output turns every one of them
+    off. Plain mode prints it unchanged, colors and spacing included, and flushes it so a piped stdout
+    shows it at once. With JSON logs on, every line of stdout is read by a log pipeline, so the message
+    goes out as one INFO record of the proxy logger instead, on stdout like the print whatever handlers
+    the logging config gave that logger, with the ANSI color codes and surrounding blank lines removed,
+    located at the caller and emitted at any log level; a blank spacer produces no record.
     """
+    if litellm.suppress_startup_output is True:
+        return
     if not litellm.json_logs:
-        print(message)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
+        print(message, flush=True)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
         return
     text: Final = _ANSI_ESCAPE.sub("", message).strip("\n")
     if not text:

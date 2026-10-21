@@ -3960,10 +3960,11 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
     """`litellm_settings.json_logs: true` turns JSON on inside the CLI process, but the workers that
     uvicorn or granian spawn are fresh interpreters that pick plain or JSON from the JSON_LOGS
     environment variable at import. The CLI has to export it, or every worker logs plain text until
-    its own load_config reaches the key."""
+    its own load_config reaches the key. `suppress_startup_output` has the same problem with the banner
+    each worker prints before its load_config."""
 
     @staticmethod
-    def _json_logs_env_after_boot(config_path: Path, litellm_settings: dict[str, object]) -> str | None:
+    def _env_after_boot(config_path: Path, litellm_settings: dict[str, object], name: str = "JSON_LOGS") -> str | None:
         config_path.write_text(yaml.dump({"model_list": [], "litellm_settings": litellm_settings}))
         mock_proxy_config: Final = MagicMock()
         mock_proxy_config.return_value.get_config = AsyncMock(return_value=yaml.safe_load(config_path.read_text()))
@@ -3973,7 +3974,11 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
             KeyManagementSettings=MagicMock(),
             save_worker_config=MagicMock(),
         )
-        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "JSON_LOGS")}
+        clean_env: Final = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL", "JSON_LOGS", "LITELLM_SUPPRESS_STARTUP_OUTPUT")
+        }
         with (
             patch.dict(os.environ, clean_env, clear=True),
             patch.dict(
@@ -3984,21 +3989,30 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
             patch("litellm.turn_on_json"),  # test-quality-ok: it swaps every logger handler in this pytest worker
         ):
             run_server.main(["--config", str(config_path), "--local", "--skip_server_startup"], standalone_mode=False)
-            return os.environ.get("JSON_LOGS")
+            return os.environ.get(name)
 
     def test_json_logs_true_exports_json_logs_to_spawned_workers(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setattr(litellm, "json_logs", False)  # run_server flips it on; undone at teardown
-        assert self._json_logs_env_after_boot(tmp_path / "config.yaml", {"json_logs": True}) == "true"
+        assert self._env_after_boot(tmp_path / "config.yaml", {"json_logs": True}) == "true"
 
     def test_plain_logs_config_leaves_json_logs_unset(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setattr(litellm, "json_logs", False)
-        assert self._json_logs_env_after_boot(tmp_path / "config.yaml", {}) is None
+        assert self._env_after_boot(tmp_path / "config.yaml", {}) is None
+
+    @pytest.mark.parametrize(("setting", "exported"), [(True, "true"), ("true", None), (False, None)])
+    def test_only_a_boolean_suppress_startup_output_reaches_spawned_workers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: object, exported: str | None
+    ) -> None:
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        settings: Final = {"suppress_startup_output": setting}
+        assert self._env_after_boot(tmp_path / "config.yaml", settings, "LITELLM_SUPPRESS_STARTUP_OUTPUT") == exported
 
 
 class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:
     """With a config file, the `--enforce_prisma_migration_check` deprecation notice waits until the config
-    is read, so a `json_logs: true` set only there makes it a JSON record. It is printed once either way,
-    and a boot whose config read fails still prints it before the error, as it did before the wait."""
+    is read, so a `json_logs: true` set only there makes it a JSON record and a `suppress_startup_output: true`
+    set only there silences it. Otherwise it is printed once, and a boot whose config read fails still prints
+    it before the error, as it did before the wait."""
 
     NOTICE: Final = "--enforce_prisma_migration_check is deprecated and has no effect"
 
@@ -4054,6 +4068,18 @@ class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:
         notice_lines: Final = [line for line in capsys.readouterr().out.splitlines() if self.NOTICE in line]
         assert len(notice_lines) == 1, notice_lines
         assert self.NOTICE in json.loads(notice_lines[0])["message"]
+
+    @pytest.mark.parametrize("json_logs", [False, True])
+    def test_a_config_only_suppress_startup_output_silences_the_notice(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "json_logs", json_logs)
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        config: Final[dict[str, object]] = {"model_list": [], "litellm_settings": {"suppress_startup_output": True}}
+
+        self._boot(tmp_path / "config.yaml", AsyncMock(return_value=config))
+
+        assert self.NOTICE not in capsys.readouterr().out
 
 
 def test_granian_flag_notices_are_json_records_in_json_mode(monkeypatch, capfd):
