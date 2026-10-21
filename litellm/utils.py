@@ -1871,7 +1871,7 @@ def _context_window_fallback_applies(
     return (
         not is_router_call
         and isinstance(error, litellm.exceptions.ContextWindowExceededError)
-        and isinstance(context_window_fallback_dict, dict)
+        and isinstance(context_window_fallback_dict, Mapping)
         and model in context_window_fallback_dict
     )
 

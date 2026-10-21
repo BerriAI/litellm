@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10340,8 +10341,13 @@ async def test_completion_retry_policy_count_only_retries_its_own_error_class(
     [{"num_retries": 2}, {"retry_policy": RetryPolicy(BadRequestErrorRetries=3)}],
     ids=["num-retries", "retry-policy-for-400s"],
 )
+@pytest.mark.parametrize("fallback_map_type", [dict, MappingProxyType], ids=["dict", "read-only-mapping"])
 async def test_completion_retries_keep_the_context_window_fallback(
-    retry_upstream: respx.MockRouter, sync_mode: bool, positional_model: bool, retry_settings: Mapping[str, object]
+    retry_upstream: respx.MockRouter,
+    sync_mode: bool,
+    positional_model: bool,
+    retry_settings: Mapping[str, object],
+    fallback_map_type: Callable[[Mapping[str, str]], Mapping[str, str]],
 ):
     def prompt_too_long_for_the_small_model(request: httpx.Request) -> httpx.Response:
         if json.loads(request.content)["model"] == "test-model-large":
@@ -10364,7 +10370,7 @@ async def test_completion_retries_keep_the_context_window_fallback(
         "api_base": _ANTHROPIC.api_base,
         "api_key": "test-key",
         **retry_settings,
-        "context_window_fallback_dict": {_ANTHROPIC.model: "anthropic/test-model-large"},
+        "context_window_fallback_dict": fallback_map_type({_ANTHROPIC.model: "anthropic/test-model-large"}),
     }
     model_args: Final = (_ANTHROPIC.model,) if positional_model else ()
     model_kwargs: Final = {} if positional_model else {"model": _ANTHROPIC.model}
