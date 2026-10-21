@@ -15,8 +15,8 @@ import pytest
 
 from litellm.types.completion import (
     ChatCompletionMessageParam,
-    CompletionRequest,
     CompletionDispatchContext,
+    CompletionRequest,
 )
 
 

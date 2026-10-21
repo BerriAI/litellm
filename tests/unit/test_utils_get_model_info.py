@@ -1,8 +1,10 @@
 import json
+import os
 import re
 from collections.abc import Collection, Iterator, Mapping
 from pathlib import Path
 from typing import Final, Literal, cast
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -14,8 +16,6 @@ from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ModelInfoBase
 from litellm.utils import _invalidate_model_cost_lowercase_map
-import os
-from unittest.mock import MagicMock, patch
 
 
 @pytest.fixture(autouse=True)
@@ -459,8 +459,7 @@ def test_get_model_info_case_insensitive_supports_function_calling(monkeypatch):
 
 
 def test_get_model_info_custom_model_router():
-    from litellm import Router
-    from litellm import get_model_info
+    from litellm import Router, get_model_info
 
     litellm.turn_on_debug()
 

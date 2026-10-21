@@ -1443,7 +1443,6 @@ class TestBedrockFilesEmbeddingTransformation:
         transformer, corrupting the modelInput.
         """
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
-
         from litellm.types.llms.bedrock import BedrockBatchRecordKind
 
         # Direct helper assertion

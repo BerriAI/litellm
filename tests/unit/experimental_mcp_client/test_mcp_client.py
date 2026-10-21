@@ -4981,6 +4981,7 @@ async def test_persistent_session_ends_after_a_broken_stream_so_the_next_call_ge
 @pytest.mark.parametrize("session_started_in_request", [True, False])
 async def test_persistent_session_releases_the_current_requests_scope_response(session_started_in_request) -> None:
     from mcp.server.context import ServerRequestContext
+
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
     from litellm.proxy._experimental.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
 
@@ -5097,7 +5098,9 @@ async def test_cancelling_persistent_operation_stops_work_and_keeps_session_usab
 @pytest.mark.asyncio
 @pytest.mark.parametrize("header_name", ["Authorization", "x-upstream-token"])
 async def test_subscription_fingerprint_preserves_context_across_managed_renewal(header_name):
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import ClientCredentialsBearerAuth
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+        ClientCredentialsBearerAuth,
+    )
     from litellm.proxy._experimental.mcp_server.outbound_credentials.types import ClientCredentialsConfig
 
     async def refetch(token: str) -> str | None:

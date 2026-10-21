@@ -1,4 +1,3 @@
-import yaml
 import builtins
 import json
 import uuid
@@ -8,7 +7,7 @@ from typing import Final
 
 import httpx
 import pytest
-from mcp.shared.exceptions import MCPError
+import yaml
 from integration._support.client import Gateway
 from integration._support.database import read_rows
 from integration._support.mcp import (
@@ -34,6 +33,7 @@ from integration._support.mcp import (
 )
 from integration._support.mcp_grants import create_toolset
 from integration._support.process import owned_proxy
+from mcp.shared.exceptions import MCPError
 
 ADD: Final = {"http": "add", "sse": "add", "stdio": "add", "openapi": "getpet"}
 ARGUMENTS: Final = {"add": {"a": 3, "b": 4}, "getpet": {"petId": "7"}}
@@ -661,13 +661,16 @@ def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(
 ) -> None:
     import asyncio
     import os
+    from contextlib import asynccontextmanager
     from pathlib import Path
     from threading import Event
-    from contextlib import asynccontextmanager
 
     import httpx
     import httpx2
     import yaml
+    from integration._support.asgi import asgi_server
+    from integration._support.mcp import _drain_sse_streams
+    from integration._support.process import owned_proxy
     from mcp import ClientSession, MCPError
     from mcp.client.streamable_http import streamable_http_client
     from mcp.server.mcpserver import Context, MCPServer
@@ -676,10 +679,6 @@ def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(
     from sse_starlette.sse import AppStatus
     from starlette.applications import Starlette
     from starlette.routing import Mount
-
-    from integration._support.asgi import asgi_server
-    from integration._support.mcp import _drain_sse_streams
-    from integration._support.process import owned_proxy
 
     upstream: Final = MCPServer("progress-cancellation-peer")
     started: Final = Event()

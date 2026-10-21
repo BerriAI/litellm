@@ -1,9 +1,16 @@
 
-import asyncio, importlib, litellm, litellm.litellm_core_utils.get_model_cost_map as bedrock_govcloud_model_cost_map, pytest
+import asyncio
+import importlib
+from collections.abc import Iterator
 from typing import Final
+from unittest.mock import Mock, patch
 
+import pytest
 
-from litellm.llms.bedrock.common_utils import(
+import litellm
+import litellm.litellm_core_utils.get_model_cost_map as bedrock_govcloud_model_cost_map
+from litellm import completion
+from litellm.llms.bedrock.common_utils import (
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
     bedrock_native_output_is_opt_in,
@@ -16,11 +23,8 @@ from litellm.llms.bedrock.common_utils import(
     strip_bedrock_throughput_suffix,
     without_bedrock_native_output_opt_in,
 )
-from collections.abc import Iterator
-from litellm import completion
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import Mock, patch
 
 # --------------------------------------------------------------------------- #
 # get_bedrock_response_stream_shape lazy-load tests                           #
@@ -2025,6 +2029,7 @@ class TestBedrockGovCloudSupport:
 @pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
 def test_event_decoder_reports_only_missing_aws_dependency(missing):
     from unittest.mock import patch
+
     from litellm.llms.bedrock.common_utils import BedrockEventStreamDecoderBase
 
     failure = ModuleNotFoundError("missing dependency", name=missing)

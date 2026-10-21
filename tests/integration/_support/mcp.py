@@ -14,6 +14,7 @@ import httpx
 from integration._support.asgi import asgi_server
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows
+from integration._support.mcp_e2e_upstream_server import add, multiply
 from integration._support.wire import Reply, Request, wire_server
 from mcp import ClientSession
 from mcp.client.sse import sse_client
@@ -21,7 +22,6 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import SamplingMessage, TextContent
-from integration._support.mcp_e2e_upstream_server import add, multiply
 from pydantic import BaseModel, JsonValue
 from sse_starlette.sse import AppStatus
 from starlette.requests import Request as StarletteRequest
