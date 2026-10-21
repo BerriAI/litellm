@@ -107,6 +107,24 @@ def test_caller_auth_header_is_honored_without_a_dashscope_key(monkeypatch: pyte
     assert resolved_headers["x-api-key"] == "caller-key"
 
 
+def test_caller_authorization_header_is_honored_without_a_dashscope_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    headers = {"Authorization": "Bearer caller-token"}
+
+    resolved_headers, _ = DashScopeAnthropicMessagesConfig().validate_anthropic_messages_environment(
+        headers=headers,
+        model="qwen3.7-plus",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=WORKSPACE,
+    )
+
+    assert resolved_headers["Authorization"] == "Bearer caller-token"
+
+
 def test_dashscope_key_wins_over_an_anthropic_environment_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-dashscope")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
