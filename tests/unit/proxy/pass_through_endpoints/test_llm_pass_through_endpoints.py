@@ -8128,11 +8128,14 @@ class TestAzureSpeechRawBodyThroughRealAuth:
 
 
 class _CountingCustomAuth:
-    def __init__(self) -> None:
+    def __init__(self, only_accepts: str | None = None) -> None:
+        self.only_accepts: Final = only_accepts
         self.api_keys_seen: list[str] = []
 
     async def __call__(self, request: Request, api_key: str) -> UserAPIKeyAuth:
         self.api_keys_seen.append(api_key)
+        if self.only_accepts is not None and api_key != self.only_accepts:
+            raise ValueError("unknown caller")
         return UserAPIKeyAuth(user_id=f"custom-auth-caller-{len(self.api_keys_seen)}")
 
 
@@ -8272,6 +8275,23 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
 
         assert response.status_code == 401, response.text
         assert custom_auth.api_keys_seen == [self.VIRTUAL_KEY]
+        assert not google.called
+
+    @pytest.mark.parametrize("header", ["x-goog-api-key", "x-api-key", "API-Key", "Ocp-Apim-Subscription-Key"])
+    def test_key_outside_litellm_headers_is_rejected_and_never_reaches_google_without_a_vertex_credential(
+        self, monkeypatch: pytest.MonkeyPatch, header: str
+    ) -> None:
+        custom_auth: Final = _CountingCustomAuth(only_accepts=self.VIRTUAL_KEY)
+        with respx.mock(assert_all_called=False) as upstream:
+            google: Final = upstream.route().mock(return_value=httpx.Response(200))
+
+            response, recorder = self._post(
+                monkeypatch, f"/vertex_ai/{self.GENERATE_CONTENT}", {header: self.VIRTUAL_KEY}, custom_auth, ()
+            )
+
+        assert response.status_code == 401, response.text
+        assert self.VIRTUAL_KEY not in custom_auth.api_keys_seen
+        assert recorder.served_user_ids == []
         assert not google.called
 
 

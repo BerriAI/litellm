@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 
 import httpx
 import openai
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Security, WebSocket
 from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
@@ -77,6 +77,8 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
     _get_bearer_token,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    api_key_header,
+    custom_litellm_key_header,
     get_bearer_token,
     is_no_auth_dev_mode,
     user_api_key_auth,
@@ -3137,6 +3139,16 @@ async def vertex_discovery_proxy_route(
     )
 
 
+async def _authenticate_vertex_caller(
+    request: Request,
+    authorization: Annotated[str | None, Security(api_key_header)],
+    litellm_api_key: Annotated[str | None, Security(custom_litellm_key_header)],
+) -> UserAPIKeyAuth:
+    return await user_api_key_auth(
+        request=request, api_key=authorization or "", custom_litellm_key_header=litellm_api_key
+    )
+
+
 @router.api_route(
     "/vertex-ai/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -3152,7 +3164,7 @@ async def vertex_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(_authenticate_vertex_caller)],
 ):
     """
     Call LiteLLM proxy via Vertex AI SDK.
