@@ -146,6 +146,7 @@ function KeyEditSession({
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const hasProject = Boolean(keyData.project_id);
+  const canChangeOrganization = userRole === "Admin" && !hasProject;
   const detachProject = hasProject && form.watch("project_id") === null;
   const canDetachProject = canDetachKeyProject(team, organizations, userID, userRole);
 
@@ -352,9 +353,10 @@ function KeyEditSession({
     })),
   ];
 
-  const visibleTeams = selectedOrganizationId
-    ? teams?.filter((t) => t.organization_id === selectedOrganizationId)
-    : teams;
+  const visibleTeams =
+    canChangeOrganization && selectedOrganizationId
+      ? teams?.filter((t) => t.organization_id === selectedOrganizationId)
+      : teams;
 
   const teamOptionsFor = (selectedTeamId: string | null): SearchSelectOption[] => {
     const selectedTeamOutsideFilter = teams?.find((t) => t.team_id === selectedTeamId && !visibleTeams?.includes(t));
@@ -795,7 +797,7 @@ function KeyEditSession({
                 value={value}
                 organizations={organizations}
                 loading={isOrganizationsLoading}
-                disabled={userRole !== "Admin" || hasProject}
+                disabled={!canChangeOrganization}
                 onChange={(orgId) => handleOrganizationChange(onChange, orgId)}
               />
             )}

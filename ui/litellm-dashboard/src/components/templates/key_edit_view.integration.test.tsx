@@ -1704,6 +1704,44 @@ describe("KeyEditView", () => {
       expect(screen.queryByRole("option", { name: /Beta/ })).not.toBeInTheDocument();
     });
 
+    it("should let a non-admin move a key to their team in another organization", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, organization_id: null, org_id: "org-1" }}
+          teams={[
+            { team_id: "team-a", team_alias: "Alpha", organization_id: "org-1" },
+            { team_id: "team-b", team_alias: "Beta", organization_id: "org-2" },
+          ]}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken=""
+          userID=""
+          userRole="Internal User"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
+      });
+
+      await userEvent.click(screen.getByRole("combobox", { name: "Team" }));
+      await userEvent.click(await screen.findByRole("option", { name: /Beta/ }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Sales");
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toMatchObject({ organization_id: "org-2", team_id: "team-b" });
+    });
+
     it("should re-scope teams when the edited key switches to another organization", async () => {
       const sharedProps = {
         teams: [
