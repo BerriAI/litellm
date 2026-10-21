@@ -79,6 +79,8 @@ class TavilySearchConfig(BaseSearchConfig):
             raise ValueError("TAVILY_API_KEY is not set. Set `TAVILY_API_KEY` environment variable.")
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
+        # Lets Tavily attribute traffic to LiteLLM; a caller-supplied value wins.
+        headers.setdefault("X-Client-Name", "litellm")
         return headers
 
     def get_complete_url(

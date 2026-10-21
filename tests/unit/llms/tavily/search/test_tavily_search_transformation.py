@@ -74,6 +74,7 @@ class TestTavilySearch:
             assert "Authorization" in headers
             assert headers["Authorization"] == "Bearer test-api-key"
             assert headers["Content-Type"] == "application/json"
+            assert headers["X-Client-Name"] == "litellm"
 
             # Verify request payload
             json_data = call_args.kwargs.get("json")
@@ -92,6 +93,13 @@ class TestTavilySearch:
             assert first_result.title == "Test Result 1"
             assert first_result.url == "https://example.com/1"
             assert first_result.snippet == "This is a test snippet for result 1"
+
+
+def test_validate_environment_keeps_a_caller_supplied_client_name():
+    headers = TavilySearchConfig().validate_environment(headers={"X-Client-Name": "my-app"}, api_key="test-api-key")
+
+    assert headers["X-Client-Name"] == "my-app"
+    assert headers["Authorization"] == "Bearer test-api-key"
 
 
 def _transform(payload: object) -> SearchResponse:
