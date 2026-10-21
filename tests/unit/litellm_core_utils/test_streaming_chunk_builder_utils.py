@@ -2517,3 +2517,44 @@ def test_stream_chunk_builder_keeps_reasoning_items_on_text_only_replies():
     assert response is not None
     assert response.choices[0].message.content == "Hello world"
     assert response.choices[0].message.reasoning_items == reasoning_items
+
+
+def test_stream_chunk_builder_concatenates_reasoning_items_from_every_chunk():
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    first: Final = {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "enc_1"}
+    second: Final = {"type": "reasoning", "id": "rs_2", "summary": [], "encrypted_content": "enc_2"}
+    chunks: Final = [
+        ModelResponseStream(
+            id="chatcmpl-rs",
+            created=1,
+            model="gpt-5.5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="Hello", role="assistant", reasoning_items=[first]),
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-rs",
+            created=1,
+            model="gpt-5.5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason="stop",
+                    index=0,
+                    delta=Delta(content=" world", role="assistant", reasoning_items=[second]),
+                )
+            ],
+        ),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=list(chunks))
+
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
+    assert response.choices[0].message.reasoning_items == [first, second]
