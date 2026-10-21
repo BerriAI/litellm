@@ -34,11 +34,13 @@ class LocalTTLCache(Protocol):
 
     def set_cache(self, key: str, value: object, *, ttl: float) -> None: ...
 
+    def delete_cache(self, key: str) -> None: ...
+
 
 class SharedWindows(Protocol):
     async def read(self, spend_key: str, budget_duration: str) -> SharedWindow | None: ...
 
-    async def open(self, spend_key: str, budget_duration: str, now: float) -> float: ...
+    async def open(self, spend_key: str, budget_duration: str, now: float) -> float | None: ...
 
     async def add(self, spend_key: str, budget_duration: str, started_at: float, spend: float) -> None: ...
 
@@ -86,10 +88,11 @@ class DatabaseSharedWindows:
         self._readings.set_cache(key=spend_key, value=_Reading(window=window), ttl=self._read_ttl_seconds)
         return window
 
-    async def open(self, spend_key: str, budget_duration: str, now: float) -> float:
+    async def open(self, spend_key: str, budget_duration: str, now: float) -> float | None:
         """When the window every replica shares started, opening one at `now` if none is open.
 
-        Falls back to `now`, this replica's own window, when the database cannot answer.
+        Without a database every window is this replica's own, so it starts at `now`. None means the database did
+        not answer, so this replica cannot know which window the others are in yet.
         """
         prisma_client: Final = self._prisma_client_source()
         if prisma_client is None:
@@ -115,9 +118,9 @@ class DatabaseSharedWindows:
             )
         except Exception:  # noqa: BLE001  # an unreachable database leaves this replica on its own window
             verbose_proxy_logger.exception("Unable to open the shared model budget window")
-            return now
+            return None
         if opened is None or not opened.is_open(budget_duration=budget_duration, now=now):
-            return now
+            return None
         return opened.started_at
 
     async def add(self, spend_key: str, budget_duration: str, started_at: float, spend: float) -> None:

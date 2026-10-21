@@ -21,7 +21,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+from litellm.llms.bedrock.common_utils import get_bedrock_base_model, get_bedrock_cross_region_inference_regions
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_budget_shared_windows import (
     PROXY_SHARED_WINDOWS,
@@ -63,7 +63,7 @@ _LATEST_RESET_AT: Final = datetime(9999, 12, 31, tzinfo=timezone.utc).timestamp(
 
 _GLOB_WILDCARD: Final = "*"
 
-ModelAccessGroups: TypeAlias = Callable[[str], Collection[str]]
+ModelAccessGroups: TypeAlias = Callable[[str, str | None], Collection[str]]
 
 _PROVIDER_PREFIXES: Final = tuple(f"{provider.value}/" for provider in LlmProviders)
 
@@ -164,18 +164,26 @@ def model_budget_start_time_cache_key(
     return f"{_BUDGET_START_TIME_KEY_PREFIXES[entity_type]}:{entity_id}:{budget_model}:{budget_duration}"
 
 
-def model_access_groups_of(router: "Router", model: str) -> frozenset[str]:
-    """Access groups serving `model`, leaving out any named after a model the router serves.
+def model_access_groups_of(router: "Router", model: str, team_id: str | None = None) -> frozenset[str]:
+    """Access groups serving `model`, or the team's own model of that name, leaving out any named after a model the
+    router serves.
 
     An entry with that name already budgets that model, so reading it as the group too would quietly widen it.
     """
     return frozenset(
-        group for group in router.get_model_access_groups(model_name=model) if group not in router.model_names
+        group
+        for group in router.get_model_access_groups(model_name=model, team_id=team_id)
+        if group not in router.model_names
     )
 
 
 def routed_models_of(router: "Router") -> RoutedModels:
-    served_names: Final = frozenset(router.model_names)
+    serves_every_name: Final = (
+        router.default_deployment is not None or router.router_general_settings.pass_through_all_models
+    )
+    served_names: Final = frozenset(router.model_names) | (
+        frozenset({_GLOB_WILDCARD}) if serves_every_name else frozenset()
+    )
     return RoutedModels(
         served_names=served_names,
         group_members=MappingProxyType(
@@ -188,9 +196,9 @@ def routed_models_of(router: "Router") -> RoutedModels:
     )
 
 
-def proxy_model_access_groups(model: str) -> frozenset[str]:
+def proxy_model_access_groups(model: str, team_id: str | None = None) -> frozenset[str]:
     router: Final = _proxy_router()
-    return frozenset() if router is None else model_access_groups_of(router=router, model=model)
+    return frozenset() if router is None else model_access_groups_of(router=router, model=model, team_id=team_id)
 
 
 def proxy_routed_models() -> RoutedModels:
@@ -212,6 +220,7 @@ def resolve_model_budget(
     model: str,
     model_max_budget: Mapping[str, object],
     model_access_groups: ModelAccessGroups = proxy_model_access_groups,
+    team_id: str | None = None,
 ) -> ResolvedModelBudget | None:
     """Find the `model_max_budget` entry that governs `model`, or None.
 
@@ -222,7 +231,7 @@ def resolve_model_budget(
     resolved: Final = (
         _usable_entry(entry=entry, raw_budget_config=model_max_budget[entry])
         for entry in _governing_entry_names(
-            model=model, model_max_budget=model_max_budget, model_access_groups=model_access_groups
+            model=model, model_max_budget=model_max_budget, model_access_groups=model_access_groups, team_id=team_id
         )
     )
     return next((entry for entry in resolved if entry is not None), None)
@@ -232,6 +241,7 @@ def _governing_entry_names(
     model: str,
     model_max_budget: Mapping[str, object],
     model_access_groups: ModelAccessGroups,
+    team_id: str | None,
 ) -> Iterator[str]:
     candidates: Final = _budget_model_candidates(model)
     yield from (candidate for candidate in candidates if candidate in model_max_budget)
@@ -239,7 +249,7 @@ def _governing_entry_names(
         sorted(entry for entry in model_max_budget if _GLOB_WILDCARD not in entry and entry not in candidates)
     )
     if group_entries:
-        groups: Final = model_access_groups(model)
+        groups: Final = model_access_groups(model, team_id)
         yield from (entry for entry in group_entries if entry in groups)
     yield from sorted(
         (entry for entry in model_max_budget if _GLOB_WILDCARD in entry and _glob_matches(entry, candidates)),
@@ -259,6 +269,8 @@ def _glob_matches_name(pattern: str, name: str) -> bool:
     always safe, since a later occurrence only leaves less room for the rest, so
     the match never needs to backtrack the way a `.*` regex does.
     """
+    if _GLOB_WILDCARD not in pattern:
+        return pattern == name
     head, *middle, tail = pattern.split(_GLOB_WILDCARD)
     middle_end: Final = len(name) - len(tail)
     if middle_end < len(head) or not name.startswith(head) or not name.endswith(tail):
@@ -280,37 +292,44 @@ def _glob_precedence(pattern: str) -> tuple[int, int, str]:
     return len(pattern) - wildcards, -wildcards, pattern
 
 
+@dataclass(frozen=True, slots=True)
+class _RequestForm:
+    """Request names that an entry governs.
+
+    Every such name matches all of ``name_globs`` and also resolves through
+    ``candidate_globs``. Its last ``/`` segment is among them unless
+    ``last_segment_open``.
+    """
+
+    name_globs: tuple[str, ...]
+    candidate_globs: tuple[str, ...] = ()
+    last_segment_open: bool = False
+
+
 def entries_outranked_by(entry: str, model_max_budget: Collection[str], routed_models: RoutedModels) -> Iterator[str]:
     """Entries that `entry` can take precedence over for some model a request can name.
 
-    Two patterns can both match a name the router has not served yet, so a
-    pattern outranks every less specific pattern. A model or group entry
-    outranks a pattern that matches one of the names it governs: the model,
-    the model under any provider prefix or wildcard route, a served name
-    ending in it, or a member of the group, and every pattern when a member is
-    itself a wildcard route.
+    A model or group entry is resolved before any pattern, and a pattern before
+    every less specific one, so `entry` outranks a pattern that some request it
+    governs also resolves to. A group entry with a wildcard route among its
+    members outranks every pattern.
     """
+    patterns: Final = tuple(other for other in model_max_budget if _GLOB_WILDCARD in other)
     if _GLOB_WILDCARD in entry:
         entry_precedence: Final = _glob_precedence(entry)
+        pattern_forms: Final = tuple(_pattern_request_forms(pattern=entry, routed_models=routed_models))
         yield from (
             other
-            for other in model_max_budget
-            if _GLOB_WILDCARD in other and _glob_precedence(other) < entry_precedence
+            for other in patterns
+            if _glob_precedence(other) < entry_precedence and _resolves_any(pattern=other, forms=pattern_forms)
         )
         return
     entry_members: Final = routed_models.members(entry)
     covers_wildcard_route: Final = any(_GLOB_WILDCARD in member for member in entry_members)
-    governed_candidates: Final = frozenset(
-        itertools.chain.from_iterable(
-            _budget_model_candidates(name)
-            for name in _names_governed_by(entry=entry, entry_members=entry_members, routed_models=routed_models)
-        )
+    entry_forms: Final = tuple(
+        _entry_request_forms(entry=entry, entry_members=entry_members, routed_models=routed_models)
     )
-    yield from (
-        other
-        for other in model_max_budget
-        if _GLOB_WILDCARD in other and (covers_wildcard_route or _glob_matches(other, governed_candidates))
-    )
+    yield from (other for other in patterns if covers_wildcard_route or _resolves_any(pattern=other, forms=entry_forms))
     yield from (
         other
         for other in model_max_budget
@@ -318,6 +337,124 @@ def entries_outranked_by(entry: str, model_max_budget: Collection[str], routed_m
         and _ranks_ahead_of_group(
             entry=entry, entry_members=entry_members, group=other, group_members=routed_models.members(other)
         )
+    )
+
+
+def _resolves_any(pattern: str, forms: Iterable[_RequestForm]) -> bool:
+    return any(_resolves(pattern=pattern, form=form) for form in forms)
+
+
+def _resolves(pattern: str, form: _RequestForm) -> bool:
+    return (
+        _globs_share_a_name(pattern, *form.name_globs)
+        or any(_globs_share_a_name(pattern, candidate) for candidate in form.candidate_globs)
+        or (form.last_segment_open and "/" not in pattern and _globs_share_a_name(f"*/{pattern}", *form.name_globs))
+    )
+
+
+def _globs_share_a_name(*globs: str) -> bool:
+    """Whether one name matches every glob.
+
+    Globs that each hold a `*` share a name exactly when their literal heads
+    are prefixes of one another and so are their literal tails: the longest
+    head, every middle piece and the longest tail, in that order, matches all
+    of them.
+    """
+    literal: Final = next((glob for glob in globs if _GLOB_WILDCARD not in glob), None)
+    if literal is not None:
+        return all(_glob_matches_name(pattern=glob, name=literal) for glob in globs)
+    heads: Final = sorted((glob.partition(_GLOB_WILDCARD)[0] for glob in globs), key=len)
+    tails: Final = sorted((glob.rpartition(_GLOB_WILDCARD)[2] for glob in globs), key=len)
+    return all(longer.startswith(shorter) for shorter, longer in itertools.pairwise(heads)) and all(
+        longer.endswith(shorter) for shorter, longer in itertools.pairwise(tails)
+    )
+
+
+def _served_form(name: str) -> _RequestForm:
+    return _RequestForm(name_globs=(name,), candidate_globs=_budget_model_candidates(name))
+
+
+def _wildcard_routes(routed_models: RoutedModels) -> tuple[str, ...]:
+    return tuple(sorted(name for name in routed_models.served_names if _GLOB_WILDCARD in name))
+
+
+def _entry_request_forms(
+    entry: str, entry_members: frozenset[str], routed_models: RoutedModels
+) -> Iterator[_RequestForm]:
+    yield from (
+        _served_form(name)
+        for name in _names_governed_by(entry=entry, entry_members=entry_members, routed_models=routed_models)
+    )
+    routes: Final = _wildcard_routes(routed_models)
+    yield from (
+        _RequestForm(name_globs=(route, f"*/{entry}"), candidate_globs=_budget_model_candidates(entry))
+        for route in routes
+    )
+    yield from _bedrock_request_forms(
+        bedrock_models=tuple(model for model in _bedrock_base_models() if entry in _bedrock_names(model)),
+        routes=routes,
+    )
+
+
+def _pattern_request_forms(pattern: str, routed_models: RoutedModels) -> Iterator[_RequestForm]:
+    yield _RequestForm(name_globs=(pattern,))
+    yield from (
+        _served_form(name)
+        for name in routed_models.served_names
+        if _GLOB_WILDCARD not in name and _glob_matches(pattern, _budget_model_candidates(name))
+    )
+    routes: Final = _wildcard_routes(routed_models)
+    yield from (_RequestForm(name_globs=(route, pattern), last_segment_open=True) for route in routes)
+    if "/" not in pattern:
+        yield from (_RequestForm(name_globs=(route, f"*/{pattern}"), candidate_globs=(pattern,)) for route in routes)
+    yield from (
+        _narrowed_to(pattern=pattern, form=form)
+        for form in _bedrock_request_forms(bedrock_models=_bedrock_base_models(), routes=routes)
+        if _resolves(pattern=pattern, form=form)
+    )
+
+
+def _narrowed_to(pattern: str, form: _RequestForm) -> _RequestForm:
+    if any(_globs_share_a_name(pattern, candidate) for candidate in form.candidate_globs):
+        return form
+    return _RequestForm(name_globs=(*form.name_globs, pattern), candidate_globs=form.candidate_globs)
+
+
+def _bedrock_request_forms(bedrock_models: Iterable[str], routes: Sequence[str]) -> Iterator[_RequestForm]:
+    """Wildcard-routed request names that resolve to a Bedrock model: its id, under a cross-region prefix or with a
+    context or throughput suffix, as the whole name or after any routing prefix, region path or ARN."""
+    forms: Final = itertools.chain.from_iterable(
+        _bedrock_model_request_forms(model=model, routes=routes) for model in bedrock_models
+    )
+    yield from (form for form in forms if _globs_share_a_name(*form.name_globs))
+
+
+def _bedrock_model_request_forms(model: str, routes: Sequence[str]) -> Iterator[_RequestForm]:
+    names: Final = _bedrock_names(model)
+    return (
+        _RequestForm(name_globs=(route, f"{prefix}{last_segment}"), candidate_globs=(last_segment, *names))
+        for route, (last_segment, prefix) in itertools.product(
+            routes, itertools.product(_bedrock_last_segments(model), ("", "*/"))
+        )
+    )
+
+
+def _bedrock_last_segments(model: str) -> tuple[str, ...]:
+    regioned: Final = (model, *(f"{region}.{model}" for region in get_bedrock_cross_region_inference_regions()))
+    _, version_separator, version = model.rpartition(":")
+    suffixes: Final = ("", "[*]", *((":*k",) if version_separator and version.isdigit() else ()))
+    return tuple(f"{name}{suffix}" for name, suffix in itertools.product(regioned, suffixes))
+
+
+def _model_cost() -> Mapping[str, object]:
+    return litellm.model_cost
+
+
+def _bedrock_base_models() -> tuple[str, ...]:
+    return tuple(
+        model
+        for model, cost_entry in _model_cost().items()
+        if _priced_as_bedrock(cost_entry) and get_bedrock_base_model(model) == model
     )
 
 
@@ -329,7 +466,6 @@ def _names_governed_by(entry: str, entry_members: frozenset[str], routed_models:
         for name in routed_models.served_names
         if _GLOB_WILDCARD not in name and entry in _budget_model_candidates(name)
     )
-    yield from (name.replace(_GLOB_WILDCARD, entry) for name in routed_models.served_names if _GLOB_WILDCARD in name)
     yield from (member for member in entry_members if _GLOB_WILDCARD not in member)
 
 
@@ -361,27 +497,50 @@ def _usable_entry(entry: str, raw_budget_config: object) -> ResolvedModelBudget 
     return ResolvedModelBudget(budget_model=entry, budget_config=budget_config)
 
 
-def team_model_budget_applies(model: str, key_model_max_budget: Mapping[str, object] | None) -> bool:
-    """A key entry named after `model` that spend-gates it overrides the team cap: it is then gated on and billed to
-    the key alone. A key pattern or group entry is gated alongside the team cap, never instead of it."""
+def team_model_budget_entries(
+    model: str, team_model_max_budget: Mapping[str, object], key_model_max_budget: Mapping[str, object] | None
+) -> Mapping[str, object]:
+    """The team entries that budget `model` for this key.
+
+    A key entry named after `model` that spend-gates it replaces the team entry named after it, so that model is
+    gated on and billed to the key's entry. The team's pattern and group entries still apply beside it.
+    """
+    exact_candidates: Final = _budget_model_candidates(model)
+    if not _key_entry_replaces_team_entry(
+        model=model, exact_candidates=exact_candidates, key_model_max_budget=key_model_max_budget
+    ):
+        return team_model_max_budget
+    return MappingProxyType(
+        {entry: config for entry, config in team_model_max_budget.items() if entry not in exact_candidates}
+    )
+
+
+def _key_entry_replaces_team_entry(
+    model: str, exact_candidates: tuple[str, ...], key_model_max_budget: Mapping[str, object] | None
+) -> bool:
     if not key_model_max_budget:
-        return True
+        return False
     resolved: Final = resolve_model_budget(
         model=model,
         model_max_budget=MappingProxyType(
             {
                 candidate: key_model_max_budget[candidate]
-                for candidate in _budget_model_candidates(model)
+                for candidate in exact_candidates
                 if candidate in key_model_max_budget
             }
         ),
-        model_access_groups=lambda _: frozenset(),
+        model_access_groups=lambda _model, _team_id: frozenset(),
     )
-    return resolved is None or not _spend_gated(resolved.budget_config)
+    return resolved is not None and _spend_gated(resolved.budget_config)
 
 
 def _spend_gated(budget_config: BudgetConfig) -> bool:
     return budget_config.max_budget is not None and budget_config.max_budget >= 0
+
+
+def entry_names_model(entry: str, model: str) -> bool:
+    """Whether `entry` budgets `model` under the model's own name, rather than as a pattern or an access group."""
+    return entry in _budget_model_candidates(model)
 
 
 def _budget_model_candidates(model: str) -> tuple[str, ...]:
@@ -405,11 +564,16 @@ def _bedrock_candidates(model: str) -> tuple[str, ...]:
     of those would produce a garbage candidate.
     """
     base_model: Final = get_bedrock_base_model(model)
-    cost_entry: Final = litellm.model_cost.get(base_model)
-    if not isinstance(cost_entry, dict) or not str(cost_entry.get("litellm_provider", "")).startswith("bedrock"):
-        return ()
+    return _bedrock_names(base_model) if _priced_as_bedrock(_model_cost().get(base_model)) else ()
+
+
+def _bedrock_names(base_model: str) -> tuple[str, ...]:
     _, _, without_vendor = base_model.partition(".")
     return (base_model, without_vendor) if without_vendor else (base_model,)
+
+
+def _priced_as_bedrock(cost_entry: object) -> bool:
+    return str(_metadata_value(cost_entry, "litellm_provider") or "").startswith("bedrock")
 
 
 @dataclass(frozen=True, slots=True)
@@ -592,6 +756,7 @@ def _resolve_entity_model_budgets(
     model: str,
     entity_budgets: Iterable[tuple[Litellm_EntityType, str | None, object]],
     model_access_groups: ModelAccessGroups,
+    team_id: str | None,
 ) -> tuple[tuple[Litellm_EntityType, str, ResolvedModelBudget], ...]:
     """Drop the scopes that do not budget `model`, keeping only what can be incremented."""
     return tuple(
@@ -600,14 +765,34 @@ def _resolve_entity_model_budgets(
         if entity_id is not None and isinstance(model_max_budget, Mapping) and model_max_budget
         for resolved in (
             resolve_model_budget(
-                model=model, model_max_budget=model_max_budget, model_access_groups=model_access_groups
+                model=model,
+                model_max_budget=model_max_budget,
+                model_access_groups=model_access_groups,
+                team_id=team_id,
             ),
         )
         if resolved is not None and resolved.budget_config.budget_duration is not None
     )
 
 
+def _requested_model_name(
+    metadata: Mapping[str, object], standard_logging_payload: StandardLoggingPayload
+) -> str | None:
+    """The model name the request was gated on: a team-scoped deployment's public name, since the router renames
+    its model group to a unique internal one, else the model group, else the deployment's model."""
+    team_public_model_name: Final = _metadata_value(metadata.get("model_info"), "team_public_model_name")
+    if (
+        isinstance(team_public_model_name, str)
+        and team_public_model_name
+        and _GLOB_WILDCARD not in team_public_model_name
+    ):
+        return team_public_model_name
+    return standard_logging_payload.get("model_group") or standard_logging_payload.get("model")
+
+
 def _metadata_value(metadata: object, key: str) -> object | None:
+    if not isinstance(metadata, Mapping):
+        return None
     metadata_mapping: Final[Mapping[str, object]] = cast(  # cast-ok: callback metadata has string keys
         Mapping[str, object], metadata
     )
@@ -658,6 +843,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         return await self._is_entity_within_model_budget(
             entity_type=Litellm_EntityType.KEY,
             entity_id=user_api_key_dict.token,
+            team_id=user_api_key_dict.team_id,
             model_max_budget=user_api_key_dict.model_max_budget,
             model=model,
             exceeded_message=(
@@ -687,6 +873,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         user_id: str,
         user_model_max_budget: Mapping[str, object],
         model: str,
+        team_id: str | None = None,
     ) -> bool:
         """
         Check if the internal user is within the model budget
@@ -697,6 +884,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         return await self._is_entity_within_model_budget(
             entity_type=Litellm_EntityType.USER,
             entity_id=user_id,
+            team_id=team_id,
             model_max_budget=user_model_max_budget,
             model=model,
             exceeded_message=f"LiteLLM User: {user_id}, exceeded budget for model={model}",
@@ -708,6 +896,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         end_user_id: str,
         end_user_model_max_budget: Mapping[str, object],
         model: str,
+        team_id: str | None = None,
     ) -> bool:
         """
         Check if the end_user is within the model budget
@@ -718,6 +907,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         return await self._is_entity_within_model_budget(
             entity_type=Litellm_EntityType.END_USER,
             entity_id=end_user_id,
+            team_id=team_id,
             model_max_budget=end_user_model_max_budget,
             model=model,
             exceeded_message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
@@ -732,18 +922,19 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         model: str,
     ) -> bool:
         """
-        Check if the team is within the model budget, unless the key's own
-        `model_max_budget` overrides it for `model`
+        Check if the team is within the model budget, leaving out a team entry named after `model` that the key's
+        own `model_max_budget` replaces
 
         Raises:
             BudgetExceededError: If the team has exceeded the model budget
         """
-        if not team_model_budget_applies(model=model, key_model_max_budget=key_model_max_budget):
-            return True
         return await self._is_entity_within_model_budget(
             entity_type=Litellm_EntityType.TEAM,
             entity_id=team_id,
-            model_max_budget=team_model_max_budget,
+            team_id=team_id,
+            model_max_budget=team_model_budget_entries(
+                model=model, team_model_max_budget=team_model_max_budget, key_model_max_budget=key_model_max_budget
+            ),
             model=model,
             exceeded_message=f"LiteLLM Team: {team_id}, exceeded budget for model={model}",
         )
@@ -759,6 +950,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         return await self._is_entity_within_model_budget(
             entity_type=Litellm_EntityType.TEAM_MEMBER,
             entity_id=team_member_budget_entity_id(user_id=user_id, team_id=team_id),
+            team_id=team_id,
             model_max_budget=team_member_model_max_budget,
             model=model,
             exceeded_message=(
@@ -770,6 +962,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         self,
         entity_type: Litellm_EntityType,
         entity_id: str | None,
+        team_id: str | None,
         model_max_budget: Mapping[str, object] | None,
         model: str,
         exceeded_message: str,
@@ -777,7 +970,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if not model_max_budget:
             return True
         resolved: Final = resolve_model_budget(
-            model=model, model_max_budget=model_max_budget, model_access_groups=self._model_access_groups
+            model=model,
+            model_max_budget=model_max_budget,
+            model_access_groups=self._model_access_groups,
+            team_id=team_id,
         )
         if resolved is None:
             verbose_proxy_logger.debug("Model %s not found in %s model_max_budget", model, entity_type.value)
@@ -906,13 +1102,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         )
         payload_metadata: Final = standard_logging_payload.get("metadata") or {}
 
-        # Use model_group (the user-facing model alias, e.g. "gpt-4o") when
-        # available.  The enforcement path receives the model name from
-        # request_data["model"] which is the model group alias, so the spend
-        # tracking cache key must resolve from the same name.  Falling back to
-        # the deployment-level "model" field preserves behaviour for non-proxy
-        # or non-router deployments where model_group is None.
-        model: Final = standard_logging_payload.get("model_group") or standard_logging_payload.get("model")
+        model: Final = _requested_model_name(
+            metadata=_metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+            standard_logging_payload=standard_logging_payload,
+        )
         if model is None:
             return
 
@@ -925,6 +1118,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         team_member_team_id: Final = _metadata_string_value(
             payload_metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
             "user_api_key_team_id",
+        )
+        team_model_max_budget: Final = _metadata_value(
+            _metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+            "user_api_key_team_model_max_budget",
         )
         team_member_entity_id: Final = (
             team_member_budget_entity_id(user_id=team_member_user_id, team_id=team_member_team_id)
@@ -939,16 +1136,17 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             ),
             (
                 Litellm_EntityType.TEAM,
-                payload_metadata.get("user_api_key_team_id"),
+                team_member_team_id,
                 (
-                    _metadata.get("user_api_key_team_model_max_budget")
-                    if team_model_budget_applies(
+                    team_model_budget_entries(
                         model=model,
+                        team_model_max_budget=team_model_max_budget,
                         key_model_max_budget=(
                             key_model_max_budget if isinstance(key_model_max_budget, Mapping) else None
                         ),
                     )
-                    else None
+                    if isinstance(team_model_max_budget, Mapping)
+                    else team_model_max_budget
                 ),
             ),
             (
@@ -972,7 +1170,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         )
 
         resolved_budgets: Final = _resolve_entity_model_budgets(
-            model=model, entity_budgets=entity_budgets, model_access_groups=self._model_access_groups
+            model=model,
+            entity_budgets=entity_budgets,
+            model_access_groups=self._model_access_groups,
+            team_id=team_member_team_id,
         )
         if not resolved_budgets:
             verbose_proxy_logger.debug(
@@ -1061,20 +1262,41 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         """Without Redis, start this replica's window where the database says every replica's window starts.
 
         Every replica then sends the same window start with its spend, so no flush reads as a newer window that
-        replaces the spend the others already added.
+        replaces the spend the others already added. While the database cannot say, this replica keeps its spend
+        unshared and sends it once a later charge joins the shared window.
         """
         now: Final = self._clock()
-        local: Final = self.dual_cache.in_memory_cache
-        if _open_local_window_start(
+        local: Final = _local_windows(self.dual_cache)
+        unshared_key: Final = _unshared_spend_key(start_time_key)
+        if local.get_cache(key=unshared_key) is None and _open_local_window_start(
             local=local, start_time_key=start_time_key, budget_duration=budget_duration, now=now
         ):
             return
         started_at: Final = await self._shared_windows.open(
             spend_key=spend_key, budget_duration=budget_duration, now=now
         )
-        if _open_local_window_start(
+        unshared_spend: Final = _as_float(local.get_cache(key=unshared_key))
+        local_window_open: Final = _open_local_window_start(
             local=local, start_time_key=start_time_key, budget_duration=budget_duration, now=now
-        ):
+        )
+        if local_window_open and unshared_spend is None:
+            return
+        if not local_window_open:
+            _start_local_window(
+                local=local,
+                spend_key=spend_key,
+                start_time_key=start_time_key,
+                started_at=now if started_at is None else started_at,
+                budget_duration=budget_duration,
+                now=now,
+                spend=0.0,
+            )
+            if started_at is None:
+                local.set_cache(key=unshared_key, value=0.0, ttl=budget_window_seconds(now, budget_duration))
+            else:
+                local.delete_cache(key=unshared_key)
+            return
+        if started_at is None or unshared_spend is None:
             return
         _start_local_window(
             local=local,
@@ -1083,12 +1305,27 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             started_at=started_at,
             budget_duration=budget_duration,
             now=now,
+            spend=_as_float(local.get_cache(key=spend_key)) or 0.0,
+        )
+        local.delete_cache(key=unshared_key)
+        await self._shared_windows.add(
+            spend_key=spend_key, budget_duration=budget_duration, started_at=started_at, spend=unshared_spend
         )
 
     async def _share_spend(
         self, spend_key: str, start_time_key: str, budget_duration: str, response_cost: float
     ) -> None:
         now: Final = self._clock()
+        local: Final = _local_windows(self.dual_cache)
+        unshared_key: Final = _unshared_spend_key(start_time_key)
+        unshared_spend: Final = _as_float(local.get_cache(key=unshared_key))
+        if unshared_spend is not None:
+            local.set_cache(
+                key=unshared_key,
+                value=unshared_spend + response_cost,
+                ttl=budget_window_seconds(now, budget_duration),
+            )
+            return
         await self._shared_windows.add(
             spend_key=spend_key,
             budget_duration=budget_duration,
@@ -1108,17 +1345,33 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         return polls == 1
 
 
+def _local_windows(dual_cache: DualCache) -> LocalTTLCache:
+    return dual_cache.in_memory_cache
+
+
 def _open_local_window_start(local: LocalTTLCache, start_time_key: str, budget_duration: str, now: float) -> bool:
     started_at: Final = _as_float(local.get_cache(key=start_time_key))
     return started_at is not None and now - started_at <= budget_window_seconds(started_at, budget_duration)
 
 
 def _start_local_window(
-    local: LocalTTLCache, spend_key: str, start_time_key: str, started_at: float, budget_duration: str, now: float
+    local: LocalTTLCache,
+    spend_key: str,
+    start_time_key: str,
+    started_at: float,
+    budget_duration: str,
+    now: float,
+    spend: float,
 ) -> None:
     ttl: Final = started_at + budget_window_seconds(started_at, budget_duration) - now
-    local.set_cache(key=spend_key, value=0.0, ttl=ttl)
+    local.delete_cache(key=spend_key)
+    local.delete_cache(key=start_time_key)
+    local.set_cache(key=spend_key, value=spend, ttl=ttl)
     local.set_cache(key=start_time_key, value=started_at, ttl=ttl)
+
+
+def _unshared_spend_key(start_time_key: str) -> str:
+    return f"{start_time_key}:unshared"
 
 
 PROXY_VirtualKeyModelMaxBudgetLimiter = _PROXY_VirtualKeyModelMaxBudgetLimiter

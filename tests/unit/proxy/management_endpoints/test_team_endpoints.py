@@ -17139,14 +17139,31 @@ _TEAM_ROUTED_MODELS: Final = RoutedModels(
 )
 
 
-def _check_team_admin_model_caps(existing: Mapping[str, object], requested: Mapping[str, object]) -> None:
+def _first_bedrock_anthropic_model(model_cost: Mapping[str, Mapping[str, object]]) -> str:
+    return next(
+        model.removeprefix("anthropic.")
+        for model, cost in model_cost.items()
+        if model.startswith("anthropic.") and str(cost.get("litellm_provider", "")).startswith("bedrock")
+    )
+
+
+_BEDROCK_ANTHROPIC_MODEL: Final = _first_bedrock_anthropic_model(litellm.model_cost)
+_TEAM_BEDROCK_VENDOR_CAP: Final = MappingProxyType({"anthropic.*": {"max_budget": 10.0, "budget_duration": "1d"}})
+_BEDROCK_ROUTE_ADDED_ENTRIES: Final = (_BEDROCK_ANTHROPIC_MODEL, f"{_BEDROCK_ANTHROPIC_MODEL[:12]}*")
+
+
+def _check_team_admin_model_caps(
+    existing: Mapping[str, object],
+    requested: Mapping[str, object],
+    routed_models: RoutedModels = _TEAM_ROUTED_MODELS,
+) -> None:
     from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
 
     _check_team_model_budget_update_authority(
         data=UpdateTeamRequest(team_id="t1", model_max_budget=dict(requested)),
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
         existing_model_max_budget=existing,
-        routed_models_source=lambda: _TEAM_ROUTED_MODELS,
+        routed_models_source=lambda: routed_models,
     )
 
 
@@ -17154,7 +17171,7 @@ def _check_team_admin_model_caps(existing: Mapping[str, object], requested: Mapp
     ("existing", "added"),
     [
         (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
-        (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 10.0, "budget_duration": "7d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 10.0, "budget_duration": "1h"}}),
         (_TEAM_OPUS_FAMILY_CAP, {"*laude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}}),
         (_TEAM_OPUS_GROUP_CAP, {"a-opus-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
         (_TEAM_OPUS_GROUP_CAP, {"claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}}),
@@ -17178,7 +17195,7 @@ def _check_team_admin_model_caps(existing: Mapping[str, object], requested: Mapp
     ],
     ids=[
         "group_over_pattern",
-        "group_rewindows_pattern",
+        "group_with_a_faster_window",
         "more_specific_pattern",
         "earlier_group_sharing_a_model",
         "model_inside_group",
@@ -17224,6 +17241,12 @@ def test_team_admin_cannot_add_an_entry_looser_than_a_cap_it_outranks(
             {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"rpm_limit": 10}},
             {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"rpm_limit": 20}},
         ),
+        (_TEAM_OPUS_FAMILY_CAP, {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 0.1, "budget_duration": "30d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 0.01, "budget_duration": "1h"}}),
+        (
+            _TEAM_OPUS_FAMILY_CAP,
+            {**_TEAM_OPUS_FAMILY_CAP, "gemini-3-pro*": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
     ],
     ids=[
         "tighter_group",
@@ -17236,12 +17259,41 @@ def test_team_admin_cannot_add_an_entry_looser_than_a_cap_it_outranks(
         "unchanged_looser_entry",
         "tightened_looser_entry",
         "uncapped_entry_edited",
+        "group_with_a_slower_window_and_lower_cap",
+        "group_with_a_faster_window_within_the_cap",
+        "pattern_sharing_only_a_wildcard_route",
     ],
 )
 def test_team_admin_can_add_entries_that_never_lift_an_outranked_cap(
     existing: Mapping[str, object], requested: Mapping[str, object]
 ) -> None:
     assert _check_team_admin_model_caps(existing=existing, requested=requested) is None
+
+
+@pytest.mark.parametrize("added_entry", _BEDROCK_ROUTE_ADDED_ENTRIES, ids=["model", "pattern"])
+def test_team_admin_cannot_lift_a_bedrock_vendor_cap_through_a_bedrock_wildcard_route(added_entry: str) -> None:
+    with pytest.raises(HTTPException) as exc:
+        _check_team_admin_model_caps(
+            existing=_TEAM_BEDROCK_VENDOR_CAP,
+            requested={**_TEAM_BEDROCK_VENDOR_CAP, added_entry: {"max_budget": 1000.0, "budget_duration": "1d"}},
+            routed_models=RoutedModels(
+                served_names=frozenset({"bedrock/*", "gpt-4o"}), group_members=MappingProxyType({})
+            ),
+        )
+    assert exc.value.status_code == 403
+    assert "'anthropic.*'" in exc.value.detail["error"]
+
+
+@pytest.mark.parametrize("added_entry", _BEDROCK_ROUTE_ADDED_ENTRIES, ids=["model", "pattern"])
+def test_team_admin_can_add_entries_beside_a_bedrock_vendor_cap_no_route_serves(added_entry: str) -> None:
+    assert (
+        _check_team_admin_model_caps(
+            existing=_TEAM_BEDROCK_VENDOR_CAP,
+            requested={**_TEAM_BEDROCK_VENDOR_CAP, added_entry: {"max_budget": 1000.0, "budget_duration": "1d"}},
+            routed_models=RoutedModels(served_names=frozenset({"gpt-4o"}), group_members=MappingProxyType({})),
+        )
+        is None
+    )
 
 
 def test_team_model_cap_authority_skips_omitted_field_malformed_rows_and_proxy_admins() -> None:

@@ -1367,7 +1367,7 @@ async def test_check_user_model_budget(user_id, user_model_max_budget, expected_
     calls = []
 
     class _Limiter:
-        async def is_user_within_model_budget(self, user_id, user_model_max_budget, model):
+        async def is_user_within_model_budget(self, user_id, user_model_max_budget, model, team_id=None):
             calls.append((user_id, user_model_max_budget, model))
             return True
 

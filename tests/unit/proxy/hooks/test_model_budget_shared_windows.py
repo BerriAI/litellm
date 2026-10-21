@@ -184,10 +184,16 @@ async def test_open_starts_a_window_at_now_when_none_is_open(stored_start: datet
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("table", [None, _Table(error=RuntimeError("database is down"))])
-async def test_open_falls_back_to_this_replicas_own_window_without_a_database(table: _Table | None):
-    windows: Final = _database_windows(table, _Sink())
+async def test_open_starts_this_replicas_own_window_without_a_database():
+    windows: Final = _database_windows(None, _Sink())
 
     assert await windows.open(spend_key=SPEND_KEY, budget_duration="1d", now=WINDOW_START.timestamp()) == (
         WINDOW_START.timestamp()
     )
+
+
+@pytest.mark.asyncio
+async def test_open_reports_no_shared_window_while_the_database_is_unreachable():
+    windows: Final = _database_windows(_Table(error=RuntimeError("database is down")), _Sink())
+
+    assert await windows.open(spend_key=SPEND_KEY, budget_duration="1d", now=WINDOW_START.timestamp()) is None

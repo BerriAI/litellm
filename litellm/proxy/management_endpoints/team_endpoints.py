@@ -44,6 +44,7 @@ from litellm._uuid import uuid
 from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds_bounds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     UI_TEAM_ID,
@@ -140,6 +141,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     RoutedModels,
     build_model_max_budget_usage,
     entries_outranked_by,
+    entry_names_model,
     proxy_routed_models,
     resolve_model_budget,
 )
@@ -1452,13 +1454,20 @@ def _check_team_model_budget_update_authority(
             },
         )
     for model_name, proposed in requested.items():
-        governing = resolve_model_budget(model=model_name, model_max_budget=existing_model_max_budget)
+        governing = resolve_model_budget(
+            model=model_name, model_max_budget=existing_model_max_budget, team_id=data.team_id
+        )
         if governing is None:
             continue
         cap = governing.budget_config
         if cap.max_budget is None:
             continue
-        if _looser_model_cap(proposed=proposed, cap=cap):
+        lets_more_through = (
+            _looser_model_cap
+            if entry_names_model(entry=governing.budget_model, model=model_name)
+            else _allows_more_than
+        )
+        if lets_more_through(proposed=proposed, cap=cap):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -1522,7 +1531,7 @@ def _looser_than_outranked_caps(
     yield from (
         (outranked, cap)
         for outranked, cap in outranked_caps
-        if cap is not None and cap.max_budget is not None and _looser_model_cap(proposed=proposed, cap=cap)
+        if cap is not None and cap.max_budget is not None and _allows_more_than(proposed=proposed, cap=cap)
     )
 
 
@@ -1530,6 +1539,29 @@ def _keeps_or_tightens(proposed: BudgetConfig, existing: BudgetConfig | None) ->
     return existing is not None and (
         existing.max_budget is None or not _looser_model_cap(proposed=proposed, cap=existing)
     )
+
+
+def _allows_more_than(proposed: BudgetConfig, cap: BudgetConfig) -> bool:
+    """Whether `proposed` lets more spend through in one of `cap`'s windows than `cap` itself does."""
+    proposed_window: Final = _budget_window_bounds(proposed)
+    cap_window: Final = _budget_window_bounds(cap)
+    if (
+        proposed.budget_duration == cap.budget_duration
+        or proposed.max_budget is None
+        or cap.max_budget is None
+        or proposed_window is None
+        or cap_window is None
+        or proposed_window[0] <= 0
+    ):
+        return _looser_model_cap(proposed=proposed, cap=cap)
+    shortest_proposed_window, _ = proposed_window
+    _, longest_cap_window = cap_window
+    proposed_windows_per_cap_window: Final = max(math.ceil(longest_cap_window / shortest_proposed_window), 1)
+    return proposed.max_budget * proposed_windows_per_cap_window > cap.max_budget
+
+
+def _budget_window_bounds(budget: BudgetConfig) -> tuple[int, int] | None:
+    return None if budget.budget_duration is None else duration_in_seconds_bounds(budget.budget_duration)
 
 
 def _looser_model_cap(proposed: BudgetConfig, cap: BudgetConfig) -> bool:
