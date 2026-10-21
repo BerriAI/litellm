@@ -2907,6 +2907,20 @@ def test_compact_bt_operator_keeps_oversized_page_text():
     assert priced - blank_price == len("Hello world")
 
 
+def test_nul_whitespace_after_bt_keeps_oversized_page_text():
+    path_operator: Final = b"10 10 m 20 20 l S\n"
+    path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1)
+    content: Final = path_padding + b"BT\x00/F1 12 Tf (Hello world) Tj ET\n"
+    data_url: Final = _pdf_data_url_with_xobjects(content, b"<< >>", ())
+    priced: Final = _count_inline_pdf_tokens(data_url, len)
+    blank_data_url: Final = _pdf_data_url_with_xobjects(b"", b"<< >>", ())
+    blank_price: Final = _count_inline_pdf_tokens(blank_data_url, len)
+
+    assert priced is not None
+    assert blank_price is not None
+    assert priced - blank_price == len("Hello world")
+
+
 def test_compact_bi_operator_strips_inline_image_before_pricing_text():
     image_data: Final = random.Random(42).randbytes(270_000)
     content: Final = b"BI/W 270000/H 1/BPC 8/CS /RGB ID " + image_data + b" EI\nBT /F1 9 Tf (Hello world) Tj ET\n"
@@ -2960,6 +2974,41 @@ def test_repeated_identity_h_form_draws_count_each_text_sample():
     assert priced is not None
     assert blank_price is not None
     assert priced - blank_price == 2 * len("Hello world")
+
+
+def test_nul_whitespace_invokes_large_form_with_bounded_sample_pricing():
+    text_object: Final = b"BT /F1 12 Tf (Hello world) Tj ET\n"
+    repetitions: Final = 8 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(text_object) + 1
+    form_object: Final = _pdf_stream(
+        text_object * repetitions,
+        b"/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >>",
+    )
+    nul_data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm1\x00Do\n",
+        b"<< /Fm1 6 0 R >>",
+        (form_object,),
+    )
+    space_data_url: Final = _pdf_data_url_with_xobjects(
+        b"/Fm1 Do\n",
+        b"<< /Fm1 6 0 R >>",
+        (form_object,),
+    )
+    nul_count_function: Final = MagicMock(side_effect=len)
+    space_count_function: Final = MagicMock(side_effect=len)
+
+    nul_price: Final = _count_inline_pdf_tokens(nul_data_url, nul_count_function)
+    space_price: Final = _count_inline_pdf_tokens(space_data_url, space_count_function)
+
+    assert nul_price is not None
+    assert space_price is not None
+    assert nul_price == space_price
+    assert nul_price > 0
+    assert max((len(call.args[0]) for call in nul_count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+    assert max((len(call.args[0]) for call in space_count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
 
 
 def test_dense_pdf_page_is_priced_without_extracting_its_full_text():

@@ -13,12 +13,25 @@ from litellm.litellm_core_utils.token_counter import (
 )
 
 
-def _pdf_page(content: bytes) -> SimpleNamespace:
+class _PdfBenchmarkForm:
+    def get_data(self) -> bytes:
+        return b"q Q\n"
+
+    def get(self, key: str) -> str | None:
+        return "/Form" if key == "/Subtype" else None
+
+    def items(self) -> tuple[tuple[str, object], ...]:
+        return ()
+
+
+def _pdf_page(content: bytes, with_form: bool = False) -> SimpleNamespace:
+    xobjects: Final = {"/Fm1": _PdfBenchmarkForm()} if with_form else {}
+    resources: Final = {"/XObject": xobjects}
     return SimpleNamespace(
         mediabox=SimpleNamespace(width=612.0, height=792.0),
         get_contents=lambda: SimpleNamespace(get_data=lambda: content),
         extract_text=lambda: "",
-        get=lambda key: {"/XObject": {}} if key == "/Resources" else None,
+        get=lambda key: resources if key == "/Resources" else None,
     )
 
 
@@ -63,9 +76,11 @@ def test_pdf_string_operand_scan_after_escaped_parentheses():  # test-quality-ok
 
 @pytest.mark.benchmark
 def test_pdf_invocation_scan_ignores_unterminated_comments():  # test-quality-ok: CodSpeed performance benchmark
-    page: Final = _pdf_page(b"/a %" * (4 * 1024 * 1024 // 4))
+    page: Final = _pdf_page(b"/a %" * (4 * 1024 * 1024 // 4), with_form=True)
 
-    _price_pdf_pages((page,), len)
+    priced: Final = _price_pdf_pages((page,), len)
+
+    assert priced > 0
 
 
 @pytest.mark.benchmark
@@ -130,6 +145,8 @@ def test_pdf_inline_image_scan_no_ei(repetitions: int):  # test-quality-ok: CodS
     ids=["23-crlf-comments", "40-crlf-comments-with-trailing-spaces"],
 )
 def test_pdf_invocation_scan_with_crlf_comments(comments: bytes):  # test-quality-ok: CodSpeed performance benchmark
-    page: Final = _pdf_page(b"BT /F1 " + comments + b"12 Tf (hello) Tj ET")
+    page: Final = _pdf_page(b"BT /F1 " + comments + b"12 Tf (hello) Tj ET", with_form=True)
 
-    _price_pdf_pages((page,), len)
+    priced: Final = _price_pdf_pages((page,), len)
+
+    assert priced > 0

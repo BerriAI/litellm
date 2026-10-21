@@ -353,25 +353,56 @@ Type for a function that counts tokens in a string.
 
 EXTRAPOLATION_SAMPLES: Final = 16
 PDF_PAGE_MAX_EXACT_CONTENT_BYTES: Final = 64 * 1024
-PDF_LITERAL_STRING_OPERAND: Final = rb"\((?:\\[\s\S]|[^\\()]|\((?:\\[\s\S]|[^\\()])*\)?)*\)?"
-PDF_STRING_OPERAND: Final = re.compile(PDF_LITERAL_STRING_OPERAND + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*")
+PDF_WHITESPACE_CLASS: Final = b"[\x00\t\n\x0c\r ]"
+PDF_HEX_STRING_OPERAND: Final = rb"<[0-9A-Fa-f" + PDF_WHITESPACE_CLASS[1:-1] + rb"]*>"
+PDF_LITERAL_STRING_OPERAND: Final = rb"\((?:\\[\x00-\xff]|[^\\()]|\((?:\\[\x00-\xff]|[^\\()])*\)?)*\)?"
+PDF_STRING_OPERAND: Final = re.compile(PDF_LITERAL_STRING_OPERAND + rb"|" + PDF_HEX_STRING_OPERAND + rb"|%[^\r\n]*")
 PDF_SIMPLE_LITERAL_STRING: Final = re.compile(rb"\([^()]*\)")
-PDF_LITERAL_ESCAPE: Final = re.compile(rb"\\([nrtbf()\\]|[0-7]{1,3}|\r\n?|\n|[\s\S])")
+PDF_LITERAL_ESCAPE: Final = re.compile(rb"\\([nrtbf()\\]|[0-7]{1,3}|\r\n?|\n|[\x00-\xff])")
 PDF_INLINE_IMAGE: Final = re.compile(
     PDF_LITERAL_STRING_OPERAND
-    + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*|(?P<inline_image>(?<![^\s\]>)])BI(?=[\s/\[\]()<>{}%])"
-    + rb"[\s\S]*?(?:(?<=\s)ID\s[\s\S]*?(?:(?P<image_end>\sEI(?![^\s\[/<(%]))|\Z)|\Z))"
+    + rb"|"
+    + PDF_HEX_STRING_OPERAND
+    + rb"|%[^\r\n]*|(?P<inline_image>(?<![^"
+    + PDF_WHITESPACE_CLASS[1:-1]
+    + rb"\]>)])BI(?="
+    + PDF_WHITESPACE_CLASS
+    + rb"|[/\[\]()<>{}%])[\x00-\xff]*?(?:(?<="
+    + PDF_WHITESPACE_CLASS
+    + rb")ID"
+    + PDF_WHITESPACE_CLASS
+    + rb"[\x00-\xff]*?(?:(?P<image_end>"
+    + PDF_WHITESPACE_CLASS
+    + rb"EI(?![^"
+    + PDF_WHITESPACE_CLASS[1:-1]
+    + rb"\[/<(%]))|\Z)|\Z))"
 )
 PDF_TEXT_OBJECT: Final = re.compile(
     PDF_LITERAL_STRING_OPERAND
-    + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*|(?P<text_object>(?<![^\s\]>)])BT(?=[\s/\[\]()<>{}%])"
+    + rb"|"
+    + PDF_HEX_STRING_OPERAND
+    + rb"|%[^\r\n]*|(?P<text_object>(?<![^"
+    + PDF_WHITESPACE_CLASS[1:-1]
+    + rb"\]>)])BT(?="
+    + PDF_WHITESPACE_CLASS
+    + rb"|[/\[\]()<>{}%])"
     + rb"(?:(?:"
     + PDF_LITERAL_STRING_OPERAND
-    + rb"|<[0-9A-Fa-f\s]*>|%[^\r\n]*|[\s\S])*?"
-    + rb"(?:(?P<text_object_end>(?<=\s)ET(?![^\s\[\]()<>{}/%]))|\Z)))"
+    + rb"|"
+    + PDF_HEX_STRING_OPERAND
+    + rb"|%[^\r\n]*|[\x00-\xff])*?(?:(?P<text_object_end>(?<="
+    + PDF_WHITESPACE_CLASS
+    + rb")ET(?![^"
+    + PDF_WHITESPACE_CLASS[1:-1]
+    + rb"\[\]()<>{}/%]))|\Z)))"
 )
 PDF_XOBJECT_INVOCATION: Final = re.compile(
-    PDF_LITERAL_STRING_OPERAND + rb"|%[^\r\n]*(?:[\r\n]|\Z)|/([^\s/\[\]()<>{}%]+)(?:\s|%[^\r\n]*(?:[\r\n]|\Z))+Do\b"
+    PDF_LITERAL_STRING_OPERAND
+    + rb"|%[^\r\n]*(?:[\r\n]|\Z)|/([^"
+    + PDF_WHITESPACE_CLASS[1:-1]
+    + rb"/\[\]()<>{}%]+)(?:"
+    + PDF_WHITESPACE_CLASS
+    + rb"|%[^\r\n]*(?:[\r\n]|\Z))+Do\b"
 )
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
@@ -1099,7 +1130,7 @@ def _pdf_decode_literal_escape(match: re.Match[bytes]) -> bytes:
 
 def _pdf_decode_string_operand(operand: bytes) -> bytes:
     if operand.startswith(b"<"):
-        digits: Final = re.sub(rb"\s+", b"", operand[1:-1])
+        digits: Final = re.sub(PDF_WHITESPACE_CLASS + rb"+", b"", operand[1:-1])
         padded_digits: Final = digits if len(digits) % 2 == 0 else digits + b"0"
         return bytes.fromhex(padded_digits.decode("ascii"))
     literal: Final = operand[1:-1] if operand.endswith(b")") else operand[1:]
@@ -1309,7 +1340,7 @@ def _pdf_truncated_text_sample_closures(  # noqa: C901  # single-pass PDF syntax
         elif byte == ord("]"):
             array_depth = max(0, array_depth - 1)
             bare_string_complete = False
-        elif byte not in b" \t\r\n\f\x00":
+        elif byte not in PDF_WHITESPACE_CLASS[1:-1]:
             bare_string_complete = False
         if (
             index
