@@ -1356,9 +1356,10 @@ describe("EntityUsage", () => {
 
     render(<StatefulEntityUsage {...defaultProps} entityType="team" />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText(/Fetching spend data failed/).length).toBeGreaterThan(0);
-    });
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Failed to load spend data");
+    expect(alert).toHaveTextContent("aggregated unavailable");
+    expect(within(alert).getByRole("button", { name: "Retry" })).toBeInTheDocument();
     expect(mockDailyActivityAggregatedCall.mock.calls.filter((c) => c[0] === "team")).toHaveLength(1);
   });
 

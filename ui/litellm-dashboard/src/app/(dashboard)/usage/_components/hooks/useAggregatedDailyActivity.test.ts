@@ -44,6 +44,19 @@ describe("useAggregatedDailyActivity", () => {
 
     await waitFor(() => expect(result.current.failed).toBe(true));
     expect(result.current.loading).toBe(false);
+    expect(result.current.errorMessage).toBe("boom");
+  });
+
+  it("reload fetches again after a failure and clears failed on success", async () => {
+    const fetch = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce({ results: [], metadata: {} });
+    const { result } = renderHook(() => useAggregatedDailyActivity({ fetch, enabled: true, deps: ["a"] }));
+
+    await waitFor(() => expect(result.current.failed).toBe(true));
+    act(() => result.current.reload());
+
+    await waitFor(() => expect(result.current.failed).toBe(false));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(result.current.errorMessage).toBeNull();
   });
 
   it("ignores an out-of-order resolution from the previous deps", async () => {

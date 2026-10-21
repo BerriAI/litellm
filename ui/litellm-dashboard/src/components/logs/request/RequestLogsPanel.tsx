@@ -301,6 +301,8 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         data={rows}
         rowCount={rowCount}
         isLoading={logsQuery.isLoading}
+        isError={logsQuery.isError}
+        errorMessage={logsQuery.error instanceof Error ? logsQuery.error.message : undefined}
         isRefreshing={logsQuery.isFetching}
         pagination={pagination}
         onPaginationChange={handlePaginationChange}
