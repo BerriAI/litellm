@@ -368,7 +368,7 @@ override-dependencies = [
 default-groups = ["dev"]
 required-version = ">=0.10.9"
 exclude-newer = "3 days"
-# TODO: remove after 2026-10-23, once certifi 2026.10.19 (drops the compromised eMudhra root) clears the 3-day window
+# TODO: ryan, remove after 2026-10-23, once certifi 2026.10.19 (drops the compromised eMudhra root) clears the 3-day window
 exclude-newer-package = { certifi = "2026-10-20T03:00:00Z" }
 
 [tool.uv.sources]
