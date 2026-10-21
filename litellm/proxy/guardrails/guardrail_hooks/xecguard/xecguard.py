@@ -33,7 +33,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi.exceptions import HTTPException
 from pydantic import TypeAdapter
@@ -72,6 +72,16 @@ if TYPE_CHECKING:
 
 def _dict_fields(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, dict) else None
+
+
+def _object_keyed_fields(value: object) -> Mapping[object, object] | None:
+    """Like ``_dict_fields`` but keeps the key type open: key metadata is admin-typed JSON."""
+    return value if isinstance(value, dict) else None  # pyright: ignore[reportUnknownVariableType]  # isinstance narrows object to dict[Unknown, Unknown]
+
+
+def _first_text(sources: Sequence[Mapping[str, object]], field: str) -> str | None:
+    """The first non-empty string ``field`` across ``sources``, or None."""
+    return next((value for value in (md.get(field) for md in sources) if isinstance(value, str) and value), None)
 
 
 def _sanitize_scan_result_for_logging(scan_result: dict) -> dict:
@@ -283,7 +293,7 @@ class XecGuardGuardrail(CustomGuardrail):
 
     @staticmethod
     def _calling_key_identity(
-        request_data: Mapping[str, Any] | None,
+        request_data: Mapping[str, object] | None,
     ) -> tuple[str | None, str | None]:
         """Return (key_alias, key_hash) of the calling virtual key from the
         proxy-injected request metadata. Both may be None (e.g. master key)."""
@@ -291,14 +301,12 @@ class XecGuardGuardrail(CustomGuardrail):
             return None, None
         sources: Final = tuple(
             md
-            for md in (request_data.get(meta_key) for meta_key in ("metadata", "litellm_metadata"))
-            if isinstance(md, dict)
+            for md in (_dict_fields(request_data.get(meta_key)) for meta_key in ("metadata", "litellm_metadata"))
+            if md is not None
         )
-        alias: Final = next((md["user_api_key_alias"] for md in sources if md.get("user_api_key_alias")), None)
-        key_hash: Final = next((md["user_api_key_hash"] for md in sources if md.get("user_api_key_hash")), None)
-        return alias, key_hash
+        return _first_text(sources, "user_api_key_alias"), _first_text(sources, "user_api_key_hash")
 
-    def _key_is_targeted(self, request_data: Mapping[str, Any] | None) -> bool:
+    def _key_is_targeted(self, request_data: Mapping[str, object] | None) -> bool:
         """Guardrail-side key targeting. With no allow/block list configured,
         every key is scanned. Otherwise the calling key is matched by alias
         (preferred) or hashed token:
@@ -327,7 +335,7 @@ class XecGuardGuardrail(CustomGuardrail):
     _KEY_IDENTITY_FIELDS = ("user_api_key_alias", "user_api_key_hash")
 
     @classmethod
-    def _key_context(cls, data: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    def _key_context(cls, data: Mapping[str, object] | None) -> Mapping[str, object] | None:
         """Return a mapping ``_calling_key_identity`` can read the key fields from.
 
         That reader looks for top-level ``metadata`` / ``litellm_metadata``. On the
@@ -340,15 +348,15 @@ class XecGuardGuardrail(CustomGuardrail):
         if not isinstance(data, dict):
             return data
         for meta_key in ("metadata", "litellm_metadata"):
-            md = data.get(meta_key)
-            if isinstance(md, dict) and any(field in md for field in cls._KEY_IDENTITY_FIELDS):
+            md = _dict_fields(data.get(meta_key))
+            if md is not None and any(field in md for field in cls._KEY_IDENTITY_FIELDS):
                 return data
-        nested: Final = data.get("litellm_params")
-        if isinstance(nested, dict):
+        nested: Final = _dict_fields(data.get("litellm_params"))
+        if nested is not None:
             for meta_key in ("metadata", "litellm_metadata"):
-                md = nested.get(meta_key)
-                if isinstance(md, dict) and any(field in md for field in cls._KEY_IDENTITY_FIELDS):
-                    return {meta_key: md}  # mutable-ok: lifts nested metadata to the readers' shape
+                md = _dict_fields(nested.get(meta_key))
+                if md is not None and any(field in md for field in cls._KEY_IDENTITY_FIELDS):
+                    return {meta_key: md}
         return data
 
     def should_run_guardrail(self, data: Mapping[str, object], event_type: GuardrailEventHooks) -> bool:
@@ -364,7 +372,7 @@ class XecGuardGuardrail(CustomGuardrail):
         ``async_logging_hook`` as well: ``POST /guardrails/apply_guardrail`` invokes
         ``apply_guardrail`` directly and never reaches this method.
         """
-        if not super().should_run_guardrail(data, event_type):
+        if not super().should_run_guardrail(data, event_type):  # pyright: ignore[reportUnknownMemberType]  # the base declares `data` untyped
             return False
         return self._key_is_targeted(self._key_context(data))
 
@@ -372,7 +380,7 @@ class XecGuardGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],  # mutable-ok: overrides CustomGuardrail.apply_guardrail's plain-dict contract
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -392,7 +400,7 @@ class XecGuardGuardrail(CustomGuardrail):
             return inputs
 
         scan_type: Final = "input" if input_type == "request" else "response"
-        scan_result: Final = await self._call_scan(
+        scan_result: Final = await self._call_scan(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # `messages: list[dict]` is the pre-existing untyped signature
             messages=messages,
             scan_type=scan_type,
             request_data=request_data,
@@ -453,8 +461,8 @@ class XecGuardGuardrail(CustomGuardrail):
         # Same key targeting as apply_guardrail. logging_only reaches the guardrail
         # through this hook rather than apply_guardrail, so the gate is repeated here;
         # without it an excluded key's content would still be sent to XecGuard.
-        if not self._key_is_targeted(self._key_context(kwargs)):
-            return kwargs, result
+        if not self._key_is_targeted(self._key_context(_dict_fields(kwargs))):  # pyright: ignore[reportUnknownArgumentType]  # `kwargs: dict` is the pre-existing logging-hook signature
+            return kwargs, result  # pyright: ignore[reportUnknownVariableType]  # same untyped `kwargs`
 
         start_time: Final = datetime.now()
         try:
@@ -479,10 +487,10 @@ class XecGuardGuardrail(CustomGuardrail):
             if not messages:
                 return kwargs, result
 
-            scan_result: Final = await self._call_scan(
+            scan_result: Final = await self._call_scan(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # `messages: list[dict]` is the pre-existing untyped signature
                 messages=messages,
                 scan_type=scan_type,
-                request_data=request_data,
+                request_data=request_data,  # pyright: ignore[reportUnknownArgumentType]  # built from the untyped `kwargs`
                 suppress_errors=True,
             )
             if scan_result is None:
@@ -547,7 +555,7 @@ class XecGuardGuardrail(CustomGuardrail):
     # Caller context (scan payload ``meta``) - SIEM correlation only
     # ------------------------------------------------------------------
 
-    def _build_scan_meta(self, context: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    def _build_scan_meta(self, context: Mapping[str, object] | None) -> Mapping[str, object] | None:
         """Assemble the scan payload's ``meta`` object, or None to omit it.
 
         ``virtualkey`` is the identity this guardrail filtered on and ``data`` is
@@ -574,13 +582,13 @@ class XecGuardGuardrail(CustomGuardrail):
             )
             return None
 
-        meta: Final[dict[str, Any]] = {"virtualkey": virtualkey}  # mutable-ok: the JSON object being assembled
+        meta: Final[dict[str, object]] = {"virtualkey": virtualkey}  # mutable-ok: the JSON object being assembled
         data: Final = self._build_scan_meta_data(context, virtualkey=virtualkey)
         if data:
             meta["data"] = data
         return meta
 
-    def _scan_meta_virtualkey(self, context: Mapping[str, Any] | None) -> str | None:
+    def _scan_meta_virtualkey(self, context: Mapping[str, object] | None) -> str | None:
         """The key identity to report, or None when there is no usable one.
 
         Alias first: that is what an operator types into ``apply_to_aliases`` /
@@ -595,7 +603,7 @@ class XecGuardGuardrail(CustomGuardrail):
                 return candidate
         return None
 
-    def _scan_meta_virtualkey_object(self, context: Mapping[str, Any] | None) -> Mapping[str, str] | None:
+    def _scan_meta_virtualkey_object(self, context: Mapping[str, object] | None) -> Mapping[str, str] | None:
         """The object form of ``virtualkey``: ``{"alias": ..., "key_id": ...}``.
 
         Either member may be absent - a key created without an alias has only an
@@ -615,7 +623,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return obj or None
 
     @staticmethod
-    def _calling_key_metadata(context: Mapping[str, Any] | None) -> Mapping[object, Any]:
+    def _calling_key_metadata(context: Mapping[str, object] | None) -> Mapping[object, object]:
         """The calling virtual key's own metadata, as injected by the proxy.
 
         This is the JSON an admin typed into the key's Metadata box on the
@@ -629,17 +637,17 @@ class XecGuardGuardrail(CustomGuardrail):
         guard look redundant to a type checker and invite its removal.
         """
         if not isinstance(context, dict):
-            return {}  # mutable-ok: "this key has no metadata"; the caller only reads it
+            return {}
         for meta_key in ("metadata", "litellm_metadata"):
-            md = context.get(meta_key)
-            if isinstance(md, dict):
-                key_metadata = md.get(_METADATA_KEY_METADATA_FIELD)
-                if isinstance(key_metadata, dict):
+            md = _dict_fields(context.get(meta_key))
+            if md is not None:
+                key_metadata = _object_keyed_fields(md.get(_METADATA_KEY_METADATA_FIELD))
+                if key_metadata is not None:
                     return key_metadata
-        return {}  # mutable-ok: same empty result, no metadata field was injected
+        return {}
 
     @classmethod
-    def _auto_meta_data_items(cls, context: Mapping[str, Any] | None) -> tuple[tuple[str, Any], ...]:
+    def _auto_meta_data_items(cls, context: Mapping[str, object] | None) -> tuple[tuple[str, object], ...]:
         """The proxy-injected virtual-key attributes, in ``_META_AUTO_DATA_FIELDS``
         order regardless of how the proxy ordered its metadata dict.
 
@@ -647,11 +655,11 @@ class XecGuardGuardrail(CustomGuardrail):
         ``team_id`` rather than an empty one - a SIEM query for "scans with no
         team" then means it, instead of matching every key.
         """
-        injected: Final[dict[str, Any]] = {}  # mutable-ok: accumulator keyed by meta.data name
+        injected: Final[dict[str, object]] = {}  # mutable-ok: accumulator keyed by meta.data name
         if isinstance(context, dict):
             for meta_key in ("metadata", "litellm_metadata"):
-                md = context.get(meta_key)
-                if not isinstance(md, dict):
+                md = _dict_fields(context.get(meta_key))
+                if md is None:
                     continue
                 for name, source_field in _META_AUTO_DATA_FIELDS:
                     if name not in injected and md.get(source_field) is not None:
@@ -659,7 +667,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return tuple((name, injected[name]) for name, _ in _META_AUTO_DATA_FIELDS if name in injected)
 
     def _build_scan_meta_data(
-        self, context: Mapping[str, Any] | None, virtualkey: str | Mapping[str, str]
+        self, context: Mapping[str, object] | None, virtualkey: str | Mapping[str, str]
     ) -> Mapping[str, str]:
         """Coerce the calling key's attributes and metadata into ``meta.data``.
 
@@ -680,7 +688,7 @@ class XecGuardGuardrail(CustomGuardrail):
         data: Final[dict[str, str]] = {}  # mutable-ok: accumulator, re-measured as it grows
         # Re-measured against the real payload shape each time, so the cap holds
         # regardless of how long the virtualkey and the field names are.
-        probe: Final[dict[str, Any]] = {"virtualkey": virtualkey, "data": data}  # mutable-ok: views `data`
+        probe: Final[dict[str, object]] = {"virtualkey": virtualkey, "data": data}  # mutable-ok: views `data`
         dropped: Final[list[str]] = []  # mutable-ok: skipped field names, for one debug line
 
         for name, raw_value in (*self._auto_meta_data_items(context), *source.items()):
@@ -742,9 +750,9 @@ class XecGuardGuardrail(CustomGuardrail):
         self,
         messages: list[dict],
         scan_type: str,
-        request_data: Mapping[str, Any] | None = None,
+        request_data: Mapping[str, object] | None = None,
         suppress_errors: bool = False,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         payload: Final[dict[str, object]] = {
             "model": self.xecguard_model,
             "scan_type": scan_type,

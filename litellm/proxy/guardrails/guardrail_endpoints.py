@@ -2453,7 +2453,7 @@ async def apply_guardrail(
     )
     from litellm.proxy.utils import handle_exception_on_proxy
 
-    data: dict = {
+    data: dict[str, object] = {  # mutable-ok: the proxy request dict, mutated by the processing pipeline below
         "guardrail_name": request.guardrail_name,
         "input": [request.text],
         "messages": request.messages or [],
@@ -2496,11 +2496,10 @@ async def apply_guardrail(
         # The proxy-injected metadata is merged last so it wins: the body's is
         # caller-controlled, and a guardrail reading it would let a caller name a
         # different virtual key than the one that authenticated.
-        merged_metadata: Final = {
-            name: value
-            for source in (request.metadata, data.get("metadata"))
-            if isinstance(source, dict)
-            for name, value in source.items()
+        proxy_metadata: Final[object] = data.get("metadata")
+        merged_metadata: Final[dict[str, object]] = {
+            **(request.metadata if isinstance(request.metadata, dict) else {}),
+            **(proxy_metadata if isinstance(proxy_metadata, dict) else {}),
         }
         request_data: Final[dict] = {
             **({"messages": request.messages} if request.messages is not None else {}),

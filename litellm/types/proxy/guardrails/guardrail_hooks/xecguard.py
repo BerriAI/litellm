@@ -138,9 +138,10 @@ class XecGuardConfigModel(GuardrailConfigModel):
         to a de-whitespaced, empties-dropped list of aliases / field names."""
         if v is None:
             return None
-        items: Final = v.split(",") if isinstance(v, str) else v
-        if isinstance(items, (list, tuple)):
-            return [s.strip() for s in items if isinstance(s, str) and s.strip()]  # mutable-ok: tests assert this list
+        if isinstance(v, str):
+            return [name.strip() for name in v.split(",") if name.strip()]
+        if isinstance(v, (list, tuple)):
+            return [name.strip() for name in v if isinstance(name, str) and name.strip()]  # pyright: ignore[reportUnknownVariableType]  # iterating a list/tuple narrowed from object
         return v
 
     @staticmethod
