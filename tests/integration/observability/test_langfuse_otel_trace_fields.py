@@ -628,7 +628,13 @@ def _tool(index: int) -> Mapping[str, object]:
     }
 
 
-def _chat_with_tools(rig: Rig, content: str, tools: int, headers: Mapping[str, str] | None = None) -> SpanRecord:
+def _chat_with_tools(
+    rig: Rig,
+    content: str,
+    tools: int,
+    metadata: Mapping[str, object] | None = None,
+    headers: Mapping[str, str] | None = None,
+) -> SpanRecord:
     response: Final = rig.proxy.request(
         "POST",
         "/v1/chat/completions",
@@ -636,6 +642,7 @@ def _chat_with_tools(rig: Rig, content: str, tools: int, headers: Mapping[str, s
             "model": rig.openai_model,
             "messages": [{"role": "user", "content": content}],
             "tools": [_tool(index) for index in range(tools)],
+            **({"metadata": dict(metadata)} if metadata is not None else {}),
         },
         key=rig.key,
         headers=headers,
@@ -647,7 +654,8 @@ def _chat_with_tools(rig: Rig, content: str, tools: int, headers: Mapping[str, s
 @pytest.mark.parametrize(("tools", "prefix"), product((30, 33, 34, 35, 36, 40), ("", "fail-")))
 def test_trace_fields_never_evict_or_drop_another_attribute_of_a_full_span(v1: Rig, tools: int, prefix: str) -> None:
     run: Final = uuid.uuid4().hex
-    derived: Final = _chat_with_tools(v1, f"{prefix}lit8281-full-{tools}-{run}", tools)
+    # Both requests carry a caller trace id, so the joined one's traceparent adds no key the derived one lacks.
+    derived: Final = _chat_with_tools(v1, f"{prefix}lit8281-full-{tools}-{run}", tools, {"trace_id": uuid.uuid4().hex})
     joined: Final = _chat_with_tools(
         v1,
         f"{prefix}lit8281-full-joined-{tools}-{run}",
