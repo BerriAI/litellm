@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Any, Final, TypeAlias, TypedDict, TypeVar, cast, overload
+from typing import Annotated, Any, Final, Literal, TypeAlias, TypedDict, TypeVar, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
@@ -6289,3 +6289,106 @@ def chat_completion_tools_for(tool: Mapping[str, object]) -> tuple[Mapping[str, 
         [dict(tool)]  # pyright: ignore[reportArgumentType]  # a JSON dict in an Anthropic or chat tool shape
     )
     return tuple(anthropic_tools)
+
+
+ToolExchangeKind: TypeAlias = Literal["tool call", "tool result"]
+
+_ExchangeValue: Final = TypeVar("_ExchangeValue")
+
+
+class _ExchangeTextBlock(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["text"]
+    text: str
+
+
+class _ExchangeFunction(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    arguments: str = ""
+
+
+class _ExchangeChatToolCall(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    function: _ExchangeFunction
+
+
+class _ExchangeToolUse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["tool_use"]
+    name: str
+    input: JsonValue = None
+
+
+class _ExchangeToolResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["tool_result"]
+    content: str | tuple[object, ...] = ""
+
+
+_EXCHANGE_PARTS: Final = TypeAdapter(tuple[object, ...])
+_EXCHANGE_TEXT_BLOCK: Final = TypeAdapter(_ExchangeTextBlock)
+_EXCHANGE_CHAT_TOOL_CALL: Final = TypeAdapter(_ExchangeChatToolCall)
+_EXCHANGE_BLOCK: Final[TypeAdapter[_ExchangeToolUse | _ExchangeToolResult]] = TypeAdapter(
+    _ExchangeToolUse | _ExchangeToolResult
+)
+
+
+def _validated_or_none(adapter: TypeAdapter[_ExchangeValue], value: object) -> _ExchangeValue | None:
+    try:
+        return adapter.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _exchange_parts(value: object) -> tuple[object, ...]:
+    return () if isinstance(value, str) else _validated_or_none(_EXCHANGE_PARTS, value) or ()
+
+
+def _exchange_content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    texts: Final = tuple(
+        block.text
+        for part in _exchange_parts(content)
+        if (block := _validated_or_none(_EXCHANGE_TEXT_BLOCK, part)) is not None
+    )
+    return " ".join(texts).strip()
+
+
+def _block_exchange(part: object) -> tuple[ToolExchangeKind, str] | None:
+    match _validated_or_none(_EXCHANGE_BLOCK, part):
+        case _ExchangeToolUse(name=name, input=arguments):
+            return ("tool call", f"{name}({json.dumps(arguments)})")
+        case _ExchangeToolResult(content=content):
+            result: Final = _exchange_content_text(content)
+            return ("tool result", result) if result else None
+        case None:
+            return None
+
+
+def tool_exchange_texts(message: Mapping[str, object]) -> tuple[tuple[ToolExchangeKind, str], ...]:
+    """The tool calls and tool results one chat-completions or Anthropic Messages turn carries, as text, in order.
+
+    Chat completions puts calls on an assistant turn's `tool_calls` and each result on its own `tool` role,
+    while Anthropic Messages puts both inside content blocks, `tool_use` on the assistant turn and
+    `tool_result` on the next user turn, so this reads both places. Responses API input reaches callers
+    already resolved to the chat-completions shape by `resolve_structured_messages`.
+    """
+    if message.get("role") == "tool":
+        result: Final = _exchange_content_text(message.get("content"))
+        return (("tool result", result),) if result else ()
+    block_exchanges: Final = tuple(
+        exchange for part in _exchange_parts(message.get("content")) if (exchange := _block_exchange(part)) is not None
+    )
+    chat_calls: Final[tuple[tuple[ToolExchangeKind, str], ...]] = tuple(
+        ("tool call", f"{call.function.name}({call.function.arguments})")
+        for part in _exchange_parts(message.get("tool_calls"))
+        if (call := _validated_or_none(_EXCHANGE_CHAT_TOOL_CALL, part)) is not None
+    )
+    return (*block_exchanges, *chat_calls)
