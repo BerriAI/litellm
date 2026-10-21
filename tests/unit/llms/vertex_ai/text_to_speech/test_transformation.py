@@ -281,6 +281,53 @@ class TestVertexAITextToSpeechConfig:
             "name": "Kore",
         }
 
+    @pytest.mark.parametrize(
+        ("voice", "expected_voice"),
+        [
+            (
+                {
+                    "multi_speaker_voice_config": {
+                        "speaker_voice_configs": [
+                            {"speaker": "Ryan", "voice_config": {"prebuilt_voice_config": {"voice_name": "Umbriel"}}},
+                            {"speaker": "Katie", "voice_config": {"prebuilt_voice_config": {"voice_name": "Leda"}}},
+                        ],
+                    },
+                    "speech_config": {"language_code": "fr-FR"},
+                },
+                {
+                    "languageCode": "fr-FR",
+                    "modelName": "gemini-3.1-flash-tts-preview",
+                    "multiSpeakerVoiceConfig": {
+                        "speakerVoiceConfigs": [
+                            {"speakerAlias": "Ryan", "speakerId": "Umbriel"},
+                            {"speakerAlias": "Katie", "speakerId": "Leda"},
+                        ],
+                    },
+                },
+            ),
+            (
+                {
+                    "voice_config": {"prebuilt_voice_config": {"voice_name": "Puck"}},
+                    "speechConfig": {"languageCode": "en-GB"},
+                },
+                {"languageCode": "en-GB", "modelName": "gemini-3.1-flash-tts-preview", "name": "Puck"},
+            ),
+        ],
+    )
+    def test_gemini_tts_voice_beside_speech_config_wrapper_reaches_cloud_tts(
+        self, voice: dict[str, object], expected_voice: dict[str, object]
+    ):
+        config: Final = VertexAITextToSpeechConfig()
+
+        voice_name, optional_params = config.map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "mp3"},
+            voice=voice,
+        )
+
+        assert voice_name is None
+        assert optional_params["vertex_voice_dict"] == expected_voice
+
     def test_gemini_tts_string_voice_reaches_cloud_tts(self):
         config: Final = VertexAITextToSpeechConfig()
 

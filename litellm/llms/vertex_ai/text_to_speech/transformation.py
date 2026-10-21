@@ -424,10 +424,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def _extract_gemini_tts_speaker_configs(
         self,
         model: str,
-        voice: Mapping[str, object],
+        speech_config: Mapping[str, object],
         drop_params: bool,
     ) -> Sequence[VertexTextToSpeechSpeakerVoiceConfig]:
-        speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
         multi_speaker_config: Final = self._get_dict_value(
             speech_config,
             "multiSpeakerVoiceConfig",
@@ -489,11 +488,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def _extract_gemini_tts_voice_name(
         self,
         voice: Mapping[str, object],
+        speech_config: Mapping[str, object],
     ) -> str | None:
         voice_name: Final = self._get_str_value(voice, "name", "voiceName", "voice_name", "voice")
         if voice_name is not None:
             return voice_name
-        speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
         nested_voice_name: Final = self._get_str_value(speech_config, "name", "voiceName", "voice_name", "voice")
         if nested_voice_name is not None:
             return nested_voice_name
@@ -516,6 +515,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         drop_params: bool = False,
     ) -> tuple[str | None, dict[str, object]]:  # mutable-ok: provider request serialization requires a concrete dict
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            merge_gemini_speech_config_wrapper,
             reject_unknown_gemini_tts_voice_keys,
         )
 
@@ -540,14 +540,14 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             return None, default_voice
         reject_unknown_gemini_tts_voice_keys(model, voice_config, drop_params, "vertex_ai")
 
-        speech_config: Final = self._get_dict_value(voice_config, "speechConfig", "speech_config") or voice_config
+        speech_config: Final = merge_gemini_speech_config_wrapper(voice_config)
         language_code: Final = (
             self._get_str_value(voice_config, "languageCode", "language_code")
             or self._get_str_value(speech_config, "languageCode", "language_code")
             or self.DEFAULT_LANGUAGE_CODE
         )
         model_name: Final = model
-        speaker_configs: Final = self._extract_gemini_tts_speaker_configs(model, voice_config, drop_params)
+        speaker_configs: Final = self._extract_gemini_tts_speaker_configs(model, speech_config, drop_params)
         self._reject_voice_fields_cloud_tts_cannot_send(model, voice_config, drop_params)
         if speaker_configs:
             return None, {
@@ -557,7 +557,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                     "speakerVoiceConfigs": speaker_configs,
                 },
             }
-        voice_name: Final = self._extract_gemini_tts_voice_name(voice_config)
+        voice_name: Final = self._extract_gemini_tts_voice_name(voice_config, speech_config)
         if voice_name is not None:
             return None, {
                 "languageCode": language_code,
