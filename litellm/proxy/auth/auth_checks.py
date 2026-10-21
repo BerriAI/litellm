@@ -5197,7 +5197,7 @@ def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> list[str]
     If the key has no team_id, it inherits the full proxy model list
     (equivalent to an empty models field, i.e. unrestricted access).
     """
-    models: Final = _configured_key_models(valid_token)
+    models: Final = _models_configured_on_key(valid_token)
     if SpecialModelNames.all_team_models.value in models:
         if valid_token.team_id is None:
             return []
@@ -5205,8 +5205,16 @@ def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> list[str]
     return list(models)
 
 
-def _configured_key_models(valid_token: UserAPIKeyAuth) -> tuple[str, ...]:
+def _models_configured_on_key(valid_token: UserAPIKeyAuth) -> tuple[str, ...]:
     return tuple(valid_token.models or ())
+
+
+def _key_is_group_restricted(valid_token: UserAPIKeyAuth) -> bool:
+    return not _models_configured_on_key(valid_token) and bool(valid_token.access_group_ids)
+
+
+def _team_is_group_restricted(team_object: LiteLLM_TeamTable | None) -> bool:
+    return team_object is not None and not team_object.models and bool(team_object.access_group_ids)
 
 
 def _model_access_groups_serving_model(
@@ -5514,33 +5522,6 @@ async def _models_granted_by_groups_only(
     _raise_model_access_denied(model=str(model), models=(), object_type=object_type)
 
 
-async def _can_object_call_model_via_groups_only(
-    model: str | list[str],  # mutable-ok: forwarded unchanged to can_object_call_model
-    access_group_ids: Sequence[str],
-    prisma_client: DatabaseClient | None,
-    llm_router: Router | None,
-    team_model_aliases: Mapping[str, str] | None,
-    team_id: str | None,
-    key_model_aliases: Mapping[str, str] | None,
-    object_type: Literal["key", "team"],
-) -> Literal[True]:
-    granted_models: Final = await _models_granted_by_groups_only(
-        model=model,
-        access_group_ids=access_group_ids,
-        prisma_client=prisma_client,
-        object_type=object_type,
-    )
-    return can_object_call_model(
-        model=model,
-        llm_router=llm_router,
-        models=list(granted_models),
-        team_model_aliases=team_model_aliases,
-        team_id=team_id,
-        key_model_aliases=key_model_aliases,
-        object_type=object_type,
-    )
-
-
 async def can_key_call_model(
     model: str | list[str],
     llm_model_list: Sequence[object] | None,
@@ -5561,18 +5542,19 @@ async def can_key_call_model(
         - Exception: If token not allowed to call model
     """
     key_access_group_ids: Final = valid_token.access_group_ids or []
-    if not _configured_key_models(valid_token) and key_access_group_ids:
-        return await _can_object_call_model_via_groups_only(
-            model=model,
-            access_group_ids=key_access_group_ids,
-            prisma_client=prisma_client,
-            llm_router=llm_router,
-            team_model_aliases=valid_token.team_model_aliases,
-            team_id=valid_token.team_id,
-            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-            object_type="key",
+    group_restricted: Final = _key_is_group_restricted(valid_token)
+    key_models: Final = (
+        list(
+            await _models_granted_by_groups_only(
+                model=model,
+                access_group_ids=key_access_group_ids,
+                prisma_client=prisma_client,
+                object_type="key",
+            )
         )
-    key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
+        if group_restricted
+        else _resolve_key_models_for_auth_check(valid_token=valid_token)
+    )
     try:
         return can_object_call_model(
             model=model,
@@ -5584,6 +5566,8 @@ async def can_key_call_model(
             object_type="key",
         )
     except ProxyException:
+        if group_restricted:
+            raise
         # Fallback: check key's access_group_ids
         if key_access_group_ids:
             models_from_groups: Final = await get_models_from_access_groups(
@@ -5794,30 +5778,34 @@ async def can_team_access_model(
     1. First checks native team-level model permissions (current implementation)
     2. If not allowed natively, falls back to access_group_ids on the team
     """
-    if team_object is not None and not team_object.models and team_object.access_group_ids:
-        return await _can_object_call_model_via_groups_only(
-            model=model,
-            access_group_ids=team_object.access_group_ids,
-            prisma_client=prisma_client,
-            llm_router=llm_router,
-            team_model_aliases=team_model_aliases,
-            team_id=team_object.team_id,
-            key_model_aliases=key_model_aliases,
-            object_type="team",
+    team_access_group_ids: Final = (team_object.access_group_ids or []) if team_object else []
+    group_restricted: Final = _team_is_group_restricted(team_object)
+    team_models: Final = (
+        list(
+            await _models_granted_by_groups_only(
+                model=model,
+                access_group_ids=team_access_group_ids,
+                prisma_client=prisma_client,
+                object_type="team",
+            )
         )
+        if group_restricted
+        else (team_object.models if team_object else [])
+    )
     try:
         return can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=team_object.models if team_object else [],
+            models=team_models,
             team_model_aliases=team_model_aliases,
             team_id=team_object.team_id if team_object else None,
             key_model_aliases=key_model_aliases,
             object_type="team",
         )
     except ProxyException:
+        if group_restricted:
+            raise
         # Fallback: check team's access_group_ids
-        team_access_group_ids: Final = (team_object.access_group_ids or []) if team_object else []
         if team_access_group_ids:
             models_from_groups: Final = await get_models_from_access_groups(
                 access_group_ids=team_access_group_ids,

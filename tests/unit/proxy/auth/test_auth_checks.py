@@ -2000,21 +2000,18 @@ GROUP_MODEL_ROUTER_ALIASES: Final = {"smart": "gpt-4", "fast": "claude-sonnet"}
         pytest.param({"ag-1": ["gpt-4"], "ag-2": ["claude-sonnet"]}, "claude-sonnet", id="second-group"),
     ],
 )
-async def test_object_with_empty_models_is_allowed_models_its_groups_grant(
+async def test_object_with_empty_models_is_held_to_the_models_its_groups_grant(
     monkeypatch: pytest.MonkeyPatch, object_type: GroupRestrictedObject, groups: GroupStore, model: str
 ) -> None:
     prisma: Final = _use_group_store(monkeypatch, groups)
+    router: Final = _router_deploying("gpt-4", "claude-sonnet", "gemini-pro", aliases=GROUP_MODEL_ROUTER_ALIASES)
 
-    result: Final = await _call_model_check(
-        object_type,
-        model,
-        _router_deploying("gpt-4", "claude-sonnet", aliases=GROUP_MODEL_ROUTER_ALIASES),
-        prisma,
-        [],
-        list(groups),
-    )
+    result: Final = await _call_model_check(object_type, model, router, prisma, [], list(groups))
+    with pytest.raises(ProxyException) as denial:
+        await _call_model_check(object_type, "gemini-pro", router, prisma, [], list(groups))
 
     assert result is True
+    assert denial.value.type == DENIAL_TYPES[object_type]
 
 
 @pytest.mark.asyncio
