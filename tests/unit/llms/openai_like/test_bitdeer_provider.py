@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final, Literal
 
@@ -151,6 +152,27 @@ def test_bitdeer_completion_rejects_custom_base_before_sending(monkeypatch: pyte
         assert len(upstream.calls) == 0
 
 
+def _request(
+    endpoint: Literal["chat", "image"], model: str, custom_llm_provider: str | None = None, api_base: str | None = None
+) -> object:
+    if endpoint == "chat":
+        return litellm.completion(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            messages=[{"role": "user", "content": "Hi"}],
+        )
+    return litellm.image_generation(
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, prompt="A tree"
+    )
+
+
+async def _arequest(endpoint: Literal["chat", "image"], model: str) -> object:
+    if endpoint == "chat":
+        return await litellm.acompletion(model=model, messages=[{"role": "user", "content": "Hi"}])
+    return await litellm.aimage_generation(model=model, prompt="A tree")
+
+
 @pytest.mark.parametrize("routing", ("prefix", "provider", "url"))
 @pytest.mark.parametrize("endpoint", ("chat", "image"))
 def test_bitdeer_missing_credentials_never_send_openai_key(
@@ -168,15 +190,7 @@ def test_bitdeer_missing_credentials_never_send_openai_key(
 
     with respx.mock() as upstream:
         with pytest.raises(litellm.AuthenticationError, match="BITDEER_API_KEY") as error:
-            if endpoint == "chat":
-                litellm.completion(
-                    model=model,
-                    custom_llm_provider=provider,
-                    api_base=api_base,
-                    messages=[{"role": "user", "content": "Hi"}],
-                )
-            else:
-                litellm.image_generation(model=model, custom_llm_provider=provider, api_base=api_base, prompt="A tree")
+            _request(endpoint, model=model, custom_llm_provider=provider, api_base=api_base)
         assert len(upstream.calls) == 0
         assert "secret" not in str(error.value)
 
@@ -194,15 +208,12 @@ async def test_bitdeer_async_missing_credentials_never_send_openai_key(
 
     with respx.mock() as upstream:
         with pytest.raises(litellm.AuthenticationError, match="BITDEER_API_KEY") as error:
-            if endpoint == "chat":
-                await litellm.acompletion(model=f"bitdeer-ai/{MODEL}", messages=[{"role": "user", "content": "Hi"}])
-            else:
-                await litellm.aimage_generation(model=f"bitdeer-ai/{MODEL}", prompt="A tree")
+            await _arequest(endpoint, model=f"bitdeer-ai/{MODEL}")
         assert len(upstream.calls) == 0
         assert "secret" not in str(error.value)
 
 
-def _unique_entries(pairs: list[tuple[str, object]]) -> dict[str, object]:
+def _unique_entries(pairs: Sequence[tuple[str, object]]) -> Mapping[str, object]:
     keys: Final = tuple(key for key, _ in pairs)
     assert len(keys) == len(set(keys)), "Duplicate JSON key"
     return dict(pairs)
