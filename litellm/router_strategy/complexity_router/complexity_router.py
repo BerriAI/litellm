@@ -61,7 +61,7 @@ from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
-from litellm.llms.nadir.common_utils import nadir_classifier_connection
+from litellm.llms.nadir.decisions.transformation import NADIR_DECISIONS_CONFIG
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -888,6 +888,13 @@ def _truncate(text: str, limit: int) -> str:
     return f"{text[:head_chars]}{_TRUNCATION_MARKER}{text[len(text) - tail_chars :]}"
 
 
+def _is_nadir_deployment(deployment: Mapping[str, object]) -> bool:
+    litellm_params: Final = deployment.get("litellm_params")
+    params: Final = litellm_params if isinstance(litellm_params, Mapping) else EMPTY_MAPPING
+    provider: Final = params.get("custom_llm_provider") or str(params.get("model") or "").split("/", 1)[0]
+    return provider == "nadir"
+
+
 def _iter_context_turns_newest_first(
     messages: Sequence[Mapping[str, object]],
     include_assistant: bool,
@@ -1366,10 +1373,10 @@ class ComplexityRouter(CustomLogger):
                 provider="databricks",
             )
         if config.provider == "nadir":
-            nadir: Final = nadir_classifier_connection(config.api_base, config.api_key)
+            nadir_base, nadir_key = NADIR_DECISIONS_CONFIG.resolve_connection(config.api_base, config.api_key)
             return HttpJevClassifierClient(
-                api_key=nadir.api_key,
-                api_base=nadir.api_base,
+                api_key=nadir_key,
+                api_base=nadir_base,
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
                 provider="nadir",
             )
@@ -2328,7 +2335,7 @@ class ComplexityRouter(CustomLogger):
             instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
             criteria=criteria,
             messages=self._classifier_context_messages(prompt, system_prompt, request_kwargs, messages)
-            if config.provider == "nadir"
+            if self._classifier_reads_conversation(config)
             else None,
         )
         try:
@@ -2576,6 +2583,14 @@ class ComplexityRouter(CustomLogger):
             )
             else system_prompt
         )
+
+    def _classifier_reads_conversation(self, config: OpenSourceClassifierConfig) -> bool:
+        """Nadir classifies the conversation itself, whether it is named as the provider or serves the
+        decision deployment, so it gets role-tagged messages in place of the LLM-judge payload."""
+        if config.deployment_name is None:
+            return config.provider == "nadir"
+        deployments: Final = self._group_deployments(config.deployment_name)
+        return bool(deployments) and all(_is_nadir_deployment(deployment) for deployment in deployments)
 
     def _classifier_prior_turns(
         self,

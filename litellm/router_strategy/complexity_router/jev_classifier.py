@@ -21,10 +21,10 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG, is_ai_decide_model
 from litellm.llms.laya.common_utils import laya_response_model
-from litellm.llms.nadir.common_utils import nadir_bucket_request, nadir_bucket_url, nadir_classifier_response
+from litellm.llms.nadir.decisions.transformation import NADIR_DECISIONS_CONFIG, nadir_bucket_body
 from litellm.llms.pass_through.typesafe_logging_handler import TypeSafePassthroughLoggingHandler
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS as _DEFAULT_JEV_INSTRUCTIONS
-from litellm.types.decisions import DecisionsResponse
+from litellm.types.decisions import DecisionsIRState, DecisionsJSON, DecisionsResponse
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 
@@ -51,8 +51,12 @@ class JevSystemOneRequest(LiteLLMBaseModel):
     state: str
     model: str
     questions: Mapping[str, JevChoiceQuestion]
-    # Native input for a classifier that reads the conversation itself (nadir); never sent to a System One server.
+    # The conversation, for a classifier that reads it itself (nadir); excluded from the System One body.
     messages: tuple[Mapping[str, str], ...] | None = Field(default=None, exclude=True)
+
+    def decision_state(self) -> DecisionsJSON:
+        """The state a decision call carries: the conversation when the classifier reads it, else the payload."""
+        return self.state if self.messages is None else {"messages": [dict(message) for message in self.messages]}
 
 
 class JevChoiceAnswer(LiteLLMBaseModel):
@@ -95,7 +99,7 @@ class _DecisionsRouter(Protocol):
         self,
         *,
         model: str,
-        state: str,
+        state: DecisionsJSON,
         questions: Mapping[str, object],
         timeout: float,
         num_retries: int,
@@ -130,14 +134,15 @@ class RouterJevClassifierClient:
             ),
             INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
         }
+        state: Final = request.decision_state()
         payload: Final = {
-            "state": request.state,
+            "state": state,
             "questions": {key: value.model_dump() for key, value in request.questions.items()},
         }
         response: Final = DecisionsResponse.model_validate(
             await self._router.adecisions(
                 model=self._deployment_name,
-                state=request.state,
+                state=state,
                 questions={key: value.model_dump() for key, value in request.questions.items()},
                 timeout=timeout_s,
                 num_retries=0,
@@ -200,7 +205,7 @@ class HttpJevClassifierClient:
 
     def _request_body(self, request: JevSystemOneRequest) -> Mapping[str, object]:
         if self._provider == "nadir":
-            return nadir_bucket_request(request.state, request.messages)
+            return nadir_bucket_body(DecisionsIRState(state=request.decision_state()))
         return request.model_dump(mode="json", exclude=self._excluded_fields(request.model))
 
     def _excluded_fields(self, model: str) -> Mapping[str, bool] | None:
@@ -210,7 +215,7 @@ class HttpJevClassifierClient:
         if self._provider == "databricks":
             return DATABRICKS_DECISIONS_CONFIG.get_complete_url(self._api_base, model)
         if self._provider == "nadir":
-            return nadir_bucket_url(self._api_base)
+            return NADIR_DECISIONS_CONFIG.get_complete_url(self._api_base, model)
         return f"{self._api_base}/v1/systemone"
 
     def _normalized_body(self, body: Mapping[str, object], requested_model: str) -> Mapping[str, object]:
@@ -220,7 +225,7 @@ class HttpJevClassifierClient:
             case "databricks":
                 return DATABRICKS_DECISIONS_CONFIG.classifier_response(body, requested_model)
             case "nadir":
-                return nadir_classifier_response(body, requested_model)
+                return NADIR_DECISIONS_CONFIG.classifier_response(body, requested_model)
             case "typesafe" | "bespoke":
                 return body
 

@@ -9638,6 +9638,8 @@ class ProviderConfigManager:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
+        if provider == LlmProviders.NADIR:
+            return litellm.NadirDecisionsConfig()
         if provider == LlmProviders.OPENAI:
             return litellm.OpenAIDecisionsConfig()
         if provider == LlmProviders.AZURE_AI:

@@ -883,6 +883,51 @@ async def test_nadir_gets_the_budgeted_conversation_without_the_judge_framing(
     assert "Classify this message" not in route.calls.last.request.content.decode()
 
 
+@pytest.mark.asyncio
+async def test_a_nadir_decision_deployment_gets_the_conversation_and_routes_on_its_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NADIR_API_BASE", raising=False)
+    monkeypatch.delenv("NADIR_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "nadir-decider", "litellm_params": {"model": "nadir/bucket", "api_key": "ndr-deployment"}}
+        ],
+        num_retries=0,
+    )
+    classifier: Final = ComplexityRouter(
+        "decision-router",
+        router,
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"deployment_name": "nadir-decider"},
+            "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+        },
+        derive_savings_baseline=False,
+    )
+    conversation: Final = [
+        {"role": "user", "content": "Refactor the tokenizer into its own module"},
+        {"role": "assistant", "content": "Done, moved it to tokenizer.py"},
+        {"role": "user", "content": "now add tests"},
+    ]
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("https://api.getnadir.com/v1/bucket").respond(200, json=_NADIR_VERDICT)
+        outcome: Final = await classifier.aclassify("now add tests", messages=conversation)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "messages": [
+            {"role": "user", "content": "Refactor the tokenizer into its own module"},
+            {"role": "user", "content": "now add tests"},
+        ],
+        "source": "litellm",
+    }
+    assert route.calls.last.request.headers["authorization"] == "Bearer ndr-deployment"
+    assert outcome.cause == "jev_classifier"
+    assert outcome.jev_verdict is not None
+    assert (outcome.jev_verdict.label, outcome.jev_verdict.provider) == ("SIMPLE", "nadir")
+
+
 def test_nadir_messages_never_reach_a_system_one_server() -> None:
     request: Final = build_jev_request(
         "Classify this message:\nhi",
@@ -1053,6 +1098,7 @@ async def test_deployed_decision_classifier_uses_registered_connection(
     assert route.call_count == 1
     assert route.calls[0].request.headers["authorization"] == "Bearer deployment-key"
     assert json.loads(route.calls[0].request.content)["model"] == model
+    assert "Classify this message" in json.loads(route.calls[0].request.content)["state"]
     assert (outcome.cause == "jev_classifier") is (status_code == 200)
     if status_code == 200:
         assert outcome.jev_verdict is not None

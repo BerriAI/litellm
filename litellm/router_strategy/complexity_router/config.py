@@ -745,7 +745,7 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
         fields: Final = TypeAdapter(Mapping[str, object]).validate_python(data)
         if fields.get("provider") != "nadir" or "model" in fields:
             return fields
-        from litellm.llms.nadir.common_utils import NADIR_CLASSIFIER_MODEL
+        from litellm.llms.nadir.decisions.transformation import NADIR_CLASSIFIER_MODEL
 
         return {**fields, "model": NADIR_CLASSIFIER_MODEL}
 
@@ -798,7 +798,7 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
                     "opensource_classifier_config.instructions has no effect for provider 'nadir', "
                     "which classifies with its own model"
                 )
-            # nadir_classifier_connection keeps NADIR_API_KEY on NADIR_API_BASE; a keyless call is anonymous.
+            # NADIR_DECISIONS_CONFIG keeps NADIR_API_KEY on NADIR_API_BASE; a keyless call is anonymous.
             return self
         if self.api_base is not None and self.api_key is None:
             raise ValueError(

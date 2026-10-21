@@ -585,6 +585,45 @@ async def test_oss_classifier_env_key_goes_only_to_its_env_api_base(
 
 
 @pytest.mark.asyncio
+async def test_nadir_answers_a_tier_question_from_its_bucket_verdict_and_keeps_its_key_home(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("NADIR_API_BASE", raising=False)
+    monkeypatch.setenv("NADIR_API_KEY", "ndr-env")
+    verdict: Final = {"routing_tier": "complex", "confidence": 0.9, "probabilities": {"simple": 0.02, "complex": 0.9}}
+    hosted: Final = respx_mock.post("https://api.getnadir.com/v1/bucket").respond(json=verdict)
+    elsewhere: Final = respx_mock.post("https://collector.example/v1/bucket").respond(json=verdict)
+    questions: Final = {"tier": {"type": "choice", "criteria": {"Simple": None, "Medium": None, "Complex": None}}}
+
+    response: Final = await litellm.asystemone(
+        model="nadir/bucket", state="Design a consensus protocol", questions=questions
+    )
+    _ = await litellm.asystemone(
+        model="nadir/bucket", state="hi", questions=questions, api_base="https://collector.example/v1"
+    )
+
+    assert response.answers["tier"] == ChoiceAnswer(
+        type="choice", choice="Complex", confidence=0.9, probabilities={"Simple": 0.02, "Medium": 0.0, "Complex": 0.9}
+    )
+    assert json.loads(hosted.calls.last.request.content) == {
+        "prompt": "Design a consensus protocol",
+        "source": "litellm",
+    }
+    assert hosted.calls.last.request.headers["authorization"] == "Bearer ndr-env"
+    assert "authorization" not in elsewhere.calls.last.request.headers
+
+
+@pytest.mark.asyncio
+async def test_nadir_refuses_a_question_it_cannot_answer_before_any_call(respx_mock: respx.MockRouter) -> None:
+    upstream: Final = respx_mock.post("https://api.getnadir.com/v1/bucket")
+    with pytest.raises(litellm.BadRequestError, match="cannot serve this request"):
+        _ = await litellm.asystemone(
+            model="nadir/bucket", state="review", questions={"is_defect": {"type": "noul", "instructions": "Defect?"}}
+        )
+    assert not upstream.called
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "api_base", "error"),
     (
@@ -620,7 +659,9 @@ _PPLX_USAGE: Final = {"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 
     ("reply", "detail"),
     (
         pytest.param(_PPLX_USAGE, "DecisionsResponse answers: Field required", id="usage"),
-        pytest.param({"error": "Rate limit reached"}, "DecisionsResponse answers: Field required", id="rate_limit_text"),
+        pytest.param(
+            {"error": "Rate limit reached"}, "DecisionsResponse answers: Field required", id="rate_limit_text"
+        ),
         pytest.param({"error": "Request timed out"}, "DecisionsResponse answers: Field required", id="timeout_text"),
         pytest.param(
             {**_PPLX_USAGE, "answers": {"rate_limit": None}},
@@ -632,7 +673,9 @@ _PPLX_USAGE: Final = {"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 
             "DecisionsResponse answers.is_defect",
             id="answer_type_timeout_text",
         ),
-        pytest.param(["Rate limit reached"], "DecisionsResponse Input should be a valid dictionary", id="not_an_object"),
+        pytest.param(
+            ["Rate limit reached"], "DecisionsResponse Input should be a valid dictionary", id="not_an_object"
+        ),
     ),
 )
 async def test_a_malformed_upstream_reply_is_a_server_error_whatever_its_text(
@@ -3729,7 +3772,12 @@ async def test_a_returned_model_registered_without_prices_is_billed_at_the_reque
     monkeypatch.setitem(
         litellm.model_cost,
         "typesafe/jev-test-alias",
-        {"litellm_provider": "typesafe", "mode": "evaluation", "input_cost_per_token": 0.001, "output_cost_per_token": 0},
+        {
+            "litellm_provider": "typesafe",
+            "mode": "evaluation",
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0,
+        },
     )
     monkeypatch.setitem(litellm.model_cost, "typesafe/jev-test-unpriced", unpriced_row)
     respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json={**_RESPONSE, "model": "jev-test-unpriced"})
