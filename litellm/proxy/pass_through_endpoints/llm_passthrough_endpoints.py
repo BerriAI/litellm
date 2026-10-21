@@ -105,7 +105,6 @@ from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
-from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
     stream_usage_relay,
     without_injected_usage_frames,
@@ -2942,7 +2941,7 @@ async def _base_vertex_proxy_route(
     fastapi_response: Response,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
     general_settings: Mapping[str, object],
-    user_api_key_dict: UserAPIKeyAuth | None = None,
+    user_api_key_dict: UserAPIKeyAuth,
     router_credentials: LiteLLM_ManagedVectorStore | None = None,
 ):
     """
@@ -2958,7 +2957,7 @@ async def _base_vertex_proxy_route(
         fastapi_response: FastAPI response object
         get_vertex_pass_through_handler: Handler for the specific Vertex AI service
         general_settings: Proxy general settings, read per request for the anthropic-beta values to drop
-        user_api_key_dict: The caller the route already authenticated, or None to authenticate here
+        user_api_key_dict: The caller the route authenticated
         router_credentials: Optional vector store credentials from registry (LiteLLM_ManagedVectorStore)
     """
     from litellm.llms.vertex_ai.common_utils import (
@@ -2972,15 +2971,10 @@ async def _base_vertex_proxy_route(
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
     headers: Mapping[str, str] = {}
-    caller: Final = (
-        user_api_key_dict
-        if user_api_key_dict is not None
-        else await user_api_key_auth(request=request, api_key=get_litellm_virtual_key(request=request))
-    )
     if router_credentials is not None:
         await assert_user_can_access_vector_store(
             vector_store=router_credentials,
-            user_api_key_dict=caller,
+            user_api_key_dict=user_api_key_dict,
         )
 
     vertex_project: str | None = get_vertex_project_id_from_url(endpoint)
@@ -3032,7 +3026,7 @@ async def _base_vertex_proxy_route(
         router_credentials=router_credentials,
         vertex_project=vertex_project,
         vertex_location=vertex_location,
-        user_api_key_dict=caller,
+        user_api_key_dict=user_api_key_dict,
     )
 
     base_target_url: Final = get_vertex_pass_through_handler.get_default_base_target_url(vertex_location)
@@ -3078,7 +3072,7 @@ async def _base_vertex_proxy_route(
         received_value: Final = await endpoint_func(
             request,
             fastapi_response,
-            caller,
+            user_api_key_dict,
         )
     except ProxyException as e:
         if headers_passed_through:
@@ -3086,6 +3080,16 @@ async def _base_vertex_proxy_route(
         raise e
 
     return received_value
+
+
+async def _authenticate_vertex_caller(
+    request: Request,
+    authorization: Annotated[str | None, Security(api_key_header)],
+    litellm_api_key: Annotated[str | None, Security(custom_litellm_key_header)],
+) -> UserAPIKeyAuth:
+    return await user_api_key_auth(
+        request=request, api_key=authorization or "", custom_litellm_key_header=litellm_api_key
+    )
 
 
 @router.api_route(
@@ -3097,6 +3101,7 @@ async def vertex_discovery_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(_authenticate_vertex_caller)],
 ):
     """
     Call any vertex discovery endpoint using the proxy.
@@ -3135,17 +3140,8 @@ async def vertex_discovery_proxy_route(
         fastapi_response=fastapi_response,
         get_vertex_pass_through_handler=discovery_handler,
         general_settings=_proxy_general_settings(),
+        user_api_key_dict=user_api_key_dict,
         router_credentials=vector_store_credentials,
-    )
-
-
-async def _authenticate_vertex_caller(
-    request: Request,
-    authorization: Annotated[str | None, Security(api_key_header)],
-    litellm_api_key: Annotated[str | None, Security(custom_litellm_key_header)],
-) -> UserAPIKeyAuth:
-    return await user_api_key_auth(
-        request=request, api_key=authorization or "", custom_litellm_key_header=litellm_api_key
     )
 
 

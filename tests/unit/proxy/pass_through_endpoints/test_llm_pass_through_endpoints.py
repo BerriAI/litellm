@@ -325,12 +325,6 @@ class TestVertexAIPassThroughHandler:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
             mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_virtual_key"
-            ) as mock_get_virtual_key,
-            mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
-            ) as mock_user_auth,
-            mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler"
             ) as mock_get_handler,
         ):
@@ -340,8 +334,6 @@ class TestVertexAIPassThroughHandler:
 
             # Setup mocks
             mock_load_auth.return_value = (mock_credentials, test_project)
-            mock_get_virtual_key.return_value = "Bearer test-key"
-            mock_user_auth.return_value = {"api_key": "test-key"}
 
             # Mock the vertex handler
             mock_handler = Mock()
@@ -427,12 +419,6 @@ class TestVertexAIPassThroughHandler:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
             mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_virtual_key"
-            ) as mock_get_virtual_key,
-            mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
-            ) as mock_user_auth,
-            mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler"
             ) as mock_get_handler,
         ):
@@ -442,8 +428,6 @@ class TestVertexAIPassThroughHandler:
 
             # Setup mocks
             mock_load_auth.return_value = (mock_credentials, test_project)
-            mock_get_virtual_key.return_value = "Bearer test-key"
-            mock_user_auth.return_value = {"api_key": "test-key"}
 
             # Mock the vertex handler for global location
             mock_handler = Mock()
@@ -1239,12 +1223,6 @@ class TestVertexAIDiscoveryPassThroughHandler:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
             mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_virtual_key"
-            ) as mock_get_virtual_key,
-            mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
-            ) as mock_user_auth,
-            mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler"
             ) as mock_get_handler,
         ):
@@ -1254,8 +1232,6 @@ class TestVertexAIDiscoveryPassThroughHandler:
 
             # Setup mocks
             mock_load_auth.return_value = (mock_credentials, test_project)
-            mock_get_virtual_key.return_value = "Bearer test-key"
-            mock_user_auth.return_value = {"api_key": "test-key"}
 
             # Mock the discovery handler
             mock_handler = Mock()
@@ -1271,6 +1247,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
                 endpoint=endpoint,
                 request=mock_request,
                 fastapi_response=mock_response,
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             )
 
             # Verify create_pass_through_route was called with correct arguments
@@ -1285,36 +1262,29 @@ class TestVertexAIDiscoveryPassThroughHandler:
     @pytest.mark.asyncio
     async def test_vertex_discovery_proxy_route_api_key_auth(self):
         """
-        The virtual key arrives in x-litellm-api-key and must reach user_api_key_auth.
-        With no Vertex credential configured, that virtual key must not be forwarded to
+        With no Vertex credential configured, the caller's virtual key must not be forwarded to
         Google, so the request fails with a clean 401 (LIT-5997).
         """
-        # Mock dependencies
         mock_request = Mock()
         mock_request.headers = {"x-litellm-api-key": "test-key-123"}
         mock_request.method = "POST"
         mock_response = Mock()
 
-        with patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth") as mock_auth:
-            mock_auth.return_value = {"api_key": "test-key-123"}
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_pass_through:
+            mock_pass_through.return_value = AsyncMock(return_value={"status": "success"})
 
-            with patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
-            ) as mock_pass_through:
-                mock_pass_through.return_value = AsyncMock(return_value={"status": "success"})
+            with pytest.raises(HTTPException) as exc_info:
+                await vertex_discovery_proxy_route(
+                    endpoint="v1/projects/test-project/locations/us-central1/dataStores/default/servingConfigs/default:search",
+                    request=mock_request,
+                    fastapi_response=mock_response,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key-123"),
+                )
 
-                with pytest.raises(HTTPException) as exc_info:
-                    await vertex_discovery_proxy_route(
-                        endpoint="v1/projects/test-project/locations/us-central1/dataStores/default/servingConfigs/default:search",
-                        request=mock_request,
-                        fastapi_response=mock_response,
-                    )
-
-                assert exc_info.value.status_code == 401
-                mock_pass_through.assert_not_called()
-                mock_auth.assert_called_once()
-                call_args = mock_auth.call_args[1]
-                assert call_args["api_key"] == "Bearer test-key-123"
+            assert exc_info.value.status_code == 401
+            mock_pass_through.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -4375,8 +4345,6 @@ class TestVertexRawPredictStreamingClassification:
                 return_value=(mock_credentials, "test-project"),
             ),
             mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
-            mock.patch(f"{module}.get_litellm_virtual_key", return_value="Bearer test-key"),
-            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=UserAPIKeyAuth(api_key="test-key"))),
             mock.patch(f"{module}.get_vertex_pass_through_handler", return_value=mock_handler),
         ):
             await vertex_proxy_route(
@@ -8163,6 +8131,10 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         "v1/projects/vertex-proj/locations/global/collections/default_collection/engines/support-engine"
         "/servingConfigs/default_search:search"
     )
+    GEMINI_ANSWER: Final = {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "hello"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+    }
 
     def _post(
         self,
@@ -8211,17 +8183,7 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         custom_auth: Final = _CountingCustomAuth()
         vertex_url: Final = f"https://us-central1-aiplatform.googleapis.com/{self.GENERATE_CONTENT}"
         with respx.mock(assert_all_called=True) as upstream:
-            vertex: Final = upstream.post(vertex_url).mock(
-                return_value=httpx.Response(
-                    200,
-                    json={
-                        "candidates": [
-                            {"content": {"role": "model", "parts": [{"text": "hello"}]}, "finishReason": "STOP"}
-                        ],
-                        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
-                    },
-                )
-            )
+            vertex: Final = upstream.post(vertex_url).mock(return_value=httpx.Response(200, json=self.GEMINI_ANSWER))
 
             response, recorder = self._post(
                 monkeypatch,
@@ -8257,6 +8219,51 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert custom_auth.api_keys_seen == [self.VIRTUAL_KEY]
         assert recorder.served_user_ids == ["custom-auth-caller-1"]
         assert discovery.call_count == 1
+
+    @pytest.mark.parametrize("scheme", ["bearer", "Basic"])
+    @pytest.mark.parametrize(
+        "route, upstream_url, credential_location, answer",
+        [
+            (
+                f"/vertex_ai/{GENERATE_CONTENT}",
+                f"https://us-central1-aiplatform.googleapis.com/{GENERATE_CONTENT}",
+                "us-central1",
+                GEMINI_ANSWER,
+            ),
+            (
+                f"/vertex_ai/discovery/{DISCOVERY_SEARCH}",
+                f"https://discoveryengine.googleapis.com/{DISCOVERY_SEARCH}",
+                "global",
+                {"results": []},
+            ),
+        ],
+        ids=["generate_content", "discovery_search"],
+    )
+    def test_x_litellm_api_key_with_any_auth_scheme_authenticates_once_on_every_vertex_route(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        scheme: str,
+        route: str,
+        upstream_url: str,
+        credential_location: str,
+        answer: Mapping[str, object],
+    ) -> None:
+        custom_auth: Final = _CountingCustomAuth(only_accepts=self.VIRTUAL_KEY)
+        with respx.mock(assert_all_called=True) as upstream:
+            google: Final = upstream.post(upstream_url).mock(return_value=httpx.Response(200, json=answer))
+
+            response, recorder = self._post(
+                monkeypatch,
+                route,
+                {"x-litellm-api-key": f"{scheme} {self.VIRTUAL_KEY}"},
+                custom_auth,
+                (credential_location,),
+            )
+
+        assert response.status_code == 200, response.text
+        assert custom_auth.api_keys_seen == [self.VIRTUAL_KEY]
+        assert recorder.served_user_ids == ["custom-auth-caller-1"]
+        assert google.call_count == 1
 
     def test_x_litellm_api_key_authenticates_once_and_is_never_forwarded_without_a_vertex_credential(
         self, monkeypatch: pytest.MonkeyPatch
