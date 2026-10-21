@@ -58,6 +58,7 @@ async function deleteGuardrail(page: PlaywrightPage, guardrailName: string): Pro
   await page.getByRole("menuitem", { name: "Delete" }).click();
   const deleteModal = page.getByRole("dialog", { name: "Delete Guardrail" });
   await expect(deleteModal).toBeVisible({ timeout: 5_000 });
+  await deleteModal.getByPlaceholder(guardrailName).fill(guardrailName);
   await deleteModal.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(page.getByText(`Guardrail "${guardrailName}" deleted successfully`)).toBeVisible({ timeout: 10_000 });
 }
