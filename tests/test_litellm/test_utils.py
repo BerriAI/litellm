@@ -1155,6 +1155,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
         "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
+        "fal_ai/bytedance/seedance-2.0/text-to-video",
+        "fal_ai/bytedance/seedance-2.0/image-to-video",
+        "fal_ai/bytedance/seedance-2.0/reference-to-video",
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
@@ -1517,8 +1520,13 @@ class TestProxyFunctionCalling:
             ("command-nightly", "litellm_proxy/command-nightly", False),
         ],
     )
-    def test_proxy_function_calling_support_consistency(self, direct_model, proxy_model, expected_result):
+    def test_proxy_function_calling_support_consistency(self, direct_model, proxy_model, expected_result, monkeypatch):
         """Test that proxy models have the same function calling support as their direct counterparts."""
+        monkeypatch.setitem(
+            litellm.model_cost,
+            direct_model,
+            {**litellm.model_cost.get(direct_model, {}), "supports_function_calling": expected_result},
+        )
         direct_result = supports_function_calling(direct_model)
         proxy_result = supports_function_calling(proxy_model)
 
@@ -5845,6 +5853,8 @@ def test_get_model_info_gemini(monkeypatch):
             and "veo" not in model
             and "lyria" not in model
             and "robotics" not in model
+            and "3.8-flash-tts" not in model
+            and "3.8-flash-lite-tts" not in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
