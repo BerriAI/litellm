@@ -171,6 +171,14 @@ def test_the_reload_pool_accepts_and_keeps_every_uvicorn_arg_the_proxy_cli_build
     assert {key: getattr(config, key) for key in server_args} == server_args
 
 
+def test_the_reload_pool_passes_a_uvicorn_arg_it_does_not_list_through_to_the_workers() -> None:
+    config: Final = pool_config(RELOAD_OPTIONS.validate_python({**_options("app:app"), "backlog": 123}), workers=POOL_WORKERS)
+    assert (config.backlog, config.reload) == (123, False)
+
+
+def test_windows_keeps_single_worker_reload_whatever_the_uvicorn_version() -> None:
+    assert not multi_worker_reload_supported("win32")
+
 def test_the_pool_is_told_to_stop_once_the_reloader_process_exits() -> None:
     reloader: Final = multiprocessing.get_context("spawn").Process(target=time.sleep, args=(POOL_TIMEOUT_SECONDS,))
     reloader.start()

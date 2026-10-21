@@ -17,6 +17,7 @@ from uvicorn import config as uvicorn_config
 from uvicorn.supervisors import ChangeReload, Multiprocess
 
 
+@with_config(ConfigDict(extra="allow"))
 class ServerOptions(TypedDict, total=False):
     host: ReadOnly[str]
     port: ReadOnly[int]
@@ -34,7 +35,7 @@ class ServerOptions(TypedDict, total=False):
     loop: ReadOnly[Literal["none", "auto", "asyncio", "uvloop"]]
 
 
-@with_config(ConfigDict(extra="forbid"))
+@with_config(ConfigDict(extra="allow"))
 class ReloadOptions(ServerOptions):
     app: Required[ReadOnly[str]]
     reload: ReadOnly[bool]
@@ -47,10 +48,17 @@ SERVER_OPTIONS: Final = TypeAdapter(ServerOptions)
 ASGI_APP: Final = TypeAdapter(ImportString[Callable[..., object]])
 LOGGER: Final = logging.getLogger("uvicorn.error")
 RELOAD_WORKER_HEALTHCHECK_SECONDS: Final = 30
+RELOADER_ONLY_KEYS: Final = frozenset(ReloadOptions.__annotations__) - frozenset(ServerOptions.__annotations__)
 
 
-def multi_worker_reload_supported() -> bool:
-    return hasattr(uvicorn_config, "STARTUP_FAILURE")
+def multi_worker_reload_supported(platform: str = sys.platform) -> bool:
+    return platform != "win32" and hasattr(uvicorn_config, "STARTUP_FAILURE")
+
+
+def server_options(options: ReloadOptions) -> ServerOptions:
+    return SERVER_OPTIONS.validate_python(
+        {key: value for key, value in options.items() if key not in RELOADER_ONLY_KEYS}
+    )
 
 
 def load_app_or_exit(import_path: str) -> Callable[..., object]:
@@ -68,7 +76,9 @@ def pool_config(options: ReloadOptions, workers: int) -> Config:
         partial(load_app_or_exit, options["app"]),
         factory=True,
         workers=workers,
-        **SERVER_OPTIONS.validate_python({"timeout_worker_healthcheck": RELOAD_WORKER_HEALTHCHECK_SECONDS, **options}),  # pyright: ignore[reportArgumentType]  # uvicorn types the float graceful shutdown timeout as int
+        **SERVER_OPTIONS.validate_python(
+            {"timeout_worker_healthcheck": RELOAD_WORKER_HEALTHCHECK_SECONDS, **server_options(options)}
+        ),  # pyright: ignore[reportArgumentType]  # uvicorn types the float graceful shutdown timeout as int
     )
 
 
@@ -109,7 +119,7 @@ def run_multi_worker_reload(options: ReloadOptions, workers: int) -> None:
         reload=options["reload"],
         reload_dirs=list(options["reload_dirs"]),
         reload_includes=list(options["reload_includes"]),
-        **SERVER_OPTIONS.validate_python(options),  # pyright: ignore[reportArgumentType]  # uvicorn types the float graceful shutdown timeout as int
+        **server_options(options),  # pyright: ignore[reportArgumentType]  # uvicorn types the float graceful shutdown timeout as int
     )
     shared_socket: Final = worker_config.bind_socket()
     try:

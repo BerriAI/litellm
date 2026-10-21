@@ -1070,7 +1070,7 @@ class ProxyInitializationHelpers:
     "--reload",
     is_flag=True,
     default=False,
-    help="Enable uvicorn hot reload (dev only), including every --num_workers worker on uvicorn>=0.50.0. Also reloads when the --config YAML or .env changes. Incompatible with --run_gunicorn, --run_hypercorn, and --run_granian.",
+    help="Enable uvicorn hot reload (dev only), including every --num_workers worker on uvicorn>=0.50.0 outside Windows. Also reloads when the --config YAML or .env changes. Incompatible with --run_gunicorn, --run_hypercorn, and --run_granian.",
 )
 @click.option(
     "--prometheus_metrics_port",
@@ -1655,8 +1655,8 @@ def run_server(
                     )
                     return
                 print(
-                    "\033[1;33mLiteLLM Proxy: --reload with --num_workers>1 requires uvicorn>=0.50.0, "
-                    "so only a single worker reloads.\033[0m"
+                    "\033[1;33mLiteLLM Proxy: --reload with --num_workers>1 requires uvicorn>=0.50.0 "
+                    "and an OS other than Windows, so only a single worker reloads.\033[0m"
                 )
             uvicorn.run(
                 **uvicorn_args,
