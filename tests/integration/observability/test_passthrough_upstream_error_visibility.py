@@ -600,7 +600,6 @@ def test_budget_rejected_call_keeps_budget_normalized_error(gateway: Gateway, tm
             )
             assert len(budget_rows) == 1, budget_rows
 
-@pytest.mark.covers("other.observability.passthrough.streaming_tags_reach_spend")
 def test_gemini_streaming_passthrough_request_tags_reach_spend_log(gateway: Gateway, tmp_path: Path) -> None:
     expected_body: Final = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
     chunks: Final = (

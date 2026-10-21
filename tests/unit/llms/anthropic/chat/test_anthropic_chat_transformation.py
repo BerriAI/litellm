@@ -1,12 +1,14 @@
 import copy
 import json
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 import respx
 from httpx import Headers
+from pydantic import JsonValue
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -8041,7 +8043,7 @@ def test_calculate_usage_sums_cache_tokens_across_compaction_iterations():
     assert usage.prompt_tokens_details.cached_tokens == 17020
 
 
-def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call():
+def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call() -> None:
     thinking_block: Final = {"type": "thinking", "thinking": "The user wants a greeting.", "signature": "sig-1"}
     body: Final = _json_mode_message_body("tool_use", None)
     result: Final = _transform_json_mode_body({**body, "content": [thinking_block, *body["content"]]})
@@ -8052,7 +8054,18 @@ def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call():
     assert [block["signature"] for block in message.thinking_blocks] == [thinking_block["signature"]]
 
 
-def _json_mode_message_body(stop_reason: str, stop_details: dict | None) -> dict:
+class JsonModeMessageBody(TypedDict):
+    id: ReadOnly[str]
+    type: ReadOnly[Literal["message"]]
+    role: ReadOnly[Literal["assistant"]]
+    model: ReadOnly[str]
+    stop_reason: ReadOnly[str]
+    stop_details: ReadOnly[dict[str, JsonValue] | None]
+    usage: ReadOnly[dict[str, int]]
+    content: ReadOnly[list[dict[str, JsonValue]]]
+
+
+def _json_mode_message_body(stop_reason: str, stop_details: dict[str, JsonValue] | None) -> JsonModeMessageBody:
     return {
         "id": "msg_json_mode",
         "type": "message",
@@ -8067,9 +8080,9 @@ def _json_mode_message_body(stop_reason: str, stop_details: dict | None) -> dict
     }
 
 
-def _transform_json_mode_body(body: dict) -> litellm.ModelResponse:
+def _transform_json_mode_body(body: JsonModeMessageBody) -> litellm.ModelResponse:
     return AnthropicConfig().transform_parsed_response(
-        completion_response=body,
+        completion_response=dict(body),
         raw_response=httpx.Response(status_code=200, headers={}),
         model_response=litellm.ModelResponse(),
         json_mode=True,
