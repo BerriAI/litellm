@@ -16,6 +16,7 @@ from openai._legacy_response import HttpxBinaryResponseContent
 
 import litellm
 from litellm._logging import session_id_var, trace_id_var
+from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL, SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
@@ -7419,6 +7420,40 @@ class TestAzurePTUSpilloverCost:
             response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
 
             assert obj._response_cost_calculator(result=response) == 0.0
+        finally:
+            self._unregister_models()
+
+    def test_spillover_payload_reports_the_pay_as_you_go_entry_billing_used(self, monkeypatch) -> None:
+        self._register_models()
+        try:
+            obj = self._logging_obj(dict(self.PTU_MODEL_INFO), flag="True", litellm_rate=0.0, monkeypatch=monkeypatch)
+            response = self._response()
+            response._hidden_params["additional_headers"] = {"llm_provider-x-ms-is-spilled-over": "true"}
+            response_cost: Final = obj._response_cost_calculator(result=response)
+
+            payload: Final = get_standard_logging_object_payload(
+                kwargs={
+                    "model": self.SERVED_MODEL,
+                    "custom_llm_provider": "azure",
+                    "litellm_params": obj.litellm_params,
+                    "response_cost": response_cost,
+                },
+                init_response_obj=response,
+                start_time=datetime.datetime.now(),
+                end_time=datetime.datetime.now(),
+                logging_obj=obj,
+                status="success",
+            )
+
+            assert response_cost == pytest.approx(self.EXPECTED_SPILL_COST)
+            assert payload is not None
+            model_map_value: Final = payload["model_map_information"]["model_map_value"]
+            assert model_map_value is not None
+            assert model_map_value["input_cost_per_token"] == litellm.model_cost[self.SERVED_MODEL]["input_cost_per_token"]
+            assert model_map_value["output_cost_per_token"] == litellm.model_cost[self.SERVED_MODEL]["output_cost_per_token"]
+            assert response_cost == pytest.approx(
+                100 * model_map_value["input_cost_per_token"] + 50 * model_map_value["output_cost_per_token"]
+            )
         finally:
             self._unregister_models()
 

@@ -1785,18 +1785,7 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = self.get_router_model_id()
 
         ## RESPONSE COST ##
-        spilled_over: Final = is_spilled_over_ptu_request(
-            model_info=_deployment_model_info(self.litellm_params if hasattr(self, "litellm_params") else None),
-            response_headers=self.model_call_details.get("response_headers"),
-            additional_headers=result_additional_headers,
-        )
-        custom_pricing: Final = (
-            False
-            if spilled_over
-            else use_custom_pricing_for_model(
-                litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None)
-            )
-        )
+        custom_pricing: Final = self.custom_pricing_for(result)
 
         prompt = self._prompt_for_cost_calculation()
 
@@ -1866,6 +1855,23 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost_failure_debug_information"] = debug_info
 
         return None
+
+    def custom_pricing_for(self, result: object) -> bool:
+        litellm_params: Final = getattr(self, "litellm_params", None)
+        result_hidden_params: Final = getattr(result, "_hidden_params", None) or MappingProxyType({})
+        additional_headers: Final = (
+            result_hidden_params.get("additional_headers")
+            if isinstance(result_hidden_params, dict)
+            else getattr(result_hidden_params, "additional_headers", None)
+        )
+        spilled_over: Final = is_spilled_over_ptu_request(
+            model_info=_deployment_model_info(litellm_params),
+            response_headers=self.model_call_details.get("response_headers"),
+            additional_headers=additional_headers,
+        )
+        return False if spilled_over else use_custom_pricing_for_model(litellm_params=litellm_params)
+
+
 
     def _prompt_for_cost_calculation(self) -> str:
         """
@@ -6349,7 +6355,7 @@ def get_standard_logging_object_payload(
         # Fall back to the actual deployment model set by the router in metadata.
         if base_model is None:
             base_model = metadata.get("deployment")
-        custom_pricing: Final = use_custom_pricing_for_model(litellm_params=litellm_params)
+        custom_pricing: Final = logging_obj.custom_pricing_for(init_response_obj)
         raw_response_cost: Final = kwargs.get("response_cost")
         llm_response_cost: Final[float] = raw_response_cost or 0.0
         guardrail_cost: Final = guardrail_information_cost(metadata.get("standard_logging_guardrail_information"))
