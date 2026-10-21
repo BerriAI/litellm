@@ -5558,9 +5558,6 @@ async def delete_verification_tokens(
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
-    # On every worker, not just this one: auth serves key objects cache-first, so a worker that
-    # kept its copy would go on authenticating the deleted key until user_api_key_cache_ttl expired.
-    # Only the rows the caller was allowed to delete, since the request list can name any cache key.
     await delete_cache_key_objects(
         hashed_tokens=tuple(key.token for key in authorized_keys if key.token is not None),
         user_api_key_cache=user_api_key_cache,
