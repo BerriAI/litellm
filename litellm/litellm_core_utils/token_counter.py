@@ -1049,7 +1049,7 @@ def _is_anthropic_web_search_tool(tool: Mapping[str, object]) -> bool:
 def _tool_mappings(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
     for tool in tools:
         if isinstance(tool, Mapping):
-            yield cast(Mapping[str, object], tool)
+            yield cast(Mapping[str, object], tool)  # cast-ok: tool payloads are JSON objects with str keys
 
 
 def _function_definitions(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
@@ -1069,20 +1069,22 @@ def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mappi
                 yield declaration
         return
     input_schema: Final = tool.get("input_schema")
-    parameters: Final = input_schema or tool.get("parameters") or {}
-    normalized_parameters: Final = parameters if isinstance(parameters, Mapping) else {}
+    parameters: Final = input_schema or tool.get("parameters") or {}  # mutable-ok: read-only default
+    normalized_parameters: Final = parameters if isinstance(parameters, Mapping) else {}  # mutable-ok: never mutated
     unmapped_anthropic_keys: Final = (
-        {key: value for key, value in tool.items() if key not in _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE}
+        {  # mutable-ok: never mutated
+            key: value for key, value in tool.items() if key not in _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE
+        }
         if input_schema is not None
-        else {}
+        else {}  # mutable-ok: read-only default
     )
     description: Final = tool.get("description")
     strict: Final = tool.get("strict")
-    yield {
+    yield {  # mutable-ok: yielded as a read-only Mapping
         "name": tool.get("name"),
-        "parameters": {**normalized_parameters, **unmapped_anthropic_keys},
-        **({"description": description} if description is not None else {}),
-        **({"strict": bool(strict)} if strict is not None else {}),
+        "parameters": {**normalized_parameters, **unmapped_anthropic_keys},  # mutable-ok: never mutated
+        **({"description": description} if description is not None else {}),  # mutable-ok: spread at once
+        **({"strict": bool(strict)} if strict is not None else {}),  # mutable-ok: spread at once
     }
 
 

@@ -18,7 +18,12 @@ def _deepseek_v4_tool_schemas(functions: Sequence[Mapping[str, object]]) -> str:
 
 def _qwen3_5_tool_schemas(functions: Sequence[Mapping[str, object]]) -> str:
     return "".join(
-        "\n" + json.dumps({"type": "function", "function": function}, ensure_ascii=False) for function in functions
+        "\n"
+        + json.dumps(
+            {"type": "function", "function": function},  # mutable-ok: serialized at once
+            ensure_ascii=False,
+        )
+        for function in functions
     )
 
 

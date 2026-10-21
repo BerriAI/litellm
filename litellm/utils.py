@@ -2453,7 +2453,7 @@ def _return_huggingface_tokenizer(model: str, *, count_route: bool = False) -> S
 def _huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> SelectTokenizerResponse:
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
         tokenizer: Final = _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend())
-    return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}  # mutable-ok: SelectTokenizerResponse shape
 
 
 def select_count_route_tokenizer(
