@@ -568,6 +568,22 @@ def _will_bridge_to_chat_completions(
     )
 
 
+def provider_stores_the_conversation(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
+    """Whether the provider, not a LiteLLM spend log, holds this turn for a `previous_response_id` follow-up.
+
+    A bridged turn is replayed from its spend log, so the bridge needs that row in the DB, and a bridged
+    first MCP round runs as an internal call that writes no spend log at all.
+    """
+    api_base: Final = _api_base_kwarg(kwargs)
+    return not _will_bridge_to_chat_completions(
+        model,
+        custom_llm_provider or litellm.get_llm_provider(model=model, api_base=api_base)[1],
+        bool(kwargs.get("use_chat_completions_api")),
+        kwargs.get("model_info"),
+        api_base,
+    )
+
+
 def _stamp_injection_points_with_dialect(
     kwargs: dict[str, object],  # mutable-ok: the points are rewritten in the caller's own kwargs for the hook to read
     model: str,

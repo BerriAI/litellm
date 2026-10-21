@@ -1318,6 +1318,32 @@ def test_resolve_llm_passthrough_timeout_validates_only_the_winning_value(
     assert resolve_llm_passthrough_timeout(kwargs=kwargs, litellm_params=litellm_params) == expected
 
 
+def test_resolve_llm_passthrough_timeout_uses_the_deployment_timeout_for_the_requests_service_tier():
+    litellm_params = {
+        "timeout": 610,
+        "stream_timeout": 30,
+        "timeout_by_service_tier": {"flex": 900},
+        "stream_timeout_by_service_tier": {"flex": 950},
+    }
+    assert resolve_llm_passthrough_timeout(kwargs={"service_tier": "flex"}, litellm_params=litellm_params) == 900.0
+    assert resolve_llm_passthrough_timeout(kwargs={"service_tier": "default"}, litellm_params=litellm_params) == 610.0
+    assert (
+        resolve_llm_passthrough_timeout(kwargs={"service_tier": "flex", "timeout": 20}, litellm_params=litellm_params)
+        == 20.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(kwargs={"service_tier": "flex", "stream": True}, litellm_params=litellm_params)
+        == 950.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"service_tier": "flex", "stream": True},
+            litellm_params={"timeout": 610, "stream_timeout": 30, "timeout_by_service_tier": {"flex": 900}},
+        )
+        == 30.0
+    )
+
+
 def test_resolve_llm_passthrough_timeout_rejects_a_non_numeric_winner():
     with pytest.raises(ValidationError):
         resolve_llm_passthrough_timeout(kwargs={"timeout": httpx.Timeout(30.0)})

@@ -5352,3 +5352,40 @@ async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool
         )
     assert exc_info.value.status_code == 400
     assert "tool_choice={'type': 'file_search'}" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_bridge_partial_response_on_disconnect_bills_the_relayed_chat_chunks():
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+
+    chat_stream: Final = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "tell me a story"}],
+        mock_response="The codename is AZURE-FALCON-42 and the story is long.",
+        stream=True,
+        api_key="test-key",
+    )
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="gpt-4o-mini",
+        litellm_custom_stream_wrapper=chat_stream,
+        request_input="tell me a story",
+        responses_api_request={},
+        custom_llm_provider="openai",
+    )
+    assert iterator.partial_response_on_disconnect() is None, "nothing relayed yet, nothing to bill"
+    events: Final = [await iterator.__anext__() for _ in range(6)]
+    relayed_text: Final = "".join(
+        getattr(event, "delta", "") for event in events if event.type == "response.output_text.delta"
+    )
+    assert relayed_text, "the bridge should have relayed some text by now"
+
+    incomplete_event: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete_event is not None
+    assert incomplete_event.type == "response.incomplete"
+    assert incomplete_event.response.status == "incomplete"
+    assert incomplete_event.response.usage is not None
+    assert incomplete_event.response.usage.output_tokens == litellm.token_counter(model="gpt-4o-mini", text=relayed_text)
+    assert incomplete_event.response.usage.input_tokens > 0

@@ -103,6 +103,7 @@ from ..common_utils import (
     process_anthropic_headers,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
+    tools_marked_for_a_tool_config_point,
 )
 
 if TYPE_CHECKING:
@@ -2129,6 +2130,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
         optional_params.pop("client_metadata", None)
+        request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
+            dict[str, object], optional_params
+        )
+        marked_tools: Final = tools_marked_for_a_tool_config_point(
+            request_params.get("tools"), request_params.pop("cache_control_injection_points", None)
+        )
+        if marked_tools is not None:
+            from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
+            request_litellm_params: Final = cast(  # cast-ok: litellm_params is the untyped dict of the shared signature
+                Mapping[str, object], litellm_params
+            )
+            AnthropicCacheControlHook.record_gateway_injection(request_litellm_params, 1)
 
         # ``top_k`` is a provider-specific kwarg that bypasses
         # ``map_openai_params``; gate it here, the single boundary shared by
@@ -2148,6 +2162,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "model": model,
             "messages": anthropic_messages,
             **optional_params,
+            **({} if marked_tools is None else {"tools": list(marked_tools)}),
         }
 
         self._apply_output_config(data=data, model=model, optional_params=optional_params)

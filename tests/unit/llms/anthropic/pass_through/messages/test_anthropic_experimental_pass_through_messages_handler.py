@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import uuid
@@ -1483,6 +1484,7 @@ async def test_provider_messages_api_base_env_is_not_shadowed_by_the_chat_defaul
 
     assert seen_urls == ["https://deepseek.internal.example/anthropic/v1/messages"]
 
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_forwards_safeguards_and_unknown_beta_to_anthropic():
     """Shapes are what Claude Code 2.1.278 sends and api.anthropic.com returns, captured 2026-09-21."""
@@ -1597,7 +1599,9 @@ def _claude_code_auto_mode_request() -> tuple[list[dict[str, object]], list[dict
     return safeguards, safeguard_results
 
 
-def _upstream_answering_with(safeguard_results: list[dict[str, object]], captured: dict[str, object]) -> AsyncHTTPHandler:
+def _upstream_answering_with(
+    safeguard_results: list[dict[str, object]], captured: dict[str, object]
+) -> AsyncHTTPHandler:
     def upstream_records_the_request(request: httpx.Request) -> httpx.Response:
         captured["body"] = json.loads(request.content)
         captured["anthropic-beta"] = request.headers.get("anthropic-beta")
@@ -1623,7 +1627,9 @@ def _upstream_answering_with(safeguard_results: list[dict[str, object]], capture
 
 
 _CLIENT_BETA_HEADERS: Final = (
-    pytest.param({"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"}, id="client_sends_beta"),
+    pytest.param(
+        {"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"}, id="client_sends_beta"
+    ),
     pytest.param({"anthropic-beta": "interleaved-thinking-2025-05-14"}, id="client_omits_beta"),
     pytest.param({}, id="client_sends_no_beta_header"),
 )
@@ -1751,26 +1757,20 @@ async def test_anthropic_messages_litellm_router_latency_metadata_tracking():
         print("Call kwargs:", json.dumps(call_kwargs, indent=2, default=str))
 
         # Verify that litellm_metadata was passed and contains _latency_per_deployment
-        assert (
-            "litellm_metadata" in call_kwargs
-        ), "litellm_metadata should be passed to anthropic_messages"
+        assert "litellm_metadata" in call_kwargs, "litellm_metadata should be passed to anthropic_messages"
 
         litellm_metadata = call_kwargs["litellm_metadata"]
         assert litellm_metadata is not None, "litellm_metadata should not be None"
-        assert isinstance(
-            litellm_metadata, dict
-        ), "litellm_metadata should be a dictionary"
+        assert isinstance(litellm_metadata, dict), "litellm_metadata should be a dictionary"
 
         # Verify _latency_per_deployment is present
-        assert (
-            "_latency_per_deployment" in litellm_metadata
-        ), "litellm_metadata should contain _latency_per_deployment field"
+        assert "_latency_per_deployment" in litellm_metadata, (
+            "litellm_metadata should contain _latency_per_deployment field"
+        )
 
         # Verify the structure of _latency_per_deployment
         latency_per_deployment = litellm_metadata["_latency_per_deployment"]
-        assert isinstance(
-            latency_per_deployment, dict
-        ), "_latency_per_deployment should be a dictionary"
+        assert isinstance(latency_per_deployment, dict), "_latency_per_deployment should be a dictionary"
 
         print(f"✅ Latency per deployment data: {latency_per_deployment}")
 
@@ -1928,9 +1928,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
     when using anthropic.messages.acreate with a bedrock model
     """
     # Mock the get_credentials method
-    with unittest.mock.patch.object(
-        BaseAWSLLM, "get_credentials"
-    ) as mock_get_credentials:
+    with unittest.mock.patch.object(BaseAWSLLM, "get_credentials") as mock_get_credentials:
         # Create a proper mock for credentials with the necessary attributes
         mock_credentials = unittest.mock.MagicMock()
         mock_credentials.access_key = "mock_access_key"
@@ -1941,9 +1939,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
         # We also need to mock the actual AWS request signing to avoid real API calls
         with unittest.mock.patch("botocore.auth.SigV4Auth.add_auth"):
             # Set up mock for AsyncHTTPHandler.post to avoid actual API calls
-            with unittest.mock.patch(
-                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-            ) as mock_post:
+            with unittest.mock.patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
                 # Configure mock response
                 mock_response = unittest.mock.MagicMock()
                 mock_response.raise_for_status = unittest.mock.MagicMock()
@@ -1985,9 +1981,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
 
                 # Assert that our test credentials were passed correctly
                 for param_name, param_value in aws_params.items():
-                    assert (
-                        call_args[param_name] == param_value
-                    ), f"Parameter {param_name} was not passed correctly"
+                    assert call_args[param_name] == param_value, f"Parameter {param_name} was not passed correctly"
 
 
 @pytest.mark.asyncio
@@ -2015,11 +2009,8 @@ async def test_anthropic_messages_bedrock_dynamic_region():
     # Patch necessary AWS components
     with (
         unittest.mock.patch("botocore.auth.SigV4Auth.add_auth"),
-        unittest.mock.patch.object(
-            BaseAWSLLM, "get_credentials"
-        ) as mock_get_credentials,
+        unittest.mock.patch.object(BaseAWSLLM, "get_credentials") as mock_get_credentials,
     ):
-
         # Setup mock credentials
         mock_credentials = unittest.mock.MagicMock()
         mock_credentials.access_key = "test_access_key"
@@ -2048,11 +2039,50 @@ async def test_anthropic_messages_bedrock_dynamic_region():
 
         # Check that the URL contains the correct region
         url = call_args.kwargs.get("url", "")
-        assert (
-            f"bedrock-runtime.{test_region}.amazonaws.com" in url
-        ), f"URL does not contain the correct region. URL: {url}"
+        assert f"bedrock-runtime.{test_region}.amazonaws.com" in url, (
+            f"URL does not contain the correct region. URL: {url}"
+        )
 
         # Verify get_credentials was called with the correct region
         mock_get_credentials.assert_called_once()
         credentials_args = mock_get_credentials.call_args.kwargs
         assert credentials_args.get("aws_region_name") == test_region
+
+
+def test_native_messages_tool_config_point_marks_last_tool_and_drops_the_key(monkeypatch):
+    """LIT-9880 on /v1/messages: the hook wrote the tool_config point back into kwargs and the
+    native path dropped it silently, so the tools went out without any cache breakpoint."""
+    from litellm.llms.anthropic.pass_through.messages import handler
+
+    captured = {}
+
+    def fake_native(**kwargs):
+        captured["params"] = kwargs["anthropic_messages_optional_request_params"]
+        captured["kwargs"] = kwargs["kwargs"]
+        captured["messages"] = kwargs["messages"]
+        return "native-passthrough"
+
+    monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", fake_native)
+    tools = [{"name": f"tool_{i}", "description": f"Tool {i}", "input_schema": {"type": "object"}} for i in range(2)]
+    tools_before = copy.deepcopy(tools)
+
+    result = handler.anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="anthropic/claude-opus-4-6",
+        api_key="sk-test",
+        tools=tools,
+        litellm_metadata={},
+        cache_control_injection_points=[
+            {"location": "message", "role": "user"},
+            {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+    )
+
+    assert result == "native-passthrough"
+    assert "cache_control_injection_points" not in captured["params"]
+    assert "cache_control_injection_points" not in captured["kwargs"]
+    assert captured["params"]["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in captured["params"]["tools"][0]
+    assert captured["messages"][0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert tools == tools_before

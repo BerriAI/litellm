@@ -76,6 +76,8 @@ class ProviderConnection:
     request_timeout: float | None = None
     force_timeout: float | None = None
     stream_timeout: float | str | None = None
+    timeout_by_service_tier: Mapping[str, float] | None = None
+    stream_timeout_by_service_tier: Mapping[str, float] | None = None
     max_retries: int | None = None
     tenant_id: str | None = None
     client_id: str | None = None

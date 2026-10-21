@@ -124,6 +124,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
 )
+from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.common_utils import resolve_model_group_alias
@@ -250,6 +251,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
+    sanitize_for_log,
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.utils import (
@@ -446,6 +448,13 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         # A natural end-of-stream success event already fired and released the
         # slot; do not bill again, and let the caller skip the slot release.
         return True
+    partial_responses_event: Final = partial_responses_incomplete_event_on_disconnect(response)
+    if partial_responses_event is not None:
+        verbose_proxy_logger.debug(
+            "Billing partial streamed Responses API spend after client disconnect, litellm_call_id=%s",
+            sanitize_for_log(logging_obj.litellm_call_id),
+        )
+        return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
     chunks: Final[object] = getattr(response, "chunks", None)
     if not isinstance(chunks, list) or not chunks:
         return False
@@ -475,6 +484,10 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     partial_usage: Final = getattr(partial_response, "usage", None)
     if isinstance(partial_usage, Usage):
         backfill_missing_cache_usage_fields(partial_usage)
+    return await _dispatch_disconnect_billing_event(logging_obj, partial_response)
+
+
+async def _dispatch_disconnect_billing_event(logging_obj: LiteLLMLoggingObj, partial_response: object) -> bool:
     try:
         await logging_obj.dispatch_success_handlers(
             partial_response,

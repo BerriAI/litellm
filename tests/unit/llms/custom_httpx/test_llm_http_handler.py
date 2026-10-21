@@ -3244,7 +3244,7 @@ async def test_async_anthropic_messages_handler_carries_deployment_vertex_locati
 
     from litellm.litellm_core_utils.litellm_logging import (
         Logging,
-        _resolve_vertex_location_for_cost,
+        resolve_vertex_location_for_cost,
     )
 
     monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
@@ -3293,7 +3293,7 @@ async def test_async_anthropic_messages_handler_carries_deployment_vertex_locati
     global_deployment = await logging_obj_after_handler(GenericLiteLLMParams(vertex_location="global"))
     assert global_deployment.litellm_params["vertex_location"] == "global"
     assert (
-        _resolve_vertex_location_for_cost(
+        resolve_vertex_location_for_cost(
             custom_llm_provider="vertex_ai",
             litellm_params=global_deployment.litellm_params,
             optional_params=global_deployment.optional_params,
