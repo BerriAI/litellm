@@ -5,15 +5,23 @@ This module provides guardrail translation support for OpenAI's text completion 
 The handler processes the 'prompt' parameter for guardrails.
 """
 
+import json
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation, StreamTransformSink
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+    StreamingScanKey,
+    StreamTransformSink,
+)
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.types.utils import GenericGuardrailAPIInputs, TextChoices, TextCompletionResponse
 
 if TYPE_CHECKING:
+    from fastapi import HTTPException
+
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -128,7 +136,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> "TextCompletionResponse":
         """
         Process output response by applying guardrails to completion text.
@@ -165,11 +173,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
                 if "response" not in request_data:
                     request_data["response"] = response
 
-            # Add user API key metadata with prefixed keys
-            if "litellm_metadata" not in request_data:
-                user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-                if user_metadata:
-                    request_data["litellm_metadata"] = user_metadata
+            self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             # Include model information from the response if available
@@ -205,14 +209,14 @@ class OpenAITextCompletionHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,  # mutable-ok: the hooks share and mutate the request payload
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
-    ) -> list[TextCompletionResponse]:
+    ) -> Sequence[TextCompletionResponse]:
         if not self._check_streaming_has_ended(responses_so_far):
             return responses_so_far
         assembled: Final = self._assemble_ended_stream(responses_so_far)
-        pre_guardrail_texts: Final = tuple(choice.text for choice in assembled.choices)
+        pre_guardrail_texts: Final = _choice_texts(assembled)
         await self.process_output_response(
             response=assembled,
             guardrail_to_apply=guardrail_to_apply,
@@ -222,40 +226,54 @@ class OpenAITextCompletionHandler(BaseTranslation):
         )
         if not deliver_ended_stream_rewrites:
             return responses_so_far
-        for choice, pre_guardrail_text in zip(assembled.choices, pre_guardrail_texts):
-            if choice.text != pre_guardrail_text:
-                self._write_choice_text(responses_so_far, choice.index, choice.text)
+        rewrites: Final = tuple(
+            after for before, after in zip(pre_guardrail_texts, _choice_texts(assembled)) if after != before
+        )
+        for choice_index, text in rewrites:
+            self._write_choice_text(responses_so_far, choice_index, text)
         return responses_so_far
 
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, TextCompletionResponse))
+        if not self._check_streaming_has_ended(chunks):
+            return None
+        assembled: Final = self._assemble_ended_stream(chunks)
+        return StreamingScanKey(texts=tuple(text for _, text in _choice_texts(assembled)), stream_ended=True)
+
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[bytes] | None:
+        from litellm.proxy.common_request_processing import sse_error_payload
+
+        _, error_obj = sse_error_payload(exc)
+        return (f'data: {{"error": {json.dumps(error_obj)}}}\n\n'.encode(),)
+
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
-        return any(
-            stream_item_field(choice, "finish_reason") is not None
-            for item in responses_so_far
-            for choice in stream_item_items(item, "choices")
-        )
+        streamed_choices: Final = chain.from_iterable(stream_item_items(item, "choices") for item in responses_so_far)
+        return any(stream_item_field(choice, "finish_reason") is not None for choice in streamed_choices)
 
     @staticmethod
     def _assemble_ended_stream(responses_so_far: Sequence[TextCompletionResponse]) -> TextCompletionResponse:
-        first: Final = responses_so_far[0]
-        streamed_choices: Final = tuple(choice for item in responses_so_far for choice in item.choices)
+        streamed_choices: Final = tuple(chain.from_iterable(item.choices for item in responses_so_far))
         choice_indices: Final = tuple(dict.fromkeys(choice.index for choice in streamed_choices))
-        assembled_choices: Final = [  # mutable-ok: TextCompletionResponse only accepts a list of choices
+        assembled_choices: Final = [
             TextChoices(
                 index=index,
-                text="".join(
-                    choice.text for choice in streamed_choices if choice.index == index and isinstance(choice.text, str)
-                ),
+                text="".join(_choice_text(choice) for choice in streamed_choices if choice.index == index),
                 finish_reason=next(
                     (
                         choice.finish_reason
-                        for choice in reversed(streamed_choices)
-                        if choice.index == index and choice.finish_reason is not None
+                        for choice in streamed_choices
+                        if choice.index == index and choice.finish_reason
                     ),
                     None,
                 ),
             )
             for index in choice_indices
         ]
+        first: Final = responses_so_far[0]
         return TextCompletionResponse(
             id=first.id,
             created=first.created,
@@ -267,11 +285,18 @@ class OpenAITextCompletionHandler(BaseTranslation):
 
     @staticmethod
     def _write_choice_text(responses_so_far: Sequence[TextCompletionResponse], choice_index: int, text: str) -> None:
-        carriers: Final = tuple(
-            choice
-            for item in responses_so_far
-            for choice in item.choices
-            if choice.index == choice_index and isinstance(choice.text, str)
-        )
-        for position, carrier in enumerate(carriers):
-            carrier.text = text if position == 0 else ""
+        streamed_choices: Final = chain.from_iterable(item.choices for item in responses_so_far)
+        head, *tail = (choice for choice in streamed_choices if choice.index == choice_index)
+        head.text = text
+        for choice in tail:
+            if isinstance(stream_item_field(choice, "text"), str):
+                choice.text = ""
+
+
+def _choice_text(choice: TextChoices) -> str:
+    text: Final = stream_item_field(choice, "text")
+    return text if isinstance(text, str) else ""
+
+
+def _choice_texts(response: TextCompletionResponse) -> tuple[tuple[int, str], ...]:
+    return tuple((choice.index, _choice_text(choice)) for choice in response.choices)

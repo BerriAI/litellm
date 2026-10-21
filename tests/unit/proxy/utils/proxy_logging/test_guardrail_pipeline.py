@@ -41,6 +41,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
     PipelineStep,
 )
+from litellm.types.utils import TextChoices, TextCompletionResponse
 
 
 @pytest.fixture(autouse=True)
@@ -1886,7 +1887,7 @@ def test_streamable_post_call_pipelines_keeps_hook_guardrails_and_drops_iterator
 
 @pytest.mark.parametrize(
     "request_route",
-    ["/v1/completions", "/v1beta/models/gemini-2.5-flash:streamGenerateContent", "/a2a/agent"],
+    ["/v1beta/models/gemini-2.5-flash:streamGenerateContent", "/a2a/agent"],
 )
 def test_streamable_post_call_pipelines_keeps_legacy_hooks_off_routes_that_assemble_no_response(
     make_user_api_key_auth, monkeypatch, caplog, request_route
@@ -2033,6 +2034,53 @@ async def test_streaming_iterator_hook_delivers_legacy_hook_rewrite_on_every_cho
         (1, ""),
     ]
     assert [item.choices[0].finish_reason for item in delivered] == [None, None, "stop", "stop"]
+    assert _warnings(caplog) == []
+
+
+def _text_completion_chunk(text: str, finish_reason: str | None = None) -> TextCompletionResponse:
+    return TextCompletionResponse(
+        id="cmpl-1", model="m", choices=[TextChoices(index=0, text=text, finish_reason=finish_reason)]
+    )
+
+
+def _rewritten_text_completion(response: Any) -> TextCompletionResponse:
+    return TextCompletionResponse(
+        id=response.id,
+        model=response.model,
+        choices=[TextChoices(index=0, text="[REWRITTEN] " + response.choices[0].text, finish_reason="stop")],
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_delivers_legacy_hook_rewrite_on_a_text_completion_stream(
+    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
+):
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_legacy_hook_stream_guardrail(seen, rewrite=_rewritten_text_completion)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = {**_post_call_pipeline_data(stream=True), "prompt": "hi"}
+    chunks = [_text_completion_chunk("hello "), _text_completion_chunk("world"), _text_completion_chunk("", "stop")]
+    auth = make_user_api_key_auth(request_route="/v1/completions")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=auth, data=data, call_type="text_completion", guardrails_only=True
+        )
+        delivered = [
+            item
+            async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=auth, response=_async_chunk_iter(chunks), request_data=data
+            )
+        ]
+
+    assert isinstance(seen["response"], TextCompletionResponse)
+    assert seen["response"].choices[0].text == "hello world"
+    assert [(item.choices[0].text, item.choices[0].finish_reason) for item in delivered] == [
+        ("[REWRITTEN] hello world", None),
+        ("", None),
+        ("", "stop"),
+    ]
+    assert data["metadata"]["applied_guardrails"] == ["gr-post"]
     assert _warnings(caplog) == []
 
 
