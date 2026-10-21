@@ -970,6 +970,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "string",
                     "enum": ["per_prompt", "per_query"],
                 },
+                "search_free_requests": {
+                    "type": "object",
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 1},
+                        "period": {"type": "string", "enum": ["day", "month"]},
+                        "shared_group": {"type": "string"},
+                    },
+                    "required": ["count", "period", "shared_group"],
+                    "additionalProperties": False,
+                },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
                     "type": "array",
@@ -5856,3 +5866,33 @@ async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: 
 
     assert len(counting_logger.logged_results) == 1, counting_logger.logged_results
     assert counting_logger.logged_results[0] is inner_result
+
+
+def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_extra_body():
+    """LIT-9880: the hook hands a tool_config point on for the provider step, and OpenAI has no
+    step that consumes it, so it must not ride along in extra_body and 400 at OpenAI."""
+    optional_params = litellm.utils.get_optional_params(
+        model="gpt-4.1",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral"}}],
+        extra_body={"kept": True},
+    )
+
+    assert optional_params["extra_body"] == {"kept": True}
+    assert "cache_control_injection_points" not in optional_params
+
+
+def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_litellm_proxy():
+    """A litellm_proxy deployment calls the downstream proxy through the OpenAI SDK, and that proxy
+    applies cache_control_injection_points itself, so the point must ride along in extra_body."""
+    point: Final = {"location": "tool_config", "control": {"type": "ephemeral"}}
+    optional_params: Final[dict[str, object]] = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="litellm_proxy",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[point],
+        extra_body={"kept": True},
+    )
+
+    assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}

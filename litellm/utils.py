@@ -1278,6 +1278,7 @@ def _schedule_async_success_logging(
         return
 
     def _enqueue_async_logging() -> None:
+        logging_obj.mark_async_success_log_enqueued()
         asyncio.create_task(
             _client_async_logging_helper(
                 logging_obj=logging_obj,
@@ -4898,6 +4899,9 @@ def get_optional_params(
     return optional_params
 
 
+LITELLM_ONLY_PARAMS: Final = frozenset(("cache_control_injection_points",))
+
+
 def add_provider_specific_params_to_optional_params(
     optional_params: dict,
     passed_params: dict,
@@ -4913,8 +4917,9 @@ def add_provider_specific_params_to_optional_params(
         # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
         if _should_drop_param(k="extra_body", additional_drop_params=additional_drop_params) is False:
             extra_body: Final = dict(passed_params.pop("extra_body", None) or {})
+            withheld_params: Final = frozenset[str]() if custom_llm_provider == "litellm_proxy" else LITELLM_ONLY_PARAMS
             for k in passed_params:
-                if k not in openai_params and passed_params[k] is not None:
+                if k not in openai_params and k not in withheld_params and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
             if not isinstance(optional_params.get("extra_body"), dict):
                 optional_params["extra_body"] = {}
@@ -6135,6 +6140,7 @@ def _get_model_info_helper(
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get("search_context_cost_per_query", None),
                 web_search_billing_unit=_model_info.get("web_search_billing_unit", None),
+                search_free_requests=_model_info.get("search_free_requests", None),
                 google_maps_grounding_cost_per_query=_model_info.get("google_maps_grounding_cost_per_query", None),
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),

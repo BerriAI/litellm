@@ -358,8 +358,9 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_mess
 # ``litellm.model_cost`` map. Both effects belong to deployment configuration,
 # not to user-supplied request bodies, so the proxy strips them before they
 # reach the call path. Built from the Pydantic model so newly-added pricing
-# fields are covered automatically.
-_CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+# fields are covered automatically. ``base_model`` selects which cost-map entry
+# prices the row, so a caller naming a cheaper model lowers their own spend.
+_CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys()) | {"base_model"}
 # ``model_info`` carries the same pricing fields when read by
 # ``use_custom_pricing_for_model``; strip from metadata for the same reason.
 # ``standard_logging_guardrail_information`` is proxy-written telemetry summed
@@ -373,6 +374,7 @@ _ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
         "original_model_group",
+        "previous_models",
         "request_retry_count",
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
         ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
