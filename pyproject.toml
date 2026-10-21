@@ -291,7 +291,7 @@ ci = [
     "blockbuster==1.5.26",
     "beautifulsoup4==4.14.3",
     "pylint==4.0.5",
-    "langchain-openai==1.1.14",
+    "langchain-openai==1.7.2",
     "langgraph>=1.2.4,<1.3.0",
     "langgraph-prebuilt>=1.1.0,<1.3.0",
     "claude-agent-sdk==0.2.165",
@@ -363,6 +363,8 @@ constraint-dependencies = [
 override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
     "packaging>=24.0",
+    # semantic-router (through 1.1.0) caps openai at <3.0.0 but only imports it for encoders LiteLLM never builds.
+    "openai>=2.20.0,<4.0.0",
     "cryptography>=50.0.0,<51.0",
     "mcp>=2.3.0,<3",
 ]

@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.custom_httpx.transport_errors import TransportErrorKind, chained_transport_error_kind
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
@@ -54,7 +55,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
 
-from ..exceptions import OpenAIError, Timeout
+from ..exceptions import OpenAIError
 from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type, with_deployment_api_base
 from .llm_response_utils.get_api_base import get_api_base
@@ -123,12 +124,6 @@ def _delta_from_upstream(upstream_delta: BaseModel | None) -> Delta | None:
         return Delta(**dict(iter(upstream_delta)))
     except Exception:
         return None
-
-
-def _is_transport_timeout(error: BaseException) -> bool:
-    return isinstance(error, httpx.TimeoutException) or (
-        isinstance(error, Timeout) and isinstance(error.__cause__, httpx.TimeoutException)
-    )
 
 
 def _skips_stream_fallback(status_code: int | None) -> bool:
@@ -2009,7 +2004,7 @@ class CustomStreamWrapper:
                 ):
                     chunk = self.completion_stream
                 else:
-                    chunk = next(self.completion_stream)
+                    chunk = self._next_sync_chunk()
                 if chunk is not None and chunk != b"":
                     print_verbose(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else chunk}; custom_llm_provider: {self.custom_llm_provider}"
@@ -2171,6 +2166,17 @@ class CustomStreamWrapper:
             self.close()
             self._handle_stream_fallback_error(e)
 
+    def _next_sync_chunk(self) -> object:
+        try:
+            return next(self.completion_stream)
+        except Exception as e:
+            if (
+                self.received_finish_reason is None
+                or chained_transport_error_kind(e) is not TransportErrorKind.DROPPED_CONNECTION
+            ):
+                raise
+            raise StopIteration from e
+
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
             # Call make_call to get the completion stream
@@ -2279,26 +2285,26 @@ class CustomStreamWrapper:
                         return usage_free_chunk
         except (StopAsyncIteration, StopIteration):
             return await self._finalize_completed_stream(cache_hit=cache_hit)
-        except httpx.TimeoutException as e:  # if httpx read timeout error occues
-            traceback_exception = traceback.format_exc()
-            ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
-            traceback_exception += f"\nLiteLLM Default Request Timeout - {litellm.request_timeout}"
-            if self.logging_obj is not None:
-                self._record_partial_usage_for_failure()
-                ## LOGGING
-                self._failure_logging = asyncio.create_task(
-                    self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
-                )
-            await self.aclose()
-            self._handle_stream_fallback_error(e)
-        except (httpx.ReadError, httpx.RemoteProtocolError) as e:
-            if self.received_finish_reason is None:
-                await self.aclose()
-                self._log_stream_failure_and_raise(e)
-            return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
-            await self.aclose()
-            self._log_stream_failure_and_raise(e)
+            match chained_transport_error_kind(e):
+                case TransportErrorKind.DROPPED_CONNECTION if self.received_finish_reason is not None:
+                    return await self._finalize_completed_stream(cache_hit=cache_hit)
+                case TransportErrorKind.TIMEOUT:
+                    traceback_exception: Final = (
+                        f"{traceback.format_exc()}\nLiteLLM Default Request Timeout - {litellm.request_timeout}"
+                    )
+                    if self.logging_obj is not None:
+                        self._record_partial_usage_for_failure()
+                        self._failure_logging = asyncio.create_task(
+                            self.logging_obj.dispatch_failure_handlers(
+                                e, traceback_exception, prefer_async_handlers=True
+                            )
+                        )
+                    await self.aclose()
+                    self._handle_stream_fallback_error(e)
+                case _:
+                    await self.aclose()
+                    self._log_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
@@ -2574,7 +2580,7 @@ class CustomStreamWrapper:
         # Raise non-retriable client errors directly (skip fallback).
         # Exception: 429 (rate-limit) IS retriable/transient — allow it
         # through so the Router can switch to a different model group.
-        if not _is_transport_timeout(e) and (
+        if chained_transport_error_kind(e) is not TransportErrorKind.TIMEOUT and (
             _skips_stream_fallback(mapped_status_code) or _skips_stream_fallback(original_status_code)
         ):
             raise mapped_exception

@@ -5,7 +5,9 @@ from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
 import anyio
 
+from litellm.exceptions import APIConnectionError, Timeout
 from litellm.files.types import FileContentProvider
+from litellm.llms.custom_httpx.transport_errors import TransportErrorKind, chained_transport_error_kind
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -59,8 +61,11 @@ class FileContentStreamingResponse:
             self._log_success_sync()
             raise
         except Exception as e:
-            self._log_failure_sync(e)
-            raise
+            public_error: Final = self._public_error(e)
+            self._log_failure_sync(public_error)
+            if public_error is e:
+                raise
+            raise public_error from e
 
     def __aiter__(self) -> "FileContentStreamingResponse":
         if not hasattr(self.stream_iterator, "__anext__"):
@@ -77,8 +82,28 @@ class FileContentStreamingResponse:
             await self._log_success_async()
             raise
         except Exception as e:
-            await self._log_failure_async(e)
-            raise
+            public_error: Final = self._public_error(e)
+            await self._log_failure_async(public_error)
+            if public_error is e:
+                raise
+            raise public_error from e
+
+    def _public_error(self, error: Exception) -> Exception:
+        match chained_transport_error_kind(error):
+            case TransportErrorKind.TIMEOUT:
+                return Timeout(
+                    message=f"timed out reading file content: {error}",
+                    model=self.model,
+                    llm_provider=self.custom_llm_provider,
+                )
+            case TransportErrorKind.DROPPED_CONNECTION:
+                return APIConnectionError(
+                    message=f"connection dropped while reading file content: {error}",
+                    llm_provider=self.custom_llm_provider,
+                    model=self.model,
+                )
+            case None:
+                return error
 
     async def aclose(self) -> None:
         if self._close_completed:
