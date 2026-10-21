@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping
 from typing import Final, NoReturn
 
 import pytest
-
+import respx
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases, adopt_model_cost_map
@@ -1704,3 +1704,151 @@ def test_per_request_custom_pricing_scopes_a_colliding_deployment_id_to_its_prov
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.open_ai_chat_completion_models.intersection_update(openai_models_before)
+
+
+def test_rerank_custom_pricing_global_and_register_model(monkeypatch: pytest.MonkeyPatch):
+    import httpx
+    import respx
+
+    monkeypatch.setattr(litellm, "custom_pricing", True)
+    custom_model = "cohere/test-custom-rerank"
+    snapshot = _snapshot_model_cost_entries([custom_model])
+    try:
+        litellm.register_model(
+            {
+                custom_model: {
+                    "input_cost_per_query": 0.005,
+                    "litellm_provider": "cohere",
+                    "mode": "rerank",
+                }
+            },
+            persist_across_reloads=False,
+        )
+
+        with respx.mock(assert_all_called=False) as respx_mock:
+            respx_mock.post("https://api.cohere.com/v2/rerank").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "id": "rerank-test-1",
+                        "results": [
+                            {"index": 0, "relevance_score": 0.99, "document": {"text": "litellm"}},
+                        ],
+                        "meta": {"billed_units": {"search_units": 1}},
+                    },
+                )
+            )
+            response = litellm.rerank(
+                model=custom_model,
+                query="what is litellm?",
+                documents=["litellm"],
+                api_key="fake-cohere-key",
+            )
+            assert response.response_cost == pytest.approx(0.005)
+            calc_cost = litellm.completion_cost(
+                completion_response=response, model=custom_model, call_type="rerank"
+            )
+            assert calc_cost == pytest.approx(0.005)
+    finally:
+        _restore_model_cost_entries(snapshot)
+
+
+def test_embedding_custom_pricing_global_and_register_model(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "custom_pricing", True)
+    custom_model = "test-custom-embedding-unregistered"
+    snapshot = _snapshot_model_cost_entries([custom_model])
+    try:
+        litellm.register_model(
+            {
+                custom_model: {
+                    "input_cost_per_token": 0.0001,
+                    "litellm_provider": "openai",
+                    "mode": "embedding",
+                }
+            },
+            persist_across_reloads=False,
+        )
+
+        response = litellm.embedding(
+            model=custom_model,
+            input=["hello custom embedding world"],
+            api_key="fake-key",
+            mock_response=[0.1, 0.2, 0.3],
+        )
+        assert response.response_cost is not None
+        assert response.response_cost > 0
+        calc_cost = litellm.completion_cost(
+            completion_response=response, model=custom_model, call_type="embedding"
+        )
+        assert calc_cost == pytest.approx(response.response_cost)
+    finally:
+        _restore_model_cost_entries(snapshot)
+
+
+def test_rerank_per_request_custom_pricing():
+    import httpx
+    import respx
+
+    custom_model = "cohere/test-request-rerank"
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.post("https://api.cohere.com/v2/rerank").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "rerank-req-1",
+                    "results": [
+                        {"index": 0, "relevance_score": 0.99, "document": {"text": "litellm"}},
+                    ],
+                    "meta": {"billed_units": {"search_units": 1}},
+                },
+            )
+        )
+        response = litellm.rerank(
+            model=custom_model,
+            query="test query",
+            documents=["litellm"],
+            api_key="fake-key",
+            input_cost_per_query=0.007,
+        )
+        assert response.response_cost == pytest.approx(0.007)
+
+
+@pytest.mark.asyncio
+async def test_rerank_router_deployment_custom_pricing(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    try:
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "cohere-rerank",
+                    "litellm_params": {
+                        "model": "cohere/rerank-english-v3.0",
+                        "api_key": "sk-fake",
+                        "input_cost_per_query": 0.004,
+                    },
+                    "model_info": {"id": "rerank-dep-1", "input_cost_per_query": 0.004},
+                }
+            ]
+        )
+        respx_mock.post("https://api.cohere.com/v2/rerank").respond(
+            200,
+            json={
+                "id": "rerank-1",
+                "results": [{"index": 0, "relevance_score": 0.9}],
+                "meta": {"billed_units": {"search_units": 1}},
+            },
+        )
+
+        public_response = await router.arerank(
+            model="cohere-rerank",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=1,
+        )
+        assert public_response.response_cost == pytest.approx(0.004)
+    finally:
+        litellm.in_memory_llm_clients_cache.flush_cache()
+

@@ -2173,6 +2173,14 @@ class ModelResponseBase(OpenAIObject):
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
+    @property
+    def response_cost(self) -> float | None:
+        if isinstance(self._hidden_params, dict):
+            cost = self._hidden_params.get("response_cost")
+            if isinstance(cost, (int, float)):
+                return float(cost)
+        return None
+
     _response_headers: dict | None = None
 
     def set_provider_response_headers(self, headers: httpx.Headers) -> None:
@@ -2413,6 +2421,14 @@ class EmbeddingResponse(OpenAIObject):
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
+
+    @property
+    def response_cost(self) -> float | None:
+        if isinstance(self._hidden_params, dict):
+            cost = self._hidden_params.get("response_cost")
+            if isinstance(cost, (int, float)):
+                return float(cost)
+        return None
 
     _response_headers: dict | None = None
     _response_ms: float | None = None

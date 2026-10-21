@@ -182,12 +182,30 @@ def rerank(
 
         model_response: Final = RerankResponse()
 
+        ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
+        if (
+            kwargs.get("input_cost_per_query") is not None
+            or (kwargs.get("input_cost_per_token") is not None and kwargs.get("output_cost_per_token") is not None)
+            or kwargs.get("input_cost_per_second") is not None
+            or kwargs.get("output_cost_per_second") is not None
+            or kwargs.get("cost_per_second") is not None
+        ):
+            from litellm.main import _register_custom_pricing_for_request
+
+            _register_custom_pricing_for_request(
+                model=model,
+                custom_llm_provider=_custom_llm_provider or "cohere",
+                kwargs=kwargs,
+                model_info=model_info,
+            )
+
         rerank_litellm_params: Final = {
             "litellm_call_id": litellm_call_id,
             "proxy_server_request": proxy_server_request,
             "model_info": model_info,
             "preset_cache_key": None,
             "stream_response": {},
+            "custom_pricing": kwargs.get("custom_pricing"),
             **optional_params.model_dump(exclude_unset=True),
         }
 

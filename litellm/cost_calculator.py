@@ -443,6 +443,7 @@ def cost_per_token(
     request_model: str | None = None,  # original request model for router detection
     custom_model_info: OCRPricing | None = None,
     bedrock_model_info: ModelInfo | None = None,
+    model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -649,6 +650,7 @@ def cost_per_token(
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
+                model_info=model_info,
             )
 
         return prompt_cost, completion_cost
@@ -657,6 +659,7 @@ def cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             billed_units=rerank_billed_units,
+            model_info=model_info,
         )
     elif call_type == "avector_store_search" or call_type == "vector_store_search":
         return vector_store_search_cost(
@@ -761,6 +764,7 @@ def cost_per_token(
             usage=usage_block,
             service_tier=service_tier,
             data_residency=data_residency,
+            model_info=model_info,
         )
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
@@ -772,6 +776,7 @@ def cost_per_token(
             usage=usage_block,
             response_time_ms=response_time_ms,
             service_tier=service_tier,
+            model_info=model_info,
         )
     elif custom_llm_provider == "gemini":
         return gemini_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
@@ -800,14 +805,15 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-        if _has_token_or_tiered_pricing(model_info):
+        resolved_fallback_model_info: Final = model_info or cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        if _has_token_or_tiered_pricing(resolved_fallback_model_info):
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
+                model_info=resolved_fallback_model_info,
             )
         verbose_logger.debug("No per-token, tiered, or per-second pricing for model=%s; cost is 0", model)
         return 0.0, 0.0
@@ -1545,6 +1551,8 @@ def completion_cost(
     or add it to model_prices_and_context_window.json.
     """
     try:
+        if custom_pricing is None:
+            custom_pricing = bool(getattr(litellm, "custom_pricing", False))
         call_type = infer_call_type(call_type, completion_response) or "completion"
         if pricing_provider is not None:
             custom_llm_provider = pricing_provider  # rebind-ok: model_info.pricing_provider overrides the routing provider for cost-map lookups
@@ -1864,19 +1872,21 @@ def completion_cost(
                         else 0.0
                     )
                 elif call_type in _RERANK_CALL_TYPES:
-                    if completion_response is not None and isinstance(completion_response, RerankResponse):
-                        meta_obj = completion_response.meta
+                    if completion_response is not None and isinstance(completion_response, (RerankResponse, dict)):
+                        if isinstance(completion_response, dict):
+                            meta_obj = completion_response.get("meta")
+                        else:
+                            meta_obj = completion_response.meta
                         if meta_obj is not None:
                             billed_units: RerankBilledUnits = meta_obj.get("billed_units") or {}
                         else:
                             billed_units = {}
 
+                        search_units = billed_units.get("search_units") or 1  # default to 1 query per rerank request
                         rerank_billed_units = RerankBilledUnits(
-                            search_units=billed_units.get("search_units"),
+                            search_units=search_units,
                             total_tokens=billed_units.get("total_tokens"),
                         )
-
-                        search_units = billed_units.get("search_units") or 1  # cohere charges per request by default.
                         completion_tokens = search_units
                 elif call_type in _SEARCH_CALL_TYPES:
                     from litellm.search import search_provider_cost_per_query
@@ -2048,6 +2058,17 @@ def completion_cost(
                     response=completion_response,
                     custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                     bedrock_model_info=bedrock_model_info,
+                    model_info=(
+                        deployment_model_info
+                        if (
+                            (deployment_model_info := _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id))
+                            and (
+                                call_type in _RERANK_CALL_TYPES
+                                or deployment_model_info.get("input_cost_per_token") is not None
+                            )
+                        )
+                        else None
+                    ),
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
@@ -2270,6 +2291,8 @@ def response_cost_calculator(
     - float or None: cost of response
     """
     try:
+        if custom_pricing is None:
+            custom_pricing = bool(getattr(litellm, "custom_pricing", False))
         response_cost: float = 0.0
         if cache_hit is not None and cache_hit is True:
             response_cost = 0.0
@@ -2666,6 +2689,7 @@ def rerank_cost(
     model: str,
     custom_llm_provider: str | None,
     billed_units: RerankBilledUnits | None = None,
+    model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Returns
@@ -2681,10 +2705,11 @@ def rerank_cost(
             provider=LlmProviders(custom_llm_provider),
         )
 
-        try:
-            model_info: ModelInfo | None = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-        except Exception:
-            model_info = None
+        if model_info is None:
+            try:
+                model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+            except Exception:
+                model_info = None
 
         return config.calculate_rerank_cost(
             model=model,
