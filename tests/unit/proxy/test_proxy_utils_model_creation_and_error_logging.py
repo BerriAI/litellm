@@ -1,5 +1,6 @@
 import asyncio
 import datetime as real_datetime
+import json
 import smtplib
 import traceback
 from collections.abc import Mapping
@@ -745,7 +746,9 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
     post-dispatch failures keep zero spend.
     """
 
-    async def _run(self, request_data, original_exception: Exception | None = None):
+    async def _run(
+        self, request_data, original_exception: Exception | None = None, request_route=None, dispatched_call_type=None
+    ):
         from unittest.mock import AsyncMock, patch
 
         from litellm.proxy._types import UserAPIKeyAuth
@@ -756,7 +759,8 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
             await proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,
                 original_exception=original_exception or Exception("boom"),
-                user_api_key_dict=UserAPIKeyAuth(),
+                user_api_key_dict=UserAPIKeyAuth(request_route=request_route),
+                dispatched_call_type=dispatched_call_type,
             )
 
     def _timeout(self, model: str, cause: Exception) -> Exception:
@@ -772,6 +776,38 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         logging_obj = MagicMock()
         logging_obj.model_call_details = model_call_details
         return logging_obj
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_route, dispatched_call_type",
+        [("/v1/responses", None), ("/cursor/chat/completions", "aresponses")],
+    )
+    async def test_a_failed_responses_request_counts_its_input_from_the_newest_compaction_item(
+        self, request_route, dispatched_call_type
+    ):
+        from datetime import datetime
+
+        async def prompt_tokens(request_input):
+            request_data = {
+                "litellm_logging_obj": self._logging_obj(
+                    {
+                        "first_api_call_start_time": datetime.now(),
+                        "model": FAILURE_USAGE_MODEL,
+                        "messages": request_input,
+                        "call_type": "aresponses",
+                    }
+                ),
+                "metadata": {},
+            }
+            await self._run(request_data, request_route=request_route, dispatched_call_type=dispatched_call_type)
+            return request_data["combined_usage_object"].prompt_tokens
+
+        resent = await prompt_tokens(
+            [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
+        )
+
+        assert resent == await prompt_tokens([COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
+        assert resent < await prompt_tokens([COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, TURN_AFTER_COMPACTION])
 
     @pytest.mark.asyncio
     async def test_timed_out_request_estimates_input_tokens_priced_at_input_rate(self):
@@ -2164,29 +2200,29 @@ def test_a_system_prompt_reads_the_same_whatever_shape_it_arrived_in(system_inpu
 
 
 def test_a_system_prompt_is_counted_on_top_of_the_request():
-    from litellm.proxy.utils import _count_request_input_tokens
+    from litellm.proxy.utils import count_request_input_tokens
 
-    without = _count_request_input_tokens(FAILURE_USAGE_MODEL, "hello world", None)
-    with_system = _count_request_input_tokens(FAILURE_USAGE_MODEL, "hello world", "be brief")
+    without = count_request_input_tokens(FAILURE_USAGE_MODEL, "hello world", None)
+    with_system = count_request_input_tokens(FAILURE_USAGE_MODEL, "hello world", "be brief")
 
     assert without > 0
     assert with_system > without
 
 
 def test_a_request_with_nothing_in_it_counts_zero():
-    from litellm.proxy.utils import _count_request_input_tokens
+    from litellm.proxy.utils import count_request_input_tokens
 
-    assert _count_request_input_tokens(FAILURE_USAGE_MODEL, [], None) == 0
-    assert _count_request_input_tokens(FAILURE_USAGE_MODEL, None, None) == 0
+    assert count_request_input_tokens(FAILURE_USAGE_MODEL, [], None) == 0
+    assert count_request_input_tokens(FAILURE_USAGE_MODEL, None, None) == 0
 
 
 def test_a_failed_dispatch_is_estimated_as_input_only():
-    from litellm.proxy.utils import _count_request_input_tokens, _estimate_dispatched_failure_usage
+    from litellm.proxy.utils import count_request_input_tokens, _estimate_dispatched_failure_usage
 
     usage = _estimate_dispatched_failure_usage(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None)
 
     assert usage is not None
-    assert usage.prompt_tokens == _count_request_input_tokens(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None)
+    assert usage.prompt_tokens == count_request_input_tokens(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None)
     assert usage.completion_tokens == 0
     assert usage.total_tokens == usage.prompt_tokens
 
@@ -2450,7 +2486,7 @@ def test_earlier_attempts_are_priced_from_the_prompt_estimate_not_the_final_stre
 
     lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
 
-    estimate = _estimated_prompt_usage(logging_obj.model_call_details, {})
+    estimate = _estimated_prompt_usage(logging_obj.model_call_details, {}, None)
     assert lifted["combined_usage_object"] is recovered
     assert [(a.usage.prompt_tokens, a.usage.completion_tokens) for a in lifted["billed_failed_attempts"]] == [
         (estimate.prompt_tokens, 0)
@@ -3334,6 +3370,83 @@ def test_a_request_that_timed_out_at_a_provider_bills_its_input_at_the_input_rat
     expected_input_cost, _ = litellm.cost_per_token(model=FAILURE_USAGE_MODEL, prompt_tokens=usage.prompt_tokens)
     assert expected_input_cost > 0
     assert response_cost == pytest.approx(expected_input_cost)
+
+
+
+COMPACTION_INSTRUCTIONS = {"role": "system", "content": "answer briefly"}
+COMPACTED_HISTORY = [
+    {"role": "user", "content": "a long turn " * 200},
+    {"role": "assistant", "content": "a long reply " * 200},
+]
+COMPACTION_ITEM = {
+    "type": "compaction",
+    "encrypted_content": json.dumps({"type": "compaction", "content": "the cat is named Biscuit"}),
+}
+TURN_AFTER_COMPACTION = {"role": "user", "content": "what is the cat's name?"}
+
+
+def _failed_call_prompt_tokens(call_type, dispatched_call_type, request_input):
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    lifted = _failure_usage_to_lift(
+        model_call_details={"call_type": call_type, "model": FAILURE_USAGE_MODEL, "messages": request_input},
+        request_body={},
+        dispatched=True,
+        dispatched_call_type=dispatched_call_type,
+    )
+    assert lifted is not None
+    return lifted[0].prompt_tokens
+
+
+@pytest.mark.parametrize(
+    "call_type, dispatched_call_type",
+    [
+        ("acompletion", "acompletion"),
+        ("aanthropic_messages", "anthropic_messages"),
+        ("responses", "acompletion"),
+    ],
+)
+def test_a_failed_call_off_the_responses_route_counts_the_history_before_a_compaction_typed_message(
+    call_type, dispatched_call_type
+):
+    def prompt_tokens(request_input):
+        return _failed_call_prompt_tokens(call_type, dispatched_call_type, request_input)
+
+    sent = prompt_tokens([COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
+
+    assert sent > prompt_tokens([COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
+
+
+def test_an_earlier_timed_out_responses_attempt_counts_its_input_from_the_newest_compaction_item():
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    def earlier_attempt_prompt_tokens(request_input):
+        logging_obj = _dispatched_failure_logging_obj(
+            FAILURE_USAGE_MODEL,
+            get_litellm_params(
+                metadata={
+                    "attempted_retries": 1,
+                    "model_info": {"id": "dep-compaction-final"},
+                    "previous_models": (
+                        {"deployment_id": "dep-compaction-final", "exception_type": "Timeout", "attempted_retries": 0},
+                    ),
+                }
+            ),
+        )
+        logging_obj.model_call_details["call_type"] = "aresponses"
+        logging_obj.model_call_details["messages"] = request_input
+        lifted = _failure_fields_to_lift(
+            {"litellm_logging_obj": logging_obj}, provider_billed=True, dispatched_call_type="aresponses"
+        )
+        (earlier_attempt,) = lifted["billed_failed_attempts"]
+        return earlier_attempt.usage.prompt_tokens
+
+    sent = earlier_attempt_prompt_tokens(
+        [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
+    )
+
+    assert sent == earlier_attempt_prompt_tokens([COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
 
 
 @pytest.mark.parametrize(
