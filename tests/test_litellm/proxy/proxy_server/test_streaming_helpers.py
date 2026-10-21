@@ -283,8 +283,9 @@ def test_restamp_streaming_chunk_model_overrides_model_on_basemodel():
         "model": new_chunk.model,
         "logged": logged,
         "same_object": new_chunk is chunk,
+        "original_model": chunk.model,
     }
-    assert snapshot == {"model": "gpt-4", "logged": True, "same_object": True}
+    assert snapshot == {"model": "gpt-4", "logged": True, "same_object": False, "original_model": "openai/internal-x"}
 
 
 @pytest.mark.parametrize("return_raw_model_name", [False, True])
@@ -310,8 +311,7 @@ def test_restamp_streaming_chunk_model_overrides_model_on_dict():
         request_data={},
         model_mismatch_logged=True,
     )
-    assert new_chunk["model"] == "gpt-4"
-    assert logged is True
+    assert (new_chunk["model"], chunk["model"], logged) == ("gpt-4", "internal", True)
 
 
 def test_restamp_streaming_chunk_model_uses_fallback_model_from_metadata():
@@ -443,7 +443,7 @@ def test_restamp_streaming_chunk_model_fastest_response_preserves_model():
     assert logged is False
 
 
-def test_restamp_streaming_chunk_model_setattr_exception_logs_and_returns():
+def test_restamp_streaming_chunk_model_restamps_a_frozen_chunk_through_a_copy():
     from pydantic import ConfigDict
 
     class FrozenChunk(_simple_chunk().__class__):
@@ -462,8 +462,30 @@ def test_restamp_streaming_chunk_model_setattr_exception_logs_and_returns():
         request_data={"litellm_call_id": "test-id"},
         model_mismatch_logged=False,
     )
-    assert new_chunk.model == "openai/internal-x"
-    assert logged is True
+    assert (new_chunk.model, chunk.model, logged) == ("gpt-4", "openai/internal-x", True)
+
+
+def test_restamp_streaming_chunk_model_records_the_client_model_on_the_logging_object():
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="openai/internal-x",
+        messages=[],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="test-id",
+        function_id="test-id",
+    )
+    _restamp_streaming_chunk_model(
+        chunk=_simple_chunk(model="openai/internal-x"),
+        requested_model_from_client="gpt-4",
+        request_data={"litellm_call_id": "test-id", "litellm_logging_obj": logging_obj},
+        model_mismatch_logged=False,
+    )
+    assert logging_obj.client_facing_stream_model == "gpt-4"
 
 
 def test_format_fallback_metadata_sse_event():

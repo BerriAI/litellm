@@ -672,6 +672,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.truncated_messages_for_logging: str | list | dict | None = None  # mutable-ok: logged messages shape
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: datetime.datetime | None = None
+        # The model the proxy shows the client on streamed chunks. The logged streamed response carries it
+        # once that response is priced, the same way a non-streamed response is logged
+        self.client_facing_stream_model: str | None = None
         self.zero_cost_warned: bool = False
         self._llm_caching_handler: LLMCachingHandler | None = None
 
@@ -710,6 +713,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # enqueue closure here instead of firing it immediately.
         self._defer_async_logging: bool = False
         self._enqueue_deferred_logging: Callable[[], None] | None = None
+        self._async_success_scheduled: bool = False
         self._on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self._async_success_enqueued: bool = False
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
@@ -2280,6 +2284,15 @@ class Logging(LiteLLMLoggingBaseClass):
     def mark_async_success_log_enqueued(self) -> None:
         self._async_success_enqueued = True
 
+    def claim_async_success_log(self) -> bool:
+        """One async success log per request. The innermost @client wrapper always exits first,
+        since the outer one is awaiting it, so it claims the log here and the outer wrapper gets
+        False and schedules nothing."""
+        if self._async_success_scheduled:
+            return False
+        self._async_success_scheduled = True
+        return True
+
     def has_run_logging(
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
@@ -2507,6 +2520,15 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             setattr(result, "usage", transformed_usage)
         return result
+
+    def _with_client_facing_stream_model(
+        self,
+        response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
+    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
+        model: Final = self.client_facing_stream_model
+        if model is None or getattr(response, "model", None) in (None, model):
+            return response
+        return response.model_copy(update={"model": model})
 
     def _success_handler_helper_fn(
         self,
@@ -2824,9 +2846,11 @@ class Logging(LiteLLMLoggingBaseClass):
                     result=complete_streaming_response
                 )
                 self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
+                logged_streaming_response: Final = self._with_client_facing_stream_model(complete_streaming_response)
+                self.model_call_details["complete_streaming_response"] = logged_streaming_response
                 ## STANDARDIZED LOGGING PAYLOAD
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
-                    complete_streaming_response, start_time, end_time
+                    logged_streaming_response, start_time, end_time
                 )
                 standard_logging_payload: Final[StandardLoggingPayload | None] = self.model_call_details.get(
                     "standard_logging_object"
@@ -3370,10 +3394,13 @@ class Logging(LiteLLMLoggingBaseClass):
 
             await self._prepare_baseline_cache_estimate(complete_streaming_response)
 
+            logged_streaming_response: Final = self._with_client_facing_stream_model(complete_streaming_response)
+            self.model_call_details["async_complete_streaming_response"] = logged_streaming_response
+
             ## STANDARDIZED LOGGING PAYLOAD
             try:
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
-                    complete_streaming_response, start_time, end_time
+                    logged_streaming_response, start_time, end_time
                 )
             except Exception:  # noqa: BLE001  # payload build must never block later callbacks (slot release)
                 verbose_logger.exception(

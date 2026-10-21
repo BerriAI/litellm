@@ -321,6 +321,18 @@ async def test_mcp_direct_content_edit_invalidates_stale_structured_data(logging
     assert "SECRET-1234" not in result.model_dump_json()
 
 
+def test_with_client_facing_stream_model_stamps_a_copy_of_the_priced_response(logging_obj):
+    response = ModelResponse(model="claude-opus-4-6@default")
+    logging_obj.client_facing_stream_model = "claude-opus-4.6"
+    logged = logging_obj._with_client_facing_stream_model(response)
+    assert (logged.model, response.model) == ("claude-opus-4.6", "claude-opus-4-6@default")
+
+
+def test_with_client_facing_stream_model_keeps_the_response_when_the_proxy_set_no_model(logging_obj):
+    response = ModelResponse(model="claude-opus-4-6@default")
+    assert logging_obj._with_client_facing_stream_model(response) is response
+
+
 def test_get_combined_callback_list_preserves_insertion_order(logging_obj):
     assert logging_obj.get_combined_callback_list(
         dynamic_success_callbacks=["prometheus", "langfuse", "datadog", "otel", "s3"],
@@ -5780,7 +5792,7 @@ def _interactions_logging_obj(stream: bool, call_type: str = "acreate"):
         messages=[],
         stream=stream,
         call_type=call_type,
-        start_time=time.time(),
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc).timestamp(),
         litellm_call_id="interactions-call-id",
         function_id="interactions-fn-id",
     )
@@ -8987,6 +8999,8 @@ async def test_prompt_management_with_unchanged_variables_replays_a_byte_identic
     assert json.dumps(messages_n_plus_one[: len(messages_n)], sort_keys=True) == json.dumps(messages_n, sort_keys=True)
     assert messages_n[0] == {"role": "system", "content": "You are a pirate. Answer in one sentence."}
     assert len(messages_n_plus_one) == len(messages_n) + 2
+
+
 @pytest.mark.parametrize(
     ("input_cost_per_token", "output_cost_per_token"),
     [(1e-06, 2e-06), (0.0, 0.0)],
@@ -9070,3 +9084,59 @@ def test_standard_logging_payload_reports_the_deployment_entry_the_request_was_b
         litellm.model_cost.pop(deployment_id, None)
 
 
+@pytest.mark.asyncio
+async def test_background_interaction_completion_logs_while_in_progress_handler_is_parked(monkeypatch):
+    """
+    The create's in_progress success handler can still be parked on awaited work when
+    the settlement arrives. The completed result is the only event carrying usage and
+    cost, so it has to reach the success callbacks whatever the one-success-log-per-request
+    dedupe does, or the settlement is marked billed with no spend row behind it.
+    """
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    class CountingLogger(CustomLogger):
+        def __init__(self):
+            super().__init__()
+            self.logged_results: list[object] = []
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.logged_results.append(response_obj)
+
+    counting_logger: Final = CountingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [counting_logger])
+
+    in_progress_parked: Final = asyncio.Event()
+    release_in_progress: Final = asyncio.Event()
+    real_truncate: Final = litellm_logging.truncate_base64_in_messages_async
+    calls: list[int] = []
+
+    async def parked_then_real_truncate(messages):
+        calls.append(1)
+        if len(calls) == 1:
+            in_progress_parked.set()
+            await release_in_progress.wait()
+        return await real_truncate(messages)
+
+    monkeypatch.setattr(litellm_logging, "truncate_base64_in_messages_async", parked_then_real_truncate)
+
+    logging_obj: Final = _interactions_logging_obj(stream=False)
+    in_progress: Final = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+    completed: Final = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+
+    first: Final = asyncio.create_task(logging_obj.async_success_handler(result=in_progress))
+    await in_progress_parked.wait()
+    completion: Final = asyncio.create_task(logging_obj.async_log_background_interaction_completion(result=completed))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    release_in_progress.set()
+    await first
+    await completion
+
+    assert counting_logger.logged_results == [completed, in_progress], counting_logger.logged_results
