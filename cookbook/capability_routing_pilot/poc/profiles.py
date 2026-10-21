@@ -89,6 +89,8 @@ class TaskAttempt:
     def __post_init__(self) -> None:
         if not self.task_id or not self.primary_label:
             raise ValueError("task_id and primary_label must be non-empty")
+        if self.primary_label != self.key.category:
+            raise ValueError("primary_label must match the profile category")
         if not math.isfinite(self.cost_usd) or self.cost_usd < 0:
             raise ValueError("cost_usd must be finite and non-negative")
         if not math.isfinite(self.latency_s) or self.latency_s < 0:
@@ -272,8 +274,25 @@ def aggregate_profiles(
     tau: float = 0.80,
     min_evidence: int = 13,
 ) -> tuple[Profile, ...]:
-    if not 0 <= tau <= 1 or min_evidence < 1:
-        raise ValueError("tau must be within [0, 1] and min_evidence must be positive")
+    _validate_thresholds(tau, min_evidence)
+    cohorts: Final = tuple(
+        (
+            attempt.task_id,
+            attempt.key.tenant_id,
+            attempt.key.model_alias,
+            attempt.key.returned_model_version,
+            attempt.key.deployment_id,
+            attempt.key.harness_version,
+            attempt.key.budget_version,
+            attempt.key.harness_config_hash,
+            attempt.key.category,
+        )
+        for attempt in attempts
+        if not attempt.is_infra
+    )
+    cohort_groups: Final = groupby(sorted(cohorts), key=lambda row: row[:-1])
+    if any(len({row[-1] for row in rows}) > 1 for _, rows in cohort_groups):
+        raise ValueError("a task and model cannot have graded attempts in multiple categories")
     ordered: Final = tuple(sorted(attempts, key=lambda attempt: attempt.key))
     return tuple(
         _aggregate(key, tuple(group), tau, min_evidence)
@@ -314,7 +333,9 @@ def select(
     tau: float = 0.80,
     quality_first: bool = False,
     min_evidence: int = 13,
+    eligible: frozenset[tuple[str, str | None]] | None = None,
 ) -> Selection:
+    _validate_thresholds(tau, min_evidence)
     if category not in SUPPORTED_CATEGORIES:
         return Selection(DecisionStatus.UNSUPPORTED_CATEGORY, None, False, "unsupported_category")
     matching: Final = tuple(
@@ -325,6 +346,7 @@ def select(
         and _versions_match(profile, versions)
         and profile.tau == tau
         and profile.min_evidence == min_evidence
+        and (eligible is None or (profile.key.model_alias, profile.key.deployment_id or None) in eligible)
     )
     qualified: Final = tuple(profile for profile in matching if profile.status is SupportStatus.QUALIFIED)
     if qualified:
@@ -352,6 +374,23 @@ def compile_map(
     min_evidence: int = 13,
     final: bool = False,
 ) -> dict[str, object]:
+    _validate_thresholds(tau, min_evidence)
+    categories: Final = (
+        "repository_debugging",
+        "feature_implementation",
+        "shell_build",
+        "algorithms_data",
+        "unknown",
+    )
+    matching: Final = tuple(
+        profile
+        for profile in profiles
+        if profile.key.tenant_id == tenant_id and _versions_match(profile, versions)
+    )
+    category_profiles: Final = {
+        category: tuple(profile for profile in matching if profile.key.category == category)
+        for category in categories
+    }
     return {
         "final": final,
         "tenant_id": tenant_id,
@@ -359,11 +398,27 @@ def compile_map(
         "min_evidence_note": MIN_EVIDENCE_NOTE,
         "interpretation": BETA_NOTE,
         "category_decisions": {
-            "repository_debugging": "profiled",
-            "feature_implementation": "profiled",
-            "shell_build": DecisionStatus.UNSUPPORTED_CATEGORY.value,
-            "algorithms_data": DecisionStatus.UNSUPPORTED_CATEGORY.value,
-            "unknown": DecisionStatus.UNSUPPORTED_CATEGORY.value,
+            category: asdict(
+                select(
+                    tenant_id,
+                    category,
+                    versions,
+                    category_profiles[category],
+                    tau,
+                    min_evidence=min_evidence,
+                )
+            )
+            for category in categories
+        },
+        "category_coverage": {
+            category: {
+                "profile_count": len(category_profiles[category]),
+                "status_counts": {
+                    status.value: sum(profile.status is status for profile in category_profiles[category])
+                    for status in SupportStatus
+                },
+            }
+            for category in categories
         },
         "versions": {
             "harness_version": versions.harness_version,
@@ -387,7 +442,13 @@ def compile_map_from_profiling_runs(
     tau: float = 0.80,
     min_evidence: int = 13,
 ) -> dict[str, object]:
-    if path.name != "profiling_runs.jsonl" or path.is_symlink():
+    _validate_thresholds(tau, min_evidence)
+    if path.is_symlink():
         raise ValueError("capability maps may only read profiling_runs.jsonl")
     profiles: Final = aggregate_profiles(read_attempts_jsonl(path), tau, min_evidence)
     return compile_map(tenant_id, versions, profiles, tau, min_evidence, final=False)
+
+
+def _validate_thresholds(tau: float, min_evidence: int) -> None:
+    if not 0 < tau < 1 or min_evidence < 1:
+        raise ValueError("tau must be within (0, 1) and min_evidence must be positive")

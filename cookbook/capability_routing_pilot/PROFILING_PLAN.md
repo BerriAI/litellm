@@ -26,7 +26,7 @@ The prior 15 recorded solver durations give a mean of 187.882 seconds and a p90 
 
 At the prior mean cost of $0.377 per run, 180 runs would cost $67.86. The solver worst case is $180. The effective worst-case API ceiling including the $5 labeling allowance is $185
 
-Storage is calculated from the compressed layer sizes in confirmed selected manifests. Total selected storage is the sum of those sizes. Peak batch storage is the maximum sum for any three-task batch before cleanup. These values remain unavailable until registry discovery returns confirmed manifest sizes
+The 60 selected manifests contain 86,932,156,867 compressed layer bytes in total (80.962 GiB). The largest planned three-image batch is 6,264,019,473 bytes (5.834 GiB). With 79 GiB free at discovery, sequential batches and cleanup preserve the 50 GiB reserve. No images were pulled
 
 ## Evidence boundaries
 

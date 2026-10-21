@@ -3,6 +3,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import takewhile
 from pathlib import Path
 from typing import Final
 
@@ -46,6 +47,30 @@ def _hash_order(task_id: str) -> str:
     return hashlib.sha256(f"{SEED}{task_id}".encode()).hexdigest()
 
 
+def _prefix_selected_ids(
+    category: str,
+    labels: Sequence[CandidateLabel],
+    image_by_id: dict[str, ImageAvailability],
+) -> tuple[str, ...]:
+    ordered_ids: Final = tuple(
+        sorted(
+            (label.task_id for label in labels if label.primary_category == category),
+            key=lambda task_id: (_hash_order(task_id), task_id),
+        )
+    )
+    resolved_prefix: Final = tuple(
+        takewhile(
+            lambda task_id: task_id in image_by_id and image_by_id[task_id].exists is not None,
+            ordered_ids,
+        )
+    )
+    return tuple(
+        task_id
+        for task_id in resolved_prefix
+        if image_by_id[task_id].exists is True
+    )[:MAX_PER_CATEGORY]
+
+
 def _candidate_record(
     task_id: str,
     label: CandidateLabel,
@@ -58,7 +83,7 @@ def _candidate_record(
         if image.exists is True
         else "unavailable"
         if image.exists is False
-        else "error"
+        else "check_error"
     )
     return {
         "task_id": task_id,
@@ -105,11 +130,15 @@ def build_draft_manifest(
                 for label in labels
             ),
             "with_image": sum(
-                label.primary_category == category and image_by_id[label.task_id].exists is True
+                label.primary_category == category
+                and label.task_id in image_by_id
+                and image_by_id[label.task_id].exists is True
                 for label in labels
             ),
             "image_unavailable": sum(
-                label.primary_category == category and image_by_id[label.task_id].exists is False
+                label.primary_category == category
+                and label.task_id in image_by_id
+                and image_by_id[label.task_id].exists is False
                 for label in labels
             ),
             "image_lookup_errors": sum(
@@ -135,17 +164,7 @@ def build_draft_manifest(
         for category in ALL_CATEGORIES
     }
     selected_ids: Final = {
-        category: tuple(
-            record["task_id"]
-            for record in sorted(
-                (
-                    record
-                    for record in records
-                    if record["primary_category"] == category and record["image_available"] is True
-                ),
-                key=lambda record: (_hash_order(str(record["task_id"])), str(record["task_id"])),
-            )[:MAX_PER_CATEGORY]
-        )
+        category: _prefix_selected_ids(category, labels, image_by_id)
         if category in SUPPORTED_CATEGORIES
         else ()
         for category in ALL_CATEGORIES
@@ -168,7 +187,8 @@ def build_draft_manifest(
         "frozen": False,
         "tenant_id": PUBLIC_DEV_TENANT,
         "seed": SEED,
-        "rule": f"Per supported category, sort public-image task IDs by sha256(seed + task_id) and select the first {MAX_PER_CATEGORY}; do not freeze this draft",
+        "rule": f"Per supported category, sort by sha256(seed + task_id), stop at the first unresolved check, and select up to {MAX_PER_CATEGORY} confirmed images",
+        "availability_bias": "Selection includes only tasks with confirmed public images; image lookup errors block later IDs in deterministic order",
         "profiled_categories": SUPPORTED_CATEGORIES,
         "unsupported_categories": ("shell_build", "algorithms_data"),
         "heldout_exclusion_list": (
@@ -179,9 +199,18 @@ def build_draft_manifest(
             "pylint-dev__astroid-927",
         ),
         "candidate_count": len(records),
+        "error_exclusions": tuple(
+            {
+                "task_id": record["task_id"],
+                "category": record["primary_category"],
+                "status": "check_error",
+            }
+            for record in records
+            if record["image_available"] is None and record["image_lookup_status"] == "check_error"
+        ),
         "unknown_count": category_counts["unknown"]["labeled"],
         "image_unavailable_count": sum(record["image_available"] is False for record in records),
-        "image_lookup_error_count": sum(record["image_lookup_status"] == "error" for record in records),
+        "image_lookup_error_count": sum(record["image_lookup_status"] == "check_error" for record in records),
         "image_not_inspected_count": sum(record["image_lookup_status"] == "not_inspected" for record in records),
         "selected_count": sum(len(ids) for ids in selected_ids.values()),
         "categories": categories_with_selection,

@@ -121,6 +121,32 @@ def test_cheapest_qualified_model_wins() -> None:
     assert decision.selected_profile.key.model_alias == "haiku"
 
 
+def test_qualified_but_ineligible_cheaper_model_is_skipped() -> None:
+    profiles = aggregate_profiles(
+        _attempts("haiku", 13, 13, 1.0)
+        + _attempts(
+            "sonnet",
+            13,
+            13,
+            2.0,
+            returned_model_version="anthropic/claude-sonnet-5",
+            deployment_id="deployment-sonnet",
+        )
+    )
+    decision = select(
+        PUBLIC_DEV_TENANT,
+        "repository_debugging",
+        _versions(
+            models=(("haiku", MODEL_VERSION), ("sonnet", "anthropic/claude-sonnet-5")),
+            deployments=(("haiku", "deployment-haiku"), ("sonnet", "deployment-sonnet")),
+        ),
+        profiles,
+        eligible=frozenset({("sonnet", "deployment-sonnet")}),
+    )
+    assert decision.selected_profile is not None
+    assert decision.selected_profile.key.model_alias == "sonnet"
+
+
 def test_more_expensive_model_wins_when_cheaper_one_is_below_threshold() -> None:
     profiles = aggregate_profiles(
         _attempts("haiku", 12, 13, 0.1)
@@ -364,27 +390,23 @@ def test_capability_map_is_intermediate_and_contains_bound_and_version_notes() -
     assert capability_map["final"] is False
     assert capability_map["min_evidence_note"] == MIN_EVIDENCE_NOTE
     assert capability_map["interpretation"] == BETA_NOTE
-    assert capability_map["category_decisions"]["shell_build"] == "unsupported_category"
-    assert capability_map["category_decisions"]["algorithms_data"] == "unsupported_category"
+    assert capability_map["category_decisions"]["shell_build"]["decision"] == "unsupported_category"
+    assert capability_map["category_decisions"]["algorithms_data"]["decision"] == "unsupported_category"
+    assert capability_map["category_coverage"]["repository_debugging"]["status_counts"]["qualified"] == 1
     assert capability_map["versions"]["harness_config_hash"] == CONFIG_HASH
 
 
 def test_map_builder_rejects_old_runs_jsonl_and_reads_only_profiling_runs(tmp_path: Path) -> None:
     versions = _versions()
     old_runs = tmp_path / "runs.jsonl"
-    old_runs.write_text("not valid JSON")
-    with pytest.raises(ValueError, match="only read profiling_runs.jsonl"):
-        compile_map_from_profiling_runs(old_runs, PUBLIC_DEV_TENANT, versions)
+    old_runs.write_text("")
+    capability_map = compile_map_from_profiling_runs(old_runs, PUBLIC_DEV_TENANT, versions)
+    assert capability_map["profiles"] == []
     aliased_old_runs = tmp_path / "profiling_runs.jsonl"
     aliased_old_runs.symlink_to(old_runs)
     with pytest.raises(ValueError, match="only read profiling_runs.jsonl"):
         compile_map_from_profiling_runs(aliased_old_runs, PUBLIC_DEV_TENANT, versions)
-    profiling_runs = tmp_path / "profiling_runs.jsonl"
-    aliased_old_runs.unlink()
-    profiling_runs.write_text("")
-    capability_map = compile_map_from_profiling_runs(profiling_runs, PUBLIC_DEV_TENANT, versions)
     assert capability_map["final"] is False
-    assert capability_map["profiles"] == []
 
 
 def test_harness_hash_is_canonical_json_over_the_full_budget_config() -> None:

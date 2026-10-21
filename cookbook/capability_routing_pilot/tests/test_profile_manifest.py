@@ -60,18 +60,40 @@ def test_manifest_reports_image_unavailable_and_lookup_errors_without_selecting_
         CandidateLabel("available", "repository_debugging", None),
         CandidateLabel("unavailable", "repository_debugging", None),
         CandidateLabel("error", "repository_debugging", None),
+        CandidateLabel("not-inspected", "repository_debugging", None),
     )
     images = (
         ImageAvailability("available", "image/a", True, "sha256:a", 100, None, True),
         ImageAvailability("unavailable", "image/b", False, None, None, None, True),
         ImageAvailability("error", "image/c", None, None, None, "http_429", True),
     )
+    image_by_id = {image.task_id: image for image in images}
     manifest = build_draft_manifest(labels, images)
     counts = manifest["categories"]["repository_debugging"]
-    assert counts["labeled"] == 3
+    assert counts["labeled"] == 4
+    assert counts["inspected"] == 3
     assert counts["with_image"] == 1
     assert counts["image_unavailable"] == 1
     assert counts["image_lookup_errors"] == 1
-    assert counts["selected_ids"] == ("available",)
+    assert counts["not_inspected"] == 1
+    ordered_ids = tuple(
+        sorted(
+            (label.task_id for label in labels),
+            key=lambda task_id: (
+                hashlib.sha256(f"{SEED}{task_id}".encode()).hexdigest(),
+                task_id,
+            ),
+        )
+    )
+    blocker = next(
+        task_id
+        for task_id in ordered_ids
+        if task_id not in {image.task_id for image in images} or image_by_id[task_id].exists is None
+    )
+    assert counts["selected_ids"] == tuple(
+        task_id
+        for task_id in ordered_ids[: ordered_ids.index(blocker)]
+        if image_by_id[task_id].exists is True
+    )
     assert manifest["image_unavailable_count"] == 1
     assert manifest["image_lookup_error_count"] == 1
