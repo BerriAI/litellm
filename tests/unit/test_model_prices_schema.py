@@ -509,7 +509,19 @@ def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
     assert all(name in rows for name in DEEPSEEK_PRICED_ROWS)
 
 
-PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
+PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset(
+    {
+        "sagemaker",
+        "bedrock_converse",
+        "coralbricks",
+        "inferenceapis",
+        "microsoft_365_copilot",
+        "openinfer",
+        "prism",
+        "sail",
+        "scaledown",
+    }
+)
 MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "evaluation"})
 VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(
     {
