@@ -34,5 +34,26 @@
       "pydicom/tests/test_valuerep.py::TestBadValueRead::test_read_bad_value_in_VR_enforce_valid_value"
     ],
     "applies_on_top_of": "pydicom repo overlay (LANG/LC_ALL=C.UTF-8)"
+  },
+  "pydicom__pydicom-1365": {
+    "snippet": "RUN /opt/miniconda3/envs/testbed/bin/pip install --no-cache-dir \"pytest==7.4.4\"",
+    "applies_on_top_of": "pydicom repo overlay (LANG/LC_ALL=C.UTF-8)",
+    "cause": "The gold preflight ran pytest 8.3.5, which no longer calls nose-style setup/teardown; at test-file commit bd82f01 TestWriteFile, TestScratchWriteDateTime, TestWriteNonStandard and TestWriteUndefinedLengthPixelData create file_out/fp in setup(self), so gold and noop both failed with missing attributes",
+    "evidence": [
+      "pydicom/tests/test_filewriter.py::TestWriteFile::testRTPlan",
+      "pydicom/tests/test_filewriter.py::TestWriteNonStandard",
+      "pydicom/tests/test_filewriter.py::TestScratchWriteDateTime"
+    ]
+  },
+  "pydicom__pydicom-1048": {
+    "snippet": "RUN /opt/miniconda3/envs/testbed/bin/pip install --no-cache-dir \"pytest==7.4.4\"",
+    "applies_on_top_of": "pydicom repo overlay (LANG/LC_ALL=C.UTF-8)",
+    "cause": "The gold preflight ran pytest 8.3.5, which no longer calls nose-style setup/teardown; at test-file commit 00c2484 TestWriteFile, TestWriteNonStandard, TestReadDataElement, TestIncorrectVR and TestDeferredRead build fixtures in setup(self), and TestReader/TestIncorrectVR teardown(self) resets config.enforce_valid_values, so skipped teardowns also leave strict-mode state that makes later charset tests raise instead of warn. Gold revalidation on the corrected image decides whether every failure is covered",
+    "evidence": [
+      "pydicom/tests/test_filewriter.py::TestWriteFile",
+      "pydicom/tests/test_filereader.py::TestReadDataElement",
+      "pydicom/tests/test_filereader.py::TestDeferredRead::test_file_exists",
+      "pydicom/tests/test_filereader.py::TestReader::test_long_specific_char_set"
+    ]
   }
 }
