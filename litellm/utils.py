@@ -1126,83 +1126,90 @@ def function_setup(
         dynamic_callbacks: Final[list[str | Callable | CustomLogger] | None] = kwargs.pop("callbacks", None)
         all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
-        if len(all_callbacks) > 0:
-            for callback in all_callbacks:
-                # check if callback is a string - e.g. "lago", "openmeter"
-                if isinstance(callback, str):
-                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
-                        callback,
-                        internal_usage_cache=None,
-                        llm_router=None,
-                    )
-                    if callback is None or any(
-                        type(cb) is type(callback) for cb in litellm._async_success_callback
-                    ):  # don't double add a callback
-                        continue
-                if callback not in litellm.input_callback:
-                    litellm.input_callback.append(callback)
-                if callback not in litellm.success_callback:
-                    litellm.logging_callback_manager.add_litellm_success_callback(callback)
-                if callback not in litellm.failure_callback:
-                    litellm.logging_callback_manager.add_litellm_failure_callback(callback)
-                if callback not in litellm._async_success_callback:
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
-                if callback not in litellm._async_failure_callback:
-                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
-            print_verbose(f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}")
+        with litellm.logging_callback_manager.callback_lists_lock:
+            if len(all_callbacks) > 0:
+                for callback in all_callbacks:
+                    # check if callback is a string - e.g. "lago", "openmeter"
+                    if isinstance(callback, str):
+                        callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                            callback,
+                            internal_usage_cache=None,
+                            llm_router=None,
+                        )
+                        if callback is None or any(
+                            type(cb) is type(callback) for cb in litellm._async_success_callback
+                        ):  # don't double add a callback
+                            continue
+                    if callback not in litellm.input_callback:
+                        litellm.input_callback.append(callback)
+                    if callback not in litellm.success_callback:
+                        litellm.logging_callback_manager.add_litellm_success_callback(callback)
+                    if callback not in litellm.failure_callback:
+                        litellm.logging_callback_manager.add_litellm_failure_callback(callback)
+                    if callback not in litellm._async_success_callback:
+                        litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
+                    if callback not in litellm._async_failure_callback:
+                        litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
+                print_verbose(
+                    f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
+                )
 
-        if (
-            len(litellm.input_callback) > 0 or len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0
-        ) and len(callback_list) == 0:
-            callback_list = list(set(litellm.input_callback + litellm.success_callback + litellm.failure_callback))
+            callbacks_to_set_up: Final = (
+                list(set(litellm.input_callback + litellm.success_callback + litellm.failure_callback))
+                if len(callback_list) == 0
+                else []
+            )
+            if callbacks_to_set_up:
+                callback_list = callbacks_to_set_up
+            ## ASYNC CALLBACKS - safety net for callbacks added via direct append
+            if len(litellm.input_callback) > 0:
+                removed_async_items = []
+                for index, callback in enumerate(litellm.input_callback):
+                    if coroutine_checker.is_async_callable(callback):
+                        litellm._async_input_callback.append(callback)
+                        removed_async_items.append(index)
+
+                # Pop the async items from input_callback in reverse order to avoid index issues
+                for index in reversed(removed_async_items):
+                    litellm.input_callback.pop(index)
+            if len(litellm.success_callback) > 0:
+                removed_async_items = []
+                for index, callback in enumerate(litellm.success_callback):
+                    if coroutine_checker.is_async_callable(callback):
+                        litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
+                        removed_async_items.append(index)
+                    elif callback == "dynamodb" or callback == "openmeter":
+                        # dynamo is an async callback, it's used for the proxy and needs to be async
+                        # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
+                        litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
+                        removed_async_items.append(index)
+                    elif callback in litellm._known_custom_logger_compatible_callbacks and isinstance(callback, str):
+                        add_custom_logger_callback_to_specific_event(callback, "success")
+
+                # Pop the async items from success_callback in reverse order to avoid index issues
+                for index in reversed(removed_async_items):
+                    litellm.success_callback.pop(index)
+
+            if len(litellm.failure_callback) > 0:
+                removed_async_items = []
+                for index, callback in enumerate(litellm.failure_callback):
+                    if coroutine_checker.is_async_callable(callback):
+                        litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
+                        removed_async_items.append(index)
+                    elif callback in litellm._known_custom_logger_compatible_callbacks and isinstance(callback, str):
+                        add_custom_logger_callback_to_specific_event(callback, "failure")
+
+                # Pop the async items from failure_callback in reverse order to avoid index issues
+                for index in reversed(removed_async_items):
+                    litellm.failure_callback.pop(index)
+        if callbacks_to_set_up:
             get_set_callbacks: Final[Callable[[], Callable[..., None]]] = litellm_utils.get_set_callbacks
-            get_set_callbacks()(callback_list=callback_list, function_id=function_id)
-        ## ASYNC CALLBACKS - safety net for callbacks added via direct append
-        if len(litellm.input_callback) > 0:
-            removed_async_items = []
-            for index, callback in enumerate(litellm.input_callback):
-                if coroutine_checker.is_async_callable(callback):
-                    litellm._async_input_callback.append(callback)
-                    removed_async_items.append(index)
-
-            # Pop the async items from input_callback in reverse order to avoid index issues
-            for index in reversed(removed_async_items):
-                litellm.input_callback.pop(index)
-        if len(litellm.success_callback) > 0:
-            removed_async_items = []
-            for index, callback in enumerate(litellm.success_callback):
-                if coroutine_checker.is_async_callable(callback):
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
-                    removed_async_items.append(index)
-                elif callback == "dynamodb" or callback == "openmeter":
-                    # dynamo is an async callback, it's used for the proxy and needs to be async
-                    # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
-                    removed_async_items.append(index)
-                elif callback in litellm._known_custom_logger_compatible_callbacks and isinstance(callback, str):
-                    add_custom_logger_callback_to_specific_event(callback, "success")
-
-            # Pop the async items from success_callback in reverse order to avoid index issues
-            for index in reversed(removed_async_items):
-                litellm.success_callback.pop(index)
-
-        if len(litellm.failure_callback) > 0:
-            removed_async_items = []
-            for index, callback in enumerate(litellm.failure_callback):
-                if coroutine_checker.is_async_callable(callback):
-                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
-                    removed_async_items.append(index)
-                elif callback in litellm._known_custom_logger_compatible_callbacks and isinstance(callback, str):
-                    add_custom_logger_callback_to_specific_event(callback, "failure")
-
-            # Pop the async items from failure_callback in reverse order to avoid index issues
-            for index in reversed(removed_async_items):
-                litellm.failure_callback.pop(index)
+            get_set_callbacks()(callback_list=callbacks_to_set_up, function_id=function_id)
         ### DYNAMIC CALLBACKS ###
-        dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_async_failure_callbacks: Final[list[str | Callable | CustomLogger] | None] = None
+        dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
+        dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
+        dynamic_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None
+        dynamic_async_failure_callbacks: Final[list[str | Callable[..., object] | CustomLogger] | None] = None
         if kwargs.get("success_callback", None) is not None and isinstance(kwargs["success_callback"], list):
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
@@ -7962,12 +7969,16 @@ class TextCompletionStreamWrapper:
             text_choices: Final = TextChoices()
             if isinstance(chunk, Choices):  # chunk should always be of type StreamingChoices
                 raise Exception
-            delta: Final = chunk["choices"][0]["delta"]
-            text_choices["text"] = delta["content"]
-            text_choices["reasoning_content"] = delta.get("reasoning_content")
-            text_choices["index"] = chunk["choices"][0]["index"]
-            text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
-            response["choices"] = [text_choices]
+
+            if chunk["choices"]:
+                delta: Final = chunk["choices"][0]["delta"]
+                text_choices["text"] = delta["content"]
+                text_choices["reasoning_content"] = delta.get("reasoning_content")
+                text_choices["index"] = chunk["choices"][0]["index"]
+                text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
+                response["choices"] = [text_choices]
+            else:
+                response["choices"] = []
 
             # only pass usage when stream_options["include_usage"] is True
             if self.stream_options and self.stream_options.get("include_usage", False) is True:
