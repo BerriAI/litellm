@@ -7251,6 +7251,39 @@ async def test_async_data_generator_closes_the_guardrail_chain_before_returning_
 
 
 @pytest.mark.asyncio
+async def test_async_data_generator_midstream_failure_frame_is_openai_shaped_with_a_json_null_param():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+
+    async def chain_failing_after_first_chunk(**_kwargs):
+        yield {"choices": [{"delta": {"content": "Hello"}}]}
+        raise ValueError("audit hook could not reach its sink")
+
+    proxy_logging = _guarded_chain_logging(chain_failing_after_first_chunk)
+    proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging):
+        frames = [
+            frame
+            async for frame in async_data_generator(
+                MagicMock(), MagicMock(spec=UserAPIKeyAuth), {"model": "gpt-4o-mini"}
+            )
+        ]
+
+    error_bodies = [json.loads(frame.removeprefix("data: ")) for frame in frames if '"error"' in frame]
+    assert error_bodies == [
+        {
+            "error": {
+                "message": "audit hook could not reach its sink",
+                "type": "internal_server_error",
+                "param": None,
+                "code": "500",
+            }
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_async_data_generator_closes_the_guardrail_chain_while_a_keepalive_read_is_pending():
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import async_data_generator
