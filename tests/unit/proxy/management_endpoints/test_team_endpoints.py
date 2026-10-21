@@ -44,6 +44,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,  # Import UserAPIKeyAuth
 )
+from litellm.proxy.hooks.model_max_budget_limiter import RoutedModels
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     PROXY_CONTROLLED_TEAM_METADATA_KEYS,
@@ -17121,19 +17122,21 @@ def test_team_admin_can_tighten_or_keep_team_model_caps(requested) -> None:
 
 _TEAM_OPUS_FAMILY_CAP: Final = MappingProxyType({"claude-opus*": {"max_budget": 10.0, "budget_duration": "1d"}})
 _TEAM_OPUS_GROUP_CAP: Final = MappingProxyType({"z-opus-group": {"max_budget": 10.0, "budget_duration": "1d"}})
-_TEAM_ACCESS_GROUP_MEMBERS: Final = MappingProxyType(
-    {
-        "z-opus-group": ("claude-opus-4-8",),
-        "a-opus-group": ("claude-opus-4-8", "claude-opus-5-5"),
-        "zz-opus-group": ("claude-opus-4-8",),
-        "a-gemini-group": ("gemini-3-pro",),
-        "z-anthropic-group": ("anthropic/*",),
-    }
+_TEAM_ROUTED_MODELS: Final = RoutedModels(
+    served_names=frozenset(
+        {"claude-opus-4-8", "claude-opus-5-5", "gemini-3-pro", "gpt-4o", "my-team/gpt-4o", "team-route/*"}
+    ),
+    group_members=MappingProxyType(
+        {
+            "opus-group": frozenset({"claude-opus-4-8"}),
+            "z-opus-group": frozenset({"claude-opus-4-8"}),
+            "a-opus-group": frozenset({"claude-opus-4-8", "claude-opus-5-5"}),
+            "zz-opus-group": frozenset({"claude-opus-4-8"}),
+            "a-gemini-group": frozenset({"gemini-3-pro"}),
+            "z-anthropic-group": frozenset({"anthropic/*"}),
+        }
+    ),
 )
-
-
-def _team_access_group_members(access_group: str) -> tuple[str, ...]:
-    return _TEAM_ACCESS_GROUP_MEMBERS.get(access_group, ())
 
 
 def _check_team_admin_model_caps(existing: Mapping[str, object], requested: Mapping[str, object]) -> None:
@@ -17143,7 +17146,7 @@ def _check_team_admin_model_caps(existing: Mapping[str, object], requested: Mapp
         data=UpdateTeamRequest(team_id="t1", model_max_budget=dict(requested)),
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
         existing_model_max_budget=existing,
-        access_group_members=_team_access_group_members,
+        routed_models_source=lambda: _TEAM_ROUTED_MODELS,
     )
 
 
@@ -17159,6 +17162,19 @@ def _check_team_admin_model_caps(existing: Mapping[str, object], requested: Mapp
             {"z-anthropic-group": {"max_budget": 10.0, "budget_duration": "1d"}},
             {"claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}},
         ),
+        (_TEAM_OPUS_FAMILY_CAP, {"claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (
+            {"anthropic/*": {"max_budget": 10.0, "budget_duration": "1d"}},
+            {"claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (
+            {"my-team/*": {"max_budget": 10.0, "budget_duration": "1d"}},
+            {"gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (
+            {"team-route/*": {"max_budget": 10.0, "budget_duration": "1d"}},
+            {"gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
     ],
     ids=[
         "group_over_pattern",
@@ -17167,6 +17183,10 @@ def _check_team_admin_model_caps(existing: Mapping[str, object], requested: Mapp
         "earlier_group_sharing_a_model",
         "model_inside_group",
         "model_under_wildcard_group",
+        "model_matching_pattern",
+        "model_under_provider_pattern",
+        "model_under_served_prefix",
+        "model_under_wildcard_route",
     ],
 )
 def test_team_admin_cannot_add_an_entry_looser_than_a_cap_it_outranks(
@@ -17187,6 +17207,11 @@ def test_team_admin_cannot_add_an_entry_looser_than_a_cap_it_outranks(
         (_TEAM_OPUS_GROUP_CAP, {**_TEAM_OPUS_GROUP_CAP, "a-gemini-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
         (_TEAM_OPUS_GROUP_CAP, {**_TEAM_OPUS_GROUP_CAP, "zz-opus-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
         (_TEAM_OPUS_GROUP_CAP, {**_TEAM_OPUS_GROUP_CAP, "gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {**_TEAM_OPUS_FAMILY_CAP, "gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (
+            _TEAM_OPUS_FAMILY_CAP,
+            {**_TEAM_OPUS_FAMILY_CAP, "a-gemini-group": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
         (
             {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 100.0, "budget_duration": "1d"}},
             {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 100.0, "budget_duration": "1d"}},
@@ -17206,6 +17231,8 @@ def test_team_admin_cannot_add_an_entry_looser_than_a_cap_it_outranks(
         "group_without_shared_models",
         "later_group_sharing_a_model",
         "model_outside_group",
+        "model_outside_pattern",
+        "group_outside_pattern",
         "unchanged_looser_entry",
         "tightened_looser_entry",
         "uncapped_entry_edited",

@@ -16,10 +16,14 @@ from litellm.proxy.hooks.model_budget_shared_windows import SharedWindow, Shared
 from litellm.proxy.hooks.model_max_budget_limiter import (
     PROXY_VirtualKeyModelMaxBudgetLimiter,
     build_model_max_budget_usage,
+    model_access_groups_of,
     model_budget_spend_cache_key,
     resolve_model_budget,
+    routed_models_of,
     team_member_budget_entity_id,
+    team_model_budget_applies,
 )
+from litellm.router import Router
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import LiteLLMBatch, Usage
 
@@ -453,6 +457,7 @@ async def test_a_model_added_to_the_access_group_later_is_covered_with_no_key_ch
         ({"claude-opus-4*": FAMILY_CAP, "claude-opus*": ROOMY_CAP}, "claude-opus-4-7", True),
         ({"claude-opus-4*": FAMILY_CAP, "claude-opus*": ROOMY_CAP}, "claude-opus-5-5", False),
         ({"claude-opus-4*": {"budget_limit": CHAT_COST}, "claude-opus*": FAMILY_CAP}, "claude-opus-5-5", True),
+        ({"claude-opus-4*": FAMILY_CAP, "c" + "*" * 15: ROOMY_CAP}, "claude-opus-4-7", True),
     ],
 )
 async def test_the_most_specific_entry_takes_the_spend_and_gates_the_request(
@@ -467,6 +472,87 @@ async def test_the_most_specific_entry_takes_the_spend_and_gates_the_request(
             await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=checked_model)
     else:
         assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=checked_model)
+
+
+@pytest.mark.asyncio
+async def test_an_exact_entry_refusal_reads_as_before_for_a_provider_prefixed_model():
+    budget: Final = {"claude-opus-4-8": FAMILY_CAP}
+    limiter: Final = _family_limiter()
+
+    await _spend_on(limiter, model="claude-opus-4-8", model_max_budget=budget)
+
+    with pytest.raises(litellm.BudgetExceededError, match=r"model=anthropic/claude-opus-4-8$"):
+        await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="anthropic/claude-opus-4-8")
+
+
+@pytest.mark.parametrize(
+    ("key_entry", "team_cap_applies"),
+    [("claude-opus-4-8", False), ("anthropic/claude-opus-4-8", True), ("claude-opus*", True), (OPUS_GROUP, True)],
+)
+def test_only_a_key_entry_named_after_the_model_replaces_the_team_cap(key_entry: str, team_cap_applies: bool):
+    assert team_model_budget_applies(model="claude-opus-4-8", key_model_max_budget={key_entry: ROOMY_CAP}) is (
+        team_cap_applies
+    )
+
+
+@pytest.mark.asyncio
+async def test_end_user_windows_stay_on_the_replica_without_redis():
+    budget: Final = {"claude-opus*": FAMILY_CAP}
+    table: Final = _SharedWindowsDouble()
+    limiter: Final = _family_limiter(shared_windows=table)
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "acompletion",
+            "standard_logging_object": {
+                "call_type": "acompletion",
+                "response_cost": CHAT_COST,
+                "model": "anthropic/claude-opus-4-8",
+                "model_group": "claude-opus-4-8",
+                "end_user": "end-user-1",
+                "metadata": {},
+            },
+            "litellm_params": {"metadata": {"user_api_key_end_user_model_max_budget": budget}},
+        },
+    )
+    table.flush()
+
+    assert dict(table.rows) == {}
+    with pytest.raises(litellm.BudgetExceededError, match="model=claude-opus-5-5"):
+        await limiter.is_end_user_within_model_budget(
+            end_user_id="end-user-1", end_user_model_max_budget=budget, model="claude-opus-5-5"
+        )
+
+
+def test_an_access_group_named_after_a_served_model_never_widens_that_models_entry():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                "model_info": {"access_groups": ["gpt-4o", "openai-models"]},
+            },
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"access_groups": ["gpt-4o", "openai-models"]},
+            },
+        ]
+    )
+
+    def governing_entry(model_max_budget: Mapping[str, object]) -> str | None:
+        resolved: Final = resolve_model_budget(
+            model="gpt-4o-mini",
+            model_max_budget=model_max_budget,
+            model_access_groups=lambda model: model_access_groups_of(router=router, model=model),
+        )
+        return None if resolved is None else resolved.budget_model
+
+    assert governing_entry({"gpt-4o": FAMILY_CAP}) is None
+    assert governing_entry({"openai-models": FAMILY_CAP}) == "openai-models"
+    assert routed_models_of(router).members("gpt-4o") == frozenset()
+    assert routed_models_of(router).members("openai-models") == frozenset({"gpt-4o", "gpt-4o-mini"})
 
 
 @pytest.mark.asyncio

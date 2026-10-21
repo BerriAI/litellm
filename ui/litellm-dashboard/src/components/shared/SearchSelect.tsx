@@ -19,6 +19,11 @@ export interface SearchSelectOption {
   icon?: React.ReactNode;
 }
 
+interface CustomValue {
+  hint: string;
+  accepts: (typed: string) => boolean;
+}
+
 interface SearchSelectProps {
   options: SearchSelectOption[];
   value?: string | null;
@@ -29,7 +34,7 @@ interface SearchSelectProps {
   className?: string;
   inputId?: string;
   allowClear?: boolean;
-  customValueHint?: string;
+  customValue?: CustomValue;
   reservedValues?: readonly string[];
   "aria-label"?: string;
   id?: string;
@@ -51,7 +56,7 @@ export function SearchSelect({
   className,
   inputId,
   allowClear = true,
-  customValueHint,
+  customValue,
   reservedValues = [],
   "aria-label": ariaLabel,
   id,
@@ -64,8 +69,8 @@ export function SearchSelect({
   const typed = query.trim();
   const isNewValue = typed !== "" && !reservedValues.includes(typed) && !known.some((option) => option.value === typed);
   const items =
-    customValueHint !== undefined && isNewValue
-      ? [...known, { label: typed, value: typed, sublabel: customValueHint }]
+    customValue !== undefined && isNewValue && customValue.accepts(typed)
+      ? [...known, { label: typed, value: typed, sublabel: customValue.hint }]
       : known;
 
   return (

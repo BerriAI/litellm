@@ -137,10 +137,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
-    AccessGroupMembers,
+    RoutedModels,
     build_model_max_budget_usage,
     entries_outranked_by,
-    proxy_access_group_members,
+    proxy_routed_models,
     resolve_model_budget,
 )
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
@@ -1430,7 +1430,7 @@ def _check_team_model_budget_update_authority(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth,
     existing_model_max_budget: Mapping[str, object] | None,
-    access_group_members: AccessGroupMembers = proxy_access_group_members,
+    routed_models_source: Callable[[], RoutedModels] = proxy_routed_models,
 ) -> None:
     """Like `_check_team_budget_update_authority`: only a proxy admin may raise, re-window or drop a per-model cap."""
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
@@ -1470,12 +1470,13 @@ def _check_team_model_budget_update_authority(
                     )
                 },
             )
+    routed_models: Final = routed_models_source()
     for model_name, proposed in requested.items():
         _check_outranked_model_caps(
             entry=model_name,
             proposed=proposed,
             existing_model_max_budget=existing_model_max_budget,
-            access_group_members=access_group_members,
+            routed_models=routed_models,
         )
 
 
@@ -1483,12 +1484,12 @@ def _check_outranked_model_caps(
     entry: str,
     proposed: BudgetConfig,
     existing_model_max_budget: Mapping[str, object],
-    access_group_members: AccessGroupMembers,
+    routed_models: RoutedModels,
 ) -> None:
     if _keeps_or_tightens(proposed=proposed, existing=_existing_model_cap(existing_model_max_budget.get(entry))):
         return
     outranked: Final = next(
-        _looser_than_outranked_caps(entry, proposed, existing_model_max_budget, access_group_members), None
+        _looser_than_outranked_caps(entry, proposed, existing_model_max_budget, routed_models), None
     )
     if outranked is None:
         return
@@ -1510,12 +1511,12 @@ def _looser_than_outranked_caps(
     entry: str,
     proposed: BudgetConfig,
     existing_model_max_budget: Mapping[str, object],
-    access_group_members: AccessGroupMembers,
+    routed_models: RoutedModels,
 ) -> Iterator[tuple[str, BudgetConfig]]:
     outranked_caps: Final = (
         (outranked, _existing_model_cap(existing_model_max_budget[outranked]))
         for outranked in entries_outranked_by(
-            entry=entry, model_max_budget=existing_model_max_budget, access_group_members=access_group_members
+            entry=entry, model_max_budget=existing_model_max_budget, routed_models=routed_models
         )
     )
     yield from (

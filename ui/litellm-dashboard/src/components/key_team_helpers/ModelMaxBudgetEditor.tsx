@@ -50,6 +50,8 @@ export const MODEL_BUDGET_PERIOD_OPTIONS = [
 
 const DEFAULT_PERIOD = "30d";
 
+const MODEL_PATTERN_VALUE = { hint: "Model pattern", accepts: (typed: string) => typed.includes("*") };
+
 export const entriesToModelMaxBudget = (entries: readonly ModelBudgetEntry[]): ModelMaxBudget =>
   Object.fromEntries(
     entries
@@ -165,7 +167,7 @@ export function ModelMaxBudgetEditor({
                 onValueChange={(model) => updateEntry(entry.id, { model })}
                 placeholder="Select model"
                 emptyText="No models found"
-                customValueHint="Access group or model pattern"
+                customValue={MODEL_PATTERN_VALUE}
                 reservedValues={entries.flatMap((other) => (other.id !== entry.id && other.model ? [other.model] : []))}
                 disabled={!premiumUser}
               />

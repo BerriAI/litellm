@@ -111,4 +111,22 @@ describe("ModelMaxBudgetEditor model families", () => {
     await user.type(newRowModelField, "claude-sonnet*");
     expect(await screen.findByRole("option", { name: /claude-sonnet\*/ })).toBeInTheDocument();
   });
+
+  it("does not offer a typed name that is neither listed nor a pattern", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelMaxBudgetEditor
+        value={{}}
+        onChange={vi.fn()}
+        availableModels={["gpt-4o", "claude-opus-4-8"]}
+        premiumUser={true}
+      />,
+    );
+
+    await user.click(addButton());
+    await user.type(screen.getByPlaceholderText("Select model"), "claude-opsu-4-8");
+
+    expect(screen.queryByRole("option", { name: /claude-opsu-4-8/ })).not.toBeInTheDocument();
+    expect(screen.getByText("No models found")).toBeInTheDocument();
+  });
 });

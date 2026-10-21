@@ -1,12 +1,18 @@
 import asyncio
 import functools
+import itertools
 import json
 import time
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final, TypeAlias, cast  # noqa: TID251  # untyped callback payload requires explicit narrowing
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    TypeAlias,
+    cast,  # noqa: TID251  # untyped callback payload requires explicit narrowing
+)
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -25,9 +31,11 @@ from litellm.proxy.hooks.model_budget_shared_windows import (
 )
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
 from litellm.router_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
-from litellm.router_utils.pattern_match_deployments import PatternUtils
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import BudgetConfig, StandardLoggingPayload
+from litellm.types.utils import BudgetConfig, LlmProviders, StandardLoggingPayload
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX: Final = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX: Final = "end_user_model_spend"
@@ -47,6 +55,8 @@ _SPEND_CACHE_KEY_PREFIXES: Final = MappingProxyType(
 
 _LEGACY_REQUEST_MODEL_SCOPES: Final = frozenset({Litellm_EntityType.KEY, Litellm_EntityType.END_USER})
 
+_PER_REPLICA_SCOPES: Final = frozenset({Litellm_EntityType.END_USER})
+
 _PROCESS_STARTED_AT: Final = time.monotonic()
 
 _LATEST_RESET_AT: Final = datetime(9999, 12, 31, tzinfo=timezone.utc).timestamp()
@@ -55,7 +65,7 @@ _GLOB_WILDCARD: Final = "*"
 
 ModelAccessGroups: TypeAlias = Callable[[str], Collection[str]]
 
-AccessGroupMembers: TypeAlias = Callable[[str], Collection[str]]
+_PROVIDER_PREFIXES: Final = tuple(f"{provider.value}/" for provider in LlmProviders)
 
 _BUDGET_START_TIME_KEY_PREFIXES: Final = MappingProxyType(
     {
@@ -80,6 +90,15 @@ class ResolvedModelBudget:
 
     budget_model: str
     budget_config: BudgetConfig
+
+
+@dataclass(frozen=True, slots=True)
+class RoutedModels:
+    served_names: frozenset[str]
+    group_members: Mapping[str, frozenset[str]]
+
+    def members(self, access_group: str) -> frozenset[str]:
+        return self.group_members.get(access_group, frozenset())
 
 
 def team_member_budget_entity_id(user_id: str, team_id: str) -> str:
@@ -145,24 +164,48 @@ def model_budget_start_time_cache_key(
     return f"{_BUDGET_START_TIME_KEY_PREFIXES[entity_type]}:{entity_id}:{budget_model}:{budget_duration}"
 
 
+def model_access_groups_of(router: "Router", model: str) -> frozenset[str]:
+    """Access groups serving `model`, leaving out any named after a model the router serves.
+
+    An entry with that name already budgets that model, so reading it as the group too would quietly widen it.
+    """
+    return frozenset(
+        group for group in router.get_model_access_groups(model_name=model) if group not in router.model_names
+    )
+
+
+def routed_models_of(router: "Router") -> RoutedModels:
+    served_names: Final = frozenset(router.model_names)
+    return RoutedModels(
+        served_names=served_names,
+        group_members=MappingProxyType(
+            {
+                group: frozenset(members)
+                for group, members in router.get_model_access_groups().items()
+                if group not in served_names
+            }
+        ),
+    )
+
+
 def proxy_model_access_groups(model: str) -> frozenset[str]:
+    router: Final = _proxy_router()
+    return frozenset() if router is None else model_access_groups_of(router=router, model=model)
+
+
+def proxy_routed_models() -> RoutedModels:
+    router: Final = _proxy_router()
+    if router is None:
+        return RoutedModels(served_names=frozenset(), group_members=MappingProxyType({}))
+    return routed_models_of(router)
+
+
+def _proxy_router() -> "Router | None":
     try:
         from litellm.proxy.proxy_server import llm_router
     except ImportError:
-        return frozenset()
-    if llm_router is None:
-        return frozenset()
-    return frozenset(llm_router.get_model_access_groups(model_name=model))
-
-
-def proxy_access_group_members(access_group: str) -> frozenset[str]:
-    try:
-        from litellm.proxy.proxy_server import llm_router
-    except ImportError:
-        return frozenset()
-    if llm_router is None:
-        return frozenset()
-    return frozenset(llm_router.get_model_access_groups(model_access_group=access_group).get(access_group, ()))
+        return None
+    return llm_router
 
 
 def resolve_model_budget(
@@ -231,21 +274,21 @@ def _after_piece(name: str, end: int) -> Callable[[int, str], int]:
     return step
 
 
-def _glob_precedence(pattern: str) -> tuple[tuple[int, int], str]:
-    return PatternUtils.calculate_pattern_specificity(pattern), pattern
+def _glob_precedence(pattern: str) -> tuple[int, int, str]:
+    """More literal characters first, then fewer wildcards, so padding a pattern with `*` never makes it win."""
+    wildcards: Final = pattern.count(_GLOB_WILDCARD)
+    return len(pattern) - wildcards, -wildcards, pattern
 
 
-def entries_outranked_by(
-    entry: str,
-    model_max_budget: Collection[str],
-    access_group_members: AccessGroupMembers = proxy_access_group_members,
-) -> Iterator[str]:
-    """Entries that `entry` can take precedence over for some request model.
+def entries_outranked_by(entry: str, model_max_budget: Collection[str], routed_models: RoutedModels) -> Iterator[str]:
+    """Entries that `entry` can take precedence over for some model a request can name.
 
-    A pattern can match a provider-prefixed or wildcard-routed name whose
-    candidates or access groups include any other entry, so patterns are taken
-    to overlap: a pattern outranks every less specific pattern, and a model or
-    group entry outranks every pattern.
+    Two patterns can both match a name the router has not served yet, so a
+    pattern outranks every less specific pattern. A model or group entry
+    outranks a pattern that matches one of the names it governs: the model,
+    the model under any provider prefix or wildcard route, a served name
+    ending in it, or a member of the group, and every pattern when a member is
+    itself a wildcard route.
     """
     if _GLOB_WILDCARD in entry:
         entry_precedence: Final = _glob_precedence(entry)
@@ -255,16 +298,39 @@ def entries_outranked_by(
             if _GLOB_WILDCARD in other and _glob_precedence(other) < entry_precedence
         )
         return
-    yield from (other for other in model_max_budget if _GLOB_WILDCARD in other)
-    entry_members: Final = frozenset(access_group_members(entry))
+    entry_members: Final = routed_models.members(entry)
+    covers_wildcard_route: Final = any(_GLOB_WILDCARD in member for member in entry_members)
+    governed_candidates: Final = frozenset(
+        itertools.chain.from_iterable(
+            _budget_model_candidates(name)
+            for name in _names_governed_by(entry=entry, entry_members=entry_members, routed_models=routed_models)
+        )
+    )
+    yield from (
+        other
+        for other in model_max_budget
+        if _GLOB_WILDCARD in other and (covers_wildcard_route or _glob_matches(other, governed_candidates))
+    )
     yield from (
         other
         for other in model_max_budget
         if _GLOB_WILDCARD not in other
         and _ranks_ahead_of_group(
-            entry=entry, entry_members=entry_members, group=other, group_members=access_group_members(other)
+            entry=entry, entry_members=entry_members, group=other, group_members=routed_models.members(other)
         )
     )
+
+
+def _names_governed_by(entry: str, entry_members: frozenset[str], routed_models: RoutedModels) -> Iterator[str]:
+    yield entry
+    yield from (f"{prefix}{entry}" for prefix in _PROVIDER_PREFIXES)
+    yield from (
+        name
+        for name in routed_models.served_names
+        if _GLOB_WILDCARD not in name and entry in _budget_model_candidates(name)
+    )
+    yield from (name.replace(_GLOB_WILDCARD, entry) for name in routed_models.served_names if _GLOB_WILDCARD in name)
+    yield from (member for member in entry_members if _GLOB_WILDCARD not in member)
 
 
 def _ranks_ahead_of_group(entry: str, entry_members: frozenset[str], group: str, group_members: Iterable[str]) -> bool:
@@ -295,16 +361,21 @@ def _usable_entry(entry: str, raw_budget_config: object) -> ResolvedModelBudget 
     return ResolvedModelBudget(budget_model=entry, budget_config=budget_config)
 
 
-def team_model_budget_applies(
-    model: str,
-    key_model_max_budget: Mapping[str, object] | None,
-    model_access_groups: ModelAccessGroups = proxy_model_access_groups,
-) -> bool:
-    """A key entry that spend-gates `model` overrides the team cap: it is then gated on and billed to the key alone."""
+def team_model_budget_applies(model: str, key_model_max_budget: Mapping[str, object] | None) -> bool:
+    """A key entry named after `model` that spend-gates it overrides the team cap: it is then gated on and billed to
+    the key alone. A key pattern or group entry is gated alongside the team cap, never instead of it."""
     if not key_model_max_budget:
         return True
     resolved: Final = resolve_model_budget(
-        model=model, model_max_budget=key_model_max_budget, model_access_groups=model_access_groups
+        model=model,
+        model_max_budget=MappingProxyType(
+            {
+                candidate: key_model_max_budget[candidate]
+                for candidate in _budget_model_candidates(model)
+                if candidate in key_model_max_budget
+            }
+        ),
+        model_access_groups=lambda _: frozenset(),
     )
     return resolved is None or not _spend_gated(resolved.budget_config)
 
@@ -667,9 +738,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         Raises:
             BudgetExceededError: If the team has exceeded the model budget
         """
-        if not team_model_budget_applies(
-            model=model, key_model_max_budget=key_model_max_budget, model_access_groups=self._model_access_groups
-        ):
+        if not team_model_budget_applies(model=model, key_model_max_budget=key_model_max_budget):
             return True
         return await self._is_entity_within_model_budget(
             entity_type=Litellm_EntityType.TEAM,
@@ -735,7 +804,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             raise litellm.BudgetExceededError(
                 message=(
                     exceeded_message
-                    if resolved.budget_model == model
+                    if resolved.budget_model in _budget_model_candidates(model)
                     else f"{exceeded_message}, budget_model={resolved.budget_model}"
                 ),
                 current_cost=current_spend,
@@ -784,7 +853,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> float:
         """Without Redis each replica's counter holds only its own share, so the window every replica adds to
         in the database is the floor."""
-        if self.dual_cache.redis_cache is not None:
+        if not self._shares_windows_in_database(entity_type):
             return local_spend
         shared: Final = await _open_shared_window(
             shared_windows=self._shared_windows,
@@ -878,7 +947,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                         key_model_max_budget=(
                             key_model_max_budget if isinstance(key_model_max_budget, Mapping) else None
                         ),
-                        model_access_groups=self._model_access_groups,
                     )
                     else None
                 ),
@@ -965,21 +1033,29 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             budget_model=resolved.budget_model,
             budget_duration=budget_duration,
         )
-        await self._join_shared_window(
-            spend_key=spend_key, start_time_key=start_time_key, budget_duration=budget_duration
-        )
+        shares_window: Final = self._shares_windows_in_database(entity_type)
+        if shares_window:
+            await self._join_shared_window(
+                spend_key=spend_key, start_time_key=start_time_key, budget_duration=budget_duration
+            )
         await self._increment_spend_for_key(
             budget_config=resolved.budget_config,
             spend_key=spend_key,
             start_time_key=start_time_key,
             response_cost=response_cost,
         )
-        await self._share_spend(
-            spend_key=spend_key,
-            start_time_key=start_time_key,
-            budget_duration=budget_duration,
-            response_cost=response_cost,
-        )
+        if shares_window:
+            await self._share_spend(
+                spend_key=spend_key,
+                start_time_key=start_time_key,
+                budget_duration=budget_duration,
+                response_cost=response_cost,
+            )
+
+    def _shares_windows_in_database(self, entity_type: Litellm_EntityType) -> bool:
+        """End-user ids are whatever the client sends, so their windows stay on each replica rather than adding a
+        database row per id."""
+        return self.dual_cache.redis_cache is None and entity_type not in _PER_REPLICA_SCOPES
 
     async def _join_shared_window(self, spend_key: str, start_time_key: str, budget_duration: str) -> None:
         """Without Redis, start this replica's window where the database says every replica's window starts.
@@ -987,8 +1063,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         Every replica then sends the same window start with its spend, so no flush reads as a newer window that
         replaces the spend the others already added.
         """
-        if self.dual_cache.redis_cache is not None:
-            return
         now: Final = self._clock()
         local: Final = self.dual_cache.in_memory_cache
         if _open_local_window_start(
@@ -1014,8 +1088,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     async def _share_spend(
         self, spend_key: str, start_time_key: str, budget_duration: str, response_cost: float
     ) -> None:
-        if self.dual_cache.redis_cache is not None:
-            return
         now: Final = self._clock()
         await self._shared_windows.add(
             spend_key=spend_key,

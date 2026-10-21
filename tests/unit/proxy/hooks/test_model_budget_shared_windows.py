@@ -35,6 +35,16 @@ class _Database:
         return 1
 
 
+class _OutracedDatabase:
+    def __init__(self, table: _Table, winner: object) -> None:
+        self.litellm_budgetwindowspend = table
+        self._winner = winner
+
+    async def execute_raw(self, query: str, *params: object) -> int:
+        self.litellm_budgetwindowspend.row = self._winner
+        return 0
+
+
 class _Sink:
     def __init__(self) -> None:
         self.transactions: tuple[WindowSpendTransaction, ...] = ()
@@ -139,6 +149,20 @@ async def test_open_reads_the_window_from_the_writer_while_the_read_replica_lags
     started_at: Final = await windows.open(
         spend_key=SPEND_KEY, budget_duration="1d", now=WINDOW_START.timestamp() + 3600
     )
+
+    assert started_at == WINDOW_START.timestamp()
+
+
+@pytest.mark.asyncio
+async def test_open_joins_the_window_a_racing_replica_opened_first():
+    winner: Final = SimpleNamespace(window_start=WINDOW_START.replace(tzinfo=None), spend=2.5)
+    database: Final = _OutracedDatabase(_Table(), winner)
+    windows: Final = DatabaseSharedWindows(
+        prisma_client_source=lambda: SimpleNamespace(db=database, writer_db=database),  # pyright: ignore[reportArgumentType]  # duck-typed prisma double
+        sink=_Sink(),
+    )
+
+    started_at: Final = await windows.open(spend_key=SPEND_KEY, budget_duration="1d", now=WINDOW_START.timestamp() + 60)
 
     assert started_at == WINDOW_START.timestamp()
 
