@@ -58,6 +58,7 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
+from litellm.proxy import proxy_server
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
@@ -67,6 +68,7 @@ from litellm.proxy.common_utils.token_count_settings import (
     TokenCountModel,
     TokenCountSettings,
     cost_map_entry,
+    unreliable_local_estimate,
 )
 from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request
 from litellm.proxy.proxy_server import (
@@ -2637,3 +2639,476 @@ async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_need
         local.total_tokens,
         local.tokenizer_type,
     )
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "messages", "tools", "expected"),
+    [
+        ("bedrock", "meta.llama4-maverick", [{"content": [{"type": "document"}]}], None, "document content"),
+        ("bedrock", "us.amazon.nova-2-lite", [], [{"name": "search"}], "more than 5%"),
+        ("azure_ai", "DeepSeek-V4-Pro", [], [{"name": "search"}], "more than 5%"),
+        ("azure_ai", "grok-4-1-fast-reasoning", [], None, "more than 5%"),
+    ],
+)
+def test_unreliable_local_estimate_returns_reason(
+    provider: str,
+    model: str,
+    messages: list[object],
+    tools: list[object] | None,
+    expected: str,
+) -> None:
+    reason: Final = unreliable_local_estimate(provider, model, messages, tools)
+
+    assert reason is not None and expected in reason
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "messages", "tools"),
+    [
+        ("bedrock", "meta.llama4-maverick", [{"content": "text"}], None),
+        ("bedrock", "us.amazon.nova-2-lite", [], None),
+        ("azure_ai", "deepseek-v4-pro", [], None),
+        ("azure_ai", "grok-4-1-fast-reasoning", [], [{"name": "search"}]),
+        ("azure", "gpt-4.1", [{"content": "text"}], None),
+    ],
+)
+def test_unreliable_local_estimate_preserves_local_count(
+    provider: str, model: str, messages: list[object], tools: list[object] | None
+) -> None:
+    assert unreliable_local_estimate(provider, model, messages, tools) is None
+
+
+@pytest.mark.parametrize(
+    ("nested_content", "expected"),
+    [
+        (
+            [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjQK",
+                    },
+                }
+            ],
+            "meta.llama4-maverick returned no server-side token count and LiteLLM cannot count document content locally",
+        ),
+        ("text", None),
+        ([{"type": "text", "text": "hello"}], None),
+    ],
+)
+def test_unreliable_local_estimate_detects_nested_document_content(
+    nested_content: object, expected: str | None
+) -> None:
+    reason: Final = unreliable_local_estimate(
+        custom_llm_provider="bedrock",
+        model="meta.llama4-maverick",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": nested_content,
+                    }
+                ],
+            }
+        ],
+        tools=None,
+    )
+
+    assert reason == expected
+
+
+_BEDROCK_COUNT_TOKENS_URL: Final = r"^https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/.+/count-tokens$"
+
+
+@pytest.mark.parametrize(
+    ("resolved_model", "messages", "tools", "call_endpoint", "reject"),
+    [
+        (
+            "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0",
+            [{"role": "user", "content": [{"type": "document"}]}],
+            None,
+            True,
+            True,
+        ),
+        (
+            "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0",
+            [{"role": "user", "content": "text"}],
+            None,
+            True,
+            False,
+        ),
+        (
+            "bedrock/us.amazon.nova-2-lite-v1:0",
+            [{"role": "user", "content": "text"}],
+            [{"name": "search"}],
+            True,
+            True,
+        ),
+        (
+            "bedrock/us.amazon.nova-2-lite-v1:0",
+            [{"role": "user", "content": "text"}],
+            None,
+            True,
+            False,
+        ),
+        ("azure_ai/deepseek-v4-pro", [{"role": "user", "content": "text"}], [{"name": "search"}], True, True),
+        ("azure_ai/deepseek-v4-pro", [{"role": "user", "content": "text"}], None, True, False),
+        ("azure_ai/grok-4-1-fast-reasoning", [{"role": "user", "content": "text"}], None, True, True),
+        ("azure_ai/grok-4-1-fast-reasoning", [{"role": "user", "content": "text"}], [{"name": "search"}], True, False),
+        (
+            "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": "JVBERi0xLjQK",
+                            },
+                        }
+                    ],
+                }
+            ],
+            None,
+            False,
+            False,
+        ),
+        ("azure/gpt-4.1", [{"role": "user", "content": "text"}], None, True, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_count_request_tokens_rejects_only_known_unreliable_estimates(
+    monkeypatch: pytest.MonkeyPatch,
+    resolved_model: str,
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]] | None,
+    call_endpoint: bool,
+    reject: bool,
+) -> None:
+    is_bedrock: Final = resolved_model.startswith("bedrock/")
+    litellm_params: Final = (
+        {
+            "model": resolved_model,
+            "aws_access_key_id": "AKIATESTACCESSKEY",
+            "aws_secret_access_key": "test-secret",
+            "aws_region_name": "us-east-1",
+        }
+        if is_bedrock
+        else {"model": resolved_model, "api_key": "test-key", "api_base": "https://count.test"}
+    )
+    router: Final = Router(model_list=[{"model_name": "count-target", "litellm_params": litellm_params}])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+    should_count_with_provider: Final = is_bedrock and call_endpoint
+
+    with respx.mock(assert_all_called=should_count_with_provider) as upstream:
+        upstream.post(url__regex=_BEDROCK_COUNT_TOKENS_URL).mock(
+            return_value=httpx.Response(400, json={"message": "CountTokens rejected request"})
+        )
+        if reject:
+            with pytest.raises(ProxyException) as raised:
+                await count_request_tokens(
+                    request=TokenCountRequest(model="count-target", messages=messages, tools=tools),
+                    call_endpoint=call_endpoint,
+                    messages_format="anthropic",
+                )
+            assert raised.value.code == "400"
+        else:
+            response: Final = await count_request_tokens(
+                request=TokenCountRequest(model="count-target", messages=messages, tools=tools),
+                call_endpoint=call_endpoint,
+                messages_format="anthropic",
+            )
+            assert response.count_source == "local_estimate"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_type", "expected_message"),
+    [
+        (429, "token_counting_error", "Provider count failed with 429"),
+        (500, "token_counting_error", "Provider count failed with 500"),
+        (400, "invalid_request_error", "cannot count document content locally"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_unreliable_document_estimate_preserves_transient_provider_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    expected_type: str,
+    expected_message: str,
+) -> None:
+    model: Final = "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "count-target",
+                "litellm_params": {
+                    "model": model,
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(url__regex=_BEDROCK_COUNT_TOKENS_URL).mock(
+            return_value=httpx.Response(
+                status_code,
+                json={"message": f"Provider count failed with {status_code}"},
+            )
+        )
+        with pytest.raises(ProxyException) as raised:
+            await count_request_tokens(
+                request=TokenCountRequest(
+                    model="count-target",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "document",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "application/pdf",
+                                        "data": "JVBERi0xLjQK",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                ),
+                call_endpoint=True,
+                messages_format="anthropic",
+            )
+
+    assert raised.value.code == str(status_code)
+    assert raised.value.type == expected_type
+    assert expected_message in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_count_request_tokens_rejects_nested_document_after_provider_count_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model: Final = "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "count-target",
+                "litellm_params": {
+                    "model": model,
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(url__regex=_BEDROCK_COUNT_TOKENS_URL).mock(
+            return_value=httpx.Response(400, json={"message": "Runtime count rejected the document"})
+        )
+        with pytest.raises(ProxyException) as raised:
+            await count_request_tokens(
+                request=TokenCountRequest(
+                    model="count-target",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "t1",
+                                    "content": [
+                                        {
+                                            "type": "document",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": "application/pdf",
+                                                "data": "JVBERi0xLjQK",
+                                            },
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                ),
+                call_endpoint=True,
+                messages_format="anthropic",
+            )
+
+    assert raised.value.code == "400"
+    assert raised.value.type == "invalid_request_error"
+    assert "cannot count document content locally" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_estimate_guard_runs_without_a_provider_counter(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "azure-ai-count-target",
+                "litellm_params": {
+                    "model": "azure_ai/deepseek-v4-pro",
+                    "api_key": "test-key",
+                    "api_base": "https://count.test",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with pytest.raises(ProxyException) as raised:
+        await count_request_tokens(
+            request=TokenCountRequest(
+                model="azure-ai-count-target",
+                messages=[{"role": "user", "content": "Summarize."}],
+                tools=[{"name": "search"}],
+            ),
+            call_endpoint=True,
+        )
+
+    assert raised.value.code == "400"
+    assert raised.value.type == "invalid_request_error"
+    assert raised.value.param == "model"
+    assert "deepseek-v4-pro" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_document_block_keeps_successful_provider_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "bedrock/us.anthropic.claude-sonnet-4-6"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "count-target",
+                "litellm_params": {
+                    "model": model,
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(url__regex=_BEDROCK_COUNT_TOKENS_URL).mock(
+            return_value=httpx.Response(200, json={"inputTokens": 17})
+        )
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(
+                model="count-target",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "document",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "application/pdf",
+                                    "data": "JVBERi0xLjQK",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            ),
+            call_endpoint=True,
+            messages_format="anthropic",
+        )
+
+    assert result.total_tokens == 17
+    assert result.count_source == "provider"
+
+
+@pytest.mark.asyncio
+async def test_unreliable_estimate_uses_deployment_model_during_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "nova-count-target",
+                "litellm_params": {
+                    "model": "bedrock/us.amazon.nova-2-lite-v1:0",
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": {"id": "nova-cooldown-deployment"},
+            }
+        ]
+    )
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="nova-cooldown-deployment",
+        original_exception=Exception("rate limited"),
+        exception_status=429,
+        cooldown_time=60,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post(url__regex=_BEDROCK_COUNT_TOKENS_URL).mock(
+            return_value=httpx.Response(200, json={"inputTokens": 17})
+        )
+        with pytest.raises(ProxyException) as raised:
+            await count_request_tokens(
+                request=TokenCountRequest(
+                    model="nova-count-target",
+                    messages=[{"role": "user", "content": "Find a record."}],
+                    tools=[{"name": "search"}],
+                ),
+                call_endpoint=True,
+                messages_format="anthropic",
+            )
+        local: Final = await count_request_tokens(
+            request=TokenCountRequest(
+                model="nova-count-target",
+                messages=[{"role": "user", "content": "Find a record."}],
+            ),
+            call_endpoint=True,
+            messages_format="anthropic",
+        )
+
+    assert raised.value.code == "400"
+    assert local.count_source == "local_estimate"

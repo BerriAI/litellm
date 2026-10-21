@@ -143,6 +143,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.common_utils.token_count_settings import (
+    CANNOT_COUNT_MODEL_STATUSES,
     TOKENIZER_LOAD_MAX_RUNNING,
     TOKENIZER_LOAD_REUSE_SECONDS,
     TOKENIZER_LOAD_WAIT_SECONDS,
@@ -150,6 +151,7 @@ from litellm.proxy.common_utils.token_count_settings import (
     TokenCountSettings,
     cost_map_entry,
     resolve_token_count_settings,
+    unreliable_local_estimate,
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
 from litellm.router_utils.access_windows import access_windows_config_error
@@ -13997,6 +13999,23 @@ def _token_count_settings_model(deployment: _TokenCountDeployment, request_model
     return model, _non_empty_str(params.get("custom_llm_provider"))
 
 
+def _unreliable_estimate_provider_model(
+    deployment: _TokenCountDeployment, request_model: str
+) -> tuple[str, str | None]:
+    settings_model: Final = _token_count_settings_model(deployment, request_model)
+    if settings_model[1] is not None:
+        return settings_model
+    params: Final = deployment.get("litellm_params", {})
+    deployment_model: Final = _non_empty_str(params.get("model"))
+    if deployment_model is None:
+        return settings_model[0], None
+    try:
+        resolved: Final = litellm.get_llm_provider(model=deployment_model)
+    except litellm.exceptions.BadRequestError:
+        return settings_model[0], None
+    return resolved[0], resolved[1]
+
+
 _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
     {litellm.LlmProviders.GEMINI.value, litellm.LlmProviders.VERTEX_AI.value}
 )
@@ -14115,6 +14134,33 @@ async def count_request_tokens(
     )
     if isinstance(ladder, TokenCountResponse):
         return ladder
+
+    if call_endpoint is True:
+        estimate_provider_model: Final = (
+            _unreliable_estimate_provider_model(deployment_view, request.model)
+            if custom_llm_provider is None
+            else (model_to_use, custom_llm_provider)
+        )
+        unreliable_reason: Final = unreliable_local_estimate(
+            custom_llm_provider=estimate_provider_model[1],
+            model=estimate_provider_model[0],
+            messages=messages,
+            tools=tools,
+        )
+        if (
+            unreliable_reason is not None
+            and isinstance(ladder, ProviderCountFailure)
+            and not ladder.rejected_before_provider_call
+            and ladder.status_code not in CANNOT_COUNT_MODEL_STATUSES
+        ):
+            raise ladder.to_proxy_exception()
+        if unreliable_reason is not None:
+            raise ProxyException(
+                message=unreliable_reason,
+                type="invalid_request_error",
+                param="model",
+                code=400,
+            )
 
     # Check if token counter is disabled before fallback
     if litellm.disable_token_counter is True:
