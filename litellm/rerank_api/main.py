@@ -160,7 +160,7 @@ def rerank(
 
         decision_kwargs: Final = _DECISION_KWARGS.validate_python(kwargs)
         if decision_kwargs.get("rerank_mode") is not None or decision_kwargs.get("decision_rerank") is not None:
-            from litellm.rerank_api.decision_rerank import rerank_with_decisions
+            from litellm.rerank_api.litellm_decisions_transformation.handler import rerank_with_decisions
 
             return rerank_with_decisions(
                 model=model,
