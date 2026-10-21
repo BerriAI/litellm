@@ -437,6 +437,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "_pipeline_managed_guardrails",
     "client_disconnected",
     "error_information",
+    "_failover_excluded_ids",
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
 

@@ -65,7 +65,7 @@ def as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
     return tuple(item for item in items if isinstance(item, str))
 
 
-def _as_excluded_deployment_ids(value: object) -> tuple[str, ...]:
+def as_excluded_deployment_ids(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
     try:
@@ -77,7 +77,7 @@ def _as_excluded_deployment_ids(value: object) -> tuple[str, ...]:
 def deployment_ids_failed_in_request(request_kwargs: Mapping[str, object]) -> frozenset[str]:
     return frozenset(
         (
-            *_as_excluded_deployment_ids(request_kwargs.get("_excluded_deployment_ids")),
+            *as_excluded_deployment_ids(request_kwargs.get("_excluded_deployment_ids")),
             *as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids")),
         )
     )

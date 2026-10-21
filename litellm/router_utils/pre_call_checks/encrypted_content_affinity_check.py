@@ -51,7 +51,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_encrypted_reasoning_from_messages,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.common_utils import deployment_ids_failed_in_request
+from litellm.router_utils.common_utils import as_excluded_deployment_ids, as_retry_skipped_deployment_ids
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import Deployment
 from litellm.utils import get_order_filtered_deployments
@@ -385,10 +385,20 @@ class EncryptedContentAffinityCheck(CustomLogger):
             model_id,
         )
 
-        failed_deployment_ids: Final = deployment_ids_failed_in_request(typed_request_kwargs)
-        untried_candidates: Final = [
-            candidate for candidate in candidates if self._deployment_model_id(candidate) not in failed_deployment_ids
+        excluded_ids: Final = frozenset(
+            as_excluded_deployment_ids(typed_request_kwargs.get("_excluded_deployment_ids"))
+        )
+        retry_skipped_ids: Final = frozenset(
+            as_retry_skipped_deployment_ids(typed_request_kwargs.get("_retry_skipped_deployment_ids"))
+        )
+        not_excluded_candidates: Final = [
+            candidate for candidate in candidates if self._deployment_model_id(candidate) not in excluded_ids
         ]
+        untried_candidates: Final = [
+            candidate
+            for candidate in not_excluded_candidates
+            if self._deployment_model_id(candidate) not in retry_skipped_ids
+        ] or not_excluded_candidates
         deployment: Final = self._find_deployment_by_model_id(
             healthy_deployments=untried_candidates,
             model_id=model_id,
