@@ -112,7 +112,7 @@ async def test_the_gate_is_never_consulted_without_a_semantic_cache(cache: Cache
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["acreate_batch", "avector_store_search", "aspeech"])
+@pytest.mark.parametrize("route", ["acreate_batch", "avector_store_search", "aspeech", "atranscription", "arerank"])
 async def test_the_gate_is_never_consulted_for_a_route_that_cannot_reach_the_cache(route: str):
     gate = _TeamAllowlist(frozenset())
 

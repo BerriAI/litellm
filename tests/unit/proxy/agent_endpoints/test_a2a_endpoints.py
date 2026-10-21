@@ -643,6 +643,8 @@ class _RejectEveryTeam(CustomLogger):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["message/send", "message/stream"])
 async def test_message_methods_hand_the_semantic_cache_check_result_to_the_agent_call(method: str):
+    agent = _make_agent_mock()
+    agent.litellm_params = {"cache": {"ttl": 60}}
     mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
     semantic_cache = Cache(
         type=LiteLLMCacheType.VALKEY_SEMANTIC, host="localhost", port="6379", similarity_threshold=0.8
@@ -650,10 +652,14 @@ async def test_message_methods_hand_the_semantic_cache_check_result_to_the_agent
 
     with patch.object(litellm, "callbacks", [_RejectEveryTeam()]), patch.object(litellm, "cache", semantic_cache):
         captured = await _invoke_message_method(
-            method, mock_request, UserAPIKeyAuth(api_key="sk-test", team_id="team-other"), _add_proxy_data
+            method,
+            mock_request,
+            UserAPIKeyAuth(api_key="sk-test", team_id="team-other"),
+            _add_proxy_data,
+            agent=agent,
         )
 
-    assert (captured.litellm_params or {}).get("cache") == {"no-cache": True, "no-store": True}
+    assert (captured.litellm_params or {}).get("cache") == {"ttl": 60, "no-cache": True, "no-store": True}
 
 
 @pytest.mark.asyncio

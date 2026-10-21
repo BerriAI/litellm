@@ -180,9 +180,12 @@ async def _resolve_backend_auth(
     )
 
 
-def _request_cache_controls(data: Mapping[str, object]) -> Mapping[str, object]:
-    cache_controls: Final = data.get("cache")
-    return {"cache": cache_controls} if isinstance(cache_controls, Mapping) else {}
+def _request_cache_controls(agent_params: Mapping[str, object], data: Mapping[str, object]) -> Mapping[str, object]:
+    request_cache: Final = data.get("cache")
+    if not isinstance(request_cache, Mapping):
+        return {}
+    agent_cache: Final = agent_params.get("cache")
+    return {"cache": {**(agent_cache if isinstance(agent_cache, Mapping) else {}), **request_cache}}
 
 
 def _forwarding_headers(
@@ -843,7 +846,10 @@ async def invoke_agent_a2a(
             ),
             backend_auth_header=backend_auth.header,
         )
-        forwarded_litellm_params: Final = {**backend_auth.litellm_params, **_request_cache_controls(data)}
+        forwarded_litellm_params: Final = {
+            **backend_auth.litellm_params,
+            **_request_cache_controls(backend_auth.litellm_params, data),
+        }
 
         # Merge agent-level guardrails into data so post_call_success_hook and
         # _handle_stream_message both pick them up.  A2A agents use model

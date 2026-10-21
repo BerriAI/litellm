@@ -13,8 +13,6 @@ SEMANTIC_CACHE_ROUTES: Final = frozenset(
         "acompletion",
         "atext_completion",
         "aembedding",
-        "atranscription",
-        "arerank",
         "aresponses",
         "_aresponses_websocket",
         "anthropic_messages",
