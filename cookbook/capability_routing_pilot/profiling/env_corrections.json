@@ -124,5 +124,14 @@
       "tests/mappers/test_mapper.py::test_interpolate_before_map"
     ],
     "applies_on_top_of": "none (no pyvista repo overlay; pinned upstream image)"
+  },
+  "pydicom__pydicom-1428": {
+    "snippet": "RUN /opt/miniconda3/envs/testbed/bin/pip install --no-cache-dir \"pytest==7.4.4\"",
+    "cause": "The gold preflight ran pytest 8.3.5, which ignores nose-style setup/teardown. At base commit 674da68 TestFileSet_Modify and TestFileSet_Copy patch FileSet.__len__ to report 2176782336+ instances and restore it only in teardown(self), so the patch leaks and later file-set writes raise NotImplementedError",
+    "evidence": [
+      "pydicom/tests/test_fileset.py::TestFileSet_Modify",
+      "pydicom/tests/test_fileset.py::TestFileSet_Copy"
+    ],
+    "applies_on_top_of": "pydicom repo overlay (LANG/LC_ALL=C.UTF-8)"
   }
 }
