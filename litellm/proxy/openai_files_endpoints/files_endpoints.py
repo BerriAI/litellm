@@ -1672,6 +1672,27 @@ def _as_file_list_page(response: object) -> object:
     return FileListPage.model_validate(page)
 
 
+async def _list_owned_managed_files(
+    managed_files_obj: object | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    purpose: str | None,
+    limit: int | None,
+    after: str | None,
+) -> FileListPage:
+    if not isinstance(managed_files_obj, BaseFileEndpoints):
+        raise HTTPException(
+            status_code=500,
+            detail="Managed file listing is unavailable, so require_managed_files cannot scope the list to the caller.",
+        )
+    return await managed_files_obj.afile_list(
+        purpose=purpose,
+        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+        user_api_key_dict=user_api_key_dict,
+        limit=limit,
+        after=after,
+    )
+
+
 @router.get(
     "/{provider}/v1/files",
     dependencies=[Depends(user_api_key_auth)],
@@ -1738,6 +1759,7 @@ async def list_files(
         )
 
         response: Any | None = None
+        list_owned_files_only: Final = litellm.require_managed_files is True
 
         # Check for model-based credential routing (no file_id encoding check for list)
         should_route, model_used, _, credentials = await handle_model_based_routing(
@@ -1749,7 +1771,7 @@ async def list_files(
             check_file_id_encoding=False,
         )
 
-        if should_route and credentials is not None:
+        if should_route and credentials is not None and not list_owned_files_only:
             # Use model-based routing with credentials from config
             prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
             response = await litellm.afile_list(
@@ -1760,7 +1782,7 @@ async def list_files(
 
             verbose_proxy_logger.debug("Listed files using model: %s", model_used)
 
-        elif target_model_names and isinstance(target_model_names, str):
+        elif target_model_names and isinstance(target_model_names, str) and not list_owned_files_only:
             target_model_names_list: Final = target_model_names.split(",")
             if len(target_model_names_list) != 1:
                 raise HTTPException(
@@ -1792,11 +1814,13 @@ async def list_files(
                 or await get_custom_llm_provider_from_request_body(request=request)
             )
             managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-            if custom_llm_provider is None and isinstance(managed_files_obj, BaseFileEndpoints):
-                response = await managed_files_obj.afile_list(
-                    purpose=purpose,
-                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            if list_owned_files_only or (
+                custom_llm_provider is None and isinstance(managed_files_obj, BaseFileEndpoints)
+            ):
+                response = await _list_owned_managed_files(
+                    managed_files_obj=managed_files_obj,
                     user_api_key_dict=user_api_key_dict,
+                    purpose=purpose,
                     limit=limit,
                     after=after,
                 )
