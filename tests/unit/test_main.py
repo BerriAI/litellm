@@ -9838,13 +9838,14 @@ _TOO_MANY_STRICT_TOOLS: Final = (
 
 
 async def _converse_with_a_strict_tools_limit_rejection_first(
-    sent: list[tuple[str, dict[str, object]]],
     asynchronous: bool,
     stream: Literal["off", "fake", "real"],
     drop_params: bool | None,
-) -> None:
+) -> tuple[tuple[tuple[str, dict[str, object]], ...], litellm.BadRequestError | None]:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from tests.unit.llms.bedrock.slow_upstream import CONVERSE_ANSWER
+
+    sent: Final[list[tuple[str, dict[str, object]]]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         sent.append((request.url.path.rsplit("/", 1)[-1], json.loads(request.content)))
@@ -9864,17 +9865,21 @@ async def _converse_with_a_strict_tools_limit_rejection_first(
         "stream": stream != "off",
         "fake_stream": stream == "fake",
     }
-    if asynchronous:
-        response = await litellm.acompletion(
-            client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)), **kwargs
-        )
-        chunks = [chunk async for chunk in response] if stream == "fake" else [response]
-    else:
-        response = litellm.completion(
-            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))), **kwargs
-        )
-        chunks = list(response) if stream == "fake" else [response]
+    try:
+        if asynchronous:
+            response = await litellm.acompletion(
+                client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)), **kwargs
+            )
+            chunks = [chunk async for chunk in response] if stream == "fake" else [response]
+        else:
+            response = litellm.completion(
+                client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))), **kwargs
+            )
+            chunks = list(response) if stream == "fake" else [response]
+    except litellm.BadRequestError as error:
+        return tuple(sent), error
     assert chunks
+    return tuple(sent), None
 
 
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
@@ -9882,10 +9887,9 @@ async def _converse_with_a_strict_tools_limit_rejection_first(
 async def test_bedrock_strict_tools_limit_rejection_is_sent_again_without_strict_under_drop_params(
     asynchronous: bool, stream: Literal["off", "fake", "real"], local_model_cost_map: None
 ) -> None:
-    sent: Final[list[tuple[str, dict[str, object]]]] = []
+    sent, error = await _converse_with_a_strict_tools_limit_rejection_first(asynchronous, stream, drop_params=True)
 
-    await _converse_with_a_strict_tools_limit_rejection_first(sent, asynchronous, stream, drop_params=True)
-
+    assert error is None
     (first_path, first_body), (second_path, second_body) = sent
     first_tool_spec: Final = first_body["toolConfig"]["tools"][0]["toolSpec"]
     assert first_tool_spec["strict"] is True
@@ -9903,9 +9907,7 @@ async def test_bedrock_strict_tools_limit_rejection_is_sent_again_without_strict
 async def test_bedrock_strict_tools_limit_rejection_reaches_the_caller_without_drop_params(
     asynchronous: bool, local_model_cost_map: None
 ) -> None:
-    sent: Final[list[tuple[str, dict[str, object]]]] = []
+    sent, error = await _converse_with_a_strict_tools_limit_rejection_first(asynchronous, stream="off", drop_params=None)
 
-    with pytest.raises(litellm.BadRequestError, match="Too many strict tools"):
-        await _converse_with_a_strict_tools_limit_rejection_first(sent, asynchronous, stream="off", drop_params=None)
-
+    assert error is not None and "Too many strict tools" in str(error)
     assert len(sent) == 1
