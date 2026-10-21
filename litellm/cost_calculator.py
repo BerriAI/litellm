@@ -2723,8 +2723,8 @@ def rerank_cost(
             try:
                 builtin_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
                 model_info = {**(model_info or {}), **builtin_info} if model_info else builtin_info
-            except Exception:
-                pass
+            except Exception as e:
+                verbose_logger.debug("Failed to get model info in rerank_cost: %s", e)
 
         return config.calculate_rerank_cost(
             model=model,
