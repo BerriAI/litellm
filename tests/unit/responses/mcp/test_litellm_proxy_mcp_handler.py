@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller, MCPServerManager
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses import main as responses_main
 from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_module
@@ -1507,9 +1507,11 @@ def _toolset_gateway_manager(toolset_id: str, server_id: str) -> types.SimpleNam
     )
 
 
-async def _tools_listing_kwargs_for_toolset_url(monkeypatch, team_toolset_id: str) -> dict[str, object]:
+async def _tools_listing_kwargs_for_toolset_url(
+    monkeypatch, team_toolset_id: str, owner_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER
+) -> dict[str, object]:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import granted_toolset_ids
-    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
     mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
     monkeypatch.setattr("litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers", mock_get_tools)
@@ -1525,7 +1527,7 @@ async def _tools_listing_kwargs_for_toolset_url(monkeypatch, team_toolset_id: st
     async def granted_through_team(context: UserAPIKeyAuth) -> frozenset[str]:
         return await granted_toolset_ids(context, team_object_permission=team_permission, require_key_access=False)
 
-    team_key: Final = UserAPIKeyAuth(api_key="sk-team", team_id="team-1", user_role=LitellmUserRoles.INTERNAL_USER)
+    team_key: Final = UserAPIKeyAuth(api_key="sk-team", team_id="team-1", user_role=owner_role)
     await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
         user_api_key_auth=team_key,
         mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/team-toolset"}],
@@ -1546,8 +1548,15 @@ async def test_toolset_gateway_url_scopes_a_team_granted_toolset_for_a_key_witho
 
 
 @pytest.mark.asyncio
-async def test_toolset_gateway_url_skips_a_toolset_the_team_does_not_grant(monkeypatch):
-    kwargs: Final = await _tools_listing_kwargs_for_toolset_url(monkeypatch, team_toolset_id="ts-other")
+@pytest.mark.parametrize(
+    "owner_role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+    ids=["internal_user", "proxy_admin", "proxy_admin_viewer"],
+)
+async def test_toolset_gateway_url_skips_a_toolset_the_team_does_not_grant(monkeypatch, owner_role):
+    kwargs: Final = await _tools_listing_kwargs_for_toolset_url(
+        monkeypatch, team_toolset_id="ts-other", owner_role=owner_role
+    )
     assert kwargs["user_api_key_auth"].object_permission is None
     assert kwargs["mcp_servers"] is None
 

@@ -27,6 +27,7 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
+    LitellmUserRoles,
     ProxyException,
     SpecialHeaders,
     SpecialMCPServerNames,
@@ -12684,3 +12685,50 @@ async def test_personal_key_mcp_access_is_denied_when_owner_teams_cannot_be_read
     assert await MCPRequestHandler.get_allowed_mcp_servers(personal_key_owner_teams) == []
     assert await MCPRequestHandler.get_allowed_tools_for_server("srv-a", personal_key_owner_teams) == []
     assert await MCPRequestHandler.get_allowed_tools_for_server("srv-open", personal_key_owner_teams) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+@pytest.mark.parametrize(
+    "owner_role",
+    [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+    ids=["proxy_admin", "proxy_admin_viewer"],
+)
+@pytest.mark.parametrize(
+    ("key_team_id", "expected_servers"),
+    [("team-a", {"srv-a", "srv-open"}), ("team-without-mcp", {"srv-open"})],
+    ids=["team_grants_one_server", "team_grants_no_server"],
+)
+async def test_admin_owned_team_key_reaches_only_its_team_mcp_servers(
+    monkeypatch: pytest.MonkeyPatch,
+    personal_key_owner_teams: UserAPIKeyAuth,
+    owner_role: LitellmUserRoles,
+    key_team_id: str,
+    expected_servers: set[str],
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team(team_id) if team_id in _PERSONAL_KEY_TEAMS else LiteLLM_TeamTable(team_id=team_id)
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    team_key: Final = personal_key_owner_teams.model_copy(update={"team_id": key_team_id, "user_role": owner_role})
+
+    assert set(await global_mcp_server_manager.get_allowed_mcp_servers(team_key)) == expected_servers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_admin_dashboard_session_keeps_the_whole_mcp_registry(
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    dashboard_session: Final = personal_key_owner_teams.model_copy(
+        update={"team_id": UI_TEAM_ID, "user_role": LitellmUserRoles.PROXY_ADMIN}
+    )
+
+    assert set(await global_mcp_server_manager.get_allowed_mcp_servers(dashboard_session)) == set(
+        global_mcp_server_manager.get_registry()
+    )
