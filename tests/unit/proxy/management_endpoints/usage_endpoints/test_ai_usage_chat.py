@@ -521,345 +521,6 @@ class TestUsageAiChatServiceAccountGuard:
         assert "Endpoint-level guard missing" in str(exc_info.value)
 
 
-class TestUsageAiChatCompletionRouting:
-    @staticmethod
-    def _plain_content_response() -> MagicMock:
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.tool_calls = None
-        mock_response.choices[0].message.content = "Hello!"
-        return mock_response
-
-    @pytest.mark.asyncio
-    async def test_stream_usage_ai_chat_passes_drop_params(self):
-        mock_acompletion = AsyncMock(return_value=self._plain_content_response())
-
-        with (
-            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
-                "litellm.proxy.proxy_server.llm_router", None
-            ),
-            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
-                new=mock_acompletion,
-            ),
-        ):
-            events = []
-            async for event in stream_usage_ai_chat(
-                messages=[{"role": "user", "content": "hi"}],
-                model="gpt-4o-mini",
-                is_admin=True,
-            ):
-                events.append(json.loads(event.replace("data: ", "").strip()))
-
-            mock_acompletion.assert_awaited_once()
-            assert mock_acompletion.await_args.kwargs["drop_params"] is True
-            assert mock_acompletion.await_args.kwargs["model"] == "gpt-4o-mini"
-
-            event_types = [e["type"] for e in events]
-            assert "chunk" in event_types
-            assert event_types[-1] == "done"
-            assert "error" not in event_types
-
-    @pytest.mark.asyncio
-    async def test_stream_usage_ai_chat_uses_router_for_configured_model(self):
-        mock_router = MagicMock()
-        mock_router.is_recognized_model.return_value = True
-        mock_router.acompletion = AsyncMock(return_value=self._plain_content_response())
-        mock_acompletion = AsyncMock(return_value=self._plain_content_response())
-
-        with (
-            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
-                "litellm.proxy.proxy_server.llm_router", mock_router
-            ),
-            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
-                new=mock_acompletion,
-            ),
-        ):
-            events = []
-            async for event in stream_usage_ai_chat(
-                messages=[{"role": "user", "content": "hi"}],
-                model="my-alias",
-                is_admin=True,
-            ):
-                events.append(json.loads(event.replace("data: ", "").strip()))
-
-            mock_router.acompletion.assert_awaited_once()
-            assert mock_router.acompletion.await_args.kwargs["model"] == "my-alias"
-            assert mock_router.acompletion.await_args.kwargs["drop_params"] is True
-            mock_acompletion.assert_not_called()
-
-            event_types = [e["type"] for e in events]
-            assert "chunk" in event_types
-            assert "error" not in event_types
-
-    @pytest.mark.asyncio
-    async def test_stream_usage_ai_chat_falls_back_to_litellm_for_unknown_model(self):
-        mock_router = MagicMock()
-        mock_router.is_recognized_model.return_value = False
-        mock_router.router_general_settings.pass_through_all_models = False
-        mock_router.default_deployment = None
-        mock_router.pattern_router.route.return_value = None
-        mock_router.acompletion = AsyncMock(return_value=self._plain_content_response())
-        mock_acompletion = AsyncMock(return_value=self._plain_content_response())
-
-        with (
-            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
-                "litellm.proxy.proxy_server.llm_router", mock_router
-            ),
-            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
-                new=mock_acompletion,
-            ),
-        ):
-            events = []
-            async for event in stream_usage_ai_chat(
-                messages=[{"role": "user", "content": "hi"}],
-                model="gpt-4o-mini",
-                is_admin=True,
-            ):
-                events.append(json.loads(event.replace("data: ", "").strip()))
-
-            mock_acompletion.assert_awaited_once()
-            assert mock_acompletion.await_args.kwargs["model"] == "gpt-4o-mini"
-            mock_router.acompletion.assert_not_called()
-
-            event_types = [e["type"] for e in events]
-            assert "chunk" in event_types
-            assert "error" not in event_types
-
-    @pytest.mark.asyncio
-    async def test_stream_usage_ai_chat_uses_router_when_wildcard_pattern_exists(self):
-        from litellm.router import Router
-
-        router: Final = Router(
-            model_list=[
-                {
-                    "model_name": "openai/*",
-                    "litellm_params": {"model": "openai/*", "api_key": "sk-dummy"},
-                }
-            ]
-        )
-        router.acompletion = AsyncMock(return_value=self._plain_content_response())
-        mock_acompletion = AsyncMock(return_value=self._plain_content_response())
-
-        with (
-            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
-                "litellm.proxy.proxy_server.llm_router", router
-            ),
-            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
-                new=mock_acompletion,
-            ),
-        ):
-            events = []
-            async for event in stream_usage_ai_chat(
-                messages=[{"role": "user", "content": "hi"}],
-                model="openai/gpt-4o-mini",
-                is_admin=True,
-            ):
-                events.append(json.loads(event.replace("data: ", "").strip()))
-
-            router.acompletion.assert_awaited_once()
-            assert router.acompletion.await_args.kwargs["model"] == "openai/gpt-4o-mini"
-            assert router.acompletion.await_args.kwargs["drop_params"] is True
-            mock_acompletion.assert_not_called()
-
-            event_types = [e["type"] for e in events]
-            assert "chunk" in event_types
-            assert "error" not in event_types
-
-    @pytest.mark.asyncio
-    async def test_stream_usage_ai_chat_falls_back_when_wildcard_does_not_match(self):
-        from litellm.router import Router
-
-        router: Final = Router(
-            model_list=[
-                {
-                    "model_name": "anthropic/*",
-                    "litellm_params": {
-                        "model": "anthropic/claude-3-haiku-20240307",
-                        "api_key": "sk-dummy",
-                    },
-                }
-            ]
-        )
-        router.acompletion = AsyncMock(return_value=self._plain_content_response())
-        mock_acompletion = AsyncMock(return_value=self._plain_content_response())
-
-        with (
-            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
-                "litellm.proxy.proxy_server.llm_router", router
-            ),
-            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
-                new=mock_acompletion,
-            ),
-        ):
-            events = []
-            async for event in stream_usage_ai_chat(
-                messages=[{"role": "user", "content": "hi"}],
-                model="gpt-4o-mini",
-                is_admin=True,
-            ):
-                events.append(json.loads(event.replace("data: ", "").strip()))
-
-            mock_acompletion.assert_awaited_once()
-            assert mock_acompletion.await_args.kwargs["model"] == "gpt-4o-mini"
-            router.acompletion.assert_not_called()
-
-            event_types = [e["type"] for e in events]
-            assert "chunk" in event_types
-            assert "error" not in event_types
-
-    @pytest.mark.asyncio
-    async def test_stream_usage_ai_chat_falls_back_when_pass_through_all_models(self):
-        from litellm.router import Router
-        from litellm.types.router import RouterGeneralSettings
-
-        router: Final = Router(
-            model_list=[
-                {
-                    "model_name": "openai/*",
-                    "litellm_params": {"model": "openai/*", "api_key": "sk-dummy"},
-                }
-            ],
-            router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
-        )
-        router.acompletion = AsyncMock(return_value=self._plain_content_response())
-        mock_acompletion = AsyncMock(return_value=self._plain_content_response())
-
-        with (
-            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
-                "litellm.proxy.proxy_server.llm_router", router
-            ),
-            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
-                new=mock_acompletion,
-            ),
-        ):
-            events = []
-            async for event in stream_usage_ai_chat(
-                messages=[{"role": "user", "content": "hi"}],
-                model="gpt-4o-mini",
-                is_admin=True,
-            ):
-                events.append(json.loads(event.replace("data: ", "").strip()))
-
-            mock_acompletion.assert_awaited_once()
-            assert mock_acompletion.await_args.kwargs["model"] == "gpt-4o-mini"
-            router.acompletion.assert_not_called()
-
-            event_types = [e["type"] for e in events]
-            assert "chunk" in event_types
-            assert "error" not in event_types
-
-    @pytest.mark.asyncio
-    async def test_stream_usage_ai_chat_uses_router_when_default_deployment_exists(self):
-        mock_router = MagicMock()
-        mock_router.is_recognized_model.return_value = False
-        mock_router.router_general_settings.pass_through_all_models = False
-        mock_router.default_deployment = {"model_name": "default", "litellm_params": {}}
-        mock_router.acompletion = AsyncMock(return_value=self._plain_content_response())
-        mock_acompletion = AsyncMock(return_value=self._plain_content_response())
-
-        with (
-            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
-                "litellm.proxy.proxy_server.llm_router", mock_router
-            ),
-            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
-                new=mock_acompletion,
-            ),
-        ):
-            events = []
-            async for event in stream_usage_ai_chat(
-                messages=[{"role": "user", "content": "hi"}],
-                model="gpt-5.6-terra",
-                is_admin=True,
-            ):
-                events.append(json.loads(event.replace("data: ", "").strip()))
-
-            mock_router.acompletion.assert_awaited_once()
-            assert mock_router.acompletion.await_args.kwargs["model"] == "gpt-5.6-terra"
-            assert mock_router.acompletion.await_args.kwargs["drop_params"] is True
-            mock_acompletion.assert_not_called()
-
-            event_types = [e["type"] for e in events]
-            assert "chunk" in event_types
-            assert "error" not in event_types
-
-    @pytest.mark.asyncio
-    async def test_stream_usage_ai_chat_streams_final_response_through_router(self):
-        mock_tool_call = MagicMock()
-        mock_tool_call.id = "call_789"
-        mock_tool_call.function.name = "get_usage_data"
-        mock_tool_call.function.arguments = json.dumps(
-            {
-                "start_date": "2025-01-01",
-                "end_date": "2025-01-31",
-            }
-        )
-
-        mock_first_response = MagicMock()
-        mock_first_response.choices = [MagicMock()]
-        mock_first_response.choices[0].message.tool_calls = [mock_tool_call]
-        mock_first_response.choices[0].message.model_dump.return_value = {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": "call_789",
-                    "type": "function",
-                    "function": {
-                        "name": "get_usage_data",
-                        "arguments": '{"start_date":"2025-01-01","end_date":"2025-01-31"}',
-                    },
-                }
-            ],
-        }
-
-        async def mock_stream():
-            chunk = MagicMock()
-            chunk.choices = [MagicMock()]
-            chunk.choices[0].delta.content = "Total spend is $50.25"
-            yield chunk
-
-        mock_router = MagicMock()
-        mock_router.is_recognized_model.return_value = True
-        mock_router.acompletion = AsyncMock(side_effect=[mock_first_response, mock_stream()])
-
-        with (
-            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
-                "litellm.proxy.proxy_server.llm_router", mock_router
-            ),
-            patch(  # test-quality-ok: the stream calls the module-level _fetch_usage_data directly; no injection seam
-                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
-                new_callable=AsyncMock,
-            ) as mock_fetch,
-        ):
-            mock_fetch.return_value = SAMPLE_AGGREGATED_RESPONSE
-
-            events = []
-            async for event in stream_usage_ai_chat(
-                messages=[{"role": "user", "content": "What is my total spend?"}],
-                model="my-alias",
-                is_admin=True,
-            ):
-                events.append(json.loads(event.replace("data: ", "").strip()))
-
-            assert mock_router.acompletion.await_count == 2
-            stream_call = mock_router.acompletion.await_args_list[1]
-            assert stream_call.kwargs["stream"] is True
-            assert stream_call.kwargs["model"] == "my-alias"
-            assert stream_call.kwargs["drop_params"] is True
-
-            chunk_events = [e for e in events if e["type"] == "chunk"]
-            assert any("$50.25" in e["content"] for e in chunk_events)
-            assert events[-1]["type"] == "done"
-            assert "error" not in [e["type"] for e in events]
-
-
 class TestUsageAiChatProviderRequest:
     USAGE_TOOL: Final = TOOLS_ADMIN[0]
 
@@ -929,7 +590,7 @@ class TestUsageAiChatProviderRequest:
     def _tool_names(sent: dict[str, object]) -> list[object]:
         return [tool.get("name") or tool["function"]["name"] for tool in sent["tools"]]
 
-    async def _ask(self, model: str, monkeypatch: pytest.MonkeyPatch, router: "Router | None" = None) -> None:
+    async def _ask(self, model: str, monkeypatch: pytest.MonkeyPatch, router: "Router | None") -> None:
         import litellm
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
@@ -939,7 +600,7 @@ class TestUsageAiChatProviderRequest:
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
         with patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
-            "litellm.proxy.proxy_server.llm_router", router or self._router()
+            "litellm.proxy.proxy_server.llm_router", router
         ):
             await _acompletion(
                 model=model,
@@ -954,7 +615,7 @@ class TestUsageAiChatProviderRequest:
     ) -> None:
         self._mock_openai(respx_mock)
 
-        await self._ask("gpt-5-prod", monkeypatch)
+        await self._ask("gpt-5-prod", monkeypatch, self._router())
 
         sent: Final = json.loads(respx_mock.calls.last.request.content)
         assert "temperature" not in sent
@@ -976,7 +637,7 @@ class TestUsageAiChatProviderRequest:
             )
         )
 
-        await self._ask("llama-on-bedrock", monkeypatch)
+        await self._ask("llama-on-bedrock", monkeypatch, self._router())
 
         sent: Final = json.loads(route.calls.last.request.content)
         assert [tool["toolSpec"]["name"] for tool in sent["toolConfig"]["tools"]] == [
@@ -989,7 +650,7 @@ class TestUsageAiChatProviderRequest:
     ) -> None:
         self._mock_openai(respx_mock)
 
-        await self._ask("openai/gpt-5.6", monkeypatch)
+        await self._ask("openai/gpt-5.6", monkeypatch, self._router())
 
         assert respx_mock.calls.last.request.headers["Authorization"] == "Bearer sk-gpt5-deployment"
 
@@ -1025,6 +686,154 @@ class TestUsageAiChatProviderRequest:
         await self._ask("openai/gpt-5.6", monkeypatch, router)
 
         assert respx_mock.calls.last.request.headers["Authorization"] == "Bearer sk-env"
+
+    @pytest.mark.asyncio
+    async def test_without_a_router_a_reasoning_model_runs_on_the_environment_key_without_temperature(
+        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._mock_openai(respx_mock)
+
+        await self._ask("openai/gpt-5.6", monkeypatch, None)
+
+        assert respx_mock.calls.last.request.headers["Authorization"] == "Bearer sk-env"
+        assert "temperature" not in json.loads(respx_mock.calls.last.request.content)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "key"),
+        [
+            pytest.param("gpt-5-prod", "sk-gpt5-deployment", id="configured-model-name"),
+            pytest.param("gpt-4o-mini", "sk-env", id="unknown-model-name"),
+        ],
+    )
+    async def test_configured_model_names_use_their_deployment_and_unknown_names_the_environment_key(
+        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model: str, key: str
+    ) -> None:
+        self._mock_openai(respx_mock)
+
+        await self._ask(model, monkeypatch, self._router())
+
+        assert respx_mock.calls.last.request.headers["Authorization"] == f"Bearer {key}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model_name", "pass_through_all_models", "model", "key"),
+        [
+            pytest.param("openai/*", False, "openai/gpt-4o-mini", "sk-pattern", id="wildcard-match"),
+            pytest.param("anthropic/*", False, "gpt-4o-mini", "sk-env", id="wildcard-miss"),
+            pytest.param("openai/*", True, "openai/gpt-4o-mini", "sk-env", id="pass-through-all-models"),
+            pytest.param("*", False, "my-unlisted-model", "sk-pattern", id="catch-all"),
+        ],
+    )
+    async def test_pattern_deployments_serve_the_models_they_match(
+        self,
+        respx_mock: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+        model_name: str,
+        pass_through_all_models: bool,
+        model: str,
+        key: str,
+    ) -> None:
+        from litellm.router import Router
+        from litellm.types.router import RouterGeneralSettings
+
+        self._mock_openai(respx_mock)
+        router: Final = Router(
+            model_list=[{"model_name": model_name, "litellm_params": {"model": "openai/*", "api_key": "sk-pattern"}}],
+            router_general_settings=RouterGeneralSettings(pass_through_all_models=pass_through_all_models),
+        )
+
+        await self._ask(model, monkeypatch, router)
+
+        assert respx_mock.calls.last.request.headers["Authorization"] == f"Bearer {key}"
+
+    @pytest.mark.asyncio
+    async def test_answer_after_a_tool_call_streams_from_the_same_deployment(
+        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm
+        from litellm.router import Router
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        tool_call_response: Final = httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_789",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_usage_data",
+                                        "arguments": '{"start_date":"2025-01-01","end_date":"2025-01-31"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        answer_chunk: Final = json.dumps(
+            {
+                "id": "chatcmpl-2",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "Total spend is $50.25"},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+        )
+        streamed_answer: Final = httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=f"data: {answer_chunk}\n\ndata: [DONE]\n\n".encode(),
+        )
+        route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            side_effect=[tool_call_response, streamed_answer]
+        )
+        router: Final = Router(
+            model_list=[
+                {"model_name": "my-alias", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-alias"}}
+            ]
+        )
+
+        with (
+            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: the usage tool reads the DB through the module-level _fetch_usage_data; no injection seam
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
+                new=AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE),
+            ),
+        ):
+            events: Final = [
+                json.loads(event.removeprefix("data: "))
+                async for event in stream_usage_ai_chat(
+                    messages=[{"role": "user", "content": "What is my total spend?"}], model="my-alias", is_admin=True
+                )
+            ]
+
+        assert [call.request.headers["Authorization"] for call in route.calls] == ["Bearer sk-alias", "Bearer sk-alias"]
+        assert json.loads(route.calls.last.request.content)["stream"] is True
+        assert {"type": "chunk", "content": "Total spend is $50.25"} in events
+        assert events[-1] == {"type": "done"}
 
 
 class TestUsageAiChatKeepalive:
@@ -1159,7 +968,7 @@ class TestUsageAiChatModelAccess:
         )
 
     @pytest.mark.asyncio
-    async def test_key_without_model_access_is_denied(self):
+    async def test_key_without_model_access_is_denied(self) -> None:
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             check_usage_ai_chat_model_access,
@@ -1187,7 +996,7 @@ class TestUsageAiChatModelAccess:
         assert exc_info.value.code == "403"
 
     @pytest.mark.asyncio
-    async def test_key_with_model_access_is_allowed(self):
+    async def test_key_with_model_access_is_allowed(self) -> None:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             check_usage_ai_chat_model_access,
@@ -1213,7 +1022,7 @@ class TestUsageAiChatModelAccess:
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_unrestricted_key_can_call_any_model(self):
+    async def test_unrestricted_key_can_call_any_model(self) -> None:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             check_usage_ai_chat_model_access,
@@ -1239,7 +1048,7 @@ class TestUsageAiChatModelAccess:
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_team_model_restriction_is_enforced(self):
+    async def test_team_model_restriction_is_enforced(self) -> None:
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             check_usage_ai_chat_model_access,
@@ -1272,7 +1081,7 @@ class TestUsageAiChatModelAccess:
         assert exc_info.value.code == "403"
 
     @pytest.mark.asyncio
-    async def test_implicit_default_model_is_checked_against_key_models(self):
+    async def test_implicit_default_model_is_checked_against_key_models(self) -> None:
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             check_usage_ai_chat_model_access,
@@ -1301,7 +1110,9 @@ class TestUsageAiChatModelAccess:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(("model", "denied"), [(None, True), ("shared-model", False)])
-    async def test_default_model_gets_the_user_model_check_a_picked_model_gets(self, model: str | None, denied: bool):
+    async def test_default_model_gets_the_user_model_check_a_picked_model_gets(
+        self, model: str | None, denied: bool
+    ) -> None:
         from litellm.proxy._types import LiteLLM_UserTable, ProxyException, UserAPIKeyAuth
         from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
@@ -1367,7 +1178,7 @@ class TestUsageAiChatTeamModelRouting:
         )
 
     @pytest.mark.asyncio
-    async def test_admin_reaches_a_team_public_model_name(self):
+    async def test_admin_reaches_a_team_public_model_name(self) -> None:
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             _acompletion,
@@ -1465,7 +1276,7 @@ class TestUsageAiChatTeamModelRouting:
         assert await asyncio.wait_for(logged.get(), timeout=10) == (None, None, None)
 
     @pytest.mark.asyncio
-    async def test_team_public_model_name_without_team_id_uses_litellm(self):
+    async def test_team_public_model_name_without_team_id_uses_litellm(self) -> None:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             _acompletion,
@@ -1579,7 +1390,7 @@ class TestUsageAiChatTeamModelRouting:
         assert b'"type": "error"' not in body
 
     @pytest.mark.asyncio
-    async def test_key_alias_wins_over_a_global_alias_of_the_same_name(self):
+    async def test_key_alias_wins_over_a_global_alias_of_the_same_name(self) -> None:
         import litellm
         from litellm.proxy._types import UserAPIKeyAuth
 
@@ -1597,7 +1408,7 @@ class TestUsageAiChatTeamModelRouting:
         assert b'"type": "error"' not in body
 
     @pytest.mark.asyncio
-    async def test_key_router_settings_fallbacks_rescue_a_failing_model(self):
+    async def test_key_router_settings_fallbacks_rescue_a_failing_model(self) -> None:
         from litellm.proxy._types import UserAPIKeyAuth
 
         key_with_fallbacks: Final = UserAPIKeyAuth(
@@ -1623,7 +1434,7 @@ class TestUsageAiChatTeamModelRouting:
         assert b'"type": "error"' not in body
 
     @pytest.mark.asyncio
-    async def test_group_alias_to_a_model_the_key_cannot_call_is_denied_before_streaming(self):
+    async def test_group_alias_to_a_model_the_key_cannot_call_is_denied_before_streaming(self) -> None:
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
         limited_key: Final = UserAPIKeyAuth(
@@ -1676,7 +1487,7 @@ class TestUsageAiChatTeamModelRouting:
                 assert b'"content": "from the aliased deployment"' in await self._endpoint_body(personal_key)
 
     @pytest.mark.asyncio
-    async def test_router_calls_receive_sanitized_caller_auth_for_access_group_filtering(self):
+    async def test_router_calls_receive_sanitized_caller_auth_for_access_group_filtering(self) -> None:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             _acompletion,
@@ -1723,7 +1534,7 @@ class TestUsageAiChatTeamModelRouting:
         mock_litellm_acompletion.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_team_alias_routes_default_model_to_the_aliased_team_deployment(self):
+    async def test_team_alias_routes_default_model_to_the_aliased_team_deployment(self) -> None:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             DEFAULT_COMPETITOR_DISCOVERY_MODEL,
@@ -1790,7 +1601,7 @@ class TestUsageAiChatTeamModelRouting:
 
 class TestUsageAiChatEndpointAccessCheck:
     @pytest.mark.asyncio
-    async def test_endpoint_denies_key_without_model_access(self):
+    async def test_endpoint_denies_key_without_model_access(self) -> None:
         from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.endpoints import (
             ChatMessage,
