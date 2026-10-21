@@ -1259,6 +1259,56 @@ class TestRetrieveBatchCostPassesModelIdentity:
         assert captured["model_info"] is not None
         assert captured["model_info"]["input_cost_per_token"] == 0.0
 
+    @pytest.mark.asyncio
+    async def test_forwards_vertex_location_of_the_deployment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+
+        captured: dict[str, object] = {}
+
+        from litellm.batches.batch_utils import BatchCostUsageResult
+        from litellm.types.utils import LiteLLMBatch, Usage
+
+        async def fake_handle_completed_batch(**kwargs: object) -> BatchCostUsageResult:
+            captured.update(kwargs)
+            return BatchCostUsageResult(
+                cost=1.25,
+                usage=Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800),
+                models=["gemini-3.5-flash"],
+                successful_requests=1,
+                failed_requests=0,
+            )
+
+        monkeypatch.setattr(logging_module, "_handle_completed_batch", fake_handle_completed_batch)
+
+        obj = LitellmLogging(
+            model="vertex_ai/gemini-3.5-flash",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="batch-call-2",
+            function_id="f",
+        )
+        obj.custom_llm_provider = "vertex_ai"
+        obj.litellm_params = {"vertex_project": "proj-1", "vertex_location": "us-central1"}
+
+        batch = LiteLLMBatch(
+            id="batch_vertex",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-in",
+            object="batch",
+            status="completed",
+            output_file_id="file-out",
+        )
+
+        with contextlib.suppress(Exception):
+            await obj._async_success_handler_body(result=batch, start_time=None, end_time=None)
+
+        assert captured, "_handle_completed_batch was never called"
+        assert captured["vertex_location"] == "us-central1"
+
 
 class TestRetrieveBatchPricesOnlyFinalBatches:
     """Regression (LIT-7048): retrieving a provider-id batch priced it on every poll.
@@ -1305,13 +1355,13 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
     async def test_non_final_batch_is_not_priced(self, monkeypatch, status, output_file_id) -> None:
         from litellm.litellm_core_utils import litellm_logging as logging_module
 
-        handle_completed_batch = AsyncMock()
-        monkeypatch.setattr(logging_module, "_handle_completed_batch", handle_completed_batch)
+        _handle_completed_batch = AsyncMock()
+        monkeypatch.setattr(logging_module, "_handle_completed_batch", _handle_completed_batch)
         batch = self._batch(status, output_file_id)
 
         await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
 
-        handle_completed_batch.assert_not_awaited()
+        _handle_completed_batch.assert_not_awaited()
         assert "response_cost" not in batch._hidden_params
 
     @pytest.mark.asyncio
@@ -1320,7 +1370,7 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         from litellm.litellm_core_utils import litellm_logging as logging_module
         from litellm.types.utils import Usage
 
-        handle_completed_batch = AsyncMock(
+        _handle_completed_batch = AsyncMock(
             return_value=BatchCostUsageResult(
                 cost=8e-06,
                 usage=Usage(prompt_tokens=26, completion_tokens=9, total_tokens=35),
@@ -1329,12 +1379,12 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
                 failed_requests=0,
             )
         )
-        monkeypatch.setattr(logging_module, "_handle_completed_batch", handle_completed_batch)
+        monkeypatch.setattr(logging_module, "_handle_completed_batch", _handle_completed_batch)
         batch = self._batch("completed", "file-out")
 
         await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
 
-        handle_completed_batch.assert_awaited_once()
+        _handle_completed_batch.assert_awaited_once()
         assert batch._hidden_params["response_cost"] == 8e-06
         assert batch.usage is not None
         assert batch.usage.total_tokens == 35
@@ -6963,10 +7013,10 @@ async def test_streaming_success_callbacks_survive_guardrail_logging_hook_failur
 
 def _resolve(custom_llm_provider, litellm_params, optional_params, model):
     from litellm.litellm_core_utils.litellm_logging import (
-        _resolve_vertex_location_for_cost,
+        resolve_vertex_location_for_cost,
     )
 
-    return _resolve_vertex_location_for_cost(
+    return resolve_vertex_location_for_cost(
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         optional_params=optional_params,
