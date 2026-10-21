@@ -23,7 +23,8 @@ import asyncio
 import json
 from datetime import datetime
 from importlib import import_module
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, cast
 from unittest.mock import Mock, patch
 
 import httpx
@@ -31,6 +32,7 @@ import pytest
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
@@ -44,6 +46,7 @@ from litellm.responses.streaming_iterator import (
     _status_code_for_error_fields,
 )
 from litellm.utils import ProviderConfigManager
+from litellm.types.utils import StandardLoggingPayload
 from litellm.types.llms.openai import (
     ErrorEvent,
     ErrorEventError,
@@ -521,6 +524,82 @@ def test_handle_logging_failed_response_records_usage_and_cost():
     assert combined_usage.total_tokens == 15
     assert iterator.logging_obj.model_call_details["response_cost"] == 0.0042
     iterator.logging_obj.response_cost_calculator.assert_called_once_with(result=chunk.response)
+
+
+class _FailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed: tuple[StandardLoggingPayload, ...] = ()
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.failed = (*self.failed, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+
+
+async def _first_failure_row(recorder: _FailureRecorder) -> StandardLoggingPayload:
+    for _ in range(200):
+        if recorder.failed:
+            return recorder.failed[0]
+        await asyncio.sleep(0.01)
+    pytest.fail("the failed stream logged no failure row")
+
+
+@pytest.mark.asyncio
+async def test_failed_stream_bills_only_its_own_usage_over_an_earlier_attempts_stash():
+    recorder: Final = _FailureRecorder()
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gpt-5.6",
+        messages=[],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="responses-failed-over-stash",
+        function_id="responses-failed-over-stash",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.6", optional_params={}, litellm_params=get_litellm_params(custom_llm_provider="openai")
+    )
+    logging_obj.model_call_details["combined_usage_object"] = litellm.Usage(
+        prompt_tokens=100, completion_tokens=50, total_tokens=150
+    )
+    logging_obj.model_call_details["response_cost"] = 0.5
+    failed: Final = {
+        "type": "response.failed",
+        "sequence_number": 1,
+        "response": {
+            "id": "resp_failed_over_stash",
+            "object": "response",
+            "created_at": 1790000000,
+            "status": "failed",
+            "model": "gpt-5.6",
+            "output": [],
+            "error": {"code": "server_error", "message": "boom"},
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        },
+    }
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=f"data: {json.dumps(failed)}\n\n".encode()
+        ),
+        model="gpt-5.6",
+        responses_api_provider_config=ProviderConfigManager.get_provider_responses_api_config(
+            provider="openai", model="gpt-5.6"
+        ),
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        await anext(aiter(iterator))
+
+    row: Final = await _first_failure_row(recorder)
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="gpt-5.6", prompt_tokens=10, completion_tokens=5, custom_llm_provider="openai"
+    )
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (10, 5)
+    assert row["response_cost"] == pytest.approx(prompt_cost + completion_cost)
 
 
 def test_handle_logging_failed_response_without_usage_skips_recording():

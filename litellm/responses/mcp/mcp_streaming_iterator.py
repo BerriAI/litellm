@@ -3,7 +3,9 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.responses.litellm_completion_transformation.streaming_iterator import LiteLLMCompletionStreamingIterator
 from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.responses.mcp.stream_round_billing import StreamedRoundBilling
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
@@ -352,6 +354,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self._round_max_output_index = -1
         self._composed_output: list[object] = []  # mutable-ok: grows as each round finishes
         self._pending_mcp_call_items: list[dict[str, object]] = []  # mutable-ok: grows per executed tool
+        self._iteration_started = False
+        self._round_billing: StreamedRoundBilling | None = None
+        self._bridged_round_billed: LiteLLMCompletionStreamingIterator | None = None
 
     def _extract_mcp_headers_from_params(self) -> None:
         """Extract MCP headers from original request params to pass to tool calls"""
@@ -436,7 +441,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         return self
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
-        chunk: Final = await self._anext_impl()
+        if not self._iteration_started:
+            self._iteration_started = True
+            self._round_billing = self._bill_rounds_on_one_row()
+        try:
+            chunk: Final = await self._anext_impl()
+        except Exception:
+            if self._round_billing is not None:
+                self._round_billing.finish()
+            raise
         sequence_number: Final = getattr(chunk, "sequence_number", None)
         if isinstance(sequence_number, int):
             if sequence_number <= self._last_sequence_number and self._last_sequence_number > 0:
@@ -445,6 +458,49 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             else:
                 self._last_sequence_number = max(self._last_sequence_number, sequence_number)
         return chunk
+
+    def __del__(self) -> None:
+        round_billing: Final[object] = getattr(self, "_round_billing", None)
+        if isinstance(round_billing, StreamedRoundBilling):
+            round_billing.release_abandoned()
+
+    def _bill_rounds_on_one_row(self) -> StreamedRoundBilling | None:
+        if not self.should_auto_execute:
+            return None
+        if isinstance(self.base_iterator, LiteLLMCompletionStreamingIterator):
+            return StreamedRoundBilling(self.base_iterator.litellm_logging_obj)
+        if isinstance(self.base_iterator, BaseResponsesAPIStreamingIterator):
+            return StreamedRoundBilling(self.base_iterator.logging_obj)
+        return None
+
+    def _restore_round_headers(self, logged_event: ResponsesAPIStreamingResponse) -> None:
+        if isinstance(self.base_iterator, LiteLLMCompletionStreamingIterator):
+            return
+        if isinstance(self.base_iterator, BaseResponsesAPIStreamingIterator):
+            self.base_iterator._restore_provider_response_headers(logged_event)
+
+    def _round_billed_early(self) -> bool:
+        return self._bridged_round_billed is not None and self._bridged_round_billed is self.base_iterator
+
+    def _bill_finished_bridged_round(self) -> None:
+        base: Final = self.base_iterator
+        if self._round_billing is None or not isinstance(base, LiteLLMCompletionStreamingIterator):
+            return
+        if self._round_billed_early():
+            return
+        finished: Final = base.finished_round_event()
+        if finished is None:
+            return
+        self._bridged_round_billed = base
+        round_output: Final = _output_items(finished.response)
+        self._round_billing.complete_round(
+            finished,
+            finished.response,
+            round_output
+            if finished.type == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE
+            else (*self._composed_output, *round_output),
+            self._restore_round_headers,
+        )
 
     async def _anext_impl(self) -> ResponsesAPIStreamingResponse:
         """
@@ -617,6 +673,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         follow-up rounds past the items already emitted, and lists every
         round's items on the final response.completed.
         """
+        self._bill_finished_bridged_round()
         chunk_type: Final[object] = getattr(chunk, "type", None)
         if self._round_index > 0 and chunk_type in (
             ResponsesAPIStreamEvents.RESPONSE_CREATED,
@@ -630,12 +687,21 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             if self._output_index_offset:
                 _set_event_field(chunk, "output_index", output_index + self._output_index_offset)
 
+        if self.should_auto_execute and chunk_type == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE:
+            return self._charge_incomplete_round(chunk)
         if not (self.should_auto_execute and self._is_response_completed(chunk)):
             return chunk
 
         response_obj: Final[object] = getattr(chunk, "response", None)
         if isinstance(response_obj, ResponsesAPIResponse):
             self.collected_response = response_obj
+            if self._round_billing is not None and not self._round_billed_early():
+                self._round_billing.complete_round(
+                    chunk,
+                    response_obj,
+                    (*self._composed_output, *_output_items(response_obj)),
+                    self._restore_round_headers,
+                )
         # Move to tool execution phase after this chunk
         self.phase = "tool_execution"
         await self._generate_tool_execution_events()
@@ -645,13 +711,33 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if self._follow_up_pending():
             self._absorb_round(response_obj)
             return None
-        if self._composed_output:
-            merged_output: Final[list[object]] = [  # mutable-ok: the response model declares output as a list
-                *self._composed_output,
-                *_output_items(response_obj),
-            ]
-            merged_response: Final = response_obj.model_copy(update={"output": merged_output})
-            _set_event_field(chunk, "response", merged_response)
+        merged_response: Final = (
+            response_obj.model_copy(update={"output": [*self._composed_output, *_output_items(response_obj)]})
+            if self._composed_output
+            else response_obj
+        )
+        client_response: Final = (
+            merged_response
+            if self._round_billing is None
+            else self._round_billing.charge_final_round(chunk, merged_response, self._restore_round_headers)
+        )
+        if client_response is not response_obj:
+            _set_event_field(chunk, "response", client_response)
+        return chunk
+
+    def _charge_incomplete_round(self, chunk: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse:
+        response_obj: Final[object] = getattr(chunk, "response", None)
+        if self._round_billing is None or not isinstance(response_obj, ResponsesAPIResponse):
+            return chunk
+        if not self._round_billed_early():
+            self._round_billing.complete_round(
+                chunk, response_obj, _output_items(response_obj), self._restore_round_headers
+            )
+        client_response: Final = self._round_billing.charge_final_round(
+            chunk, response_obj, self._restore_round_headers
+        )
+        if client_response is not response_obj:
+            _set_event_field(chunk, "response", client_response)
         return chunk
 
     async def _process_base_iterator_chunk(self) -> ResponsesAPIStreamingResponse:
@@ -949,6 +1035,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self.collected_response = None
                 self._cached_response_id = None
                 self._round_index += 1
+                if self._round_billing is not None:
+                    self._round_billing.record_billed_rounds(follow_up_response)
 
         except Exception as e:
             verbose_logger.error("Error creating follow-up iterator: %s", e)

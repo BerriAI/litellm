@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime as dt_object
 from functools import lru_cache
@@ -573,6 +573,27 @@ def mask_api_base_credentials(api_base: str) -> str:
 class UncachedPrice:
     cost: float | None
     cost_breakdown: CostBreakdown | None
+
+
+@dataclass(frozen=True, slots=True)
+class BilledRoundsSpend:
+    usage: Usage
+    cost: float
+    cost_breakdown: CostBreakdown | None
+
+
+@dataclass(frozen=True, slots=True)
+class BilledRoundsDispatch:
+    """A parked success log for a stream bridged through chat completions that billed several rounds, and the spend
+    its failure log bills when a post-call hook rejects the response, as it does for a rejected one-round bridged
+    stream."""
+
+    dispatch: Coroutine[object, object, None]
+    spend: BilledRoundsSpend
+
+
+def _fixed_margin(cost_breakdown: CostBreakdown | None) -> float:
+    return 0.0 if cost_breakdown is None else cost_breakdown.get("margin_fixed_amount", 0.0)
 
 
 def _timestamp_seconds(moment: object) -> float | None:
@@ -2420,6 +2441,31 @@ class Logging(LiteLLMLoggingBaseClass):
         """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
+
+    def record_failure_after_earlier_rounds(
+        self, earlier: BilledRoundsSpend, failed_usage: Usage, failed_cost: float
+    ) -> None:
+        """Bill a failed round on the failure log after the rounds of its request before it were billed on the success
+        log.
+
+        The fixed margin is a per-request fee, so it is charged once: the failed round's margin is dropped when the
+        earlier rounds already paid one."""
+        from litellm.responses.mcp.round_billing import breakdown_less_repeated_fixed_margin
+
+        failed_breakdown: Final = None if self.cost_breakdown is earlier.cost_breakdown else self.cost_breakdown
+        repeated_fixed_margin: Final = (
+            0.0
+            if failed_breakdown is None
+            else min(_fixed_margin(earlier.cost_breakdown), _fixed_margin(failed_breakdown), earlier.cost, failed_cost)
+        )
+        self.model_call_details["combined_usage_object"] = failed_usage
+        self.model_call_details["response_cost"] = failed_cost - repeated_fixed_margin
+        self.cost_breakdown = breakdown_less_repeated_fixed_margin(failed_breakdown, repeated_fixed_margin)
+
+    def record_billed_rounds_for_failure(self, spend: BilledRoundsSpend) -> None:
+        """Bill every round of a fully streamed request on the failure log when a post-call hook rejects it."""
+        self.record_partial_usage_for_failure(spend.usage, spend.cost)
+        self.cost_breakdown = spend.cost_breakdown
 
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves

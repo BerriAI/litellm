@@ -5,7 +5,8 @@ from itertools import filterfalse
 from typing import Any, Final, cast
 
 import litellm
-from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
+from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params, served_from_cache
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
@@ -1362,6 +1363,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if getattr(item, "type", None) != "message" or self._message_output_index is not None:
             return False
         return not any(getattr(part, "text", None) for part in getattr(item, "content", None) or ())
+
+    def finished_round_event(self) -> ResponseCompletedEvent | ResponseIncompleteEvent | None:
+        if not isinstance(self.litellm_model_response, ModelResponse):
+            return None
+        finished: Final = self._emit_terminal_response_event(self.litellm_model_response)
+        if finished is not None and served_from_cache(self.litellm_custom_stream_wrapper):
+            finished.response.hidden_params = {**finished.response.hidden_params, "cache_hit": True}
+        return finished
+
+    def bill_failure_after_earlier_rounds(self, earlier: BilledRoundsSpend) -> None:
+        self.litellm_custom_stream_wrapper.bill_failure_after_earlier_rounds(earlier)
 
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
