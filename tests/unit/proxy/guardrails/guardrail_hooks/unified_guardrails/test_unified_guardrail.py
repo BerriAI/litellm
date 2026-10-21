@@ -3110,7 +3110,7 @@ class TestUnscannedStreamIsAnnounced:
         assert len(chunks) == 3
         assert any(
             "no guardrail translation handler" in message
-            and "Add a guardrail translation handler for that call type." in message
+            and "streaming this response to the client unscanned" in message
             and "recording-guardrail" in message
             and "/chat/completions" in message
             for message in warnings
@@ -3233,26 +3233,18 @@ class TestUnscannedRequestIsAnnounced:
         ), self._warnings(caplog)
 
     @pytest.mark.asyncio
-    async def test_during_call_warns_instead_of_raising_on_a_call_type_outside_the_enum(self, caplog, monkeypatch):
+    async def test_during_call_still_rejects_a_call_type_outside_the_enum(self, monkeypatch):
         _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
         guardrail = RecordingGuardrail()
-        data = self._request(guardrail)
 
-        with self._capturing(caplog):
-            returned = await UnifiedLLMGuardrails().async_moderation_hook(
-                data=data,
-                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/moderations"),
-                call_type="not_a_call_type",
+        with pytest.raises(ValueError, match="acompact_responses"):
+            await UnifiedLLMGuardrails().async_moderation_hook(
+                data=self._request(guardrail),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses/compact"),
+                call_type="acompact_responses",
             )
 
         assert guardrail.apply_calls == []
-        assert returned["messages"] == [{"role": "user", "content": "hello world"}]
-        assert any(
-            "call type 'not_a_call_type' is not one litellm can scan" in message
-            and "Map the route to a CallTypes member in API_ROUTE_TO_CALL_TYPES." in message
-            and "skipping during-call scanning" in message
-            for message in self._warnings(caplog)
-        ), self._warnings(caplog)
 
     @pytest.mark.asyncio
     async def test_a_route_with_no_handler_warns_once_instead_of_once_per_request(self, caplog, monkeypatch):
@@ -3261,19 +3253,21 @@ class TestUnscannedRequestIsAnnounced:
 
         with self._capturing(caplog):
             for _ in range(5):
-                await UnifiedLLMGuardrails().async_moderation_hook(
-                    data=self._request(guardrail),
+                await UnifiedLLMGuardrails().async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses/resp_123"),
+                    cache=DualCache(),
+                    data=self._request(guardrail),
                     call_type="aget_responses",
                 )
-            await UnifiedLLMGuardrails().async_moderation_hook(
-                data=self._request(guardrail),
+            await UnifiedLLMGuardrails().async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/moderations"),
+                cache=DualCache(),
+                data=self._request(guardrail),
                 call_type="aget_responses",
             )
 
         unscanned = [
-            message for message in self._distinct_warnings(caplog) if "skipping during-call scanning" in message
+            message for message in self._distinct_warnings(caplog) if "skipping pre-call scanning" in message
         ]
         assert len(unscanned) == 2, unscanned
         assert "/v1/responses/resp_123" in unscanned[0]
@@ -3297,3 +3291,21 @@ class TestUnscannedRequestIsAnnounced:
         assert unscanned, self._warnings(caplog)
         assert "call type 'aresponses'" in unscanned[0], unscanned[0]
         assert "CallTypes." not in unscanned[0], unscanned[0]
+
+    @pytest.mark.asyncio
+    async def test_post_call_warns_on_every_unscanned_response(self, caplog, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.aembedding: _NoopTranslation})
+        guardrail = RecordingGuardrail()
+
+        with self._capturing(caplog):
+            for _ in range(3):
+                await UnifiedLLMGuardrails().async_post_call_success_hook(
+                    data={"guardrail_to_apply": guardrail, "model": "gpt-4o"},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses"),
+                    response=litellm.ModelResponse(),
+                )
+
+        unscanned = [
+            message for message in self._distinct_warnings(caplog) if "skipping post-call scanning" in message
+        ]
+        assert len(unscanned) == 3, unscanned

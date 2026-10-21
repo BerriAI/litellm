@@ -235,8 +235,7 @@ def _resolved_call_type(call_type: str | None) -> CallTypes | None:
         return None
 
 
-@lru_cache(maxsize=_UNSCANNED_WARNING_KEYS)
-def _warn_left_unscanned_once(
+def _log_left_unscanned(
     guardrail_name: str | None,
     request_route: str | None,
     call_type: str | None,
@@ -244,8 +243,7 @@ def _warn_left_unscanned_once(
 ) -> None:
     if _resolved_call_type(call_type) is not None:
         verbose_proxy_logger.warning(
-            "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; %s. "
-            "Add a guardrail translation handler for that call type.",
+            "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; %s.",
             guardrail_name,
             request_route,
             call_type,
@@ -268,6 +266,9 @@ def _warn_left_unscanned_once(
         consequence,
         remedy,
     )
+
+
+_warn_left_unscanned_once: Final = lru_cache(maxsize=_UNSCANNED_WARNING_KEYS)(_log_left_unscanned)
 
 
 def _warn_left_unscanned(
@@ -389,8 +390,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         mappings: Final = load_guardrail_translation_mappings()
-        resolved_call_type: Final = _resolved_call_type(call_type)
-        if resolved_call_type is None or resolved_call_type not in mappings:
+        resolved_call_type: Final = CallTypes(call_type)
+        if resolved_call_type not in mappings:
             _warn_left_unscanned(
                 guardrail_to_apply=guardrail_to_apply,
                 user_api_key_dict=user_api_key_dict,
@@ -464,9 +465,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         mappings: Final = load_guardrail_translation_mappings()
         resolved_call_type: Final = _resolved_call_type(call_type)
         if resolved_call_type is None or resolved_call_type not in mappings:
-            _warn_left_unscanned(
-                guardrail_to_apply=guardrail_to_apply,
-                user_api_key_dict=user_api_key_dict,
+            _log_left_unscanned(
+                guardrail_name=guardrail_to_apply.guardrail_name,
+                request_route=user_api_key_dict.request_route,
                 call_type=call_type,
                 consequence="skipping post-call scanning",
             )
