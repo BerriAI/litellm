@@ -702,6 +702,26 @@ def test_streaming_responses_opens_the_gateway_tool_call_empty_and_streams_its_a
         assert len(rig.upstream_tools()) == 2
 
 
+@pytest.mark.parametrize("surface", SURFACES)
+def test_streamed_auto_execute_gives_back_the_keys_only_parallel_slot_once_the_stream_ends(
+    gateway: Gateway, surface: Surface
+) -> None:
+    with _rig(gateway, surface) as rig:
+        key: Final = rig.scenario.key(object_permission={"mcp_servers": [rig.server_id]}, max_parallel_requests=1)
+        streamed: Final = rig.send(key, [AUTO], stream=True)
+        assert streamed.status_code == 200, streamed.text
+        assert ANSWER in streamed.text, streamed.text
+        assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+        follow_up: Final = eventually(
+            lambda: rig.send(key, [], prompt=f"{DIRECT} {rig.alias}"),
+            lambda response: response.status_code == 200,
+            seconds=20,
+            return_last_on_timeout=True,
+        )
+        assert follow_up.status_code == 200, follow_up.text
+        assert rig.final_text(follow_up.json()) == ANSWER
+
+
 def test_streaming_chat_through_a_toolset_gateway_url_serves_a_team_key_without_its_own_grant(
     gateway: Gateway,
 ) -> None:
