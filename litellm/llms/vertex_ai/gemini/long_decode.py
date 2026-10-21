@@ -86,7 +86,9 @@ def _int_or_none(value: object) -> int | None:
 
 
 def _asks_for_one_candidate(generation_config: Mapping[str, object]) -> bool:
-    return all(_int_or_none(generation_config[key]) == 1 for key in _CANDIDATE_COUNT_KEYS if key in generation_config)
+    return all(
+        _int_or_none(generation_config[key] or 1) == 1 for key in _CANDIDATE_COUNT_KEYS if key in generation_config
+    )
 
 
 def continuation_cap_of(request_body: RequestBody) -> int | None:

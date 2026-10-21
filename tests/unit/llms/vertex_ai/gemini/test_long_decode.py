@@ -554,6 +554,42 @@ async def test_unary_request_for_more_than_one_choice_is_never_continued(
     ]
 
 
+@pytest.mark.parametrize(
+    "one_choice_request",
+    [
+        {"max_tokens": 100_000, "n": 0},
+        {"extra_body": {"generationConfig": {"candidateCount": None}}},
+        {"extra_body": {"generationConfig": {"candidateCount": 0}}},
+    ],
+)
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_unary_request_whose_candidate_count_google_reads_as_one_is_continued(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, one_choice_request: Mapping[str, object]
+):
+    monkeypatch.setenv(BUDGET_ENV, "100000")
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2))
+    kwargs: Final = {
+        "model": MODEL,
+        "messages": list(MESSAGES),
+        "api_key": "fake-gemini-key",
+        **one_choice_request,
+    }
+
+    response: Final = (
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(hops, sent))))
+        if is_async
+        else litellm.completion(
+            **kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_replay(hops, sent))))
+        )
+    )
+
+    assert sent[1] == {**sent[0], "continuationToken": "dG9rLTE="}
+    assert response.choices[0].message.content == "hello world"
+    assert response.choices[0].finish_reason == "stop"
+
+
 @pytest.mark.asyncio
 async def test_unary_failed_continuation_hop_returns_the_answer_so_far_with_its_token():
     sent: Final[list[dict[str, object]]] = []
