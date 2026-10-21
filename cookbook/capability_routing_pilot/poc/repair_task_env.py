@@ -356,8 +356,10 @@ def repair_task(
     correction: Final = _object(corrections.get(task.task_id), f"correction for {task.task_id}")
     snippet: Final = correction.get("snippet")
     base_snippet: Final = config.overlays.get(task.task_id.split("__", 1)[0])
-    if not isinstance(snippet, str) or not isinstance(base_snippet, str):
-        raise ValueError("task correction and repository overlay must both be available")
+    if not isinstance(snippet, str) or (
+        base_snippet is not None and not isinstance(base_snippet, str)
+    ):
+        raise ValueError("task correction snippet and any repository overlay must be strings")
     rows: Final = tuple(run_pilot.read_jsonl_locked(config.runs_path))
     _validate_repair_eligibility(task, rows, correction_sha256)
     if task.image_ref is None or task.image_digest is None:
@@ -377,7 +379,12 @@ def repair_task(
             raise RuntimeError("manifest image pull returned no local image ID")
         if ops.inspect_image(repair_ref) is not None:
             raise RuntimeError(f"refusing to overwrite existing repair image {repair_ref}")
-        dockerfile: Final = _overlay_dockerfile(task.image_ref, f"{base_snippet.rstrip()}\n{snippet.strip()}")
+        dockerfile_snippet: Final = (
+            snippet.strip()
+            if base_snippet is None
+            else f"{base_snippet.rstrip()}\n{snippet.strip()}"
+        )
+        dockerfile: Final = _overlay_dockerfile(task.image_ref, dockerfile_snippet)
         dockerfile_sha256: Final = _sha256(dockerfile.encode())
         owned_refs = owned_refs + (repair_ref,)
         ops.build_image(repair_ref, dockerfile)

@@ -55,5 +55,14 @@
       "pydicom/tests/test_filereader.py::TestDeferredRead::test_file_exists",
       "pydicom/tests/test_filereader.py::TestReader::test_long_specific_char_set"
     ]
+  },
+  "pyvista__pyvista-432": {
+    "snippet": "RUN apt-get update && apt-get install -y --no-install-recommends libxrender1 && rm -rf /var/lib/apt/lists/*",
+    "cause": "Gold and noop preflights both failed at collection with ImportError: libXrender.so.1: cannot open shared object file, so no FAIL_TO_PASS test could run; the image lacks the X11 render library VTK loads at import",
+    "evidence": [
+      "tests/test_plotting.py::test_invalid_color",
+      "tests/test_plotting.py::test_invalid_font"
+    ],
+    "applies_on_top_of": "none (no pyvista repo overlay; pinned upstream image)"
   }
 }

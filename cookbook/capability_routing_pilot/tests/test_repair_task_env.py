@@ -1,7 +1,9 @@
 import hashlib
 import json
+from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
@@ -20,6 +22,7 @@ from poc.profiles import ProfileVersions
 
 
 TASK_ID: Final = "pydicom__pydicom-1413"
+PYVISTA_TASK_ID: Final = "pyvista__pyvista-432"
 REPAIR_REF: Final = f"routing_poc/profiling-overlay:{TASK_ID}-envfix1"
 
 
@@ -27,6 +30,9 @@ def _scenario(
     tmp_path: Path,
     gold_status: str = "resolved",
     fail_once: str | None = None,
+    task_id: str = TASK_ID,
+    image: str = "swebench/pydicom",
+    correction_payload: Mapping[str, object] | None = None,
 ) -> tuple[
     ProfileConfig,
     ProfileTask,
@@ -44,7 +50,7 @@ def _scenario(
     manifest_bytes: Final = json.dumps(
         {
             "categories": {
-                "repository_debugging": {"selected_ids": [TASK_ID]},
+                "repository_debugging": {"selected_ids": [task_id]},
                 "feature_implementation": {"selected_ids": []},
                 "shell_build": {"selected_ids": []},
                 "algorithms_data": {"selected_ids": []},
@@ -52,8 +58,8 @@ def _scenario(
             },
             "candidates": [
                 {
-                    "task_id": TASK_ID,
-                    "image": "swebench/pydicom",
+                    "task_id": task_id,
+                    "image": image,
                     "image_digest": "sha256:upstream-digest",
                 }
             ],
@@ -68,7 +74,7 @@ def _scenario(
     )
     prior: Final = {
         "record_type": "preflight_failed",
-        "task_id": TASK_ID,
+        "task_id": task_id,
         "error_class": "env",
         "gold_status": "unresolved",
         "noop_status": "unresolved",
@@ -78,20 +84,23 @@ def _scenario(
     run_pilot.append_jsonl(config.runs_path, prior)
     task: Final = ProfileTask(
         0,
-        TASK_ID,
+        task_id,
         "repository_debugging",
         model_order_for_task(0),
-        "swebench/pydicom@sha256:upstream-digest",
+        f"{image}@sha256:upstream-digest",
         "sha256:upstream-digest",
     )
-    correction: Final = {
-        TASK_ID: {
+    correction_entry: Final = (
+        correction_payload
+        if correction_payload is not None
+        else {
             "snippet": 'RUN /opt/miniconda3/envs/testbed/bin/pip install --no-cache-dir "pytest==7.4.4"',
             "cause": "pytest setup compatibility",
             "evidence": ["pydicom/tests/test_valuerep.py::TestBadValueRead::test_read_bad_value_in_VR_default"],
             "applies_on_top_of": "pydicom repo overlay",
         }
-    }
+    )
+    correction: Final = {task_id: dict(correction_entry)}
     correction_path: Final = tmp_path / "profiling" / "env_corrections.json"
     correction_bytes: Final = json.dumps(correction).encode()
     correction_path.write_bytes(correction_bytes)
@@ -100,16 +109,16 @@ def _scenario(
         run_root=tmp_path / ".private" / "profiling_runs",
         dataset_root=tmp_path / ".private" / "agent_dataset",
         eval_dataset=str(tmp_path / ".private" / "swebench_dev.json"),
-        base_commits={TASK_ID: "base"},
-        image_digests={"swebench/pydicom:latest": "sha256:upstream-digest"},
+        base_commits={task_id: "base"},
+        image_digests={f"{image}:latest": "sha256:upstream-digest"},
         image_overlay_ids={},
         dataset_metadata={},
         root_dir=tmp_path,
     )
     data: Final = AttemptPaths(
         pilot_paths,
-        {TASK_ID: {"instance_id": TASK_ID, "image": "swebench/pydicom:latest"}},
-        {TASK_ID: ""},
+        {task_id: {"instance_id": task_id, "image": f"{image}:latest"}},
+        {task_id: ""},
         {model: {"gateway_model": model} for model in task.model_order},
     )
     images: Final = {}
@@ -130,7 +139,7 @@ def _scenario(
         images[target] = images.get(source, source)
 
     def build_image(tag: str, dockerfile: str) -> None:
-        assert dockerfile.startswith("FROM swebench/pydicom@sha256:upstream-digest\n")
+        assert dockerfile.startswith(f"FROM {image}@sha256:upstream-digest\n")
         images[tag] = "corrected-image-id"
 
     def evaluate(task_id: str, patch: str, label: str, paths: run_pilot.AttemptPaths) -> tuple[str, float]:
@@ -304,6 +313,66 @@ def test_task_without_correction_entry_is_refused(tmp_path: Path) -> None:
             config,
             task,
             {},
+            correction_sha256,
+            data,
+            ops,
+            guard,
+            versions,
+            {},
+            "https://gateway.invalid",
+        )
+
+
+def test_no_base_overlay_builds_from_upstream_with_only_correction_snippet(tmp_path: Path) -> None:
+    corrections_path: Final = Path(__file__).parents[1] / "profiling" / "env_corrections.json"
+    corrections: Final = cast(Mapping[str, object], json.loads(corrections_path.read_text()))
+    correction_entry: Final = cast(Mapping[str, object], corrections[PYVISTA_TASK_ID])
+    snippet: Final = correction_entry["snippet"]
+    assert isinstance(snippet, str)
+    scenario: Final = _scenario(
+        tmp_path,
+        gold_status="unresolved",
+        task_id=PYVISTA_TASK_ID,
+        image="pyvista/pyvista",
+        correction_payload=correction_entry,
+    )
+    config, task, correction, correction_sha256, data, ops, guard, versions, _, _ = scenario
+    assert config.overlays.get("pyvista") is None
+    dockerfiles: list[str] = []
+    original_build_image: Final = ops.build_image
+
+    def capture_build_image(tag: str, dockerfile: str) -> None:
+        dockerfiles.append(dockerfile)
+        original_build_image(tag, dockerfile)
+
+    captured_ops: Final = replace(ops, build_image=capture_build_image)
+    assert repair_task(
+        config,
+        task,
+        correction,
+        correction_sha256,
+        data,
+        captured_ops,
+        guard,
+        versions,
+        {},
+        "https://gateway.invalid",
+    ) is False
+    assert task.image_ref is not None
+    assert dockerfiles == [f"FROM {task.image_ref}\n{snippet.strip()}\n"]
+
+
+def test_non_string_base_overlay_is_rejected(tmp_path: Path) -> None:
+    scenario: Final = _scenario(tmp_path)
+    config, task, correction, correction_sha256, data, ops, guard, versions, _, _ = scenario
+    invalid_overlays: Final = cast(Mapping[str, str], {"pydicom": 1})
+    invalid_config: Final = replace(config, overlays=invalid_overlays)
+
+    with pytest.raises(ValueError, match="any repository overlay must be strings"):
+        repair_task(
+            invalid_config,
+            task,
+            correction,
             correction_sha256,
             data,
             ops,
