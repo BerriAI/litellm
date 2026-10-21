@@ -1,8 +1,16 @@
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
+import { teamMemberBudgetGate } from "@/components/shared/InheritedBudgetHint";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import CopyButton from "@/components/shared/CopyButton";
-import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
+import {
+  DateCell,
+  ENTITY_CELL_TITLE_CLASSES,
+  IdCell,
+  IdentityCell,
+  MoneyCell,
+  UserPopoverCell,
+} from "@/components/shared/table_cells";
 import {
   DataTable,
   DataTableFilterDrawer,
@@ -11,9 +19,11 @@ import {
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { Badge } from "@/components/ui/badge";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Input } from "@/components/ui/input";
+import { orgDetailHref, userDetailHref } from "@/utils/entityLinks";
+import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { ChevronDown, ChevronRight } from "lucide-react";
@@ -68,19 +78,17 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
   const pageIndex = tablePagination.pageIndex;
   const pageSize = tablePagination.pageSize;
 
-  const {
-    data: keys,
-    isPending: isLoading,
-    isFetching,
-    refetch,
-  } = useKeys(pageIndex + 1, pageSize, {
+  const keyListOptions = {
     teamID: teamId,
-    selectedKeyAlias: searchQuery.trim() || undefined,
+    search: searchQuery.trim() || undefined,
     userID: getFilterValue("user_id"),
+    keyHash: getFilterValue("key_hash"),
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
     expand: "user",
-  });
+  };
+
+  const { data: keys, isPending: isLoading, isFetching, refetch } = useKeys(pageIndex + 1, pageSize, keyListOptions);
 
   const displayKeys = useMemo(() => {
     const kList = keys?.keys || [];
@@ -91,6 +99,12 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       organization_id: (k.organization_id ?? k.org_id) || orgId,
     }));
   }, [keys?.keys, organization?.organization_id]);
+
+  const teamMemberBudgetTeamIds = useMemo(
+    () => (displayKeys.some((key) => key.max_budget == null && Boolean(key.user_id)) ? [teamId] : []),
+    [displayKeys, teamId],
+  );
+  const teamMemberBudgets = useTeamMemberBudgets(teamMemberBudgetTeamIds);
 
   const rowCount = keys?.total_count ?? 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
@@ -170,7 +184,15 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         header: "Organization ID",
         size: 140,
         enableSorting: false,
-        cell: (info) => (info.getValue() ? info.renderValue() : "-"),
+        cell: (info) => {
+          const orgId = info.getValue() as string | null;
+          if (!orgId) return "-";
+          return (
+            <SimpleTooltip content={orgId}>
+              <IdentityCell title={orgId} titleClassName={ENTITY_CELL_TITLE_CLASSES} href={orgDetailHref(orgId)} />
+            </SimpleTooltip>
+          );
+        },
       },
       {
         id: "user_email",
@@ -181,9 +203,14 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         cell: (info) => {
           const user = info.getValue() as { user_email?: string } | undefined;
           const value = user?.user_email;
+          const userId = info.row.original.user_id;
           return (
             <SimpleTooltip content={value}>
-              <span className="block max-w-full truncate font-mono text-xs">{value ?? "-"}</span>
+              <IdentityCell
+                title={value ?? "-"}
+                titleClassName={ENTITY_CELL_TITLE_CLASSES}
+                href={value && userId ? userDetailHref(userId) : undefined}
+              />
             </SimpleTooltip>
           );
         },
@@ -196,10 +223,16 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         enableSorting: false,
         cell: (info) => {
           const userId = info.getValue() as string | null;
-          const displayValue = userId === "default_user_id" ? "Default Proxy Admin" : userId;
+          if (userId === DEFAULT_PROXY_ADMIN_USER_ID) {
+            return <DefaultProxyAdminTag userId={userId} />;
+          }
           return (
-            <SimpleTooltip content={displayValue}>
-              <span className="block max-w-full truncate font-mono text-xs">{displayValue ?? "-"}</span>
+            <SimpleTooltip content={userId}>
+              <IdentityCell
+                title={userId ?? "-"}
+                titleClassName={ENTITY_CELL_TITLE_CLASSES}
+                href={userId ? userDetailHref(userId) : undefined}
+              />
             </SimpleTooltip>
           );
         },
@@ -223,53 +256,13 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const userId = info.getValue() as string | null;
           if (!userId) return "-";
           const { created_by_user } = info.row.original;
-          const userAlias = created_by_user?.user_alias ?? null;
-          const userEmail = created_by_user?.user_email ?? null;
-          const isDefaultAdmin = userId === "default_user_id";
-          const displayValue = userAlias || userEmail || userId;
-
-          const popoverContent = (
-            <div className="flex min-w-[200px] max-w-[300px] flex-col gap-2 text-xs">
-              {[
-                { label: "User Alias", value: userAlias },
-                { label: "User Email", value: userEmail },
-                { label: "User ID", value: userId },
-              ].map(({ label, value }) => (
-                <div key={label} className="flex flex-col min-w-0">
-                  <span className="text-muted-foreground">{label}</span>
-                  {value ? (
-                    <span className="flex items-center gap-1">
-                      <span className="min-w-0 flex-1 truncate font-mono text-xs">{value}</span>
-                      <CopyButton value={value} label={`Copy ${label}`} />
-                    </span>
-                  ) : (
-                    <span className="font-mono">-</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          );
-
-          if (isDefaultAdmin && !userAlias && !userEmail) {
-            return (
-              <HoverCard>
-                <HoverCardTrigger render={<span className="cursor-default" />}>
-                  <DefaultProxyAdminTag userId={userId} />
-                </HoverCardTrigger>
-                <HoverCardContent align="start">{popoverContent}</HoverCardContent>
-              </HoverCard>
-            );
-          }
-
           return (
-            <HoverCard>
-              <HoverCardTrigger
-                render={<span className="block max-w-full cursor-default truncate font-mono text-xs" />}
-              >
-                {displayValue}
-              </HoverCardTrigger>
-              <HoverCardContent align="start">{popoverContent}</HoverCardContent>
-            </HoverCard>
+            <UserPopoverCell
+              userAlias={created_by_user?.user_alias ?? null}
+              userEmail={created_by_user?.user_email ?? null}
+              userId={userId}
+              width={130}
+            />
           );
         },
       },
@@ -301,7 +294,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "spend",
         accessorKey: "spend",
-        meta: { title: "Spend (USD)" },
+        meta: { title: "Spend (USD)", numeric: true },
         header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" variant="header-cycle" />,
         size: 100,
         enableSorting: true,
@@ -310,13 +303,26 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "max_budget",
         accessorKey: "max_budget",
-        meta: { title: "Budget (USD)" },
+        meta: { title: "Budget (USD)", numeric: true },
         header: ({ column }) => <DataTableSortHeader column={column} title="Budget (USD)" variant="header-cycle" />,
-        size: 110,
+        size: 160,
         enableSorting: true,
-        cell: (info) => (
-          <MoneyCell value={info.getValue() as number | null} decimals={0} emptyText="Unlimited" showZero />
-        ),
+        cell: (info) => {
+          const key = info.row.original;
+          const memberGate =
+            key.max_budget == null
+              ? teamMemberBudgetGate(teamMemberBudgets[teamId], key.user_id, key.user?.user_email)
+              : null;
+
+          return memberGate ? (
+            <span className="block w-full whitespace-nowrap text-right tabular-nums">
+              ${formatNumberWithCommas(memberGate.maxBudget, 0)}{" "}
+              <span className="text-muted-foreground">(team member)</span>
+            </span>
+          ) : (
+            <MoneyCell value={info.getValue() as number | null} decimals={0} emptyText="Unlimited" showZero />
+          );
+        },
       },
       {
         id: "budget_reset_at",
@@ -436,7 +442,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         },
       },
     ],
-    [expandedAccordions],
+    [expandedAccordions, teamMemberBudgets, teamId],
   );
 
   const handleSortingChange = useCallback((updaterOrValue: React.SetStateAction<SortingState>) => {
@@ -445,7 +451,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
   }, []);
 
   return (
-    <div className="w-full h-full overflow-hidden">
+    <div className="w-full">
       {selectedKey ? (
         <KeyInfoView
           keyId={selectedKey.token}
@@ -455,7 +461,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           onDelete={refetch}
         />
       ) : (
-        <div className="py-4 flex-1 overflow-hidden">
+        <div className="py-4">
           <DataTable
             data={displayKeys}
             columns={columns}
@@ -473,7 +479,6 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
             columnResizeMode="onChange"
             isLoading={isLoading || isFetching}
             loadingMessage="Loading keys..."
-            maxBodyHeight="75vh"
             size="compact"
             toolbar={(table) => (
               <>
@@ -481,11 +486,11 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                   table={table}
                   searchValue={searchInput}
                   onSearchChange={handleSearchChange}
-                  searchPlaceholder="Search by key alias…"
+                  searchPlaceholder="Search by key alias or ID…"
                   onRefresh={() => refetch?.()}
                   isRefreshing={isFetching}
                   onOpenFilters={() => setFiltersOpen(true)}
-                  filterLabels={{ user_id: "User ID" }}
+                  filterLabels={{ user_id: "User ID", key_hash: "Key ID" }}
                 />
                 <DataTableFilterDrawer
                   table={table}
@@ -495,13 +500,22 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                   description={`Narrow down keys for ${teamAlias ?? "this team"}`}
                 >
                   {({ get, set }) => (
-                    <DataTableFilterField label="User ID">
-                      <Input
-                        value={(get("user_id") as string) ?? ""}
-                        onChange={(event) => set("user_id", event.target.value)}
-                        placeholder="Filter by user ID…"
-                      />
-                    </DataTableFilterField>
+                    <>
+                      <DataTableFilterField label="User ID">
+                        <Input
+                          value={(get("user_id") as string) ?? ""}
+                          onChange={(event) => set("user_id", event.target.value)}
+                          placeholder="Filter by user ID…"
+                        />
+                      </DataTableFilterField>
+                      <DataTableFilterField label="Key ID">
+                        <Input
+                          value={(get("key_hash") as string) ?? ""}
+                          onChange={(event) => set("key_hash", event.target.value)}
+                          placeholder="Enter Key ID…"
+                        />
+                      </DataTableFilterField>
+                    </>
                   )}
                 </DataTableFilterDrawer>
               </>

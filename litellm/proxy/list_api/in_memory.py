@@ -141,3 +141,15 @@ class InMemoryListExecutor(Generic[TRow]):
     async def find_many(self, plan: QueryPlan) -> Sequence[TRow]:
         page: Final = _ordered(self._matching(plan.where), plan.order)[plan.skip : plan.skip + plan.take]
         return await self.enrich_page(tuple(row for _, row in page))
+
+    async def distinct(self, field: str, where: tuple[Predicate, ...]) -> Sequence[str]:
+        """A repeated field contributes each of its elements, so a facet over `providers`
+        lists providers rather than the tuples rows happen to carry."""
+        cells: Final = (cells.get(field) for cells, _ in self._matching(where))
+        values: Final = (
+            value
+            for cell in cells
+            for value in (cell if isinstance(cell, tuple) else (cell,))
+            if isinstance(value, str) and value
+        )
+        return tuple(sorted(frozenset(values)))

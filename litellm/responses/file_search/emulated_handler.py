@@ -45,7 +45,7 @@ class FileSearchToolCallArgs(TypedDict):
 
 
 def should_use_emulated_file_search(
-    tools: Iterable[ToolParam] | None,
+    tools: Iterable[object] | None,
     provider_config: "BaseResponsesAPIConfig | None",
 ) -> bool:
     """Return True when there is a file_search tool and the provider can't handle it natively."""
@@ -105,7 +105,7 @@ def _build_function_tool(vector_store_ids: list[str]) -> dict[str, object]:
     }
 
 
-def _replace_file_search_tools(
+def replace_file_search_tools(
     tools: Iterable[ToolParam] | None,
 ) -> tuple[list[object], list[str]]:
     """
@@ -380,7 +380,7 @@ def _synthesize_responses_api_response(
             if first_cost is not None:
                 current_cost: Final = hidden.get("response_cost") if isinstance(hidden, dict) else 0
                 hidden["response_cost"] = (current_cost or 0) + first_cost
-        synthesized._hidden_params = hidden
+        synthesized.hidden_params = hidden
     return synthesized
 
 
@@ -390,7 +390,7 @@ def _synthesize_responses_api_response(
 
 
 async def _call_aresponses(input, model, tools, **kwargs):  # pragma: no cover – thin wrapper for patching in tests
-    from litellm.responses.main import aresponses
+    from litellm.responses.main import aresponses  # noqa: TID251  # inner call must not re-enter file-search emulation
 
     return await aresponses(input=input, model=model, tools=tools, **kwargs)
 
@@ -459,7 +459,14 @@ async def _execute_file_search_tool_calls(
         queries_from_call = _resolve_queries_from_args(args, input)
 
         vs_id_arg = args.get("vector_store_id")
-        vs_ids_for_call = [cast(str, vs_id_arg)] if vs_id_arg else all_vs_ids  # cast-ok: model-supplied, as today
+        if vs_id_arg is not None and vs_id_arg not in all_vs_ids:
+            verbose_logger.warning(
+                "file_search emulated: model picked vector_store_id=%r outside the request's vector_store_ids %s; "
+                "searching the request's stores instead",
+                vs_id_arg,
+                all_vs_ids,
+            )
+        vs_ids_for_call = [cast(str, vs_id_arg)] if vs_id_arg in all_vs_ids else all_vs_ids  # cast-ok: request id
 
         queries, results = await _run_vector_searches(
             queries=queries_from_call,
@@ -522,7 +529,7 @@ async def aresponses_with_emulated_file_search(
     _include_search_results, call_kwargs = _prepare_emulated_file_search_call(kwargs=kwargs)
 
     # 1. Replace file_search tools with function tool
-    transformed_tools, all_vs_ids = _replace_file_search_tools(tools)
+    transformed_tools, all_vs_ids = replace_file_search_tools(tools)
 
     # 2. First provider call — provider will call the file_search function.
     # Mark as an internal sub-call so wrapper_async skips billing callbacks;

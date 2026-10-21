@@ -21,7 +21,8 @@ from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
+    from litellm.models.skills import LiteLLM_SkillsTable
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class LiteLLMSkillsTransformationHandler:
@@ -136,7 +137,7 @@ class LiteLLMSkillsTransformationHandler:
         """Async implementation of create_skill."""
         # Lazy import to avoid SDK dependency on proxy
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
-        from litellm.proxy._types import NewSkillRequest
+        from litellm.models.skills import NewSkillRequest
 
         skill_request: Final = NewSkillRequest(
             display_title=display_title,
@@ -154,7 +155,7 @@ class LiteLLMSkillsTransformationHandler:
             user_api_key_dict=user_api_key_dict,
         )
 
-        return self._db_skill_to_response(db_skill)
+        return self.db_skill_to_response(db_skill)
 
     def list_skills_handler(
         self,
@@ -222,7 +223,7 @@ class LiteLLMSkillsTransformationHandler:
             user_api_key_dict=user_api_key_dict,
         )
 
-        skills: Final = [self._db_skill_to_response(s) for s in db_skills]
+        skills: Final = [self.db_skill_to_response(s) for s in db_skills]
         return ListSkillsResponse(
             data=skills,
             has_more=len(skills) >= limit,
@@ -288,7 +289,7 @@ class LiteLLMSkillsTransformationHandler:
             skill_id=skill_id,
             user_api_key_dict=user_api_key_dict,
         )
-        return self._db_skill_to_response(db_skill)
+        return self.db_skill_to_response(db_skill)
 
     def delete_skill_handler(
         self,
@@ -354,7 +355,7 @@ class LiteLLMSkillsTransformationHandler:
             type=result.get("type", "skill_deleted"),
         )
 
-    def _db_skill_to_response(self, db_skill: "LiteLLM_SkillsTable") -> Skill:
+    def db_skill_to_response(self, db_skill: "LiteLLM_SkillsTable") -> Skill:
         """
         Convert a database skill record to Anthropic-compatible Skill response.
 
@@ -375,4 +376,5 @@ class LiteLLMSkillsTransformationHandler:
             latest_version=db_skill.latest_version,
             source=db_skill.source or "custom",
             type="skill",
+            description=db_skill.description,
         )
