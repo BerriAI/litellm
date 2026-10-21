@@ -21,6 +21,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -538,7 +539,7 @@ class OCIChatConfig(BaseConfig):
         stream: bool | None = None,
     ) -> str:
         base: Final = get_oci_base_url(optional_params, api_base or litellm.api_base)
-        return f"{base}/{OCI_API_VERSION}/actions/chat"
+        return join_api_base(base, f"{OCI_API_VERSION}/actions/chat")
 
     def _get_optional_params(self, vendor: OCIVendors, optional_params: dict, model: str = "") -> dict:
         param_map: Final = (

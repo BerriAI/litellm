@@ -3,15 +3,16 @@
 ## Initial implementation - covers gemini + image gen calls
 import json
 import re
+import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
-from functools import partial
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -27,7 +28,8 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
@@ -95,6 +97,7 @@ from ..common_utils import (
     build_json_schema,
     build_vertex_schema,
     supports_response_json_schema,
+    with_integer_enums_that_fit,
 )
 from ..context_caching.known_cached_contents import known_cached_contents
 from ..context_caching.rejected_cache_retry import (
@@ -195,6 +198,29 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
     )
 
 
+_SAMPLING_DEPRECATION_UNMAPPED_MODELS: Final = "models outside litellm's model map"
+_sampling_deprecation_lock: Final = threading.Lock()
+
+
+@lru_cache(maxsize=None)
+def _log_gemini_sampling_params_deprecated(model: str) -> None:
+    verbose_logger.warning(
+        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
+        model,
+    )
+
+
+def _sampling_deprecation_notice_key(model: str) -> str:
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    is_cataloged: Final = any(name in catalog for name in (model, f"vertex_ai/{model}", f"gemini/{model}"))
+    return model if is_cataloged else _SAMPLING_DEPRECATION_UNMAPPED_MODELS
+
+
+def _warn_gemini_sampling_params_deprecated(model: str) -> None:
+    with _sampling_deprecation_lock:
+        _log_gemini_sampling_params_deprecated(_sampling_deprecation_notice_key(model))
+
+
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
     recorded: Final[object] = getattr(logging_obj, "vertex_ai_cache_creation_input_tokens", 0)
     return recorded if isinstance(recorded, int) and recorded > 0 else 0
@@ -204,6 +230,274 @@ def _served_model_name(model_version: object) -> str | None:
     if not isinstance(model_version, str) or not model_version:
         return None
     return model_version.split("@", 1)[0]
+
+
+_GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "multi_speaker_voice_config": "multiSpeakerVoiceConfig",
+        "speaker_voice_configs": "speakerVoiceConfigs",
+        "voice_config": "voiceConfig",
+        "prebuilt_voice_config": "prebuiltVoiceConfig",
+        "voice_name": "voiceName",
+        "replicated_voice_config": "replicatedVoiceConfig",
+        "mime_type": "mimeType",
+        "voice_sample_audio": "voiceSampleAudio",
+        "language_code": "languageCode",
+        "speaker_alias": "speakerAlias",
+        "speaker_id": "speakerId",
+    }
+)
+
+
+_SPEECH_CONFIG_ITEMS: Final = TypeAdapter(list[object])
+
+
+def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> Mapping[str, object]:
+    normalized: Final[dict[str, object]] = {}  # mutable-ok: iterative traversal fills nested output without recursion
+
+    pending: Final[  # mutable-ok: the explicit worklist must grow while avoiding recursive traversal
+        list[tuple[dict[str, object] | list[object], Mapping[str, object] | list[object]]]
+    ] = [(normalized, value)]
+    while pending:
+        target, source = pending.pop()
+        items = source.items() if isinstance(source, Mapping) else enumerate(source)
+        for key, item in items:
+            if isinstance(source, Mapping):
+                if not isinstance(key, str):
+                    continue
+                normalized_key: str | int = _GEMINI_SPEECH_CONFIG_KEY_MAP.get(key, key)
+            else:
+                normalized_key = len(target)
+
+            child: object
+            if (mapping_item := as_str_mapping(item)) is not None:
+                pending.append((child_mapping := dict[str, object](), mapping_item))
+                child = child_mapping
+            elif isinstance(item, list):
+                pending.append((child_items := list[object](), _SPEECH_CONFIG_ITEMS.validate_python(item)))
+                child = child_items
+            else:
+                child = (
+                    OPENAI_TO_GEMINI_TTS_VOICES.get(item.lower(), item)
+                    if normalized_key == "voiceName" and isinstance(item, str)
+                    else item
+                )
+
+            if isinstance(target, dict):
+                assert isinstance(normalized_key, str)
+                target[normalized_key] = child
+            else:
+                target.append(child)
+
+    return normalized
+
+
+def _gemini_speaker_voice_config(item: object) -> object:
+    speaker_config: Final = as_str_mapping(item)
+    if speaker_config is None:
+        return item
+    speaker: Final = speaker_config.get("speakerAlias")
+    voice_name: Final = speaker_config.get("speakerId")
+    if not isinstance(speaker, str) or not isinstance(voice_name, str):
+        return item
+    return {
+        **{key: value for key, value in speaker_config.items() if key not in ("speakerAlias", "speakerId")},
+        "speaker": speaker,
+        "voiceConfig": {
+            "prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice_name.lower(), voice_name)}
+        },
+    }
+
+
+def _with_gemini_speaker_voice_configs(config: Mapping[str, object]) -> Mapping[str, object]:
+    multi_speaker_config: Final = as_str_mapping(config.get("multiSpeakerVoiceConfig"))
+    if multi_speaker_config is None:
+        return config
+    speaker_voice_configs: Final = multi_speaker_config.get("speakerVoiceConfigs")
+    if not isinstance(speaker_voice_configs, list):
+        return config
+    return {
+        **config,
+        "multiSpeakerVoiceConfig": {
+            **multi_speaker_config,
+            "speakerVoiceConfigs": [
+                _gemini_speaker_voice_config(item)
+                for item in _SPEECH_CONFIG_ITEMS.validate_python(speaker_voice_configs)
+            ],
+        },
+    }
+
+
+_GEMINI_SPEECH_CONFIG_FIELDS: Final = frozenset({"voiceConfig", "multiSpeakerVoiceConfig", "languageCode"})
+
+_GEMINI_VOICE_CONFIG_FIELDS: Final = MappingProxyType(
+    {
+        "prebuiltVoiceConfig": frozenset({"voiceName"}),
+        "replicatedVoiceConfig": frozenset({"mimeType", "voiceSampleAudio"}),
+        "voice": None,
+    }
+)
+
+_GEMINI_SPEAKER_VOICE_CONFIG_FIELDS: Final = frozenset({"speaker", "voiceConfig"})
+
+
+def _known_leaf_fields(value: object, fields: frozenset[str] | None) -> object:
+    mapping: Final = as_str_mapping(value)
+    if fields is None or mapping is None:
+        return value
+    return {key: item for key, item in mapping.items() if key in fields}
+
+
+def _known_voice_config_fields(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    if mapping is None:
+        return value
+    return {
+        key: _known_leaf_fields(item, _GEMINI_VOICE_CONFIG_FIELDS[key])
+        for key, item in mapping.items()
+        if key in _GEMINI_VOICE_CONFIG_FIELDS
+    }
+
+
+def _known_speaker_voice_config_fields(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    if mapping is None:
+        return value
+    return {
+        key: _known_voice_config_fields(item) if key == "voiceConfig" else item
+        for key, item in mapping.items()
+        if key in _GEMINI_SPEAKER_VOICE_CONFIG_FIELDS
+    }
+
+
+def _known_speaker_voice_configs(value: object) -> object:
+    if not isinstance(value, list):
+        return value
+    return [_known_speaker_voice_config_fields(item) for item in _SPEECH_CONFIG_ITEMS.validate_python(value)]
+
+
+def _known_multi_speaker_voice_config_fields(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    if mapping is None:
+        return value
+    return {key: _known_speaker_voice_configs(item) for key, item in mapping.items() if key == "speakerVoiceConfigs"}
+
+
+def _known_speech_config_field(key: str, value: object) -> object:
+    match key:
+        case "voiceConfig":
+            return _known_voice_config_fields(value)
+        case "multiSpeakerVoiceConfig":
+            return _known_multi_speaker_voice_config_fields(value)
+        case _:
+            return value
+
+
+def _known_gemini_speech_fields(
+    config: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    return {
+        key: _known_speech_config_field(key, item)
+        for key, item in config.items()
+        if key in _GEMINI_SPEECH_CONFIG_FIELDS
+    }
+
+
+_GEMINI_TTS_VOICE_KEYS: Final = frozenset(
+    {
+        "format",
+        "name",
+        "voice",
+        "voiceName",
+        "voice_name",
+        "languageCode",
+        "language_code",
+        "modelName",
+        "model_name",
+        "speechConfig",
+        "speech_config",
+        "voiceConfig",
+        "voice_config",
+        "multiSpeakerVoiceConfig",
+        "multi_speaker_voice_config",
+    }
+)
+
+
+_NAMED_UNKNOWN_VOICE_KEYS: Final = 10
+
+_NAMED_VOICE_KEY_CHARS: Final = 100
+
+
+def _gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, object] | None:
+    camel_config: Final = as_str_mapping(value.get("speechConfig"))
+    return camel_config if camel_config is not None else as_str_mapping(value.get("speech_config"))
+
+
+def named_voice_keys(keys: Sequence[str]) -> str:
+    named: Final = ", ".join(key[:_NAMED_VOICE_KEY_CHARS] for key in keys[:_NAMED_UNKNOWN_VOICE_KEYS])
+    unnamed_count: Final = len(keys) - _NAMED_UNKNOWN_VOICE_KEYS
+    return f"{named}, and {unnamed_count} more" if unnamed_count > 0 else named
+
+
+def reject_unknown_gemini_tts_voice_keys(
+    model: str, voice: Mapping[str, object], drop_params: bool, llm_provider: str | None
+) -> None:
+    nested_config: Final = _gemini_speech_config_wrapper(voice) or {}
+    ignored_wrapper: Final = (
+        ("speech_config",)
+        if as_str_mapping(voice.get("speechConfig")) is not None and voice.get("speech_config") is not None
+        else ()
+    )
+    unknown_keys: Final = sorted(
+        {*(key for key in (*voice, *nested_config) if key not in _GEMINI_TTS_VOICE_KEYS), *ignored_wrapper}
+    )
+    if not unknown_keys or drops_unsupported_params(drop_params):
+        return
+    raise UnsupportedParamsError(
+        message=(
+            f"{model} does not support the voice keys {named_voice_keys(unknown_keys)}. Remove them, or set "
+            "drop_params to ignore them."
+        ),
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
+def normalize_gemini_speech_config(
+    value: Mapping[str, object], drop_unknown_fields: bool = False
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    speech_config: Final = {**_with_gemini_speaker_voice_configs(mapped_gemini_speech_config(value))}
+    return _known_gemini_speech_fields(speech_config) if drop_unknown_fields else speech_config
+
+
+def _merge_gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, object]:
+    nested_config: Final = _gemini_speech_config_wrapper(value)
+    if nested_config is None:
+        return value
+    return {
+        **{key: item for key, item in value.items() if key not in ("speechConfig", "speech_config")},
+        **nested_config,
+    }
+
+
+def mapped_gemini_speech_config(
+    value: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    normalized: Final = _normalize_gemini_speech_config_item(_merge_gemini_speech_config_wrapper(value))
+    speech_config: Final = {key: item for key, item in normalized.items() if key in _GEMINI_SPEECH_CONFIG_FIELDS}
+    voice_name: Final = next(
+        (normalized[key] for key in ("name", "voiceName", "voice") if isinstance(normalized.get(key), str)),
+        None,
+    )
+    if "voiceConfig" in speech_config or "multiSpeakerVoiceConfig" in speech_config or not isinstance(voice_name, str):
+        return speech_config
+    return {
+        **speech_config,
+        "voiceConfig": {
+            "prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice_name.lower(), voice_name)}
+        },
+    }
 
 
 class VertexAIBaseConfig:
@@ -403,11 +697,43 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return False
         return True
 
+    @staticmethod
+    def supports_sampling_params(model: str) -> bool:
+        """Whether Google still honors ``temperature`` / ``top_p`` / ``top_k`` for ``model``.
+
+        Driven by ``supports_sampling_params`` in the model map: Gemini 3.6 Flash, 3.5 Flash-Lite
+        and later accept the fields but ignore them, and a later generation will 400 on them.
+        A model the map says nothing about keeps forwarding them. ``temperature`` and ``top_p``
+        leave ``get_supported_openai_params`` when the flag is off, so the shared unsupported-param
+        check raises or drops them and ``allowed_openai_params`` still forwards them verbatim;
+        ``top_k`` is a provider-specific kwarg that bypasses that check and is gated while the
+        request body is built."""
+        rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
+        bare: Final = model.split("/")[-1]
+        for candidate in (model, bare, f"vertex_ai/{bare}", f"gemini/{bare}"):
+            if isinstance(flag := rows.get(candidate, {}).get("supports_sampling_params"), bool):
+                return flag
+        return True
+
+    @staticmethod
+    def reject_unsupported_sampling_param(model: str, param: str, drop_params: bool) -> None:
+        """Return under ``drop_params`` so the caller drops ``param``, else raise the client-side 400
+        that names the escape hatch."""
+        if litellm.drop_params or drop_params:
+            return
+        raise UnsupportedParamsError(
+            message=(
+                f"{model} does not support {param}: the model map flags it `supports_sampling_params: false` "
+                "because Google ignores sampling params on this model. "
+                "To drop unsupported params, set `litellm.drop_params = True`."
+            ),
+            status_code=400,
+        )
+
     def get_supported_openai_params(self, model: str) -> list[str]:
+        sampling_params: Final = ("temperature", "top_p", "top_k") if self.supports_sampling_params(model) else ()
         supported_params: Final = [
-            "temperature",
-            "top_p",
-            "top_k",
+            *sampling_params,
             "max_tokens",
             "max_completion_tokens",
             "stream",
@@ -692,13 +1018,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _map_function(self, value: list[dict], optional_params: dict) -> list[Tools]:
+    def _map_function(self, value: list[dict], optional_params: dict, send_integer_enums: bool = False) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 
         Args:
             value: List of tool definitions
             optional_params: Request-scoped parameters to store retrieval config
+            send_integer_enums: Whether to send integer enums with string values
 
         Returns:
             List of mapped tools in Vertex AI format
@@ -711,18 +1038,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         googleSearch: dict | None = None
         googleSearchRetrieval: dict | None = None
         enterpriseWebSearch: dict | None = None
-        urlContext: dict | None = None
+        urlContext: dict[str, object] | None = None
         code_execution: dict | None = None
         googleMaps: dict | None = None
         google_maps_retrieval_config: dict | None = None
         computerUse: dict | None = None
         # remove 'additionalProperties' from tools
-        schema_value: Final[JsonValue] = cast(JsonValue, value)  # cast-ok: tool schemas come from JSON request data
+        schema_value: Final[JsonValue] = deepcopy(cast(JsonValue, value))  # cast-ok: tools are JSON request data
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
 
-        for tool in value:
+        for tool in cast(list[dict], schema_value):  # cast-ok: a deep copy keeps the caller's tool shape
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
@@ -732,7 +1059,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     and _openai_function_object["parameters"] is not None
                     and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
-                    _openai_function_object["parameters"] = build_vertex_schema(_openai_function_object["parameters"])
+                    _openai_function_object["parameters"] = build_vertex_schema(
+                        _openai_function_object["parameters"], send_integer_enums=send_integer_enums
+                    )
 
                 openai_function_object = _openai_function_object
 
@@ -875,21 +1204,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self,
         value: list[dict[str, object]],  # mutable-ok: mirrors override contract
         optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        send_integer_enums: bool = False,
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
-        return self._map_function(value, optional_params)
+        return self._map_function(value, optional_params, send_integer_enums)
 
-    def _map_response_schema(self, value: dict) -> dict:
+    def _map_response_schema(self, value: dict, send_integer_enums: bool = False) -> Mapping[str, object]:
         old_schema = deepcopy(value)
         if isinstance(old_schema, list):
             for item in old_schema:
                 if isinstance(item, dict):
-                    item = build_vertex_schema(parameters=item, add_property_ordering=True)
+                    item = build_vertex_schema(
+                        parameters=item, add_property_ordering=True, send_integer_enums=send_integer_enums
+                    )
 
         elif isinstance(old_schema, dict):
-            old_schema = build_vertex_schema(parameters=old_schema, add_property_ordering=True)
+            old_schema = build_vertex_schema(
+                parameters=old_schema, add_property_ordering=True, send_integer_enums=send_integer_enums
+            )
         return old_schema
 
-    def apply_response_schema_transformation(self, value: dict, optional_params: dict, model: str):
+    def apply_response_schema_transformation(
+        self, value: dict, optional_params: dict, model: str, allow_integer_enums: bool = True
+    ):
         new_value = deepcopy(value)
         # remove 'strict' from json schema (not supported by Gemini)
         new_value = remove_strict_from_schema(new_value)
@@ -931,7 +1267,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # - OpenAPI-style format (uppercase types)
                 # - No additionalProperties support
                 # - Requires propertyOrdering
-                optional_params["response_schema"] = self._map_response_schema(value=schema)
+                optional_params["response_schema"] = with_integer_enums_that_fit(
+                    partial(self._map_response_schema, schema),
+                    allow_integer_enums and self._is_gemini_3_or_newer(model),
+                )
 
     @property
     def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
@@ -1166,7 +1505,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=400,
             )
 
-    def _map_audio_params(self, value: dict) -> dict:
+    def _map_audio_params(
+        self, value: Mapping[str, object], drop_unknown_fields: bool = False
+    ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
         """
         Expected input:
         {
@@ -1185,12 +1526,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             languageCode: "en-US",
         }
         """
-        from litellm.types.llms.vertex_ai import (
-            PrebuiltVoiceConfig,
-            SpeechConfig,
-            VoiceConfig,
-        )
-
         # Validate audio format - Gemini TTS only supports pcm16
         audio_format: Final = value.get("format")
         if audio_format is not None and audio_format != "pcm16":
@@ -1200,22 +1535,46 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 f"Please set audio format to 'pcm16'."
             )
 
-        # Map OpenAI audio parameter to Gemini speech config
-        speech_config: Final[SpeechConfig] = {}
+        camel_speech_config: Final = value.get("speechConfig")
+        snake_speech_config: Final = value.get("speech_config")
+        speech_config_value: Final = (
+            camel_speech_config if isinstance(camel_speech_config, Mapping) else snake_speech_config
+        )
+        language_code: Final = value.get("language_code", value.get("languageCode"))
+        if isinstance(speech_config_value, Mapping):
+            return normalize_gemini_speech_config(value, drop_unknown_fields)
 
-        if "voice" in value:
-            voice: Final = value["voice"]
-            voice_name: Final = (
-                OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice) if isinstance(voice, str) else voice
-            )
-            prebuilt_voice_config: Final[PrebuiltVoiceConfig] = {"voiceName": voice_name}
-            voice_config: Final[VoiceConfig] = {"prebuiltVoiceConfig": prebuilt_voice_config}
-            speech_config["voiceConfig"] = voice_config
+        voice: Final = value.get("voice")
+        speech_config_without_language: Final[  # mutable-ok: provider request serialization requires a concrete dict
+            dict[str, object]
+        ] = (
+            {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice)
+                        if isinstance(voice, str)
+                        else voice,
+                    }
+                }
+            }
+            if "voice" in value
+            else {}
+        )
 
-        if "language_code" in value:
-            speech_config["languageCode"] = value["language_code"]
+        if language_code is not None:
+            return {
+                **speech_config_without_language,
+                "languageCode": language_code,
+            }
 
-        return cast(dict, speech_config)
+        return speech_config_without_language
+
+    def _map_chat_audio_params(
+        self, model: str, value: Mapping[str, object], drop_params: bool
+    ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
+        if _gemini_speech_config_wrapper(value) is not None:
+            reject_unknown_gemini_tts_voice_keys(model, value, drop_params, self.custom_llm_provider)
+        return self._map_audio_params(value, drop_unknown_fields=drops_unsupported_params(drop_params))
 
     def map_audio_params(
         self,
@@ -1249,10 +1608,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        allow_integer_enums: bool = True,
     ) -> dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
-        gemini_sampling_params_warned: bool = False
+        supports_sampling_params: Final = self.supports_sampling_params(model)
         for param, value in non_default_params.items():
+            if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
+                continue
             if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
                     if value is not None and value < 1.0:
@@ -1260,28 +1622,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             "Warning: Setting temperature < 1.0 for Gemini 3 models (%s) can cause infinite loops, degraded reasoning performance, and failure on complex tasks. Strongly recommended to use temperature = 1.0 (default).",
                             model,
                         )
-                    if not gemini_sampling_params_warned:
-                        verbose_logger.warning(
-                            "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                            model,
-                        )
-                        gemini_sampling_params_warned = True
+                    _warn_gemini_sampling_params_deprecated(model)
                 optional_params["temperature"] = value
             elif param == "top_p":
-                if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
-                    verbose_logger.warning(
-                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                        model,
-                    )
-                    gemini_sampling_params_warned = True
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    _warn_gemini_sampling_params_deprecated(model)
                 optional_params["top_p"] = value
             elif param == "top_k":
-                if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
-                    verbose_logger.warning(
-                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                        model,
-                    )
-                    gemini_sampling_params_warned = True
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    _warn_gemini_sampling_params_deprecated(model)
                 optional_params["top_k"] = value
             elif (
                 param == "stream" and value is True
@@ -1290,7 +1639,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "n":
                 optional_params["candidate_count"] = value
             elif param == "audio" and isinstance(value, dict):
-                optional_params["speechConfig"] = self._map_audio_params(value)
+                optional_params["speechConfig"] = self._map_chat_audio_params(model, value, drop_params)
             elif param == "stop":
                 if isinstance(value, str):
                     optional_params["stop_sequences"] = [value]
@@ -1299,7 +1648,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
             elif param == "response_format" and isinstance(value, dict):
-                self.apply_response_schema_transformation(value=value, optional_params=optional_params, model=model)
+                self.apply_response_schema_transformation(
+                    value=value, optional_params=optional_params, model=model, allow_integer_enums=allow_integer_enums
+                )
             elif param == "frequency_penalty":
                 if self._supports_penalty_parameters(model):
                     optional_params["frequency_penalty"] = value
@@ -1312,7 +1663,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["logprobs"] = value
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
-                mapped_tools = self._map_function(value=value, optional_params=optional_params)
+                mapped_tools = with_integer_enums_that_fit(
+                    partial(self._map_function, value, optional_params),
+                    allow_integer_enums and self._is_gemini_3_or_newer(model),
+                )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
             elif param == "tool_choice" and (isinstance(value, str) or isinstance(value, dict)):
                 _tool_choice_value = self.map_tool_choice_values(
