@@ -10731,7 +10731,7 @@ def test_access_group_scoped_key_filters_deployments_with_same_public_model():
         team_models=["AG2"],
     )
 
-    _model, deployments = router._common_checks_available_deployment(
+    _model, deployments = router._resolve_available_deployment_candidates(
         model="gpt-5",
         request_kwargs={
             "metadata": {
