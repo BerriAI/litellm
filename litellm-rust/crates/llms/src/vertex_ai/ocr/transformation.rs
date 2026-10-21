@@ -16,7 +16,7 @@ use crate::{
 };
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
-const DEFAULT_LOCATION: &str = "us-central1";
+use litellm_llms_types::providers::vertex_ai::DEFAULT_LOCATION;
 
 #[derive(Clone, Debug, Default)]
 pub struct VertexAiOcrConfig;
@@ -35,7 +35,7 @@ impl BaseOcrConfig for VertexAiOcrConfig {
     }
 
     fn secret_names(&self) -> Vec<&'static str> {
-        litellm_auth_gcp::SECRET_NAMES.to_vec()
+        litellm_auth_gcp::secret_names().to_vec()
     }
 
     fn map_ocr_params(

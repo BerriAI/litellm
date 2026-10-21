@@ -1,9 +1,11 @@
 import asyncio
 import json
 import time
+from collections.abc import Mapping
 from typing import Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.constants import (
     OPEN_SANDBOX_API_BASE_ENV_VAR,
@@ -19,6 +21,7 @@ from litellm.constants import (
     OPEN_SANDBOX_READY_TIMEOUT,
 )
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.sandbox.transformation import (
     SANDBOX_MAX_OUTPUT_BYTES,
     BaseSandboxConfig,
@@ -36,6 +39,9 @@ DEFAULT_SANDBOX_TIMEOUT: Final = OPEN_SANDBOX_DEFAULT_TIMEOUT
 DEFAULT_READY_TIMEOUT: Final = OPEN_SANDBOX_READY_TIMEOUT
 DEFAULT_POLL_INTERVAL: Final = OPEN_SANDBOX_POLL_INTERVAL
 MAX_OUTPUT_BYTES: Final = SANDBOX_MAX_OUTPUT_BYTES
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUE: Final = TypeAdapter(object)
 
 
 class OpenSandboxSandboxConfig(BaseSandboxConfig):
@@ -88,11 +94,11 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         )
 
         response: Final = await self._http(client).post(
-            url=f"{base}/sandboxes",
+            url=join_api_base(base, "sandboxes"),
             headers=self._lifecycle_headers(key),
             json=body,
         )
-        data: Final = response.json()
+        data: Final = _JSON_OBJECT.validate_python(response.json())
         sandbox_id: Final = str(data["id"])
 
         if self._sandbox_state(data) != "Running":
@@ -187,7 +193,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         key: Final = self._api_key(api_key=api_key, handle=handle)
         try:
             response: Final = await self._http(client).delete(
-                url=f"{base}/sandboxes/{handle.id}",
+                url=join_api_base(base, f"sandboxes/{handle.id}"),
                 headers=self._lifecycle_headers(key),
             )
         except httpx.HTTPStatusError as e:
@@ -253,10 +259,10 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         deadline: Final = time.monotonic() + ready_timeout
         while True:
             response = await self._http(client).get(
-                url=f"{api_base}/sandboxes/{sandbox_id}",
+                url=join_api_base(api_base, f"sandboxes/{sandbox_id}"),
                 headers=headers,
             )
-            data = response.json()
+            data = _JSON_VALUE.validate_python(response.json())
             state = self._sandbox_state(data)
             if state == "Running":
                 return
@@ -311,7 +317,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         client: AsyncHTTPHandler | None,
     ) -> tuple[str, dict[str, str]]:
         response: Final = await self._http(client).get(
-            url=f"{api_base}/sandboxes/{sandbox_id}/endpoints/{OPEN_SANDBOX_EXECD_PORT}",
+            url=join_api_base(api_base, f"sandboxes/{sandbox_id}/endpoints/{OPEN_SANDBOX_EXECD_PORT}"),
             headers=headers,
             params={"use_server_proxy": use_server_proxy},
         )

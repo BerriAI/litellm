@@ -1,3 +1,7 @@
+vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
+  useModelCostMap: () => ({ data: { "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" } } }),
+}));
+
 import { openAutoRouterAdvanced, selectAutoRouterOption } from "../../../tests/autoRouterSetup";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -7,6 +11,7 @@ import { act, fireEvent, renderWithProviders, screen, waitFor, within, testQuery
 import { toast } from "@/lib/toast";
 import EditAutoRouterModal from "./edit_auto_router_modal";
 import { apiClient } from "../networking";
+import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
@@ -30,6 +35,12 @@ vi.mock("../networking", () => ({
   apiClient: { post: vi.fn().mockResolvedValue({ allowances: [], error: null }) },
   modelPatchUpdateCall,
   modelAvailableCall,
+  modelInfoCall: vi.fn().mockResolvedValue({
+    data: [
+      { model_name: "decision-one", litellm_params: { model: "typesafe/jev-latest" } },
+      { model_name: "decision-two", litellm_params: { model: "typesafe/jev-latest" } },
+    ],
+  }),
   getAutoRouterClassifierDefaultPromptCall,
   getAutoRouterAssembledPromptCall,
   validateAutoRouterConfig,
@@ -1570,4 +1581,48 @@ describe("EditAutoRouterModal availability checks", () => {
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
   });
+});
+
+describe("EditAutoRouterModal deployed decision classifier", () => {
+  it.each(["evaluation", undefined])(
+    "shows and changes the saved deployment without ignored legacy model controls (mode=%s)",
+    async (mode) => {
+      vi.mocked(fetchAvailableModels).mockResolvedValueOnce([
+        { model_group: "decision-one", mode },
+        { model_group: "decision-two", mode },
+        { model_group: "gpt-4o-mini", mode: "chat" },
+      ]);
+      modelPatchUpdateCall.mockClear();
+      renderModal({
+        modelData: {
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: {
+              ...STORED_CONFIG,
+              classifier_type: "oss_classifier",
+              opensource_classifier_config: { provider: "jev", model: "jev-latest", deployment_name: "decision-one" },
+            },
+          },
+        },
+      });
+      const picker = await screen.findByRole("combobox", { name: "Decision model" });
+      expect(picker).toHaveValue("decision-one");
+      await userEvent.click(picker);
+      await userEvent.click(await screen.findByRole("option", { name: "decision-two" }));
+      expect(picker).toHaveValue("decision-two");
+      openAutoRouterAdvanced("Classification Method");
+      expect(screen.queryByLabelText("Classifier Model")).not.toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText("Classifier Timeout (ms)"), { target: { value: "4500" } });
+      await waitFor(() => expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled());
+      await userEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+      await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+      expect(savedConfig().opensource_classifier_config).toEqual(
+        expect.objectContaining({
+          deployment_name: "decision-two",
+          timeout_ms: 4500,
+        }),
+      );
+    },
+  );
 });

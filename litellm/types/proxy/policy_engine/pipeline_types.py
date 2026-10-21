@@ -13,6 +13,7 @@ from pydantic import ConfigDict, Field, field_validator
 from litellm.types.llms.base import LiteLLMBaseModel
 
 VALID_PIPELINE_ACTIONS: Final = {"allow", "block", "next", "modify_response"}
+DETECT_ONLY_PIPELINE_ACTIONS: Final = frozenset({"allow", "next"})
 VALID_PIPELINE_MODES: Final = {"pre_call", "post_call"}
 
 
