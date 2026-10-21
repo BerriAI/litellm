@@ -14,6 +14,7 @@ a hold that such a pass accounts for is reported under `garbage collection` inst
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections.abc import Iterable
@@ -178,6 +179,31 @@ def offenders(rows: Iterable[StallRow]) -> tuple[str, ...]:
         )
         for row in rows
         if row.offending
+    )
+
+
+def _over_allowance(row: StallRow) -> int:
+    return row.count if row.allowed_by is None else max(0, row.count - row.allowed_by.max_count)
+
+
+def junit_properties(spec: EventLoopStalls, rows: Iterable[StallRow]) -> tuple[tuple[str, float | str], ...]:
+    """The stall table as `perf_event_loop_*` properties for the dashboard: every hold over the threshold with the
+    allowlist's total as its limit, the holds past their allowance (limit 0, the case's one assertion), the longest
+    and the summed hold, and a `_breakdown` of holds per location in the shape the other metrics use."""
+    table: Final = tuple(rows)
+    holds: Final = sum(row.count for row in table)
+    breakdown: Final = tuple(
+        {"label": f"{row.coroutine} {row.where}".strip(), "value": row.count, "share": row.count / holds}
+        for row in table
+    )
+    return (
+        ("perf_event_loop_holds", holds),
+        ("perf_event_loop_holds_limit", sum(known.max_count for known in spec.allowlist)),
+        ("perf_event_loop_offending_holds", sum(map(_over_allowance, table))),
+        ("perf_event_loop_offending_holds_limit", 0),
+        ("perf_event_loop_hold_seconds_max", max((row.max_seconds for row in table), default=0.0)),
+        ("perf_event_loop_hold_seconds_total", sum(row.total_seconds for row in table)),
+        *((("perf_event_loop_holds_breakdown", json.dumps(breakdown)),) if breakdown else ()),
     )
 
 

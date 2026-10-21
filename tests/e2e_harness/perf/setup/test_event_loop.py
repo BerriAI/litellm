@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import math
 from typing import Final
 
-from setup.event_loop import EventLoopStalls, KnownStall, offenders, parse_stalls, summarize
+from pydantic import BaseModel, ConfigDict, TypeAdapter
+from setup.event_loop import EventLoopStalls, KnownStall, junit_properties, offenders, parse_stalls, summarize
 
 _HANDLER: Final = (
     "Executing <Task pending name='Task-9' coro=<RequestResponseCycle.run_asgi() running at "
@@ -29,6 +31,14 @@ _SPEC: Final = EventLoopStalls(
         KnownStall("garbage collection", max_count=1),
     )
 )
+
+
+class _Slice(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    value: int
+    share: float
 
 
 def test_parse_keeps_the_coroutine_its_location_and_the_hold() -> None:
@@ -95,3 +105,29 @@ def test_a_collector_pass_explains_only_the_next_hold_and_only_one_at_least_as_l
         ("RequestResponseCycle.run_asgi()", False),
     ]
     assert summarize(_SPEC, parse_stalls((_GC_PASS,))) == ()
+
+
+def test_junit_properties_count_every_hold_and_only_the_holds_past_their_allowance_as_offending() -> None:
+    rows: Final = summarize(_SPEC, parse_stalls((_STARTUP, _STREAM, _STREAM, _HANDLER, _HANDLER, _HANDLER)))
+    properties: Final = dict(junit_properties(_SPEC, rows))
+    assert properties["perf_event_loop_holds"] == 6
+    assert properties["perf_event_loop_holds_limit"] == 6
+    assert properties["perf_event_loop_offending_holds"] == 3
+    assert properties["perf_event_loop_offending_holds_limit"] == 0
+    assert properties["perf_event_loop_hold_seconds_max"] == 0.731
+    assert math.isclose(float(properties["perf_event_loop_hold_seconds_total"]), 0.302 + 2 * 0.412 + 3 * 0.731)
+    breakdown: Final = TypeAdapter(list[_Slice]).validate_json(str(properties["perf_event_loop_holds_breakdown"]))
+    assert [(slice.label, slice.value) for slice in breakdown] == [
+        ("RequestResponseCycle.run_asgi() uvicorn/protocols/http/h11_impl.py:416", 3),
+        ("TaskHandle._run_coro() anyio/_core/_tasks.py:275", 2),
+        ("LifespanOn.main() uvicorn/lifespan/on.py:86", 1),
+    ]
+    assert math.isclose(sum(slice.share for slice in breakdown), 1.0)
+
+
+def test_junit_properties_without_holds_report_zeros_and_no_breakdown() -> None:
+    properties: Final = dict(junit_properties(_SPEC, ()))
+    assert properties["perf_event_loop_holds"] == 0
+    assert properties["perf_event_loop_offending_holds"] == 0
+    assert properties["perf_event_loop_hold_seconds_max"] == 0
+    assert "perf_event_loop_holds_breakdown" not in properties
