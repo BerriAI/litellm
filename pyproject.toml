@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.106.1"
+version = "1.106.2"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -78,7 +78,7 @@ proxy = [
     "httpx2>=2.5.0,<3",
     "pydantic>=2.12.0,<3",
     "litellm-proxy-extras==0.4.108",
-    "litellm-enterprise==0.1.76",
+    "litellm-enterprise==0.1.76.post1",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -290,7 +290,7 @@ ci = [
     "langchain-openai==1.1.14",
     "langgraph>=1.2.4,<1.3.0",
     "langgraph-prebuilt>=1.1.0,<1.3.0",
-    "claude-agent-sdk==0.1.44",
+    "claude-agent-sdk==0.2.165",
     "google-cloud-speech==2.40.0",
 ]
 healthcheck = [
@@ -373,7 +373,7 @@ litellm-enterprise = { workspace = true }
 members = ["enterprise", "litellm-proxy-extras"]
 
 [tool.commitizen]
-version = "1.106.1"
+version = "1.106.2"
 version_files = [
     "pyproject.toml:^version",
 ]

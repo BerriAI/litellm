@@ -777,11 +777,17 @@ def _batch_response_was_successful(
     message batch results lines report ``result.type == "succeeded"``; Bedrock
     batch output lines report ``modelOutput`` (and no ``error``).
     """
-    if custom_llm_provider == "anthropic":
-        return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("type") == "succeeded"
     if custom_llm_provider == "bedrock":
         return batch_job_output_file.get("modelOutput") is not None and batch_job_output_file.get("error") is None
-    _response: Final[dict[str, object]] = cast(  # cast-ok: batch response bodies come from provider JSON
-        dict[str, object], batch_job_output_file.get("response", None) or {}
+    envelope_key: Final = "result" if custom_llm_provider == "anthropic" else "response"
+    envelope: Final = batch_job_output_file.get(envelope_key)
+    if not isinstance(envelope, Mapping):
+        if envelope is not None:
+            verbose_logger.warning("batch output %s must be an object, treating the line as unsuccessful", envelope_key)
+        return False
+    response: Final = cast(Mapping[object, object], envelope)  # cast-ok: mapping shape validated above
+    return (
+        response.get("type") == "succeeded"
+        if custom_llm_provider == "anthropic"
+        else response.get("status_code") == 200
     )
-    return _response.get("status_code", None) == 200

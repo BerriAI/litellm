@@ -24,7 +24,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from fastapi import HTTPException
-from pydantic import ValidationError
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Unpack
 
 import litellm
@@ -345,6 +345,31 @@ def _iter_provider_file_id_pairs(
 
 def _managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedObjectTableActions:
     return prisma_client.db.litellm_managedobjecttable
+
+
+_JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_POSTGRES_UNSTORABLE_CHARACTER: Final = "\x00"
+
+
+def _storable_text(text: str) -> str:
+    return text.replace(_POSTGRES_UNSTORABLE_CHARACTER, "")
+
+
+def _storable_json_value(value: JsonValue) -> JsonValue:
+    if isinstance(value, str):
+        return _storable_text(value)
+    if isinstance(value, list):
+        return [_storable_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {_storable_text(key): _storable_json_value(item) for key, item in value.items()}
+    return value
+
+
+def postgres_storable_json(file_object: BaseModel) -> str:
+    dumped: Final = file_object.model_dump_json()
+    if "\\u0000" not in dumped:
+        return dumped
+    return _JSON_VALUE_ADAPTER.dump_json(_storable_json_value(_JSON_VALUE_ADAPTER.validate_json(dumped))).decode()
 
 
 def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, str]:
