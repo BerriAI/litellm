@@ -9,7 +9,7 @@ from typing import Final, TypeVar
 from openai.types.responses.easy_input_message_param import EasyInputMessageParam
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import ResponseInputParam
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
@@ -59,6 +59,23 @@ def _provider_compaction_block(provider_specific_fields: object) -> CompactionBl
 def provider_compaction_summary(provider_specific_fields: object) -> str | None:
     block: Final = _provider_compaction_block(provider_specific_fields)
     return None if block is None else block.summary
+
+
+class _AssistantTurnFields(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    content: object = None
+    tool_calls: object = None
+    provider_specific_fields: object = None
+
+
+def carries_only_compaction(message: object) -> bool:
+    fields: Final = _AssistantTurnFields.model_validate(message)
+    return (
+        not fields.content
+        and not fields.tool_calls
+        and provider_compaction_summary(fields.provider_specific_fields) is not None
+    )
 
 
 def _choice_provider_specific_fields(choice: object) -> object:

@@ -6773,6 +6773,46 @@ def test_native_compaction_replay_moves_a_call_its_compaction_item_splits_from_i
 
 
 @pytest.mark.parametrize(
+    "responses_api_request",
+    [
+        pytest.param(_COMPACTION_REQUESTED, id="native_compaction_block"),
+        pytest.param(ResponsesAPIOptionalRequestParams(), id="summary_as_text"),
+    ],
+)
+def test_compaction_replay_invents_no_call_for_an_output_whose_call_was_never_stored(
+    responses_api_request: ResponsesAPIOptionalRequestParams,
+) -> None:
+    async def no_stored_turns(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(messages=[], litellm_session_id=None)
+
+    chat_request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="anthropic/claude-sonnet-5-5",
+        input=cast(
+            ResponseInputParam,
+            [
+                {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+                {"type": "function_call_output", "call_id": "call_never_stored", "output": "Rain."},
+            ],
+        ),
+        responses_api_request=ResponsesAPIOptionalRequestParams(
+            **responses_api_request,
+            tools=[{"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "strict": False}],
+        ),
+    )
+
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_unknown",
+            litellm_completion_request=chat_request,
+            instructions=None,
+            session_lookup=no_stored_turns,
+        )
+    )
+
+    assert not any(message.get("tool_calls") for message in request["messages"])
+
+
+@pytest.mark.parametrize(
     ("responses_api_request", "expected_turns"),
     [
         pytest.param(

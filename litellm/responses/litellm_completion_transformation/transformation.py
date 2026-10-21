@@ -122,6 +122,7 @@ from litellm.types.utils import (
 )
 
 from .compaction_items import (
+    carries_only_compaction,
     compaction_output_item,
     decode_compaction_item,
     holds_compaction_summary,
@@ -1727,7 +1728,7 @@ class LiteLLMCompletionResponsesConfig:
         """Find the index of the previous assistant message."""
         for j in range(current_idx - 1, -1, -1):
             if messages[j].get("role") == "assistant":
-                return j
+                return None if carries_only_compaction(messages[j]) else j
         return None
 
     @staticmethod
