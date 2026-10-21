@@ -7889,6 +7889,48 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
         router._count_pre_call_check_tokens(messages=None, input=None)
 
 
+def _embedding_router_with_context_window(max_input_tokens: int) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "fake-key"},
+                "model_info": {"max_input_tokens": max_input_tokens},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one two three four five six"] * 3, id="texts"),
+        pytest.param([list(range(6))] * 3, id="token-id-lists"),
+    ],
+)
+async def test_aembedding_batch_fits_when_every_input_fits_the_context_window(embedding_input):
+    router: Final = _embedding_router_with_context_window(10)
+
+    response: Final = await router.aembedding(model="embed", input=embedding_input, mock_response=[0.1, 0.2])
+
+    assert response.data
+
+
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one", " ".join(["word"] * 20)], id="texts"),
+        pytest.param(list(range(11)), id="token-ids"),
+        pytest.param([[1], list(range(11))], id="token-id-lists"),
+    ],
+)
+async def test_aembedding_rejects_a_batch_with_an_input_over_the_context_window(embedding_input):
+    router: Final = _embedding_router_with_context_window(10)
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aembedding(model="embed", input=embedding_input, mock_response=[0.1, 0.2])
+
 def test_count_pre_call_check_tokens_skips_the_history_a_compaction_item_replaces():
     router = litellm.Router(model_list=[{"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}}])
     summary: Final = "The user planned a Tokyo trip."

@@ -46,7 +46,7 @@ import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, StrictInt, StrictStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -596,12 +596,29 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
     return False
 
 
+def _longest_embedding_input_tokens(items: Sequence[object]) -> int | None:
+    """Token count of the longest input in an embedding batch, or None when `items` is not one.
+
+    An embedding model's context window bounds each input on its own, so the batch is never summed.
+    """
+    if all(isinstance(item, int) for item in items):
+        return len(items)
+    try:
+        batch: Final = _EMBEDDING_BATCH_ADAPTER.validate_python(items)
+    except ValidationError:
+        return None
+    return max((litellm.token_counter(text=item) if isinstance(item, str) else len(item) for item in batch), default=0)
+
+
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
+_EMBEDDING_BATCH_ADAPTER: Final[TypeAdapter[tuple[StrictStr | tuple[StrictInt, ...], ...]]] = TypeAdapter(
+    tuple[StrictStr | tuple[StrictInt, ...], ...]
+)
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -14040,12 +14057,14 @@ class Router:
         Prompt content the message list never carries is read from `request_kwargs`:
         `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
         Anthropic Messages top-level `system` block.
+
+        Embedding batches (`list[str]`, `list[int]`, `list[list[int]]`) count their longest input.
         """
         from litellm.llms.anthropic.pass_through.messages.utils import (
             anthropic_system_to_openai_message,
         )
 
-        extras: Final = request_kwargs if request_kwargs is not None else MappingProxyType({})
+        extras: Final = request_kwargs if request_kwargs is not None else _NO_DEFAULT_PARAMS
         raw_instructions: Final = extras.get("instructions")
         instructions: Final = raw_instructions if isinstance(raw_instructions, str) else None
         raw_tools: Final = extras.get("tools")
@@ -14058,6 +14077,8 @@ class Router:
         if messages is not None:
             counted_messages: Final = (system_message, *messages) if system_message is not None else messages
             return litellm.token_counter(messages=counted_messages, tools=tools)
+        if isinstance(input, list) and (embedding_tokens := _longest_embedding_input_tokens(input)) is not None:
+            return embedding_tokens
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
