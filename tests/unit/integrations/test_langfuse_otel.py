@@ -2,6 +2,7 @@ import base64
 import json
 import os
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -174,6 +175,31 @@ class TestLangfuseOtelIntegration:
             )
 
         assert span.attributes["langfuse.environment"] == "team-a-env"
+
+    @pytest.mark.parametrize(
+        "completion_start_time",
+        [
+            datetime(2026, 10, 9, 12, 0, 0, 250000, tzinfo=timezone.utc),
+            datetime(2026, 10, 9, 12, 0, 0, 250000),
+        ],
+        ids=["aware", "naive_local_time"],
+    )
+    def test_set_langfuse_specific_attributes_completion_start_time(self, completion_start_time: datetime):
+        """The first-token time goes out the way the Langfuse SDK sends it: a JSON string, with an explicit offset."""
+        span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
+
+        LangfuseOtelLogger._set_langfuse_specific_attributes(span, {"completion_start_time": completion_start_time}, {})
+
+        sent: Final = datetime.fromisoformat(json.loads(span.attributes["langfuse.observation.completion_start_time"]))
+        assert sent.tzinfo is not None
+        assert sent.timestamp() == completion_start_time.timestamp()
+
+    def test_set_langfuse_specific_attributes_without_completion_start_time(self):
+        span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
+
+        LangfuseOtelLogger._set_langfuse_specific_attributes(span, {}, {})
+
+        assert "langfuse.observation.completion_start_time" not in span.attributes
 
     def test_extract_langfuse_metadata_basic(self):
         """Ensure metadata is correctly pulled from litellm_params."""
@@ -1358,6 +1384,58 @@ class TestDerivedTraceFieldsOnlyOnTracesLitellmStarts:
             "langfuse.trace.name": "caller-trace",
             "langfuse.trace.tags": json.dumps(["caller"]),
         }
+
+
+ERROR_KEYS: Final = (
+    "error.code",
+    "http.response.status_code",
+    "error.type",
+    "error.message",
+    "error.llm_provider",
+    "error.stack_trace",
+)
+SPAN_ATTRIBUTE_LIMIT: Final = 128
+
+
+@dataclass(frozen=True, slots=True)
+class ExportedSpan:
+    keys: frozenset[str]
+    dropped: int
+
+
+def _exported_full_span(filler: int, *, joins_caller: bool, failed: bool) -> ExportedSpan:
+    """A span already holding ``filler`` attributes, after langfuse_otel stamps a chat call and, when ``failed``, the
+    error attributes a failed call adds."""
+    span: Final = _TRACER.start_span(
+        "litellm_request",
+        context=trace.set_span_in_context(trace.NonRecordingSpan(CALLER)) if joins_caller else Context(),
+    )
+    span.set_attributes({f"main.{index}": index for index in range(filler)})
+    LangfuseOtelLogger._set_langfuse_specific_attributes(
+        span, {**CHAT_KWARGS, "litellm_params": {"metadata": {}}}, _chat_response("ok")
+    )
+    span.set_attributes(dict.fromkeys(ERROR_KEYS, "scripted failure") if failed else {})
+    span.end()
+    return ExportedSpan(frozenset(getattr(span, "attributes", None) or {}), getattr(span, "dropped_attributes", 0))
+
+
+class TestDerivedTraceFieldsAtTheSpanAttributeLimit:
+    """The derived trace fields take only room a span has to spare, so a full span exports what it would without
+    them."""
+
+    @pytest.mark.parametrize("failed", [False, True])
+    @pytest.mark.parametrize("filler", range(SPAN_ATTRIBUTE_LIMIT - 30, SPAN_ATTRIBUTE_LIMIT + 1))
+    def test_trace_fields_never_evict_or_drop_another_attribute(self, filler: int, failed: bool) -> None:
+        derived: Final = _exported_full_span(filler, joins_caller=False, failed=failed)
+        without_trace_fields: Final = _exported_full_span(filler, joins_caller=True, failed=failed)
+
+        assert without_trace_fields.keys <= derived.keys
+        assert derived.dropped == without_trace_fields.dropped
+
+    def test_a_span_with_room_to_spare_carries_every_trace_field(self) -> None:
+        derived: Final = _exported_full_span(SPAN_ATTRIBUTE_LIMIT - 30, joins_caller=False, failed=False)
+
+        assert {"langfuse.trace.name", "langfuse.trace.input", "langfuse.trace.output"} <= derived.keys
 
 
 LANGFUSE_ENV_ONLY: Final = {

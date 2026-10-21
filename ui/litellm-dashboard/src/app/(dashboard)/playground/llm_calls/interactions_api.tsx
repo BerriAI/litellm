@@ -1,5 +1,7 @@
+import type { ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
 import { toast } from "@/lib/toast";
 import { getGatewayBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { streamErrorMessage } from "@/utils/streamErrorMessage";
 import {
   buildPlaygroundHeaders,
   type CustomHeaders,
@@ -16,6 +18,7 @@ export async function makeInteractionsRequest(
   customBaseUrl?: string,
   previousInteractionId?: string,
   customHeaders?: CustomHeaders,
+  onResponseHeaders?: ResponseHeadersListener,
 ): Promise<void> {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -51,6 +54,7 @@ export async function makeInteractionsRequest(
       body: JSON.stringify(body),
       signal,
     });
+    onResponseHeaders?.(response.headers);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -90,6 +94,11 @@ export async function makeInteractionsRequest(
           event = JSON.parse(jsonStr);
         } catch {
           continue;
+        }
+
+        const errorMessage = streamErrorMessage(event);
+        if (errorMessage !== null) {
+          throw new Error(errorMessage);
         }
 
         const eventType = event.event_type as string | undefined;

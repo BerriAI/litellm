@@ -2,6 +2,8 @@
 legacy dual-emit, hierarchy, error status, and idempotency. Needs the OTel SDK."""
 
 import json
+from collections.abc import Mapping
+from typing import Final
 
 import pytest
 
@@ -22,6 +24,7 @@ from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.emitter import SpanEmitter, attribute_budget, span_attribute_limit  # noqa: E402
 from litellm.integrations.otel.emitter import stamp_error  # noqa: E402
+from litellm.integrations.otel.mappers import LangfuseMapper  # noqa: E402  # after the opentelemetry importorskip
 from litellm.integrations.otel.mappers.utils import MAX_TOOL_DEFINITION_ATTRS_PER_SPAN  # noqa: E402
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
     GuardrailSpanData,
@@ -88,6 +91,61 @@ def test_llm_call_span_cost_breakdown():
     assert a[f"{LiteLLM.COST_PREFIX}cache_read"] == 0.001
     # Unreported components are omitted, not zero-filled.
     assert f"{LiteLLM.COST_PREFIX}margin_total_amount" not in a
+
+
+_PRICE_LOOKUP_FAILED: Final = {"error_str": "This model isn't mapped yet. model=openai/unpriced-model", "traceback_str": ""}
+
+
+@pytest.mark.parametrize(
+    ("cost_fields", "expected_cost"),
+    [
+        pytest.param({"response_cost": 0.0}, 0.0, id="free-model"),
+        pytest.param(
+            {"response_cost": 0.0, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED},
+            None,
+            id="unpriced",
+        ),
+        pytest.param(
+            {"response_cost": 0.0, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED, "cache_hit": True},
+            0.0,
+            id="unpriced-cache-hit",
+        ),
+    ],
+)
+def test_llm_call_span_tells_unpriced_call_from_free_call(
+    cost_fields: Mapping[str, object], expected_cost: float | None
+) -> None:
+    engine, exporter = _engine()
+    data: Final = LLMCallSpanData.from_standard_logging_payload(_payload(**cost_fields))
+
+    engine.emit(SpanRole.LLM_CALL, data)
+
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes.get(f"{LiteLLM.COST_PREFIX}total") == expected_cost
+    langfuse_cost_details: Final = LangfuseMapper().map(data).get("langfuse.observation.cost_details")
+    langfuse_cost: Final = json.loads(langfuse_cost_details)["total"] if langfuse_cost_details is not None else None
+    assert langfuse_cost == expected_cost
+
+
+def test_unpriced_call_keeps_the_guardrail_charge_on_the_guardrail_span() -> None:
+    engine, exporter = _engine()
+    payload: Final = _payload(
+        response_cost=0.002,
+        response_cost_failure_debug_info=_PRICE_LOOKUP_FAILED,
+        cost_breakdown={"guardrail_cost": 0.002, "total_cost": 0.002},
+    )
+
+    engine.emit(SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(payload))
+    engine.emit(
+        SpanRole.GUARDRAIL,
+        GuardrailSpanData.from_logging_entry(
+            {"guardrail_name": "bedrock", "guardrail_status": "success", "guardrail_cost": 0.002}
+        ),
+    )
+
+    llm_span, guardrail_span = exporter.get_finished_spans()
+    assert f"{LiteLLM.COST_PREFIX}total" not in llm_span.attributes
+    assert guardrail_span.attributes[LiteLLM.GUARDRAIL_COST] == 0.002
 
 
 def test_tracer_scope_carries_litellm_version():
@@ -642,25 +700,71 @@ def test_preset_message_key_the_fit_sheds_still_never_overflows_the_span():
     assert len(finished.attributes) <= SpanLimits().max_span_attributes
 
 
-def test_attribute_budget_counts_only_keys_the_fit_does_not_overwrite():
+def test_preset_keys_the_mappers_overwrite_shed_no_message_attribute(monkeypatch):
     """Pre-set attributes the mapped set overwrites consume no slot against the span limit.
 
     A boundary-opened LLM-call span already carries a few stamped attributes,
-    most of which the mappers re-emit under the same keys. Charging those
-    against the budget reserves slots the fit can never spend and sheds
-    indexed message attributes for nothing.
+    most of which the mappers re-emit under the same keys, so a span sized to
+    exactly its mapped attributes keeps every indexed message.
     """
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "1000")
+    full: Final = _conversation_span(["genai", "openinference"], _conversation_payload(6)).attributes
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(len(full)))
+    cfg: Final = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        mapper_names=["genai", "openinference"],
+        capture_message_content="span_only",
+    )
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine: Final = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    span: Final = engine.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
+    span.set_attribute("gen_ai.request.model", "gpt-4o")
+    span.set_attribute("llm.input_messages.1.message.role", "stale-role")
+    engine.finish_span(
+        SpanRole.LLM_CALL,
+        span,
+        LLMCallSpanData.from_standard_logging_payload(_conversation_payload(6), capture_content=True),
+    )
+    (finished,) = exporter.get_finished_spans()
+    assert finished.dropped_attributes == 0
+    assert dict(finished.attributes) == dict(full)
+
+
+def test_a_preset_message_key_the_fit_sheds_never_overflows_an_exact_limit(monkeypatch):
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "1000")
+    full: Final = _conversation_span(["genai", "openinference"], _conversation_payload(6)).attributes
+    limit: Final = len(full) - 2
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(limit))
+    cfg: Final = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        mapper_names=["genai", "openinference"],
+        capture_message_content="span_only",
+    )
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine: Final = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    span: Final = engine.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
+    span.set_attribute("llm.input_messages.1.message.role", "stale-role")
+    engine.finish_span(
+        SpanRole.LLM_CALL,
+        span,
+        LLMCallSpanData.from_standard_logging_payload(_conversation_payload(6), capture_content=True),
+    )
+    (finished,) = exporter.get_finished_spans()
+    assert finished.dropped_attributes == 0
+    assert len(finished.attributes) <= limit
+    assert finished.attributes.get("llm.input_messages.1.message.role") != "stale-role"
+
+
+def test_attribute_budget_charges_every_key_the_span_already_carries():
     cfg = OpenTelemetryV2Config(exporter="in_memory")
     provider, _exporter = providers.in_memory_provider(cfg)
     span = providers.get_tracer(provider, "litellm-test").start_span("s")
     span.set_attribute("gen_ai.request.model", "gpt-4o")
     span.set_attribute("litellm.metadata.user_api_key_alias", "edge-key")
     try:
-        assert attribute_budget(span, 0) == SpanLimits().max_span_attributes - 2
-        assert (
-            attribute_budget(span, 0, frozenset({"gen_ai.request.model"}))
-            == SpanLimits().max_span_attributes - 1
-        )
+        assert attribute_budget(span, 1) == SpanLimits().max_span_attributes - 3
     finally:
         span.end()
 

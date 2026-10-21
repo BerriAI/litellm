@@ -67,6 +67,9 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
     def should_filter_anthropic_beta_headers(self) -> bool:
         return False
 
+    def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
+        return False
+
     def get_complete_url(
         self,
         api_base: str | None,
@@ -173,9 +176,9 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         self,
         model: str,
         httpx_response: httpx.Response,
-        request_body: dict,
+        request_body: dict[str, object],  # mutable-ok: mirrors the base signature
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[bytes]:
         return AnthropicMessagesConfig.get_async_streaming_response_iterator(
             self,
             model=model,

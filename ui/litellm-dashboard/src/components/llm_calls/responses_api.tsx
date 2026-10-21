@@ -1,3 +1,4 @@
+import { observeResponseHeaders, type ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
 import openai from "openai";
 import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
@@ -87,6 +88,7 @@ export async function makeOpenAIResponsesRequest(
   streamingEnabled: boolean = true,
   onTotalLatency?: (latency: number) => void,
   customHeaders?: CustomHeaders,
+  onResponseHeaders?: ResponseHeadersListener,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -111,6 +113,7 @@ export async function makeOpenAIResponsesRequest(
     baseURL: proxyBaseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders: headers,
+    ...(onResponseHeaders ? { fetch: observeResponseHeaders(onResponseHeaders) } : {}),
   });
 
   try {
@@ -143,12 +146,13 @@ export async function makeOpenAIResponsesRequest(
     if (selectedMCPServers && selectedMCPServers.length > 0) {
       if (selectedMCPServers.includes("__all__")) {
         // All MCP Servers selected
-        tools.push({
+        const allServersTool = {
           type: "mcp",
           server_label: "litellm",
           server_url: `${mcpBaseUrl}/mcp`,
           require_approval: "never",
-        });
+        };
+        tools.push(allServersTool);
       } else {
         // Individual servers/toolsets selected - create one entry per item
         selectedMCPServers.forEach((serverId) => {
@@ -157,12 +161,13 @@ export async function makeOpenAIResponsesRequest(
             const toolsetId = serverId.slice("toolset:".length);
             const toolset = mcpToolsets?.find((t) => t.toolset_id === toolsetId);
             const toolsetName = toolset?.toolset_name || toolsetId;
-            tools.push({
+            const toolsetTool = {
               type: "mcp",
               server_label: toolsetName,
               server_url: `${mcpBaseUrl}/mcp/${encodeURIComponent(toolsetName)}`,
               require_approval: "never",
-            });
+            };
+            tools.push(toolsetTool);
           } else {
             const server = mcpServers?.find((s) => s.server_id === serverId);
             // Use server_name for both routing and labelling. server_name is the
@@ -170,13 +175,14 @@ export async function makeOpenAIResponsesRequest(
             const routeName = server?.server_name || serverId;
             const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
 
-            tools.push({
+            const serverTool = {
               type: "mcp",
               server_label: routeName, // unique per request — collisions cause silent tool-routing failures
               server_url: `${mcpBaseUrl}/mcp/${encodeURIComponent(routeName)}`,
               require_approval: "never",
               ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
-            });
+            };
+            tools.push(serverTool);
           }
         });
       }
