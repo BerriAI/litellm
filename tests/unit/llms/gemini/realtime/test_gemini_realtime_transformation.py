@@ -613,6 +613,35 @@ def test_gemini_audio_only_live_models_drop_text_from_text_audio_combo(patch_gem
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
+@pytest.mark.parametrize("output_modalities", ["text", ["text"]])
+def test_gemini_session_update_accepts_a_single_string_output_modality(output_modalities):
+    """Regression: a bare string was iterated per character, so output_modalities
+    "text" reached Vertex as responseModalities ["T"], which it rejects with 1007."""
+    config = GeminiRealtimeConfig()
+    session_update = {"type": "session.update", "session": {"type": "realtime", "output_modalities": output_modalities}}
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
+    )
+
+    assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
+@pytest.mark.parametrize(
+    ("output_modalities", "expected"),
+    [(["video", "text"], ["TEXT"]), (["video"], ["AUDIO"]), (None, ["AUDIO"])],
+)
+def test_gemini_session_update_drops_modalities_live_cannot_produce(output_modalities, expected):
+    config = GeminiRealtimeConfig()
+    session_update = {"type": "session.update", "session": {"type": "realtime", "output_modalities": output_modalities}}
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
+    )
+
+    assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == expected
+
+
 def test_gemini_non_live_model_preserves_text_modality():
     config = GeminiRealtimeConfig()
     session_update = {
@@ -2167,6 +2196,47 @@ def test_unbilled_usage_on_session_close_flushes_trailing_audio(patch_gemini_tra
     }
     assert usage == expected
     assert config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live") is None
+
+
+def test_gemini_realtime_two_output_modalities_collapse_to_audio():
+    """Gemini Live closes the socket with 1007 when the setup names two response
+    modalities, so a GA session.update asking for ["text", "audio"] must reach the
+    backend as AUDIO only, the same choice the beta shim makes."""
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {"output_modalities": ["text", "audio"], "instructions": "Be brief."},
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-live-2.5-flash",
+        session_configuration_request=None,
+    )
+
+    assert len(messages) == 1
+    assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+def test_gemini_realtime_inf_max_response_output_tokens_is_not_forwarded():
+    """OpenAI's default max_response_output_tokens is the string "inf", which Gemini
+    rejects with 1007 (TYPE_INT32), so only integer limits map to maxOutputTokens."""
+    config = GeminiRealtimeConfig()
+
+    def generation_config_for(limit):
+        session_update = {
+            "type": "session.update",
+            "session": {"modalities": ["text"], "max_response_output_tokens": limit},
+        }
+        messages = config.transform_realtime_request(
+            json.dumps(session_update),
+            "gemini-live-2.5-flash",
+            session_configuration_request=None,
+        )
+        return json.loads(messages[0])["setup"]["generationConfig"]
+
+    assert "maxOutputTokens" not in generation_config_for("inf")
+    assert generation_config_for(200)["maxOutputTokens"] == 200
 
 
 def _grounded_live_frame(grounding_metadata: Mapping[str, object] | None) -> Mapping[str, object]:

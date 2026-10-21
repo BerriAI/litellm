@@ -21,6 +21,7 @@ from litellm.constants import (
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
+    _merge_session_fields,
     client_sent_openai_beta_realtime_header,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1256,9 +1257,11 @@ async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup
         side_effect=[
             json.dumps({"type": "session.update", "session": {"tools": []}}),
             json.dumps({"type": "session.update", "session": {"tools": []}}),
+            _TEXT_ITEM_CREATE,
             Exception("client done"),
         ]
     )
+    websocket.send_text = AsyncMock()
 
     provider_config = MagicMock()
 
@@ -2286,6 +2289,7 @@ async def test_guardrail_turn_detection_injected_into_first_session_update_defer
     logging_obj.success_handler = MagicMock()
 
     provider_config = MagicMock()
+    provider_config.builds_setup_from_session_update = MagicMock(return_value=False)
     transformed_messages = []
 
     def mock_transform(msg, model, session_config):
@@ -2352,6 +2356,7 @@ async def test_guardrail_turn_detection_injection_tolerates_non_dict_value(
     logging_obj.success_handler = MagicMock()
 
     provider_config = MagicMock()
+    provider_config.builds_setup_from_session_update = MagicMock(return_value=False)
     transformed_messages = []
 
     def mock_transform(msg, model, session_config):
@@ -2497,6 +2502,162 @@ async def test_follow_up_setup_updates_cached_session_configuration_request():
     await streaming.client_ack_messages()
 
     assert streaming.session_configuration_request == follow_up_setup
+
+
+def _gemini_default_mode_streaming(monkeypatch, client_messages, model="gemini-live-2.5-flash-native-audio"):
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    client_ws = MagicMock()
+    client_ws.receive_text = AsyncMock(side_effect=[*client_messages, ConnectionClosed(None, None)])
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        MagicMock(),
+        provider_config=GeminiRealtimeConfig(),
+        model=model,
+    )
+    return streaming, backend_ws
+
+
+_TEXT_ITEM_CREATE = json.dumps(
+    {
+        "type": "conversation.item.create",
+        "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    }
+)
+
+
+@pytest.mark.asyncio
+async def test_default_mode_sends_default_setup_before_first_non_session_client_message(monkeypatch):
+    """Gemini Live setup is no longer pre-sent at connect, so a client that never
+    sends session.update still gets the provider default setup ahead of its
+    first content frame."""
+    streaming, backend_ws = _gemini_default_mode_streaming(monkeypatch, [_TEXT_ITEM_CREATE])
+
+    await streaming.client_ack_messages()
+
+    frames = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
+    assert frames[0]["setup"]["generationConfig"]["responseModalities"] == ["AUDIO"]
+    assert streaming.session_configuration_request == backend_ws.send.await_args_list[0].args[0]
+
+
+@pytest.mark.asyncio
+async def test_default_mode_session_update_first_builds_the_only_setup(monkeypatch):
+    session_update = json.dumps({"type": "session.update", "session": {"modalities": ["text"]}})
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [session_update, _TEXT_ITEM_CREATE], model="gemini-live-2.5-flash"
+    )
+
+    await streaming.client_ack_messages()
+
+    frames = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
+    assert frames[0]["setup"]["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
+@pytest.mark.asyncio
+async def test_default_mode_merges_every_session_update_sent_before_the_first_content_frame(monkeypatch):
+    """Clients configure a session over several session.update messages. Gemini
+    Live takes one setup, so every update sent before the first content frame is
+    merged into that setup instead of only the first one applying."""
+    instructions_update = json.dumps({"type": "session.update", "session": {"instructions": "Be brief."}})
+    modalities_update = json.dumps({"type": "session.update", "session": {"modalities": ["text"]}})
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [instructions_update, modalities_update, _TEXT_ITEM_CREATE], model="gemini-live-2.5-flash"
+    )
+
+    await streaming.client_ack_messages()
+
+    frames = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
+    assert frames[0]["setup"]["generationConfig"]["responseModalities"] == ["TEXT"]
+    assert frames[0]["setup"]["systemInstruction"]["parts"][0]["text"] == "Be brief."
+
+
+@pytest.mark.asyncio
+async def test_default_mode_merges_nested_audio_settings_across_session_updates(monkeypatch):
+    vad_update = json.dumps(
+        {"type": "session.update", "session": {"audio": {"input": {"turn_detection": {"silence_duration_ms": 1500}}}}}
+    )
+    voice_update = json.dumps({"type": "session.update", "session": {"audio": {"output": {"voice": "Kore"}}}})
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [vad_update, voice_update, _TEXT_ITEM_CREATE], model="gemini-live-2.5-flash"
+    )
+
+    await streaming.client_ack_messages()
+
+    setup = json.loads(backend_ws.send.await_args_list[0].args[0])["setup"]
+    assert setup["realtimeInputConfig"]["automaticActivityDetection"]["silenceDurationMs"] == 1500
+    assert setup["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+def test_merge_session_fields_replaces_nested_mappings_wholesale_past_the_depth_cap():
+    def nested(levels: int, key: str) -> dict:
+        return {key: levels, **({"child": nested(levels - 1, key)} if levels else {})}
+
+    def level(node, depth: int):
+        return node if depth == 0 else level(node["child"], depth - 1)
+
+    merged = _merge_session_fields(nested(10, "keep"), nested(10, "new"))
+
+    assert all({"keep", "new"} <= set(level(merged, depth)) for depth in range(9))
+    assert "keep" not in level(merged, 9)
+    assert level(merged, 9)["new"] == 1
+
+
+@pytest.mark.asyncio
+async def test_default_mode_acknowledges_each_held_session_update_before_any_backend_frame(monkeypatch):
+    """A client that waits for session.updated before sending content must not
+    hang while its updates are held, so each one is acknowledged right away
+    with the modalities the merged setup will carry."""
+    instructions_update = json.dumps({"type": "session.update", "session": {"instructions": "Be brief."}})
+    modalities_update = json.dumps({"type": "session.update", "session": {"modalities": ["text"]}})
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [instructions_update, modalities_update], model="gemini-live-2.5-flash"
+    )
+
+    await streaming.client_ack_messages()
+
+    acks = [json.loads(call.args[0]) for call in streaming.websocket.send_text.await_args_list]
+    assert [ack["type"] for ack in acks] == ["session.updated", "session.updated"]
+    assert [ack["session"].get("output_modalities") or ack["session"].get("modalities") for ack in acks] == [
+        ["audio"],
+        ["text"],
+    ]
+    assert acks[1]["session"]["instructions"] == "Be brief."
+    backend_ws.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_default_mode_folds_transcription_guardrail_vad_disable_into_the_merged_setup(monkeypatch):
+    """A transcription guardrail gates every turn, so its auto-response disable
+    has to land in the one setup built from the held session.updates, injected
+    once rather than into every update that gets merged."""
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    debug = MagicMock()
+    monkeypatch.setattr("litellm.litellm_core_utils.realtime_streaming.verbose_logger.debug", debug)
+    instructions_update = json.dumps({"type": "session.update", "session": {"instructions": "Be brief."}})
+    vad_update = json.dumps(
+        {"type": "session.update", "session": {"turn_detection": {"type": "server_vad", "silence_duration_ms": 900}}}
+    )
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [instructions_update, vad_update, _TEXT_ITEM_CREATE], model="gemini-live-2.5-flash"
+    )
+
+    await streaming.client_ack_messages()
+
+    frames = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
+    assert frames[0]["setup"]["realtimeInputConfig"]["automaticActivityDetection"] == {"disabled": True}
+    assert frames[0]["setup"]["systemInstruction"]["parts"][0]["text"] == "Be brief."
+    assert streaming._guardrail_turn_detection_update_sent is True
+    injected = [call for call in debug.call_args_list if str(call.args[0]).startswith("Injected turn_detection")]
+    assert len(injected) == 1
 
 
 @pytest.mark.asyncio

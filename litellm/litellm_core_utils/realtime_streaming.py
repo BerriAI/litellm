@@ -124,6 +124,38 @@ class _LoggingWorker(Protocol):
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
+_SESSION_FIELDS: Final = TypeAdapter(dict[str, object])
+_NO_SESSION_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_SESSION_MERGE_MAX_DEPTH: Final = 8
+
+
+class _SessionUpdateFrame(TypedDict):
+    type: ReadOnly[str]
+    session: ReadOnly[Mapping[str, object]]
+
+
+def _merge_session_fields(
+    base: Mapping[str, object], update: Mapping[str, object], depth: int = 0
+) -> Mapping[str, object]:
+    def merged_value(key: str) -> object:
+        if key not in update:
+            return base[key]
+        value: Final = update[key]
+        base_value: Final = base.get(key)
+        if depth < _SESSION_MERGE_MAX_DEPTH and isinstance(value, Mapping) and isinstance(base_value, Mapping):
+            return _merge_session_fields(
+                _SESSION_FIELDS.validate_python(base_value), _SESSION_FIELDS.validate_python(value), depth + 1
+            )
+        return update[key]
+
+    return MappingProxyType({key: merged_value(key) for key in (*base, *update)})
+
+
+def _session_update_frame(session: Mapping[str, object]) -> str:
+    frame: Final[_SessionUpdateFrame] = {"type": "session.update", "session": session}
+    return json.dumps(frame, default=_SESSION_FIELDS.validate_python)
+
+
 def _decode_json_object(payload: str) -> Mapping[str, object]:
     """Decode a realtime frame into its top-level field mapping."""
     return json.loads(payload)
@@ -299,6 +331,7 @@ class RealTimeStreaming:
         # Gemini Live rejects a follow-up BidiGenerateContentSetup once any
         # content (realtimeInput / clientContent / toolResponse) has been sent.
         self._content_sent_after_setup: bool = False
+        self._held_session_update: Mapping[str, object] | None = None
         # Whether this is a transcription-only session (session.type == "transcription",
         # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
         # their input_audio_transcription.completed usage drives duration-based cost.
@@ -376,7 +409,7 @@ class RealTimeStreaming:
             message_obj: dict[str, Any] = cast(dict[str, Any], message)
         else:
             message_obj = cast(dict[str, Any], json.loads(message))
-        self._collect_tool_calls_from_response_done(cast(dict, message_obj))
+        self._collect_tool_calls_from_response_done(message_obj)
         if not self._should_store_message(message_obj):
             return
         try:
@@ -501,7 +534,7 @@ class RealTimeStreaming:
         self.store_message(flush_event)
         self._capture_transcription_usage(flush_event)
 
-    def _collect_tool_calls_from_response_done(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
+    def _collect_tool_calls_from_response_done(self, event_obj: Mapping[str, object] | OpenAIRealtimeEvents) -> None:
         """Extract function_call items from response.done events for spend logging."""
         try:
             if event_obj.get("type") != "response.done":
@@ -605,6 +638,60 @@ class RealTimeStreaming:
             if sent_event is not None:
                 self._usage_meter.observe_client_event(sent_event)
         return True
+
+    def _holds_session_updates_until_first_content(self) -> bool:
+        if self.provider_config is None or self.session_configuration_request is not None:
+            return False
+        return self.provider_config.builds_setup_from_session_update() and not self._uses_deferred_backend_setup()
+
+    def _held_session_update_message(self) -> str:
+        return _session_update_frame(self._held_session_update or _NO_SESSION_FIELDS)
+
+    async def _hold_session_update(self, message: str) -> None:
+        session: Final = _decode_json_object(message).get("session")
+        update: Final = _SESSION_FIELDS.validate_python(session) if isinstance(session, Mapping) else _NO_SESSION_FIELDS
+        self._held_session_update = _merge_session_fields(self._held_session_update or _NO_SESSION_FIELDS, update)
+        await self._acknowledge_held_session_update()
+
+    async def _acknowledge_held_session_update(self) -> None:
+        if self.provider_config is None:
+            return
+        preview: Final = self.provider_config.transform_realtime_request(
+            self._held_session_update_message(), self.model, None
+        )
+        setup: Final = next(
+            (frame for frame in preview if isinstance(frame, str) and "setup" in _decode_json_object(frame)), None
+        )
+        if setup is None:
+            return
+        acknowledged: Final = self.provider_config.transform_session_created_event(
+            self.model, str(self.logging_obj.litellm_trace_id), setup
+        )
+        if acknowledged is None:
+            return
+        event: Final[Mapping[str, object]] = {**acknowledged, "type": "session.updated"}
+        event_str: Final = json.dumps(event)
+        self.store_message(event_str)
+        await self._send_event_to_client(event, event_str)
+
+    async def _send_held_session_update_as_setup(self) -> None:
+        if self._held_session_update is None:
+            return
+        message: Final = self._held_session_update_message()
+        self._held_session_update = None
+        await self._send_to_backend(message)
+
+    async def _send_default_setup_before_first_client_message(self, msg_type: str | None) -> None:
+        if self.session_configuration_request is not None or self.provider_config is None:
+            return
+        if msg_type == "session.update" or self._uses_deferred_backend_setup():
+            return
+        default_setup: Final = self.provider_config.session_configuration_request(self.model)
+        if not default_setup:
+            return
+        setup: Final = self.maybe_inject_guardrail_auto_response_disable(default_setup)
+        await self.backend_ws.send(setup)
+        self._cache_session_configuration_request(setup)
 
     def _enforce_transcription_session_model(self, message: str) -> str:
         """Force client transcription session updates to the authorized model.
@@ -1594,6 +1681,7 @@ class RealTimeStreaming:
                     if (
                         msg_type == "session.update"
                         and self.session_configuration_request is None
+                        and self._held_session_update is None
                         and not self._guardrail_turn_detection_update_sent
                         and self._should_disable_vad_auto_response()
                         and (
@@ -1691,6 +1779,12 @@ class RealTimeStreaming:
                 # ``_maybe_send_guardrail_turn_detection_update`` would retry.
                 if msg_type == "session.update" and self.provider_config is None:
                     await self._send_session_gate_once()
+                if self._holds_session_updates_until_first_content():
+                    if msg_type == "session.update":
+                        await self._hold_session_update(message)
+                        continue
+                    await self._send_held_session_update_as_setup()
+                await self._send_default_setup_before_first_client_message(msg_type)
                 sent = await self._send_to_backend(message)
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True
