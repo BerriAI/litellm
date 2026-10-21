@@ -1,35 +1,17 @@
-import asyncio
-import subprocess
-import time
-import traceback
-import platform
+from typing import Final
 
-import pytest
+import litellm
+
+MOCK_REPLY: Final = "windows runtime reply"
 
 
-
-def test_using_litellm_on_windows():
-    """Test that LiteLLM can be imported on Windows systems."""
-
-    try:
-        import litellm
-
-        print(
-            f"litellm imported successfully on Windows ({platform.system()} {platform.release()})"
-        )
-
-        response = litellm.completion(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "This should never fail. Email ishaan@berri.ai if this test ever fails.",
-                }
-            ],
-            mock_response="Hello, how are you?",
-        )
-        print(response)
-    except Exception as e:
-        pytest.fail(
-            f"Error occurred on Windows: {e}. Installing litellm on Windows failed."
-        )
+def test_using_litellm_on_windows() -> None:
+    response: Final = litellm.completion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "windows smoke"}],
+        mock_response=MOCK_REPLY,
+    )
+    assert response.choices[0].message.content == MOCK_REPLY
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].finish_reason == "stop"
+    assert response.model == "gpt-4o"

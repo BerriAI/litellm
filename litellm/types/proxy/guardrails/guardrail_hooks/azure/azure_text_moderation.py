@@ -1,7 +1,9 @@
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing_extensions import Required, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from ..base import GuardrailConfigModel
 from .base import AzureContentSafetyConfigModel
@@ -42,7 +44,7 @@ class AzureTextModerationGuardrailResponse(TypedDict):
 AzureHarmCategories = Literal["Hate", "SelfHarm", "Sexual", "Violence"]
 
 
-class AzureTextModerationOptionalParams(BaseModel):
+class AzureTextModerationOptionalParams(LiteLLMBaseModel):
     severity_threshold: int | None = Field(
         default=None,
         description="Severity threshold for the Azure Content Safety Text Moderation guardrail across all categories",

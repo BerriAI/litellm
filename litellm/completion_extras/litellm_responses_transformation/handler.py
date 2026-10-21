@@ -2,8 +2,14 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Final, Union
+from collections.abc import AsyncIterable, Coroutine, Iterable, Mapping
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Union,
+    cast,  # noqa: TID251  # optional_params reaches the bridge as an untyped dict
+)
 
 from typing_extensions import TypedDict
 
@@ -45,14 +51,14 @@ class ResponsesToCompletionBridgeHandler:
         return bool(stream)
 
     @staticmethod
-    def _is_preformatted_cached_chat_stream(result: Any) -> bool:
+    def _is_preformatted_cached_chat_stream(result: object) -> bool:
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
         return isinstance(result, CustomStreamWrapper) and result.custom_llm_provider == "cached_response"
 
     @staticmethod
     def _coerce_response_object(
-        response_obj: Any,
+        response_obj: object,
         hidden_params: dict | None,
     ) -> "ResponsesAPIResponse":
         if isinstance(response_obj, ResponsesAPIResponse):
@@ -74,12 +80,12 @@ class ResponsesToCompletionBridgeHandler:
                     existing.setdefault(key, value)
         return response
 
-    def _collect_response_from_stream(self, stream_iter: Any) -> "ResponsesAPIResponse":
+    def _collect_response_from_stream(self, stream_iter: Iterable[object]) -> "ResponsesAPIResponse":
         for _ in stream_iter:
             pass
 
-        completed: Final = getattr(stream_iter, "completed_response", None)
-        response_obj: Final = getattr(completed, "response", None) if completed else None
+        completed: Final[object] = getattr(stream_iter, "completed_response", None)
+        response_obj: Final[object] = getattr(completed, "response", None) if completed else None
         if response_obj is None:
             raise ValueError("Stream ended without a completed response")
 
@@ -89,12 +95,12 @@ class ResponsesToCompletionBridgeHandler:
             raise ValueError("Stream completed response is invalid")
         return response
 
-    async def _collect_response_from_stream_async(self, stream_iter: Any) -> "ResponsesAPIResponse":
+    async def _collect_response_from_stream_async(self, stream_iter: AsyncIterable[object]) -> "ResponsesAPIResponse":
         async for _ in stream_iter:
             pass
 
-        completed: Final = getattr(stream_iter, "completed_response", None)
-        response_obj: Final = getattr(completed, "response", None) if completed else None
+        completed: Final[object] = getattr(stream_iter, "completed_response", None)
+        response_obj: Final[object] = getattr(completed, "response", None) if completed else None
         if response_obj is None:
             raise ValueError("Stream ended without a completed response")
 
@@ -157,7 +163,7 @@ class ResponsesToCompletionBridgeHandler:
     def completion(
         self, *args, **kwargs
     ) -> Union[
-        Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
+        Coroutine[None, None, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
         "CustomStreamWrapper",
     ]:
@@ -194,6 +200,8 @@ class ResponsesToCompletionBridgeHandler:
         # would raise a duplicate-keyword TypeError.
         request_data["custom_llm_provider"] = custom_llm_provider
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
+        if kwargs.get("cache") is not None:
+            request_data["cache"] = kwargs["cache"]
         result: Final = responses(
             **request_data,
         )
@@ -243,10 +251,15 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
+            from .transformation import is_structured_output_request
+
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
                 sync_stream=True,
                 json_mode=kwargs.get("json_mode"),
+                structured_output=is_structured_output_request(
+                    cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
+                ),
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -289,6 +302,8 @@ class ResponsesToCompletionBridgeHandler:
         # would raise a duplicate-keyword TypeError.
         request_data["custom_llm_provider"] = custom_llm_provider
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
+        if kwargs.get("cache") is not None:
+            request_data["cache"] = kwargs["cache"]
         result: Final = await aresponses(
             **request_data,
             aresponses=True,
@@ -339,10 +354,15 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
+            from .transformation import is_structured_output_request
+
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
                 sync_stream=False,
                 json_mode=kwargs.get("json_mode"),
+                structured_output=is_structured_output_request(
+                    cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
+                ),
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

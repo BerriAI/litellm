@@ -1,5 +1,10 @@
 # Data Privacy and Security
 
+## Security Announcements
+
+LiteLLM maintains a security announcements mailing list that is open to anyone. Subscribers receive advance notice, typically one to two days, before we release a fix for a particularly severe vulnerability or for any vulnerability exploitable by an unauthenticated attacker. This notice is provided on a best-effort basis
+
+To subscribe, visit [https://berriai.github.io/security-announce-signup/](https://berriai.github.io/security-announce-signup/)
 
 ## Security Vulnerability Reporting Guidelines
 

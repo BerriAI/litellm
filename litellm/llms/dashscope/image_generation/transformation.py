@@ -23,9 +23,11 @@ Response format:
 }
 """
 
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -39,10 +41,14 @@ from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 DEFAULT_API_BASE: Final = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 
@@ -89,6 +95,15 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
                 mapped[k] = v
         return mapped
 
+    def _resolve_api_key(self, api_key: str | None) -> str:
+        resolved_api_key: Final = api_key or get_secret_str("DASHSCOPE_API_KEY")
+        if not resolved_api_key:
+            raise ValueError("DASHSCOPE_API_KEY is not set")
+        return resolved_api_key
+
+    def _resolve_image_api_base(self, image_api_base: str | None) -> str:
+        return image_api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
+
     def get_complete_url(
         self,
         api_base: str | None,
@@ -101,7 +116,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         image_api_base: Final = (
             api_base if api_base and not api_base.rstrip("/").endswith(CHAT_COMPATIBLE_MODE_PATH) else None
         )
-        return image_api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
+        return self._resolve_image_api_base(image_api_base)
 
     def validate_environment(
         self,
@@ -113,10 +128,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        final_api_key: Final = api_key or get_secret_str("DASHSCOPE_API_KEY")
-        if not final_api_key:
-            raise ValueError("DASHSCOPE_API_KEY is not set")
-        headers["Authorization"] = f"Bearer {final_api_key}"
+        headers["Authorization"] = f"Bearer {self._resolve_api_key(api_key)}"
         headers["Content-Type"] = "application/json"
         return headers
 
@@ -157,7 +169,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -185,9 +197,10 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
 
         # DashScope can return API-level errors in a 200 response body.
         # Example: {"code": "InvalidParameter", "message": "Size not supported"}
-        if "code" in response_data and "output" not in response_data:
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        if "code" in response_object and "output" not in response_object:
             raise self.get_error_class(
-                error_message=str(response_data.get("message", response_data)),
+                error_message=str(response_object.get("message", response_object)),
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
@@ -195,9 +208,11 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
 
-        choices: Final = response_data.get("output", {}).get("choices", [])
+        output: Final = _JSON_OBJECT.validate_python(response_object.get("output", {}))
+        choices: Final = _JSON_OBJECTS.validate_python(output.get("choices", []))
         for choice in choices:
-            content_list = choice.get("message", {}).get("content", [])
+            message = _JSON_OBJECT.validate_python(choice.get("message", {}))
+            content_list = _JSON_OBJECTS.validate_python(message.get("content", []))
             for content_item in content_list:
                 image_url = content_item.get("image")
                 if image_url:
