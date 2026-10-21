@@ -1276,6 +1276,20 @@ async def test_refused_connection_maps_to_httpx_connect_error(
     assert (cause.host, cause.port) == ("127.0.0.1", port)
 
 
+async def _read_request_headers(reader: asyncio.StreamReader) -> bytes:
+    headers: Final = await reader.readuntil(b"\r\n\r\n")
+    content_length: Final = next(
+        (
+            int(header.split(b":", 1)[1])
+            for header in headers.split(b"\r\n")
+            if header.lower().startswith(b"content-length:")
+        ),
+        0,
+    )
+    await reader.readexactly(content_length)
+    return headers
+
+
 @pytest.mark.asyncio
 async def test_reset_after_request_is_not_replayed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
@@ -1283,17 +1297,7 @@ async def test_reset_after_request_is_not_replayed(monkeypatch: pytest.MonkeyPat
     received_requests: Final[list[bytes]] = []  # mutable-ok: local server captures requests
 
     async def reset_after_request(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        headers: Final = await reader.readuntil(b"\r\n\r\n")
-        content_length: Final = next(
-            (
-                int(header.split(b":", 1)[1])
-                for header in headers.split(b"\r\n")
-                if header.lower().startswith(b"content-length:")
-            ),
-            0,
-        )
-        await reader.readexactly(content_length)
-        received_requests.append(headers)
+        received_requests.append(await _read_request_headers(reader))
         transport_socket: Final = writer.get_extra_info("socket")
         assert transport_socket is not None
         transport_socket.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
@@ -1310,3 +1314,104 @@ async def test_reset_after_request_is_not_replayed(monkeypatch: pytest.MonkeyPat
             assert len(received_requests) == 1
     finally:
         await handler.close()
+
+
+_SSE_EVENTS_BEFORE_DROP: Final = (
+    b'data: {"id":"chatcmpl-drop","object":"chat.completion.chunk","created":1,"model":"gpt-5.6",'
+    b'"choices":[{"index":0,"delta":{"role":"assistant","content":"1 2 "},"finish_reason":null}]}\n\n',
+    b'data: {"id":"chatcmpl-drop","object":"chat.completion.chunk","created":1,"model":"gpt-5.6",'
+    b'"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+)
+
+
+async def _stream_events_then_drop_before_done(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    await _read_request_headers(reader)
+    chunked_events: Final = b"".join(b"%x\r\n%s\r\n" % (len(event), event) for event in _SSE_EVENTS_BEFORE_DROP)
+    writer.write(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n" + chunked_events
+    )
+    await writer.drain()
+    writer.close()
+    await writer.wait_closed()
+
+
+async def _until_connection_drop_is_received(content: aiohttp.StreamReader) -> None:
+    while content.exception() is None:
+        await asyncio.sleep(0)
+
+
+async def _read_until_error(stream: httpx.AsyncByteStream) -> tuple[bytes, Exception | None]:
+    chunks: Final[list[bytes]] = []  # mutable-ok: keeps the chunks read before the stream raises
+    try:
+        async for chunk in stream:
+            chunks.append(chunk)
+    except Exception as error:
+        return b"".join(chunks), error
+    return b"".join(chunks), None
+
+
+@pytest.mark.asyncio
+async def test_bytes_received_before_a_connection_drop_are_yielded_before_read_error() -> None:
+    server: Final = await asyncio.start_server(_stream_events_then_drop_before_done, "127.0.0.1", 0)
+    port: Final = server.sockets[0].getsockname()[1]
+    async with server, aiohttp.ClientSession() as session:
+        aiohttp_response: Final = await session.post(f"http://127.0.0.1:{port}/v1/chat/completions", data=b"{}")
+        await _until_connection_drop_is_received(aiohttp_response.content)
+        received, error = await _read_until_error(AiohttpResponseStream(aiohttp_response))
+
+    assert received == b"".join(_SSE_EVENTS_BEFORE_DROP)
+    assert isinstance(error, httpx.ReadError)
+
+
+@pytest.mark.asyncio
+async def test_finished_stream_dropped_before_done_ends_cleanly_through_acompletion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
+    upstream_responses: Final[list[aiohttp.ClientResponse]] = []  # mutable-ok: trace hook captures the response
+
+    async def capture_response(
+        _session: ClientSession, _context: object, params: aiohttp.TraceRequestEndParams
+    ) -> None:
+        upstream_responses.append(params.response)
+
+    trace_config: Final = aiohttp.TraceConfig()
+    trace_config.on_request_end.append(capture_response)
+    server: Final = await asyncio.start_server(_stream_events_then_drop_before_done, "127.0.0.1", 0)
+    port: Final = server.sockets[0].getsockname()[1]
+    async with server, aiohttp.ClientSession(trace_configs=[trace_config]) as session:
+        stream: Final = await litellm.acompletion(
+            model="openai/gpt-5.6",
+            api_base=f"http://127.0.0.1:{port}/v1",
+            api_key="sk-local-test",
+            messages=[{"role": "user", "content": "count to two"}],
+            stream=True,
+            shared_session=session,
+        )
+        await _until_connection_drop_is_received(upstream_responses[0].content)
+        chunks: Final = [chunk async for chunk in stream]
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "1 2 "
+    assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+class _ContentWithChangedBufferInternals(MockContent):
+    def _read_nowait(self, n: int) -> bytes:
+        raise TypeError(f"_read_nowait({n}) no longer drains the buffer")
+
+
+@pytest.mark.asyncio
+async def test_payload_error_still_maps_to_read_error_when_buffer_drain_breaks() -> None:
+    mock_response: Final = MockAiohttpResponse()
+    mock_response.content = _ContentWithChangedBufferInternals(
+        chunks=[b"chunk1", b"chunk2"],
+        exception_to_raise=aiohttp.ClientPayloadError("Response payload is not completed"),
+        exception_at_chunk=1,
+    )
+
+    received, error = await _read_until_error(AiohttpResponseStream(mock_response))  # pyright: ignore[reportArgumentType]  # duck-typed aiohttp response double
+
+    assert received == b"chunk1"
+    assert isinstance(error, httpx.ReadError)
+    assert mock_response.closed is True

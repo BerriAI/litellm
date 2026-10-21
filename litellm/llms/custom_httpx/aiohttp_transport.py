@@ -109,6 +109,32 @@ def map_aiohttp_exceptions() -> Generator[None, None, None]:
         raise mapped_exc(message) from exc
 
 
+@contextlib.contextmanager
+def _map_stream_read_errors() -> Generator[None, None, None]:
+    try:
+        yield
+    except RuntimeError as e:
+        if "Connection closed" not in str(e):
+            raise
+        raise httpx.ReadError(str(e)) from e
+    except aiohttp.http_exceptions.TransferEncodingError as e:
+        raise httpx.ReadError(str(e)) from e
+    except Exception:
+        with map_aiohttp_exceptions():
+            raise
+
+
+def _received_unread_bytes(content: aiohttp.StreamReader) -> bytes:
+    read_buffer: Final[Callable[[int], object] | None] = getattr(content, "_read_nowait", None)
+    if read_buffer is None:
+        return b""
+    try:
+        unread: Final = read_buffer(-1)
+    except (AttributeError, TypeError, TimeoutError):
+        return b""
+    return unread if isinstance(unread, bytes) else b""
+
+
 class AiohttpResponseStream(httpx.AsyncByteStream):
     CHUNK_SIZE = 1024 * 16
 
@@ -116,18 +142,15 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
         self._aiohttp_response = aiohttp_response
 
     async def __aiter__(self) -> typing.AsyncIterator[bytes]:
+        content: Final = self._aiohttp_response.content
         try:
-            async for chunk in self._aiohttp_response.content.iter_chunked(self.CHUNK_SIZE):
+            async for chunk in content.iter_chunked(self.CHUNK_SIZE):
                 yield chunk
-        except RuntimeError as e:
-            if "Connection closed" not in str(e):
-                raise
-            raise httpx.ReadError(str(e)) from e
-        except aiohttp.http_exceptions.TransferEncodingError as e:
-            raise httpx.ReadError(str(e)) from e
         except Exception:
-            # For other exceptions, use the normal mapping
-            with map_aiohttp_exceptions():
+            unread: Final = _received_unread_bytes(content)
+            if unread:
+                yield unread
+            with _map_stream_read_errors():
                 raise
         finally:
             # Release the aiohttp connection when iteration ends for any
