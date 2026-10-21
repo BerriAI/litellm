@@ -258,8 +258,6 @@ def test_anthropic_sdk_pages_backwards_to_the_newest_file_and_stops(rig: Rig) ->
     assert listed == list(reversed(newest_first[:-1]))
 
 
-@pytest.mark.parametrize("deployment", DEPLOYMENTS)
-def test_master_key_lists_managed_files_instead_of_the_provider_key(rig: Rig, deployment: Deployment) -> None:
-    listed: Final = rig.list(ListCall(f"/{deployment.provider}/v1/files")).ids
-    assert UNMANAGED_FILE not in listed
-    assert set(rig.files_by_provider[deployment.provider]) <= set(listed)
+def test_master_key_still_lists_the_files_on_the_shared_provider_key(rig: Rig) -> None:
+    listed: Final = rig.list(ListCall(f"/{ANTHROPIC.provider}/v1/files")).ids
+    assert UNMANAGED_FILE in listed

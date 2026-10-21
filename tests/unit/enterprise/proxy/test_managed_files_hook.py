@@ -15,6 +15,7 @@ import pytest
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from litellm.llms.base_llm.files.transformation import FileListModelScope
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import BATCH_CREATE_HIDDEN_PARAM
 from litellm.types.llms.openai import FileListPage, OpenAIFileObject
@@ -657,7 +658,7 @@ async def test_afile_list_reads_no_rows_when_no_deployment_can_hold_a_file() -> 
         purpose=None,
         litellm_parent_otel_span=None,
         user_api_key_dict=_make_user_api_key_dict(),
-        model_mapping_keys=frozenset(),
+        model_scope=FileListModelScope(frozenset()),
     )
 
     assert response.data == []

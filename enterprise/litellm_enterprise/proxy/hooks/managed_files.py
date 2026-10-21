@@ -50,7 +50,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
-from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_list_page,
     build_owner_filter,
@@ -2252,7 +2252,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         user_api_key_dict: UserAPIKeyAuth,
         limit: Optional[int] = None,
         after: Optional[str] = None,
-        model_mapping_keys: Optional[frozenset[str]] = None,
+        model_scope: Optional[FileListModelScope] = None,
         before: Optional[str] = None,
         **data: Dict,
     ) -> FileListPage:
@@ -2264,9 +2264,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         each page still ordered newest first.
         ``purpose`` is applied after parsing, because the managed file table
         keeps it inside the ``file_object`` blob instead of a column, and
-        ``model_mapping_keys`` keeps only files mapped to one of those
-        deployment ids, or model names for storage-backed files, read from
-        ``model_mappings``, a JSON column. Rows
+        ``model_scope`` keeps only files whose ``model_mappings``, a JSON
+        column, name one of its deployment ids or model names, or for a
+        storage-backed file a model name the router sends to the listed
+        provider. Rows
         whose blob will not parse drop out there too, so a chunk of rows can
         yield fewer matches than the page holds. Successive chunks are read
         until the page is full or the caller's rows run out, which keeps
@@ -2276,8 +2277,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         ``FILE_LIST_CONTINUATION_CHUNK_SIZE``, so the walk costs one query per
         that many rows instead of one per page. That bound is per query, not
         per request: the work is still linear in the rows the caller owns, and
-        a filter matching nothing reads every one of them, with no index
-        covering either the owner filter or the sort.
+        a filter matching nothing reads every one of them, each chunk through
+        the owner and creation-time indexes instead of a table scan.
         """
         validate_file_list_limit(limit)
         validate_file_list_purpose(purpose)
@@ -2309,7 +2310,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     openai_code="invalid_value",
                 )
 
-        if model_mapping_keys is not None and not model_mapping_keys:
+        if model_scope is not None and not model_scope.model_mapping_keys:
             return FileListPage.model_validate(build_list_page([]))
 
         page_size: Final = min(limit or MAX_FILE_LIST_LIMIT, MAX_FILE_LIST_LIMIT)
@@ -2329,9 +2330,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             matches.extend(
                 _public_file_object(parsed_file_object, row.unified_file_id)
                 for row in chunk
-                if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
+                if (
+                    model_scope is None
+                    or model_scope.holds(row.model_mappings, stored=row.storage_backend is not None)
+                )
+                and (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
                 and (purpose is None or parsed_file_object.purpose == purpose)
-                and (model_mapping_keys is None or not model_mapping_keys.isdisjoint(row.model_mappings))
             )
             if len(chunk) < chunk_size:
                 break

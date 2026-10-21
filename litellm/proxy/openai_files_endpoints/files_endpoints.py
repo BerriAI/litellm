@@ -6,6 +6,7 @@
 ######################################################################
 
 import asyncio
+import functools
 import itertools
 import traceback
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -36,7 +37,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 )
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
-from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1685,7 +1686,7 @@ async def _list_owned_managed_files(
     limit: int | None,
     after: str | None,
     before: str | None,
-    model_mapping_keys: frozenset[str] | None,
+    model_scope: FileListModelScope | None,
 ) -> FileListPage:
     return await managed_files_obj.afile_list(
         purpose=purpose,
@@ -1694,7 +1695,7 @@ async def _list_owned_managed_files(
         limit=limit,
         after=after,
         before=before,
-        model_mapping_keys=model_mapping_keys,
+        model_scope=model_scope,
     )
 
 
@@ -1702,6 +1703,12 @@ async def _list_owned_managed_files(
 class _UnscopedFileList:
     status_code: int
     detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ListedFiles:
+    model_scope: FileListModelScope | None
+    custom_llm_provider: str | None
 
 
 def _raise_unscoped_file_list(failure: _UnscopedFileList) -> NoReturn:
@@ -1739,13 +1746,11 @@ def _model_mapping_keys(deployments: Iterable[Deployment]) -> frozenset[str]:
     return frozenset(itertools.chain.from_iterable(map(_deployment_model_mapping_keys, deployments)))
 
 
-def _model_mapping_keys_serving_model(llm_router: Router, model: str) -> frozenset[str]:
+def _deployments_serving_model(llm_router: Router, model: str) -> tuple[Deployment, ...]:
     deployment: Final = llm_router.get_deployment(model_id=model) if llm_router.has_model_id(model) else None
     if deployment is not None:
-        return _deployment_model_mapping_keys(deployment)
-    return _model_mapping_keys(
-        Deployment.model_validate(listed) for listed in llm_router.get_model_list(model_name=model) or ()
-    )
+        return (deployment,)
+    return tuple(Deployment.model_validate(listed) for listed in llm_router.get_model_list(model_name=model) or ())
 
 
 def _resolved_deployment_provider(deployment: Deployment) -> str | None:
@@ -1769,28 +1774,51 @@ def _deployments_on_provider(llm_router: Router | None, custom_llm_provider: str
     )
 
 
-def _model_mapping_keys_on_provider(
-    llm_router: Router | None, custom_llm_provider: str
-) -> frozenset[str] | _UnscopedFileList:
+def _pattern_routes_model_name_to_provider(llm_router: Router, custom_llm_provider: str, model_name: str) -> bool:
+    return model_name not in llm_router.model_names and llm_router.pattern_router.routes_to_provider(
+        model_name, custom_llm_provider
+    )
+
+
+def _files_on_provider(llm_router: Router | None, custom_llm_provider: str) -> _ListedFiles | _UnscopedFileList:
     from litellm.proxy.pass_through_endpoints.managed_id_rewriter import passthrough_file_model_id
 
     if custom_llm_provider not in litellm.provider_list:
         return _UnscopedFileList(status_code=400, detail=f"Unknown provider '{custom_llm_provider}' for listing files.")
     passthrough_model_id: Final = passthrough_file_model_id(custom_llm_provider)
-    return _model_mapping_keys(_deployments_on_provider(llm_router, custom_llm_provider)) | frozenset(
-        (passthrough_model_id,) if passthrough_model_id is not None else ()
+    model_mapping_keys: Final = _model_mapping_keys(
+        _deployments_on_provider(llm_router, custom_llm_provider)
+    ) | frozenset((passthrough_model_id,) if passthrough_model_id is not None else ())
+    if llm_router is None:
+        return _ListedFiles(FileListModelScope(model_mapping_keys), custom_llm_provider)
+    return _ListedFiles(
+        FileListModelScope(
+            model_mapping_keys,
+            routes_stored_model_name=functools.partial(
+                _pattern_routes_model_name_to_provider, llm_router, custom_llm_provider
+            ),
+        ),
+        custom_llm_provider,
     )
 
 
-async def _listed_model_mapping_keys(
+def _files_serving_model(llm_router: Router, model: str) -> _ListedFiles:
+    deployments: Final = _deployments_serving_model(llm_router, model)
+    providers: Final = frozenset(map(_resolved_deployment_provider, deployments))
+    return _ListedFiles(
+        FileListModelScope(_model_mapping_keys(deployments)), next(iter(providers)) if len(providers) == 1 else None
+    )
+
+
+async def _listed_files(
     llm_router: Router | None,
     user_api_key_dict: UserAPIKeyAuth,
     custom_llm_provider: str | None,
     target_model_names: str | None,
     routed_model: str | None,
-) -> frozenset[str] | None | _UnscopedFileList:
+) -> _ListedFiles | _UnscopedFileList:
     if routed_model is not None and llm_router is not None:
-        return _model_mapping_keys_serving_model(llm_router, routed_model)
+        return _files_serving_model(llm_router, routed_model)
     if target_model_names:
         target_model_name: Final = _single_target_model_name(target_model_names)
         if isinstance(target_model_name, _UnscopedFileList):
@@ -1805,10 +1833,10 @@ async def _listed_model_mapping_keys(
             user_api_key_dict=user_api_key_dict,
             operation_context="file list",
         )
-        return _model_mapping_keys_serving_model(llm_router, target_model_name)
+        return _files_serving_model(llm_router, target_model_name)
     if custom_llm_provider is None:
-        return None
-    return _model_mapping_keys_on_provider(llm_router, custom_llm_provider)
+        return _ListedFiles(None, None)
+    return _files_on_provider(llm_router, custom_llm_provider)
 
 
 @router.get(
@@ -1880,8 +1908,8 @@ async def list_files(
 
         response: Any | None = None
         owned_files_hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-        list_owned_files_only: Final = litellm.require_managed_files is True and (
-            isinstance(owned_files_hook, BaseFileEndpoints) or not user_api_key_has_admin_view(user_api_key_dict)
+        list_owned_files_only: Final = litellm.require_managed_files is True and not user_api_key_has_admin_view(
+            user_api_key_dict
         )
 
         # Check for model-based credential routing (no file_id encoding check for list)
@@ -1905,26 +1933,23 @@ async def list_files(
                     status_code=500,
                     detail="Managed file listing is unavailable, so require_managed_files cannot scope the list to the caller.",
                 )
-            requested_custom_llm_provider: Final = await _requested_custom_llm_provider(
-                request=request, provider=provider
-            )
-            listed_model_mapping_keys: Final = await _listed_model_mapping_keys(
+            listed_files: Final = await _listed_files(
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
-                custom_llm_provider=requested_custom_llm_provider,
+                custom_llm_provider=await _requested_custom_llm_provider(request=request, provider=provider),
                 target_model_names=target_model_names,
                 routed_model=model_used if should_route else None,
             )
-            if isinstance(listed_model_mapping_keys, _UnscopedFileList):
-                _raise_unscoped_file_list(listed_model_mapping_keys)
+            if isinstance(listed_files, _UnscopedFileList):
+                _raise_unscoped_file_list(listed_files)
             response = await _list_owned_managed_files(  # rebind-ok: each dispatch branch binds response
                 managed_files_obj=owned_files_hook,
                 user_api_key_dict=user_api_key_dict,
                 purpose=purpose,
-                limit=limit if limit is not None else _default_file_list_limit(requested_custom_llm_provider),
+                limit=limit if limit is not None else _default_file_list_limit(listed_files.custom_llm_provider),
                 after=after or after_id,
                 before=before_id,
-                model_mapping_keys=listed_model_mapping_keys,
+                model_scope=listed_files.model_scope,
             )
         elif should_route and credentials is not None:
             # Use model-based routing with credentials from config
@@ -1969,7 +1994,7 @@ async def list_files(
                     limit=limit,
                     after=after,
                     before=None,
-                    model_mapping_keys=None,
+                    model_scope=None,
                 )
             else:
                 resolved_custom_llm_provider: Final = custom_llm_provider or "openai"
