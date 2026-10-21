@@ -1238,6 +1238,80 @@ async def test_tools_with_reasoning_bridge_stores_only_when_the_caller_asks(loca
     assert "include" not in body
 
 
+@pytest.mark.parametrize(
+    "include_param",
+    [
+        {"include": ["file_search_call.results"]},
+        {"extra_body": {"include": ["file_search_call.results"]}},
+    ],
+)
+async def test_tools_with_reasoning_bridge_keeps_encrypted_reasoning_beside_a_requested_include(
+    local_cost_map, fake_aws_env, include_param
+):
+    requests, client = _async_recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
+    await litellm.acompletion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "weather in Paris"}],
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        client=client,
+        **include_param,
+    )
+
+    body = json.loads(requests[0].content)
+    assert body["store"] is False
+    assert body["include"] == ["file_search_call.results", "reasoning.encrypted_content"]
+
+
+async def test_tools_with_reasoning_bridge_sends_a_tool_reference_result_as_its_tool_name_like_converse(
+    local_cost_map, fake_aws_env
+):
+    requests, client = _async_recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
+    await litellm.acompletion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[
+            {"role": "user", "content": "find a web tool"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "ToolSearch", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "tool_reference", "tool_name": "WebSearch"}],
+            },
+        ],
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        client=client,
+    )
+
+    body = json.loads(requests[0].content)
+    tool_output = next(item for item in body["input"] if item["type"] == "function_call_output")
+    assert tool_output["output"] == [{"type": "input_text", "text": "WebSearch"}]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "streamed"])
+async def test_tools_with_reasoning_bridge_returns_the_provider_response_headers(local_cost_map, fake_aws_env, stream):
+    reply_kwargs: Final = (
+        {
+            "content": _responses_stream_with_reasoning("bedrock-minted", "global.openai.gpt-6-sol"),
+            "headers": {"content-type": "text/event-stream", "x-amzn-requestid": "req-1"},
+        }
+        if stream
+        else {
+            "json": _responses_reply_with_reasoning("bedrock-minted", "global.openai.gpt-6-sol"),
+            "headers": {"x-amzn-requestid": "req-1"},
+        }
+    )
+    _, response = await _bedrock_turn([{"role": "user", "content": "weather in Paris"}], **reply_kwargs)
+
+    assert response._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-1"
+
+
 async def test_tools_with_reasoning_and_a_param_the_bridge_drops_fail_like_converse_without_drop_params(
     local_cost_map, fake_aws_env
 ):

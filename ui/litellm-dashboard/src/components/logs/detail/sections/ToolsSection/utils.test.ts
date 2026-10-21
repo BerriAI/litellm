@@ -335,6 +335,38 @@ describe("ToolsSection utils", () => {
       expect(result[0].called).toBe(true);
       expect(result[0].callData?.arguments).toEqual({ location: "Tokyo" });
     });
+
+    it("should parse tool calls from a Responses API response output", () => {
+      const log: Partial<LogEntry> = {
+        request_id: "test-responses-1",
+        proxy_server_request: {
+          tools: [
+            { type: "function", function: { name: "get_weather", description: "Get current weather" } },
+            { type: "function", function: { name: "get_time", description: "Get current time" } },
+          ],
+        },
+        response: {
+          object: "response",
+          output: [
+            { type: "reasoning", summary: [] },
+            {
+              type: "function_call",
+              call_id: "call_abc",
+              name: "get_weather",
+              arguments: '{"location": "Paris"}',
+            },
+          ],
+        },
+      } as any;
+
+      const result = parseToolsFromLog(log as LogEntry);
+
+      expect(result.map((tool) => [tool.name, tool.called])).toEqual([
+        ["get_weather", true],
+        ["get_time", false],
+      ]);
+      expect(result[0].callData).toEqual({ id: "call_abc", name: "get_weather", arguments: { location: "Paris" } });
+    });
   });
 
   describe("hasTools", () => {

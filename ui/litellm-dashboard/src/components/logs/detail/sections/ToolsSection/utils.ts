@@ -80,29 +80,34 @@ function extractToolCallsFromResponse(log: LogEntry): ToolCall[] {
     return responseData.tool_calls;
   }
 
+  // Responses API format: response.output[].type === "function_call"
+  if (Array.isArray(responseData.output)) {
+    const toolCalls = toolCallsFromOutput(responseData.output);
+    if (toolCalls.length > 0) return toolCalls;
+  }
+
   // Realtime API format: response.results[].response.output[].type === "function_call"
   if (Array.isArray(responseData.results)) {
-    const toolCalls: ToolCall[] = [];
-    for (const result of responseData.results) {
-      if (result.type === "response.done" && result.response?.output) {
-        for (const item of result.response.output) {
-          if (item.type === "function_call") {
-            toolCalls.push({
-              id: item.call_id || "",
-              type: "function",
-              function: {
-                name: item.name || "",
-                arguments: item.arguments || "{}",
-              },
-            });
-          }
-        }
-      }
-    }
+    const toolCalls = responseData.results
+      .filter((result: any) => result.type === "response.done" && Array.isArray(result.response?.output))
+      .flatMap((result: any) => toolCallsFromOutput(result.response.output));
     if (toolCalls.length > 0) return toolCalls;
   }
 
   return [];
+}
+
+function toolCallsFromOutput(output: any[]): ToolCall[] {
+  return output
+    .filter((item: any) => item.type === "function_call")
+    .map((item: any) => ({
+      id: item.call_id || "",
+      type: "function",
+      function: {
+        name: item.name || "",
+        arguments: item.arguments || "{}",
+      },
+    }));
 }
 
 /**

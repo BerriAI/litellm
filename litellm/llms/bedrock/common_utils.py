@@ -1313,10 +1313,17 @@ def _bedrock_serves_responses(model: str) -> bool:
 def bedrock_responses_bridge_optional_params(optional_params: Mapping[str, object]) -> Mapping[str, object]:
     if optional_params.get("store") is not None:
         return optional_params
-    include: Final = optional_params.get("include")
+    extra_body: Final = optional_params.get("extra_body")
+    extra_body_params: Final = _EXTRA_BODY_ADAPTER.validate_python(extra_body) if isinstance(extra_body, dict) else {}
+    include: Final = extra_body_params.get("include", optional_params.get("include"))
     requested: Final = _INCLUDE_ADAPTER.validate_python(include) if isinstance(include, (list, tuple)) else ()
     return {
         **optional_params,
+        **(
+            {"extra_body": {key: value for key, value in extra_body_params.items() if key != "include"}}
+            if "include" in extra_body_params
+            else {}
+        ),
         "store": False,
         "include": [*requested, *(() if _ENCRYPTED_REASONING in requested else (_ENCRYPTED_REASONING,))],
     }

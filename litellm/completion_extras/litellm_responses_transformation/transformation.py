@@ -336,6 +336,28 @@ def reasoning_origin_for(provider: str | None, model: str) -> str | None:
     return f"{_REASONING_ORIGIN_PREFIX}bedrock/{get_bedrock_base_model(model)}:"
 
 
+def _tool_reference_as_text(part: object) -> object:
+    match part:
+        case {"type": "tool_reference", "tool_name": str() as tool_name}:
+            return {"type": "text", "text": tool_name}
+        case _:
+            return part
+
+
+def _tool_message_with_tool_references_as_text(msg: Mapping[str, object]) -> Mapping[str, object]:
+    content: Final = msg.get("content")
+    if msg.get("role") != "tool" or not isinstance(content, list):
+        return msg
+    parts: Final = cast("list[object]", content)  # cast-ok: isinstance leaves the part type unknown
+    return {**msg, "content": [_tool_reference_as_text(part) for part in parts]}
+
+
+def _tool_references_as_text(messages: Sequence["AllMessageValues"]) -> tuple["AllMessageValues", ...]:
+    return cast(  # cast-ok: each message keeps its fields, and only tool content parts change
+        'tuple["AllMessageValues", ...]', tuple(_tool_message_with_tool_references_as_text(msg) for msg in messages)
+    )
+
+
 def _with_reasoning_origin(output_items: Sequence[object], origin: str | None) -> Sequence[object]:
     if origin is None:
         return output_items
@@ -859,7 +881,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def convert_chat_completion_messages_to_responses_api(
         self,
-        messages: list["AllMessageValues"],
+        messages: Sequence["AllMessageValues"],
         *,
         drop_params: bool = False,
         keep_prompt_cache_breakpoints: bool = False,
@@ -883,7 +905,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def _convert_chat_completion_messages_to_responses_input(
         self,
-        messages: list["AllMessageValues"],
+        messages: Sequence["AllMessageValues"],
         *,
         drop_params: bool = False,
         replay_tool_search: bool = False,
@@ -1140,7 +1162,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and supports_openai_prompt_cache_breakpoint(base_model, provider)
         )
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
-            messages,
+            _tool_references_as_text(messages) if provider == "bedrock" else messages,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast

@@ -11,7 +11,7 @@ GPT_6_1_SOL_TOOL_SEARCH_TEST_CASE: Final = TranslationTestCase(
     scenario="tool_search",
     litellm_endpoint="/v1/messages",
     litellm_request={
-        "model": "bedrock/global.openai.gpt-6.1-sol",
+        "model": "bedrock/converse/global.openai.gpt-6.1-sol",
         "max_tokens": 1024,
         "thinking": {"type": "adaptive"},
         "output_config": {"effort": "low"},
@@ -139,7 +139,7 @@ GPT_6_1_SOL_TOOL_SEARCH_TEST_CASE: Final = TranslationTestCase(
         "id": ANY,
         "type": "message",
         "role": "assistant",
-        "model": "bedrock/global.openai.gpt-6.1-sol",
+        "model": "bedrock/converse/global.openai.gpt-6.1-sol",
         "stop_sequence": None,
         "usage": {"input_tokens": 100, "output_tokens": 15},
         "content": [{"type": "text", "text": "The web search tool is loaded and ready to use."}],

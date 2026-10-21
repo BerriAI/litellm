@@ -16,6 +16,8 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 if TYPE_CHECKING:
+    import httpx
+
     from litellm import CustomStreamWrapper, LiteLLMLoggingObj, ModelResponse
 
 
@@ -30,6 +32,12 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
     custom_llm_provider: str
     encoding: object
     client: ReadOnly[object]
+
+
+def _provider_response_headers(stream: object) -> "httpx.Headers | None":
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    return stream.response.headers if isinstance(stream, BaseResponsesAPIStreamingIterator) else None
 
 
 def _restore_routing_prefix(model: str, custom_llm_provider: str) -> str:
@@ -269,6 +277,7 @@ class ResponsesToCompletionBridgeHandler:
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
+                _response_headers=_provider_response_headers(result),
             )
             return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 
@@ -374,6 +383,7 @@ class ResponsesToCompletionBridgeHandler:
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
+                _response_headers=_provider_response_headers(result),
             )
             return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 
