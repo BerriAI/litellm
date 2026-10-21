@@ -75,7 +75,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
 )
-from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
+from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentMarker
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
@@ -292,7 +292,7 @@ def _get_spend_logs_metadata(
         kubernetes_pod_routing=kubernetes_pod_routing,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
         is_silent_experiment=SILENT_EXPERIMENT_METADATA_KEY in metadata
-        and metadata[SILENT_EXPERIMENT_METADATA_KEY] is True,
+        and metadata[SILENT_EXPERIMENT_METADATA_KEY] is SilentExperimentMarker.MIRRORED,
         billed_retry_attempt=billed_retry_attempt,
         user_api_key_user_email=_stored_user_email(metadata),
     )

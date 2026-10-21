@@ -17,6 +17,7 @@ import litellm.proxy.spend_tracking.spend_tracking_utils as spend_tracking_utils
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_GENERATED_METADATA_KEY, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, INTERNAL_CALL_ORIGIN_METADATA_KEY, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
 from litellm.constants import SILENT_EXPERIMENT_METADATA_KEY
+from litellm.types.router import SilentExperimentMarker
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -167,8 +168,9 @@ def test_get_logging_payload_includes_kubernetes_pod_routing(
 @pytest.mark.parametrize(
     ("silent_experiment_metadata", "expected"),
     [
-        ({SILENT_EXPERIMENT_METADATA_KEY: True}, True),
-        ({SILENT_EXPERIMENT_METADATA_KEY: "true"}, False),
+        ({SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED}, True),
+        ({SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED.value}, False),
+        ({SILENT_EXPERIMENT_METADATA_KEY: True}, False),
         ({"is_silent_experiment": True}, False),
         ({}, False),
     ],

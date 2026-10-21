@@ -12,11 +12,13 @@ import pytest
 import respx
 
 import litellm
+from litellm.constants import SILENT_EXPERIMENT_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router import Router
 from litellm.router import _silent_experiment_kwargs_snapshot
 from litellm.router import _silent_experiment_targets
+from litellm.types.router import SilentExperimentMarker
 
 
 class _RecordingLogger(CustomLogger):
@@ -265,7 +267,9 @@ async def test_multiple_shadow_targets_fan_out_async(recording_logger):
 
 
 @pytest.mark.asyncio
-async def test_standard_logging_payload_marks_only_the_mirrored_calls_as_silent_experiments(recording_logger):
+async def test_standard_logging_payload_marks_only_the_mirrored_calls_as_silent_experiments(
+    recording_logger: _RecordingLogger,
+) -> None:
     router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
     response: Final = await router.acompletion(
         model="primary-model",
@@ -286,7 +290,7 @@ async def test_standard_logging_payload_marks_only_the_mirrored_calls_as_silent_
 def _spend_row_is_silent_experiment(call: dict[str, object]) -> object:
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
-    now: Final = datetime.datetime.now(datetime.timezone.utc)
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
     row: Final = get_logging_payload(
         kwargs=call,
         response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
@@ -297,7 +301,9 @@ def _spend_row_is_silent_experiment(call: dict[str, object]) -> object:
 
 
 @pytest.mark.asyncio
-async def test_spend_rows_mark_only_the_mirrored_calls_when_the_caller_sends_litellm_metadata(recording_logger):
+async def test_spend_rows_mark_only_the_mirrored_calls_when_the_caller_sends_litellm_metadata(
+    recording_logger: _RecordingLogger,
+) -> None:
     router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
     await router.acompletion(
         model="primary-model",
@@ -315,13 +321,24 @@ async def test_spend_rows_mark_only_the_mirrored_calls_when_the_caller_sends_lit
 
 
 @pytest.mark.asyncio
-async def test_a_caller_sent_is_silent_experiment_does_not_mark_a_real_call_as_mirrored(recording_logger):
+@pytest.mark.parametrize(
+    ("bucket", "planted"),
+    [
+        ("metadata", {"is_silent_experiment": True}),
+        ("metadata", {SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED.value}),
+        ("litellm_metadata", {SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED.value}),
+        ("litellm_metadata", {SILENT_EXPERIMENT_METADATA_KEY: True}),
+    ],
+)
+async def test_a_caller_sent_silent_experiment_flag_does_not_mark_a_real_call_as_mirrored(
+    recording_logger: _RecordingLogger, bucket: str, planted: dict[str, object]
+) -> None:
     router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
     await router.acompletion(
         model="shadow-b",
         messages=[{"role": "user", "content": "hi"}],
         mock_response="pong",
-        metadata={"is_silent_experiment": True},
+        **{bucket: planted},
     )
     await _wait_for_all_successes(recording_logger, expected=1)
 
