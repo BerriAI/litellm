@@ -1,9 +1,9 @@
 import os
 from collections.abc import Collection, Mapping, Sequence
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -16,14 +16,23 @@ from litellm.llms.azure_ai.common_utils import (
     get_azure_ai_auth_headers,
 )
 from litellm.types.llms.azure_ai import FoundryAgentReference
-from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import (
+    ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _PROJECT_PATH_PREFIX: Final = ("api", "projects")
 _RESPONSES_PATH: Final = ("openai", "v1", "responses")
 _AGENT_OWNED_PARAMS: Final = frozenset({"temperature", "top_p", "tools", "text", "reasoning"})
 _CALLER_AGENT_KEYS: Final = ("agent", "agent_reference")
+_RESPONSE_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 def _project_root(base_url: httpx.URL) -> tuple[str, ...]:
@@ -34,6 +43,19 @@ def _project_root(base_url: httpx.URL) -> tuple[str, ...]:
 def _responses_url(api_base: str) -> str:
     base_url: Final = httpx.URL(api_base)
     return str(base_url.copy_with(path="/" + "/".join((*_project_root(base_url), *_RESPONSES_PATH)), query=None))
+
+
+def _without_agent_instructions(response: ResponsesAPIResponse) -> ResponsesAPIResponse:
+    if "agent_reference" not in (response.model_extra or {}):
+        return response
+    return response.model_copy(update={"instructions": None})
+
+
+def _event_without_agent_instructions(event: Mapping[str, object]) -> Mapping[str, object]:
+    response: Final = event.get("response")
+    if not (isinstance(response, Mapping) and "agent_reference" in response):
+        return event
+    return {**event, "response": {**_RESPONSE_FIELDS.validate_python(response), "instructions": None}}
 
 
 class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
@@ -87,6 +109,31 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
             )
         return _responses_url(resolved_base)
 
+    def transform_response_api_response(
+        self, model: str, raw_response: httpx.Response, logging_obj: "LiteLLMLoggingObj"
+    ) -> ResponsesAPIResponse:
+        return _without_agent_instructions(super().transform_response_api_response(model, raw_response, logging_obj))
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: Mapping[str, object],
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> ResponsesAPIStreamingResponse:
+        return super().transform_streaming_response(  # pyright: ignore[reportUnknownMemberType]  # parent types parsed_chunk as a bare dict
+            model=model, parsed_chunk=dict(_event_without_agent_instructions(parsed_chunk)), logging_obj=logging_obj
+        )
+
+    def transform_get_response_api_response(
+        self, raw_response: httpx.Response, logging_obj: "LiteLLMLoggingObj"
+    ) -> ResponsesAPIResponse:
+        return _without_agent_instructions(super().transform_get_response_api_response(raw_response, logging_obj))
+
+    def transform_cancel_response_api_response(
+        self, raw_response: httpx.Response, logging_obj: "LiteLLMLoggingObj"
+    ) -> ResponsesAPIResponse:
+        return _without_agent_instructions(super().transform_cancel_response_api_response(raw_response, logging_obj))
+
 
 def _agent_reference(model: str) -> FoundryAgentReference:
     name, _, version = model.split("agents/", 1)[1].partition(":")
@@ -95,24 +142,59 @@ def _agent_reference(model: str) -> FoundryAgentReference:
     return FoundryAgentReference(type="agent_reference", name=name)
 
 
+class _CallerAgentReference(BaseModel):
+    model_config = ConfigDict(frozen=True, coerce_numbers_to_str=True)
+
+    name: str
+    version: str | None = None
+
+
+def _caller_agent_reference(value: object) -> _CallerAgentReference | None:
+    try:
+        return _CallerAgentReference.model_validate(value)
+    except ValidationError:
+        return None
+
+
+def _requested_agent(
+    deployment_agent: FoundryAgentReference, caller_agents: Sequence[_CallerAgentReference | None]
+) -> FoundryAgentReference:
+    requested_versions: Final = frozenset(
+        agent.version
+        for agent in caller_agents
+        if agent is not None and agent.name == deployment_agent["name"] and agent.version is not None
+    )
+    if "version" in deployment_agent or len(requested_versions) != 1:
+        return deployment_agent
+    return FoundryAgentReference(
+        type="agent_reference", name=deployment_agent["name"], version=next(iter(requested_versions))
+    )
+
+
 def _deployment_agent(
     model: str, caller_fields: Mapping[str, object], litellm_params: GenericLiteLLMParams
 ) -> FoundryAgentReference:
-    deployment_agent: Final = _agent_reference(model)
+    caller_keys: Final = tuple(key for key in _CALLER_AGENT_KEYS if key in caller_fields)
+    caller_agents: Final = tuple(_caller_agent_reference(caller_fields[key]) for key in caller_keys)
+    agent: Final = _requested_agent(_agent_reference(model), caller_agents)
     other_agents: Final = tuple(
-        key for key in _CALLER_AGENT_KEYS if key in caller_fields and caller_fields[key] != deployment_agent
+        key
+        for key, caller_agent in zip(caller_keys, caller_agents)
+        if caller_agent is None
+        or caller_agent.name != agent["name"]
+        or caller_agent.version not in (None, agent.get("version"))
     )
     if other_agents and not (litellm.drop_params is True or litellm_params.drop_params is True):
         raise UnsupportedParamsError(
             message=(
-                f"This model entry always calls Foundry agent {deployment_agent['name']!r}, so `{other_agents[0]}` "
+                f"This model entry always calls Foundry agent {agent['name']!r}, so `{other_agents[0]}` "
                 "in the request cannot pick another agent or version. Remove it, call the model entry for that "
                 "agent, or set `drop_params: true` to drop it"
             ),
             llm_provider=LlmProviders.AZURE_AI.value,
             model=model,
         )
-    return deployment_agent
+    return agent
 
 
 _INPUT_ITEMS: Final = TypeAdapter(list[object])
@@ -197,7 +279,7 @@ class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
         model: str,
         litellm_params: GenericLiteLLMParams,
     ) -> Mapping[str, object]:
-        return {
-            **{key: value for key, value in extra_body.items() if key not in _CALLER_AGENT_KEYS},
-            "agent_reference": _deployment_agent(model, extra_body, litellm_params),
-        }
+        passthrough: Final = {key: value for key, value in extra_body.items() if key not in _CALLER_AGENT_KEYS}
+        if len(passthrough) == len(extra_body):
+            return passthrough
+        return {**passthrough, "agent_reference": _deployment_agent(model, extra_body, litellm_params)}
