@@ -166,6 +166,15 @@ def get_secret_str(
 
 
 LOCAL_OIDC_SECRET_PREFIXES: Final = ("oidc/file/", "oidc/env/")
+GOOGLE_OIDC_SECRET_PREFIX: Final = "oidc/google/"
+API_KEY_OIDC_SECRET_PREFIXES: Final = (*LOCAL_OIDC_SECRET_PREFIXES, GOOGLE_OIDC_SECRET_PREFIX)
+_GOOGLE_METADATA_DEFAULT_HOST: Final = "metadata.google.internal"
+_GOOGLE_TOKEN_UNAVAILABLE: Final = "the metadata server did not return an ID token"
+
+
+def _google_metadata_identity_url() -> str:
+    host: Final = os.getenv("GCE_METADATA_HOST") or _GOOGLE_METADATA_DEFAULT_HOST
+    return f"http://{host}/computeMetadata/v1/instance/service-accounts/default/identity"
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,11 +206,37 @@ def resolve_local_oidc_reference(value: str) -> str | UnresolvableSecretReferenc
     return secret
 
 
-def _logged_unresolvable(reference: str, kind: str, reason: str) -> UnresolvableSecretReference:
+def resolve_api_key_oidc_reference(value: str) -> str | UnresolvableSecretReference:
+    if not value.startswith(GOOGLE_OIDC_SECRET_PREFIX):
+        return resolve_local_oidc_reference(value)
+    try:
+        token: Final = get_secret_str(value)
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        return _logged_unresolvable(value, "oidc/google", _GOOGLE_TOKEN_UNAVAILABLE, f"{type(exc).__name__}: {exc}")
+    if not token:
+        return _logged_unresolvable(value, "oidc/google", "it resolved to an empty value")
+    return token
+
+
+def google_oidc_token_needs_fetch(value: str) -> bool:
+    return (
+        value.startswith(GOOGLE_OIDC_SECRET_PREFIX) and oidc_cache.get_cache(key=value) is None  # pyright: ignore[reportUnknownMemberType]  # DualCache.get_cache is untyped
+    )
+
+
+def _logged_unresolvable(
+    reference: str, kind: str, reason: str, detail: str | None = None
+) -> UnresolvableSecretReference:
     verbose_logger.warning(
-        "Secret reference %s could not be resolved: %s", reference.replace("\r", "").replace("\n", ""), reason
+        "Secret reference %s could not be resolved: %s",
+        _single_line(reference),
+        reason if detail is None else f"{reason} ({_single_line(detail)})",
     )
     return UnresolvableSecretReference(kind=kind, reason=reason)
+
+
+def _single_line(text: str) -> str:
+    return text.replace("\r", "").replace("\n", "")
 
 
 def _unresolvable_reason(kind: str, exc: OSError | ValueError) -> str:
@@ -279,14 +314,16 @@ def get_secret(
             oidc_client = _get_oidc_http_handler()
             # https://cloud.google.com/compute/docs/instances/verifying-instance-identity#request_signature
             response = oidc_client.get(
-                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity",
+                _google_metadata_identity_url(),
                 params={"audience": oidc_aud},
                 headers={"Metadata-Flavor": "Google"},
             )
             if response.status_code == 200:
                 oidc_token = response.text
                 ttl: Final = _oidc_token_cache_ttl(oidc_token, 3600 - 60)
-                if ttl > 0:
+                if not oidc_token:
+                    verbose_logger.warning("Google OIDC token for %s is empty; not caching it", secret_name)
+                elif ttl > 0:
                     oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=ttl)
                 else:
                     verbose_logger.warning(
@@ -296,7 +333,7 @@ def get_secret(
                     )
                 return oidc_token
             else:
-                raise ValueError("Google OIDC provider failed")
+                raise ValueError(f"Google OIDC provider failed with HTTP {response.status_code}")
         elif oidc_provider == "circleci":
             # https://circleci.com/docs/openid-connect-tokens/
             env_secret = os.getenv("CIRCLE_OIDC_TOKEN")

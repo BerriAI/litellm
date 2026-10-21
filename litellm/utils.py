@@ -30,7 +30,7 @@ import time
 import traceback
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from functools import lru_cache, wraps
+from functools import lru_cache, partial, wraps
 from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
@@ -464,11 +464,12 @@ from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.secret_managers.main import (
-    LOCAL_OIDC_SECRET_PREFIXES,
+    API_KEY_OIDC_SECRET_PREFIXES,
     UnresolvableSecretReference,
     get_secret,
+    google_oidc_token_needs_fetch,
     oidc_reference_kind,
-    resolve_local_oidc_reference,
+    resolve_api_key_oidc_reference,
 )
 
 from ._logging import is_debugging_on, verbose_logger
@@ -765,19 +766,30 @@ def resolve_api_key_secret_reference(
     return _secret_behind_api_key_reference(api_key, model=model, llm_provider=llm_provider, upstream=upstream)
 
 
+async def aresolve_api_key_secret_reference(
+    api_key: str | None, model: object, llm_provider: object, upstream: Mapping[str, object]
+) -> str | None:
+    resolve: Final = partial(resolve_api_key_secret_reference, api_key, model, llm_provider, upstream)
+    return await asyncio.to_thread(resolve) if _resolving_fetches_a_token(api_key) else resolve()
+
+
+def _resolving_fetches_a_token(api_key: object) -> bool:
+    return isinstance(api_key, AdminApiKeySecretReference) and google_oidc_token_needs_fetch(api_key)
+
+
 def _secret_behind_api_key_reference(
     reference: AdminApiKeySecretReference, model: object, llm_provider: object, upstream: Mapping[str, object]
 ) -> str:
     if not reference.may_reach(upstream):
         raise _secret_reference_error(_unreachable_upstream_message(reference), llm_provider=llm_provider, model=model)
-    if not reference.startswith(LOCAL_OIDC_SECRET_PREFIXES):
+    if not reference.startswith(API_KEY_OIDC_SECRET_PREFIXES):
         raise _secret_reference_error(
             f"api_key is an {oidc_reference_kind(reference)} secret reference, a kind api_key does not support. "
-            "Use oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>.",
+            "Use oidc/file/<absolute path>, oidc/env/<VARIABLE_NAME> or oidc/google/<audience>.",
             llm_provider=llm_provider,
             model=model,
         )
-    match resolve_local_oidc_reference(reference):
+    match resolve_api_key_oidc_reference(reference):
         case UnresolvableSecretReference(kind=kind, reason=reason):
             raise _secret_reference_error(
                 f"api_key {kind} secret reference could not be resolved: {reason}",
@@ -814,12 +826,25 @@ def load_credentials_from_list(kwargs: dict[str, object]) -> None:
     Updates kwargs with the credentials if credential_name in kwarg, then swaps an admin-configured oidc/ api_key
     reference for the secret it points to, read now so a rotated token is used on the next call
     """
-    kwargs.update(_credential_updates(kwargs))
+    kwargs.update(_credential_updates(kwargs, _named_credential_values(kwargs)))
 
 
-def _credential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+async def acredential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     credential_values: Final = _named_credential_values(kwargs)
-    api_key: Final = kwargs.get("api_key", credential_values.get("api_key"))
+    resolve: Final = partial(_credential_updates, kwargs, credential_values)
+    return (
+        await asyncio.to_thread(resolve)
+        if _resolving_fetches_a_token(_api_key_after_credentials(kwargs, credential_values))
+        else resolve()
+    )
+
+
+def _api_key_after_credentials(kwargs: Mapping[str, object], credential_values: Mapping[str, object]) -> object:
+    return kwargs.get("api_key", credential_values.get("api_key"))
+
+
+def _credential_updates(kwargs: Mapping[str, object], credential_values: Mapping[str, object]) -> Mapping[str, object]:
+    api_key: Final = _api_key_after_credentials(kwargs, credential_values)
     if not isinstance(api_key, AdminApiKeySecretReference):
         return credential_values
     secret: Final = _secret_behind_api_key_reference(
@@ -2192,7 +2217,7 @@ def client(original_function):
 
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
-            load_credentials_from_list(kwargs)
+            kwargs.update(await acredential_updates(kwargs))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is the untyped request dict
             from litellm.llms.github_copilot.per_user_auth import aattach_github_copilot_user_session
 
             await aattach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
