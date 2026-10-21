@@ -479,6 +479,81 @@ def test_map_builder_rejects_attempt_membership_or_digest_mismatch(
         )
 
 
+def test_final_map_requires_every_selected_attempt_or_accounted_infra_deficit(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest_bytes = json.dumps(
+        {
+            "categories": {
+                "repository_debugging": {"selected_ids": ["task-0"]},
+                "feature_implementation": {"selected_ids": []},
+                "shell_build": {"selected_ids": []},
+                "algorithms_data": {"selected_ids": []},
+                "unknown": {"selected_ids": []},
+            }
+        }
+    ).encode()
+    manifest.write_bytes(manifest_bytes)
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    versions = _versions(
+        models=(
+            ("haiku-4.5", MODEL_VERSION),
+            ("sonnet-5", "anthropic/claude-sonnet-5"),
+            ("opus-5", "anthropic/claude-opus-5"),
+        ),
+        deployments=(
+            ("haiku-4.5", "deployment-haiku"),
+            ("sonnet-5", "deployment-sonnet"),
+            ("opus-5", "deployment-opus"),
+        ),
+    )
+    preflight = {
+        "record_type": "preflight_passed",
+        "task_id": "task-0",
+        "manifest_sha256": manifest_sha256,
+    }
+    attempt_rows = tuple(
+        {
+            **asdict(_attempts(alias, 1, 1, 0.1, returned_model_version=version, deployment_id=deployment)[0]),
+            **asdict(_attempts(alias, 1, 1, 0.1, returned_model_version=version, deployment_id=deployment)[0].key),
+            "record_type": "attempt",
+            "model_alias": alias,
+            "model": alias,
+            "run_id": f"run-{alias}",
+            "manifest_sha256": manifest_sha256,
+        }
+        for alias, version, deployment in (
+            ("haiku-4.5", MODEL_VERSION, "deployment-haiku"),
+            ("sonnet-5", "anthropic/claude-sonnet-5", "deployment-sonnet"),
+            ("opus-5", "anthropic/claude-opus-5", "deployment-opus"),
+        )
+    )
+    profiling_runs = tmp_path / "profiling_runs.jsonl"
+    profiling_runs.write_text(
+        "\n".join(json.dumps(row) for row in (preflight,) + attempt_rows) + "\n"
+    )
+
+    complete_map = compile_map_from_profiling_runs(
+        profiling_runs,
+        manifest,
+        manifest_sha256,
+        PUBLIC_DEV_TENANT,
+        versions,
+    )
+    profiling_runs.write_text(
+        "\n".join(json.dumps(row) for row in (preflight,) + attempt_rows[:-1]) + "\n"
+    )
+    incomplete_map = compile_map_from_profiling_runs(
+        profiling_runs,
+        manifest,
+        manifest_sha256,
+        PUBLIC_DEV_TENANT,
+        versions,
+    )
+
+    assert complete_map["final"] is True
+    assert incomplete_map["final"] is False
+
+
 def test_harness_hash_is_canonical_json_over_the_full_budget_config() -> None:
     config = HarnessConfig(
         harness_version="run_pilot_attempt_v1",

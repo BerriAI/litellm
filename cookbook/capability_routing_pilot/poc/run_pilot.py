@@ -59,6 +59,7 @@ class AttemptPaths:
     image_digests: Mapping[str, str]
     image_overlay_ids: Mapping[str, str]
     dataset_metadata: Mapping[str, str]
+    root_dir: Path | None = None
 TOKEN_FIELDS = {
     "prompt": "prompt_tokens",
     "completion": "completion_tokens",
@@ -88,8 +89,12 @@ def read_jsonl_locked(path: Path) -> list[dict[str, object]]:
 
 
 def committed_spend_usd(runs_path: Path = RUNS_PATH, aux_path: Path = AUX_COSTS_PATH) -> float:
-    run_cost = sum(_cost(row.get("cost_usd")) for row in read_jsonl_locked(runs_path))
-    aux_cost = sum(_cost(row.get("cost_usd")) for row in read_jsonl_locked(aux_path))
+    run_rows = read_jsonl_locked(runs_path)
+    aux_rows = read_jsonl_locked(aux_path)
+    if any(not valid_cost(row.get("cost_usd")) for row in run_rows + aux_rows):
+        raise ValueError("committed spend contains missing or invalid cost")
+    run_cost = sum(_cost(row.get("cost_usd")) for row in run_rows)
+    aux_cost = sum(_cost(row.get("cost_usd")) for row in aux_rows)
     return run_cost + aux_cost
 
 
@@ -184,11 +189,11 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _read_pilot_key() -> str:
-    path = ROOT / ".private" / "pilot_key"
-    if stat.S_IMODE(path.stat().st_mode) != 0o600:
+def _read_pilot_key(path: Path | None = None) -> str:
+    key_path = path if path is not None else ROOT / ".private" / "pilot_key"
+    if stat.S_IMODE(key_path.stat().st_mode) != 0o600:
         raise PermissionError("pilot key must have mode 0600")
-    key = path.read_text().strip()
+    key = key_path.read_text().strip()
     if not key:
         raise ValueError("pilot key is empty")
     return key
@@ -283,6 +288,7 @@ def _grade(
     run_dir: Path,
     env: dict[str, str],
     dataset_name: str = "SWE-bench/SWE-bench",
+    root_dir: Path = ROOT,
 ) -> tuple[str, float]:
     if not submission.strip():
         return "skipped_empty_patch", 0.0
@@ -303,7 +309,7 @@ def _grade(
         + "\n"
     )
     command = [
-        str(ROOT / ".venv" / "bin" / "python"),
+        str(root_dir / ".venv" / "bin" / "python"),
         "-m",
         "swebench.harness.run_evaluation",
         "-d",
@@ -343,10 +349,10 @@ def _grade(
     return status, time.monotonic() - started
 
 
-def _cleanup_containers(run_id: str, env: dict[str, str]) -> int:
+def _cleanup_containers(run_id: str, env: dict[str, str], root_dir: Path = ROOT) -> int:
     result = subprocess.run(
         ["docker", "ps", "-aq", "--filter", f"label=routing_poc_run={run_id}"],
-        cwd=ROOT,
+        cwd=root_dir,
         env=_utility_env(env),
         capture_output=True,
         text=True,
@@ -357,7 +363,7 @@ def _cleanup_containers(run_id: str, env: dict[str, str]) -> int:
         return 0
     removed = subprocess.run(
         ["docker", "rm", "-f", *container_ids],
-        cwd=ROOT,
+        cwd=root_dir,
         env=_utility_env(env),
         capture_output=True,
     )
@@ -391,6 +397,7 @@ def _attempt(
     started_at = _utc_now()
     started = time.monotonic()
     run_id = f"{task_id}__{model}__a{attempt}__{_timestamp()}"
+    root_dir: Final = paths.root_dir if paths is not None and paths.root_dir is not None else ROOT
     run_root: Final = paths.run_root if paths is not None else RUNS_ROOT
     dataset_root: Final = paths.dataset_root if paths is not None else ROOT / "agent_dataset"
     run_dir = run_root / run_id
@@ -403,7 +410,7 @@ def _attempt(
     command = [
         "timeout",
         "600",
-        str(ROOT / ".venv" / "bin" / "mini-extra"),
+        str(root_dir / ".venv" / "bin" / "mini-extra"),
         "swebench",
         "--subset",
         str(dataset_root),
@@ -426,7 +433,7 @@ def _attempt(
     with solve_log.open("wb") as log:
         process = subprocess.Popen(
             command,
-            cwd=ROOT,
+            cwd=root_dir,
             env=env,
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -444,7 +451,7 @@ def _attempt(
         rc = process.wait()
     _bounded_log(solve_log)
     solve_latency_s = time.monotonic() - started
-    containers_removed = _cleanup_containers(run_id, env)
+    containers_removed = _cleanup_containers(run_id, env, root_dir)
     trajectory_path = solve_dir / task_id / f"{task_id}.traj.json"
     info, trajectory_found = _trajectory(trajectory_path)
     exit_status = info.get("exit_status")
@@ -461,6 +468,7 @@ def _attempt(
         run_dir,
         env,
         paths.eval_dataset if paths is not None else "SWE-bench/SWE-bench",
+        root_dir,
     )
     if eval_status == "skipped_empty_patch":
         success = False
@@ -589,6 +597,13 @@ class DispatchGuard:
                 self._stop_path,
                 {"task_id": task_id, "reason": "cost_accounting_incomplete", "ts": _utc_now()},
             )
+
+    def stop(self, task_id: str, reason: str) -> None:
+        with self._lock:
+            if self._stopped:
+                return
+            self._stopped = True
+            append_jsonl(self._stop_path, {"task_id": task_id, "reason": reason, "ts": _utc_now()})
 
     def release(self) -> None:
         with self._lock:

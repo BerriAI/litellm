@@ -203,7 +203,24 @@ def attempt_from_mapping(value: object) -> TaskAttempt:
 
 
 def read_attempts_jsonl(path: Path) -> tuple[TaskAttempt, ...]:
-    return tuple(attempt_from_mapping(json.loads(line)) for line in path.read_text().splitlines() if line.strip())
+    if not path.exists():
+        return ()
+    rows: Final = tuple(
+        _record_mapping(json.loads(line)) for line in path.read_text().splitlines() if line.strip()
+    )
+    return tuple(
+        attempt_from_mapping(row)
+        for row in rows
+        if row.get("record_type", "attempt") == "attempt"
+    )
+
+
+def _run_rows(path: Path) -> tuple[Mapping[str, object], ...]:
+    if not path.exists():
+        return ()
+    return tuple(
+        _record_mapping(json.loads(line)) for line in path.read_text().splitlines() if line.strip()
+    )
 
 
 def _manifest_category_ids(value: object) -> tuple[str, ...]:
@@ -319,7 +336,6 @@ def aggregate_profiles(
             attempt.key.category,
         )
         for attempt in attempts
-        if not attempt.is_infra
     )
     cohort_groups: Final = groupby(sorted(cohorts), key=lambda row: row[:-1])
     if any(len({row[-1] for row in rows}) > 1 for _, rows in cohort_groups):
@@ -332,14 +348,20 @@ def aggregate_profiles(
 
 
 def _versions_match(profile: Profile, versions: ProfileVersions) -> bool:
-    expected_model_version: Final = dict(versions.model_versions).get(profile.key.model_alias)
-    expected_deployment_id: Final = dict(versions.model_deployments).get(profile.key.model_alias)
+    model_versions_match: Final = (
+        not versions.model_versions
+        or (profile.key.model_alias, profile.key.returned_model_version) in versions.model_versions
+    )
+    deployments_match: Final = (
+        not versions.model_deployments
+        or (profile.key.model_alias, profile.key.deployment_id) in versions.model_deployments
+    )
     return (
         profile.key.harness_version == versions.harness_version
         and profile.key.budget_version == versions.budget_version
         and profile.key.harness_config_hash == versions.harness_config_hash
-        and profile.key.returned_model_version == expected_model_version
-        and (expected_deployment_id is None or profile.key.deployment_id == expected_deployment_id)
+        and model_versions_match
+        and deployments_match
     )
 
 
@@ -398,6 +420,7 @@ def compile_map(
     tau: float = 0.80,
     min_evidence: int = 13,
     final: bool = False,
+    eligible: frozenset[tuple[str, str | None]] | None = None,
 ) -> dict[str, object]:
     _validate_thresholds(tau, min_evidence)
     categories: Final = (
@@ -428,6 +451,7 @@ def compile_map(
                     category_profiles[category],
                     tau,
                     min_evidence=min_evidence,
+                    eligible=eligible,
                 )
             )
             for category in categories
@@ -446,8 +470,47 @@ def compile_map(
             "harness_version": versions.harness_version,
             "budget_version": versions.budget_version,
             "harness_config_hash": versions.harness_config_hash,
-            "model_versions": dict(versions.model_versions),
-            "model_deployments": dict(versions.model_deployments),
+            "model_versions": {
+                alias: tuple(sorted({profile.key.returned_model_version for profile in matching
+                                     if profile.key.model_alias == alias}))
+                for alias in sorted({profile.key.model_alias for profile in matching})
+            },
+            "model_deployments": {
+                alias: tuple(sorted({profile.key.deployment_id for profile in matching
+                                     if profile.key.model_alias == alias}))
+                for alias in sorted({profile.key.model_alias for profile in matching})
+            },
+            "observed_model_cohorts": tuple(
+                {
+                    "model_alias": alias,
+                    "returned_model_version": returned_model,
+                    "deployment_id": deployment_id or None,
+                }
+                for alias, returned_model, deployment_id in sorted(
+                    {
+                        (profile.key.model_alias, profile.key.returned_model_version, profile.key.deployment_id)
+                        for profile in matching
+                    }
+                )
+            ),
+            "version_changes": tuple(
+                {
+                    "model_alias": alias,
+                    "returned_model_versions": versions_for_alias,
+                    "deployment_ids": deployments_for_alias,
+                }
+                for alias, versions_for_alias, deployments_for_alias in (
+                    (
+                        alias,
+                        tuple(sorted({profile.key.returned_model_version for profile in matching
+                                      if profile.key.model_alias == alias})),
+                        tuple(sorted({profile.key.deployment_id for profile in matching
+                                      if profile.key.model_alias == alias})),
+                    )
+                    for alias in sorted({profile.key.model_alias for profile in matching})
+                )
+                if len(versions_for_alias) > 1 or len(deployments_for_alias) > 1
+            ),
         },
         "profiles": [
             asdict(profile)
@@ -468,16 +531,147 @@ def compile_map_from_profiling_runs(
 ) -> dict[str, object]:
     _validate_thresholds(tau, min_evidence)
     selected_task_ids, actual_manifest_sha256 = manifest_selection(manifest_path, expected_manifest_sha256)
+    rows: Final = _run_rows(path)
+    for row in rows:
+        row_task_id: Final = row.get("task_id")
+        row_manifest_sha256: Final = row.get("manifest_sha256")
+        if row.get("record_type", "attempt") in {
+            "attempt",
+            "preflight_passed",
+            "preflight_failed",
+            "quarantined_attempt",
+        }:
+            if not isinstance(row_task_id, str) or not isinstance(row_manifest_sha256, str):
+                raise ValueError("profiling run records must include task_id and manifest_sha256")
+            validate_manifest_attempt(
+                row_task_id,
+                row_manifest_sha256,
+                selected_task_ids,
+                actual_manifest_sha256,
+            )
     attempts: Final = read_attempts_jsonl(path)
-    for attempt in attempts:
-        validate_manifest_attempt(
-            attempt.task_id,
-            attempt.manifest_sha256,
-            selected_task_ids,
-            actual_manifest_sha256,
+    observed_versions: Final = tuple(
+        sorted({(attempt.key.model_alias, attempt.key.returned_model_version) for attempt in attempts})
+    )
+    observed_deployments: Final = tuple(
+        sorted(
+            {
+                (attempt.key.model_alias, attempt.key.deployment_id)
+                for attempt in attempts
+            }
         )
+    )
+    effective_versions: Final = ProfileVersions(
+        versions.harness_version,
+        versions.budget_version,
+        versions.harness_config_hash,
+        observed_versions,
+        observed_deployments,
+    )
     profiles: Final = aggregate_profiles(attempts, tau, min_evidence)
-    return compile_map(tenant_id, versions, profiles, tau, min_evidence, final=False)
+    preflight: Final = tuple(row for row in rows if row.get("record_type") in {"preflight_passed", "preflight_failed"})
+    preflight_by_task: Final = {
+        str(row["task_id"]): row
+        for row in preflight
+        if isinstance(row.get("task_id"), str)
+    }
+    task_order: Final = tuple(selected_task_ids)
+    expected_models: Final = {
+        task_id: (
+            ("haiku-4.5", "sonnet-5", "opus-5")[index % 3: ]
+            + ("haiku-4.5", "sonnet-5", "opus-5")[: index % 3]
+        )
+        for index, task_id in enumerate(task_order)
+    }
+    attempt_rows: Final = tuple(row for row in rows if row.get("record_type", "attempt") == "attempt")
+    completion: Final = _map_completeness(task_order, expected_models, preflight_by_task, attempt_rows)
+    quarantined: Final = tuple(
+        dict(row)
+        for row in rows
+        if row.get("record_type") == "quarantined_attempt"
+    )
+    failed_preflights: Final = tuple(
+        dict(row)
+        for row in preflight
+        if row.get("record_type") == "preflight_failed"
+    )
+    return (
+        compile_map(
+            tenant_id,
+            effective_versions,
+            profiles,
+            tau,
+            min_evidence,
+            final=completion["final"] is True,
+            eligible=frozenset(
+                (attempt.key.model_alias, attempt.key.deployment_id or None)
+                for attempt in attempts
+                if attempt.key.model_alias in {"haiku-4.5", "sonnet-5", "opus-5"}
+            ),
+        )
+        | {
+            "infra_deficits": completion["infra_deficits"],
+            "preflight_incomplete": completion["preflight_incomplete"],
+            "preflight_failed": failed_preflights,
+            "quarantined_attempts": quarantined,
+        }
+    )
+
+
+def _map_completeness(
+    task_order: tuple[str, ...],
+    expected_models: Mapping[str, tuple[str, ...]],
+    preflight_by_task: Mapping[str, Mapping[str, object]],
+    attempt_rows: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    preflight_incomplete: Final = tuple(task_id for task_id in task_order if task_id not in preflight_by_task)
+    passed_task_ids: Final = tuple(
+        task_id
+        for task_id in task_order
+        if preflight_by_task.get(task_id, {}).get("record_type") == "preflight_passed"
+    )
+    grouped_rows: Final = {
+        (str(row.get("task_id")), str(row.get("model_alias", row.get("model")))): tuple(
+            candidate
+            for candidate in attempt_rows
+            if candidate.get("task_id") == row.get("task_id")
+            and candidate.get("model_alias", candidate.get("model")) == row.get("model_alias", row.get("model"))
+        )
+        for row in attempt_rows
+    }
+    infra_deficits: Final = tuple(
+        {
+            "task_id": task_id,
+            "model_alias": model_alias,
+            "error_class": latest.get("error_class"),
+            "cost_usd": latest.get("cost_usd"),
+        }
+        for task_id in passed_task_ids
+        for model_alias in expected_models[task_id]
+        for rows in (grouped_rows.get((task_id, model_alias), ()),)
+        if rows
+        for latest in (rows[-1],)
+        if latest.get("is_infra") is True
+        and latest.get("retry_eligible") is False
+        and not any(row.get("is_infra") is False for row in rows)
+    )
+    incomplete_pairs: Final = tuple(
+        (task_id, model_alias)
+        for task_id in passed_task_ids
+        for model_alias in expected_models[task_id]
+        if not any(
+            row.get("is_infra") is False
+            for row in grouped_rows.get((task_id, model_alias), ())
+        )
+        and (task_id, model_alias) not in {
+            (str(row["task_id"]), str(row["model_alias"])) for row in infra_deficits
+        }
+    )
+    return {
+        "final": not preflight_incomplete and not incomplete_pairs,
+        "preflight_incomplete": preflight_incomplete,
+        "infra_deficits": infra_deficits,
+    }
 
 
 def _validate_thresholds(tau: float, min_evidence: int) -> None:
