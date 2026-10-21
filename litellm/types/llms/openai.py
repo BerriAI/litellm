@@ -64,6 +64,7 @@ from openai.types.responses.response_create_params import (
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
+from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 from pydantic import (
     ConfigDict,
     Discriminator,
@@ -1487,6 +1488,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionToolCall
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
+            | ResponseReasoningItem
             | OutputToolSearchCall
         ]
     )
