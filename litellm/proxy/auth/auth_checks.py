@@ -5491,6 +5491,10 @@ async def stamp_matched_model_access_groups(
     return matched
 
 
+def _log_safe(value: object) -> str:
+    return "".join(ch for ch in str(value).replace("\r", "").replace("\n", "") if ch.isprintable())
+
+
 async def _models_granted_by_groups_only(
     model: str | Sequence[str],
     access_group_ids: Sequence[str],
@@ -5507,9 +5511,9 @@ async def _models_granted_by_groups_only(
         verbose_proxy_logger.warning(
             "%s model access denied, access groups could not be loaded. model=%s access_group_ids=%s error=%s",
             object_type,
-            model,
-            list(access_group_ids),
-            e,
+            _log_safe(model),
+            _log_safe(list(access_group_ids)),
+            _log_safe(e),
         )
         _raise_model_access_denied(
             model=str(model),

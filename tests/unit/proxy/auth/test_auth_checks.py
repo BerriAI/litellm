@@ -2105,6 +2105,26 @@ async def test_group_load_failure_is_logged_with_group_ids_and_without_the_token
 
 
 @pytest.mark.asyncio
+async def test_group_load_failure_log_cannot_be_split_by_user_controlled_model_or_group_id(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    forged_group_id: Final = "ag-1\r\nFORGED LOG LINE\x1b[31m"
+    prisma: Final = _use_group_store(monkeypatch, {forged_group_id: RuntimeError("database unreachable")})
+    verbose_proxy_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level("WARNING", logger=verbose_proxy_logger.name), pytest.raises(ProxyException):
+            await _call_model_check(
+                "key", "gpt-4\nFORGED MODEL LINE", _router_deploying("gpt-4"), prisma, [], [forged_group_id]
+            )
+    finally:
+        verbose_proxy_logger.removeHandler(caplog.handler)
+
+    messages: Final = {record.getMessage() for record in caplog.records if "access groups" in record.getMessage()}
+    assert len(messages) == 1
+    assert not any(ch in next(iter(messages)) for ch in "\r\n\x1b")
+
+
+@pytest.mark.asyncio
 async def test_group_restricted_key_is_held_to_its_groups_on_the_request_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
