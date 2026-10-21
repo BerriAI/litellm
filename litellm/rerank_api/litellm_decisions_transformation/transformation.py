@@ -227,6 +227,12 @@ class LiteLLMDecisionsRerankConfig:
         provider: str,
         strategy: Literal["pointwise", "multiple_choice"],
     ) -> DecisionRerankRequest:
+        if params.get("stream") is True:
+            raise litellm.UnsupportedParamsError(
+                message="Decision reranking does not support stream=True",
+                model=model,
+                llm_provider=provider,
+            )
         unsupported: Final = tuple(key for key in _UNSUPPORTED if params.get(key) is not None)
         if unsupported:
             raise litellm.UnsupportedParamsError(
