@@ -18,7 +18,7 @@ _GPT_SERIES_VERSION: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?(?=[.-]|$)")
 
 DROP_REFUSED_REASONING_EFFORT_WARNING: Final = (
     "Dropping %s=%r for model=%r (drop_params=True) because the model map does not mark that level supported for "
-    "%r. If the deployment supports it, add the level to model_info.reasoning_effort_levels, or set "
+    "%r. If the deployment supports it, list every level it supports in model_info.reasoning_effort_levels, or set "
     "model_info.base_model when the deployment name is not its underlying model."
 )
 

@@ -2389,7 +2389,7 @@ class TestResponsesSurfaceSharesTheEffortRule:
         assert mapped["reasoning"] == {"summary": "auto"}
 
     def test_dropping_a_refused_effort_logs_one_warning_naming_the_level_and_the_fix(
-        self, local_model_cost_map, caplog: pytest.LogCaptureFixture
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
     ) -> None:
         refused: Final = next(
             level
@@ -2412,7 +2412,7 @@ class TestResponsesSurfaceSharesTheEffortRule:
         )
 
     def test_dropping_reasoning_for_a_model_without_supports_reasoning_logs_one_warning(
-        self, local_model_cost_map, caplog: pytest.LogCaptureFixture
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
             mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
@@ -2426,7 +2426,9 @@ class TestResponsesSurfaceSharesTheEffortRule:
         assert len(drop_warnings) == 1
         assert all(fragment in drop_warnings[0] for fragment in ("'medium'", "gpt-4o", "supports_reasoning"))
 
-    def test_a_forwarded_effort_logs_no_drop_warning(self, local_model_cost_map, caplog: pytest.LogCaptureFixture) -> None:
+    def test_a_forwarded_effort_logs_no_drop_warning(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
             mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
                 response_api_optional_params={"reasoning": {"effort": "medium"}},
