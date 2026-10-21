@@ -1496,9 +1496,6 @@ class _CallbackCapabilities:
     # every string entry in ``litellm.callbacks``.
     resolved_callbacks: tuple[object, ...] = field(default_factory=tuple)
     listed_models_filters: tuple[CustomLogger, ...] = field(default_factory=tuple)
-    # Resolved callbacks that override ``async_post_call_streaming_hook``, in
-    # ``litellm.callbacks`` order. The per-chunk loop only visits these, since
-    # every other callback's per-chunk hook is the base no-op.
     streaming_chunk_overrides: tuple[CustomLogger, ...] = field(default_factory=tuple)
 
 
@@ -1508,13 +1505,6 @@ def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
 
 
 def _overrides_streaming_chunk_hook(callback: CustomLogger) -> bool:
-    # Walk the MRO for ``async_post_call_streaming_hook`` rather than
-    # using the leaf-class ``__dict__`` check used by the other flags:
-    # before this PR the hook was unconditionally invoked, so a
-    # callback that inherits an override from an intermediate parent
-    # (e.g. a vendor base class providing the override, with the
-    # registered class adding nothing else) MUST still be detected.
-    # A leaf-class miss here would silently drop the inherited hook.
     base_streaming_hook: Final = CustomLogger.async_post_call_streaming_hook
     cls_streaming_hook: Final = getattr(type(callback), "async_post_call_streaming_hook", base_streaming_hook)
     return getattr(cls_streaming_hook, "__func__", cls_streaming_hook) is not getattr(
@@ -3313,8 +3303,7 @@ class ProxyLogging:
     def has_streaming_chunk_hook_overrides() -> bool:
         """True iff any callback overrides ``async_post_call_streaming_hook``
         (the per-chunk hook, distinct from the iterator wrapper)."""
-        caps: Final = ProxyLogging.callback_capabilities()
-        return caps.has_streaming_chunk_override or caps.has_guardrail
+        return ProxyLogging.callback_capabilities().has_streaming_chunk_override
 
     def needs_iterator_wrap(self) -> bool:
         """Whether ``async_data_generator`` needs to wrap the upstream stream

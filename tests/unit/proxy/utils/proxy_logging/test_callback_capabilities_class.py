@@ -201,10 +201,18 @@ def test_has_streaming_chunk_hook_overrides_truth_table(monkeypatch, mock_callba
     monkeypatch.setattr(litellm, "callbacks", [_OverridesIterator()])
     ProxyLogging._callback_capabilities_cache.clear()
     snapshot["only_iterator_false"] = ProxyLogging.has_streaming_chunk_hook_overrides()
+    monkeypatch.setattr(litellm, "callbacks", [CustomGuardrail(guardrail_name="g", event_hook="pre_call")])
+    ProxyLogging._callback_capabilities_cache.clear()
+    snapshot["request_only_guardrail_false"] = ProxyLogging.has_streaming_chunk_hook_overrides()
+    monkeypatch.setattr(litellm, "callbacks", [_PerChunkGuardrail(guardrail_name="g", event_hook="post_call")])
+    ProxyLogging._callback_capabilities_cache.clear()
+    snapshot["per_chunk_guardrail_true"] = ProxyLogging.has_streaming_chunk_hook_overrides()
     assert snapshot == {
         "empty_false": False,
         "per_chunk_override_true": True,
         "only_iterator_false": False,
+        "request_only_guardrail_false": False,
+        "per_chunk_guardrail_true": True,
     }
 
 
