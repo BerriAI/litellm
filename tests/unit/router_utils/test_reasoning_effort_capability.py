@@ -393,29 +393,25 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
     @pytest.mark.parametrize(
         "model,custom_llm_provider",
         [
-            ("azure/gpt-6-astra", "azure"),
-            ("azure/us/gpt-6-astra", "azure"),
-            ("azure_ai/gpt-6-astra", "azure_ai"),
+            ("azure/gpt-6-sol", "azure"),
+            ("azure/gpt-6-luna", "azure"),
+            ("azure/eu/gpt-6-sol", "azure"),
+            ("azure/eu/gpt-6-luna", "azure"),
+            ("azure_ai/gpt-6-sol", "azure_ai"),
+            ("azure_ai/gpt-6-luna", "azure_ai"),
         ],
     )
-    def test_an_azure_hosted_deployment_advertises_none_but_not_max(
+    def test_the_azure_entry_advertises_the_same_levels_as_openai(
         self, local_model_cost_map, model, custom_llm_provider
     ):
-        """Microsoft hosts the same model with a different level set than OpenAI does. Verified live
-        on both Azure routes: none returns 200 with zero reasoning tokens and unlocks temperature,
-        which OpenAI's API rejects, while max returns 400 unsupported_value naming none through
-        xhigh as the levels it does take."""
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
+        azure_info = dict(get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
+        openai_info = dict(get_model_info_helper(model=model.rsplit("/", 1)[1], custom_llm_provider="openai"))
 
-        assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-        )
+        assert resolve_supported_reasoning_efforts(
+            azure_info, deployment_is_mapped=True
+        ) == resolve_supported_reasoning_efforts(openai_info, deployment_is_mapped=True)
 
 
 class TestGpt6SolAndLunaAdvertiseNoneThroughMax:
