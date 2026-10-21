@@ -4,7 +4,7 @@
 
 `lower.rs` is the only code that knows both the wire types and `litellm-cost`. It lowers an `EntryWire` into `Prices`, `Adjustments` and `Model` and checks the rules that span keys, such as one price per meter and condition, contiguous tiers, no suffix inside a block, and off-peak needing hours and prices. Lowering only goes one way. Nothing turns `Prices` back into JSON, since the raw fields are kept
 
-`catalog.rs` reads the document, indexes aliases and runs the checks across entries. A bad entry keeps its raw fields and its problems are listed in `Catalog::problems`. Deciding what to do with them is the caller's job
+`catalog.rs` reads the document, indexes aliases and runs the checks across entries. A bad entry keeps its raw fields and its problems are listed in `Catalog::problems`. Deciding what to do with them is the caller's job. `Catalog::written` gives back every top-level key and value as the document wrote them, in document order, which is what `litellm.model_cost` is built from
 
 ## Prices
 
@@ -16,4 +16,4 @@ A new `N`, image size or resolution in an existing key shape parses with no Rust
 
 ## Tests
 
-Tests that read the checked-in `model_prices_and_context_window.json` are `#[ignore]` until a host serves the catalog. Fixture tests always run
+`BUNDLED_REGISTRY` embeds the root `model_prices_and_context_window.json`, so the tests over it fail a JSON change with a bad value or a key no type reads

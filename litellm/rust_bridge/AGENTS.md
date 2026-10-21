@@ -43,6 +43,7 @@
 # Fallback
 
 - Native admission may pick Python before execution starts
+- The model cost map has no Python fallback. `litellm_core_utils/get_model_cost_map.py` imports `_native.ModelRegistry` directly, so `import litellm` needs the extension
 - A failure after execution starts is terminal and never triggers fallback
 - Creating an unstarted native coroutine acquires no clients or credentials and captures no execution context
 

@@ -4,16 +4,17 @@ count actual model entries, not reserved meta keys) and the extraction of the
 ``fallback_generalizations`` block out of the raw map.
 """
 
-import asyncio, importlib, importlib.resources as importlib_get_model, json, litellm
+import asyncio, importlib, json, litellm
+import logging
 import os
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
 import boto3
 import pytest
-from pydantic import ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils import get_model_cost_map as get_model_cost_map_module
@@ -33,15 +34,16 @@ from litellm.litellm_core_utils.get_model_cost_map import (
 )
 
 
+_ROOT_COST_MAP_PATH: Final = os.path.join(os.path.dirname(__file__), "../../../model_prices_and_context_window.json")
+
+
 def _load_root_cost_map() -> dict:
-    path = os.path.join(os.path.dirname(__file__), "../../../model_prices_and_context_window.json")
-    with open(path) as f:
+    with open(_ROOT_COST_MAP_PATH) as f:
         return json.load(f)
 
 
 def _bundled_blob_id() -> str:
-    path = os.path.join(os.path.dirname(__file__), "../../../litellm/model_prices_and_context_window_backup.json")
-    with open(path, "rb") as f:
+    with open(_ROOT_COST_MAP_PATH, "rb") as f:
         return git_blob_id(f.read())
 
 
@@ -1026,7 +1028,7 @@ class TestGetModelCostMapFallback:
         assert fetches == 1
         assert result.keys() == _backup_keys()
         assert source["source"] == "local"
-        assert source["fallback_reason"] == f"Remote fetch failed: expected a JSON object from {_URL}, got list"
+        assert source["fallback_reason"].startswith(f"Remote fetch failed: invalid model cost map from {_URL}")
 
     def test_should_fallback_when_fetched_map_shrinks_dramatically(self, monkeypatch):
         """When upstream returns far fewer models than backup, should fall back."""
@@ -1239,26 +1241,63 @@ def test_get_model_cost_map():
     except Exception as e:
         pytest.fail(f"An exception occurred: {e}")
 
-@pytest.mark.usefixtures(
-    "_vcr_outcome_gate_local_testing",
-    "isolate_litellm_state",
-    "setup_and_teardown_local_testing",
-)
-def test_get_backup_model_cost_map():
-    with importlib_get_model.open_text("litellm", "model_prices_and_context_window_backup.json") as f:
-        print("inside backup")
-        content = json.load(f)
-        print("content", content)
+
+def test_the_embedded_map_is_the_root_json_exactly_as_python_reads_it():
+    loaded: Final = GetModelCostMap.load_local_model_cost_map()
+    expected: Final = _load_root_cost_map()
+
+    assert type(loaded) is dict
+    assert all(type(entry) is dict for entry in loaded.values())
+    assert loaded == expected
+    assert json.dumps(loaded) == json.dumps(expected)
+    assert GetModelCostMap.read_local_model_cost_map_bytes() == Path(_ROOT_COST_MAP_PATH).read_bytes()
 
 
-@pytest.mark.parametrize("backup", [b'["only-in-the-backup"]', b'"only-in-the-backup"', b"null"])
-def test_a_bundled_backup_that_is_not_a_json_object_is_rejected_without_quoting_it(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backup: bytes
-):
-    (tmp_path / "model_prices_and_context_window_backup.json").write_bytes(backup)
-    monkeypatch.setattr(get_model_cost_map_module, "files", lambda _package: tmp_path)
+def _read_every_key(model_cost: dict) -> dict[str, tuple[object, object, object]]:
+    get_model_cost_map_module.adopt_model_cost_map(model_cost)
+    litellm.get_model_info.cache_clear()
 
-    with pytest.raises(ValidationError) as rejected:
-        GetModelCostMap.load_local_model_cost_map_with_revision()
+    def outcome(read: Callable[[], object]) -> object:
+        try:
+            return read()
+        except Exception as error:  # noqa: BLE001  # the exception type is the behavior being compared
+            return type(error).__name__
 
-    assert "only-in-the-backup" not in str(rejected.value)
+    return {
+        key: (
+            outcome(lambda: litellm.get_model_info(key)),
+            outcome(lambda: litellm.cost_per_token(model=key, prompt_tokens=1000, completion_tokens=100)),
+            model_cost[key],
+        )
+        for key in model_cost
+    }
+
+
+@pytest.mark.usefixtures("isolate_litellm_state")
+def test_every_key_reads_the_same_as_the_json_parsed_map(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    from_json: Final = _read_every_key(_finalize_model_cost_map(_load_root_cost_map()))
+    native: Final = _read_every_key(get_model_cost_map(url=_URL))
+
+    assert native.keys() == from_json.keys()
+    assert [key for key in native if native[key] != from_json[key]] == []
+
+
+@pytest.mark.asyncio
+async def test_a_fetched_map_serves_a_bad_entry_as_written_and_logs_it_by_model_and_key():
+    edited = json.loads(_real_map_bytes())
+    edited["gpt-5.4-mini"]["mode"] = "telepathy"
+    client, _ = _mock_client([httpx.Response(200, content=json.dumps(edited).encode())])
+    records: Final[list[logging.LogRecord]] = []
+    handler: Final = logging.Handler()
+    handler.emit = records.append
+    logger: Final = logging.getLogger("LiteLLM")
+    logger.addHandler(handler)
+    try:
+        result = await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=client)
+    finally:
+        logger.removeHandler(handler)
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert result.model_cost_map["gpt-5.4-mini"]["mode"] == "telepathy"
+    assert [record for record in records if "gpt-5.4-mini.mode" in record.getMessage()]

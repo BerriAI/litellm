@@ -119,3 +119,7 @@ GIL handling to `litellm-host-python`.
 - `cargo test --workspace` must compile this crate.
 - Python tests must cover bridge disabled, bridge enabled, and module-missing
   fallback behavior for every exposed route.
+- `ModelRegistry` is the one export with no module-missing fallback. `import
+  litellm` builds `litellm.model_cost` from it, so the package does not import
+  without `_native`, and every CI job that runs litellm from source builds or
+  installs the extension first.

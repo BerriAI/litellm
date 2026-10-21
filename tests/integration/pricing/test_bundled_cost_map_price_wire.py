@@ -13,7 +13,7 @@ _API_KEY: Final = "synthetic-openai-key"
 _PROMPT_TOKENS: Final = 1000
 _COMPLETION_TOKENS: Final = 500
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
-_PACKAGED_PRICES: Final = Path(__file__).resolve().parents[3] / "litellm" / "model_prices_and_context_window_backup.json"
+_PACKAGED_PRICES: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
 _REPLY: Final = json.dumps(
     {
         "id": "chatcmpl-bundled-price",

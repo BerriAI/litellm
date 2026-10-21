@@ -9,10 +9,8 @@ return ``False`` even though the canonical ``deepseek-chat`` entry has the
 field set to ``True``.
 """
 
-import json
-import os
-
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.utils import (
     supports_factory,
 )
@@ -22,28 +20,18 @@ from litellm.utils import (
 # ---------------------------------------------------------------------------
 
 
-def _load_backup_json() -> dict:
-    """Load the backup JSON directly from disk."""
-    backup_path = os.path.join(
-        os.path.dirname(litellm.__file__),
-        "model_prices_and_context_window_backup.json",
-    )
-    with open(backup_path, encoding="utf-8") as f:
-        return json.load(f)
-
-
 class TestDeepSeekModelCostEntries:
     """Verify that provider-prefixed DeepSeek entries contain the same
     capability flags as their bare-name counterparts in the JSON files."""
 
-    def test_deepseek_chat_max_input_tokens_matches_bare_in_backup(self):
-        data = _load_backup_json()
+    def test_deepseek_chat_max_input_tokens_matches_bare_in_bundled_map(self):
+        data = GetModelCostMap.load_local_model_cost_map()
         bare = data.get("deepseek-chat", {})
         prefixed = data.get("deepseek/deepseek-chat", {})
         assert prefixed.get("max_input_tokens") == bare.get("max_input_tokens")
 
-    def test_deepseek_reasoner_max_output_tokens_matches_bare_in_backup(self):
-        data = _load_backup_json()
+    def test_deepseek_reasoner_max_output_tokens_matches_bare_in_bundled_map(self):
+        data = GetModelCostMap.load_local_model_cost_map()
         bare = data.get("deepseek-reasoner", {})
         prefixed = data.get("deepseek/deepseek-reasoner", {})
         assert prefixed.get("max_output_tokens") == bare.get("max_output_tokens")

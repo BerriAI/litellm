@@ -1,8 +1,8 @@
 """
 Pulls the cost + context window + provider route for known models from https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
 
-This can be disabled by setting the LITELLM_LOCAL_MODEL_COST_MAP environment variable to True.
-The ``lite`` and ``litellm-proxy`` CLI entry points also use the bundled map without fetching.
+This can be disabled by setting the LITELLM_LOCAL_MODEL_COST_MAP environment variable to True, which serves the copy
+embedded in the native extension. The ``lite`` and ``litellm-proxy`` CLI entry points also use it without fetching.
 
 ```
 export LITELLM_LOCAL_MODEL_COST_MAP=True
@@ -11,7 +11,6 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 
 import asyncio
 import hashlib
-import json
 import os
 import random
 import sys
@@ -21,14 +20,13 @@ import urllib.parse
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from importlib.resources import files
 from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Protocol, cast  # noqa: TID251  # adapts boto3 and botocore's dynamic client responses
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm import verbose_logger
@@ -39,10 +37,10 @@ from litellm.constants import (
 from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
+from litellm.rust_bridge._native import ModelRegistry
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
-_BUNDLED_CATALOG_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 
 
@@ -64,6 +62,18 @@ def git_blob_id(body: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(body) + body, usedforsecurity=False).hexdigest()
 
 
+def _report_problems(registry: ModelRegistry, source: str) -> ModelRegistry:
+    problems: Final = registry.problems()
+    if problems:
+        verbose_logger.warning(
+            "LiteLLM: %d problems in the model cost map from %s, serving every entry as written: %s",
+            len(problems),
+            source,
+            "; ".join(problems),
+        )
+    return registry
+
+
 class GetModelCostMap:
     """
     Handles fetching, validating, and loading the model cost map.
@@ -77,7 +87,7 @@ class GetModelCostMap:
 
     @staticmethod
     def read_local_model_cost_map_bytes() -> bytes:
-        return files("litellm").joinpath("model_prices_and_context_window_backup.json").read_bytes()
+        return ModelRegistry.bundled_bytes()
 
     @staticmethod
     def read_local_model_cost_map_text() -> str:
@@ -85,13 +95,14 @@ class GetModelCostMap:
 
     @staticmethod
     def load_local_model_cost_map_with_revision() -> "ModelCostMapReloaded":
-        body: Final = GetModelCostMap.read_local_model_cost_map_bytes()
-        content: Final = _BUNDLED_CATALOG_ADAPTER.validate_python(json.loads(body))
-        return ModelCostMapReloaded(model_cost_map=content, revision=git_blob_id(body))
+        return ModelCostMapReloaded(
+            model_cost_map=_report_problems(ModelRegistry.bundled(), "the native extension").to_dict(),
+            revision=git_blob_id(GetModelCostMap.read_local_model_cost_map_bytes()),
+        )
 
     @staticmethod
     def load_local_model_cost_map() -> dict:
-        """Load the local backup model cost map bundled with the package."""
+        """Load the model cost map embedded in the native extension."""
         return GetModelCostMap.load_local_model_cost_map_with_revision().model_cost_map
 
     _loaded_catalog: Mapping[str, Mapping[str, object]] = MappingProxyType({})
@@ -313,15 +324,12 @@ def _classify_fetch_error(error: httpx.HTTPError | httpx.InvalidURL, url: str) -
 
 def _classify_fetch_content(content: bytes, url: str, etag: str | None) -> _FetchAttemptOutcome:
     try:
-        parsed: Final[object] = json.loads(content)
+        registry: Final = ModelRegistry.parse(content)
     except ValueError as e:
-        return ModelCostMapReloadUnavailable(reason=f"invalid JSON from {url}: {e}")
-    if not isinstance(parsed, dict):
-        return ModelCostMapReloadUnavailable(reason=f"expected a JSON object from {url}, got {type(parsed).__name__}")
-    model_cost_map: Final = cast(  # cast-ok: JSON object keys are strings by definition
-        dict[str, object], parsed
+        return ModelCostMapReloadUnavailable(reason=f"invalid model cost map from {url}: {e}")
+    return ModelCostMapReloaded(
+        model_cost_map=_report_problems(registry, url).to_dict(), revision=git_blob_id(content), etag=etag
     )
-    return ModelCostMapReloaded(model_cost_map=model_cost_map, revision=git_blob_id(content), etag=etag)
 
 
 def _split_url(url: str) -> urllib.parse.SplitResult | ModelCostMapReloadUnavailable:

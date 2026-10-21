@@ -1,11 +1,10 @@
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use litellm_model_catalog::{
-    Catalog, IntegrityLimits, IntegrityViolation, InvalidDocument, Mode, Problem,
+    BUNDLED_REGISTRY, Catalog, IntegrityLimits, IntegrityViolation, InvalidDocument, Mode, Problem,
 };
 use rstest::{fixture, rstest};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 const ALPHA_FIXTURE: &[u8] = br#"{
     "sample_spec":{"explanation":"example","input_cost_per_token":"not checked"},
@@ -21,6 +20,14 @@ fn fixture_catalog() -> Catalog {
 
 fn catalog(document: Value) -> Catalog {
     Catalog::parse(document.to_string().as_bytes()).unwrap()
+}
+
+fn written(catalog: &Catalog) -> String {
+    let document: Map<String, Value> = catalog
+        .written()
+        .map(|(key, value)| (key.to_owned(), serde_json::to_value(value).unwrap()))
+        .collect();
+    serde_json::to_string(&document).unwrap()
 }
 
 fn problems(catalog: &Catalog) -> Vec<String> {
@@ -91,8 +98,8 @@ fn a_bad_entry_is_reported_by_model_and_key_and_kept_raw() {
     let problems = problems(&catalog);
 
     assert_eq!(problems.len(), 3, "{problems:?}");
-    assert!(problems[0].starts_with("Bad.input_cost_per_token: invalid value"));
-    assert!(problems[1].starts_with("Bad.mode: unknown variant `chatt`"));
+    assert!(problems[0].starts_with("Bad.mode: unknown variant `chatt`"));
+    assert!(problems[1].starts_with("Bad.input_cost_per_token: invalid value"));
     assert_eq!(problems[2], "Worse.litellm_provider is required");
     assert!(catalog.lookup("Good").unwrap().entry.model().is_some());
     let bad = catalog.lookup("Bad").unwrap().entry;
@@ -115,6 +122,10 @@ fn a_bad_entry_is_reported_by_model_and_key_and_kept_raw() {
     "a.aliases: invalid type: string \"bad\", expected a sequence"
 )]
 #[case::entry_not_object(json!({"a": 1}), "a must be a JSON object")]
+#[case::fallback_rules_missing(
+    json!({"fallback_generalizations": {}, "a": {"litellm_provider": "t"}}),
+    "fallback_generalizations: missing field `rules`"
+)]
 #[case::unknown_timezone(
     json!({"a": {"litellm_provider": "t", "off_peak_pricing": {
         "windows": [{"hours_utc": "00:00-01:00"}],
@@ -201,10 +212,7 @@ enum Malformed {
 #[case::empty(b"{}", Malformed::Empty)]
 #[case::only_sections(br#"{"sample_spec":{}}"#, Malformed::Empty)]
 #[case::invalid_json(b"{", Malformed::Json)]
-#[case::fallback_rules_missing(
-    br#"{"fallback_generalizations":{},"a":{"litellm_provider":"t"}}"#,
-    Malformed::Json
-)]
+#[case::not_an_object(b"[]", Malformed::Json)]
 fn malformed_documents_are_rejected_whole(#[case] body: &[u8], #[case] expected: Malformed) {
     let actual = Catalog::parse(body);
     match expected {
@@ -214,13 +222,20 @@ fn malformed_documents_are_rejected_whole(#[case] body: &[u8], #[case] expected:
 }
 
 #[rstest]
-#[ignore]
-fn the_checked_in_registry_parses_with_no_problems_and_every_key_understood() {
-    let body = std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../model_prices_and_context_window.json"),
-    )
-    .unwrap();
-    let catalog = Catalog::parse(&body).unwrap();
+fn written_is_the_document_in_order_including_sections_and_bad_entries() {
+    let body = concat!(
+        r#"{"b":{"litellm_provider":"t","z":1,"a":null},"sample_spec":{"x":"y"},"n":4,"#,
+        r#""fallback_generalizations":{"rules":"bad"},"a":{"mode":"chatt","price":1.0}}"#
+    );
+    let catalog = Catalog::parse(body.as_bytes()).unwrap();
+
+    assert_eq!(written(&catalog), body);
+    assert_eq!(catalog.model_count(), 2);
+}
+
+#[rstest]
+fn the_bundled_registry_parses_with_no_problems_and_every_key_understood() {
+    let catalog = Catalog::parse(BUNDLED_REGISTRY).unwrap();
     let problems: Vec<&Problem> = catalog.problems().iter().collect();
     let unrecognized: Vec<_> = catalog.unrecognized().collect();
 
@@ -237,4 +252,14 @@ fn the_checked_in_registry_parses_with_no_problems_and_every_key_understood() {
     // Snapshot from 2026-09-23, an independent baseline that catches catalog shrinkage.
     const REFERENCE_MODEL_COUNT: usize = 4303;
     assert!(catalog.model_count() as f64 >= REFERENCE_MODEL_COUNT as f64 * 0.9);
+}
+
+#[rstest]
+fn the_bundled_registry_is_written_back_as_it_was_read() {
+    let document: Value = serde_json::from_slice(BUNDLED_REGISTRY).unwrap();
+
+    assert_eq!(
+        written(&Catalog::parse(BUNDLED_REGISTRY).unwrap()),
+        serde_json::to_string(&document).unwrap()
+    );
 }

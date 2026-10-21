@@ -42,7 +42,7 @@ jobs:
         id: rust-bridge-key
         if: steps.changes.outputs.decision != 'skip'
         env:
-          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'pyproject.toml') }}
+          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml') }}
         run: echo "key=$RUST_BRIDGE_CACHE_KEY" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
@@ -991,7 +991,6 @@ jobs:
           UNIT_SHARD: ${{ matrix.shard }}
           SCHEMA_BASE_REF: origin/${{ github.event.repository.default_branch }}
         run: |
-          diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
             .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
           else
@@ -1300,6 +1299,8 @@ jobs:
           done
   openai-sdk-compat:
     name: OpenAI ${{ matrix.openai-version }} compatibility
+    needs: rust-bridge
+    if: ${{ !cancelled() }}
     permissions:
       contents: read
       pull-requests: read
@@ -1336,10 +1337,17 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Set up the Rust build
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/rust-bridge
+        with:
+          artifact: ${{ needs.rust-bridge.outputs.artifact }}
+
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group dev --group proxy-dev --extra proxy --no-install-workspace
+          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
           uv pip install "openai==${OPENAI_VERSION:?}" --exclude-newer-package openai=2026-10-07T00:00:00Z
           uv run --no-sync python -c 'import os, openai; assert openai.__version__ == os.environ["OPENAI_VERSION"], openai.__version__'
 

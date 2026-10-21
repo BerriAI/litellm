@@ -1,17 +1,11 @@
-import json
-from functools import lru_cache
-from pathlib import Path
 from typing import Final
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
-
-REPO_ROOT = Path(__file__).parents[2]
-MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
-BACKUP_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
 FLEX_LONG_CONTEXT = {
     "gpt-5.4": {
@@ -103,12 +97,6 @@ def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     litellm.add_known_models()
 
 
-@lru_cache(maxsize=2)
-def _load(path: Path) -> dict[str, dict[str, object]]:
-    with open(path) as f:
-        return json.load(f)
-
-
 LONG_CONTEXT_PROMPT_TOKENS = 300_000
 COMPLETION_TOKENS = 1_000
 
@@ -127,9 +115,8 @@ TIERED_COST_CASES = [
 ]
 
 
-@pytest.mark.parametrize("path", (MAIN_PATH, BACKUP_PATH), ids=("main", "backup"))
-def test_catalogs_contain_expected_tiered_long_context_rates(path: Path) -> None:
-    catalog: Final = _load(path)
+def test_catalog_contains_expected_tiered_long_context_rates() -> None:
+    catalog: Final = GetModelCostMap.load_local_model_cost_map()
 
     assert {model: {key: catalog[model][key] for key in rates} for model, rates in EXPECTED.items()} == EXPECTED, (
         "gpt-6-astra ultrafast rates per https://developers.openai.com/api/docs/pricing (2026-09-29)"

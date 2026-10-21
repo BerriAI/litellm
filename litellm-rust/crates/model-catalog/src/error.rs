@@ -24,6 +24,11 @@ pub enum IntegrityViolation {
 pub enum Problem {
     #[error("{model} must be a JSON object")]
     NotAnObject { model: String },
+    #[error("fallback_generalizations: {error}")]
+    FallbackGeneralizations {
+        #[source]
+        error: serde_json::Error,
+    },
     #[error("{model}.{problem}")]
     Entry {
         model: String,
