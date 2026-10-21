@@ -76988,5 +76988,35 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "wandb/reflection/Beam-1.0-501B-A23B": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "wandb",
+        "max_input_tokens": 1049000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://www.coreweave.com/products/coreweave-forge/serverless-inference",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "wandb/zai-org/GLM-5.3": {
+        "cache_read_input_token_cost": 1.9e-07,
+        "input_cost_per_token": 1.2e-06,
+        "litellm_provider": "wandb",
+        "max_input_tokens": 1049000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://www.coreweave.com/products/coreweave-forge/serverless-inference",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
     }
 }
