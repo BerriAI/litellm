@@ -4,7 +4,7 @@ export interface PricingCalculatorProps {
 }
 
 export interface PricingFormValues {
-  model: string;
+  model: string | null;
   input_tokens: number;
   output_tokens: number;
   num_requests_per_day?: number;
@@ -13,7 +13,7 @@ export interface PricingFormValues {
 
 export interface ModelEntry {
   id: string;
-  model: string;
+  model: string | null;
   input_tokens: number;
   output_tokens: number;
   num_requests_per_day?: number;

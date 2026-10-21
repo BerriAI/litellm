@@ -89,6 +89,65 @@ describe("PassThroughEndpointsTable", () => {
     expect(onDeleteClick).toHaveBeenCalledWith("ep-1");
   });
 
+  it("should disable edit and delete for config-defined endpoints", async () => {
+    const user = userEvent.setup();
+    const onEndpointClick = vi.fn();
+    const onDeleteClick = vi.fn();
+    const configEndpoint: passThroughItem = {
+      id: "ep-config",
+      path: "/from-config",
+      target: "https://config.example.com",
+      headers: {},
+      is_from_config: true,
+    };
+    render(
+      <PassThroughEndpointsTable
+        {...defaultProps}
+        endpoints={[configEndpoint]}
+        onEndpointClick={onEndpointClick}
+        onDeleteClick={onDeleteClick}
+      />,
+    );
+
+    await user.click(screen.getByTestId("endpoint-actions-ep-config"));
+    const editItem = await screen.findByTestId("endpoint-action-edit");
+    const deleteItem = await screen.findByTestId("endpoint-action-delete");
+
+    expect(editItem).toHaveAttribute("data-disabled");
+    expect(deleteItem).toHaveAttribute("data-disabled");
+    expect(screen.getByTestId("endpoint-config-hint")).toHaveTextContent(
+      "This endpoint is defined in the config file and cannot be edited or deleted on the dashboard.",
+    );
+
+    await user.click(editItem);
+    await user.click(deleteItem);
+
+    expect(onEndpointClick).not.toHaveBeenCalled();
+    expect(onDeleteClick).not.toHaveBeenCalled();
+  });
+
+  it("should not show the config hint for DB endpoints", async () => {
+    const user = userEvent.setup();
+    render(<PassThroughEndpointsTable {...defaultProps} />);
+
+    await user.click(screen.getByTestId("endpoint-actions-ep-1"));
+    await screen.findByTestId("endpoint-action-delete");
+    expect(screen.queryByTestId("endpoint-config-hint")).not.toBeInTheDocument();
+  });
+
+  it("should label endpoint source as Config or DB", () => {
+    const configEndpoint: passThroughItem = {
+      id: "ep-config",
+      path: "/from-config",
+      target: "https://config.example.com",
+      headers: {},
+      is_from_config: true,
+    };
+    render(<PassThroughEndpointsTable {...defaultProps} endpoints={[...endpoints, configEndpoint]} />);
+    expect(screen.getByText("Config")).toBeInTheDocument();
+    expect(screen.getAllByText("DB")).toHaveLength(2);
+  });
+
   it("should disable edit and delete for endpoints without an id", async () => {
     const user = userEvent.setup();
     const onEndpointClick = vi.fn();

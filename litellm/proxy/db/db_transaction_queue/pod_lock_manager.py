@@ -1,13 +1,17 @@
 import asyncio
 import json
+import logging
 from typing import TYPE_CHECKING, Any, Final
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cache import RedisCache, log_redis_failure
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
 from litellm.types.services import ServiceTypes
+
+POD_LOCK_TARGET: Final = "pod_lock"
 
 if TYPE_CHECKING:
     ProxyLogging = Any
@@ -39,6 +43,7 @@ end
     def get_redis_lock_key(cronjob_id: str) -> str:
         return f"cronjob_lock:{cronjob_id}"
 
+    @with_service_target(POD_LOCK_TARGET)
     async def acquire_lock(
         self,
         cronjob_id: str,
@@ -109,7 +114,7 @@ end
                     )
             return False
         except Exception as e:
-            verbose_proxy_logger.error("Error acquiring Redis lock for %s: %s", cronjob_id, e)
+            log_redis_failure(verbose_proxy_logger, logging.ERROR, f"Error acquiring Redis lock for {cronjob_id}", e)
             return False
 
     async def release_lock(
@@ -151,8 +156,9 @@ end
                     cronjob_id,
                 )
         except Exception as e:
-            verbose_proxy_logger.error("Error releasing Redis lock for %s: %s", cronjob_id, e)
+            log_redis_failure(verbose_proxy_logger, logging.ERROR, f"Error releasing Redis lock for {cronjob_id}", e)
 
+    @with_service_target(POD_LOCK_TARGET)
     async def _compare_and_delete_lock(self, lock_key: str) -> int:
         """
         Atomically delete lock key only if current pod owns it.

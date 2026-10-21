@@ -1,1 +1,0 @@
-# XAI Responses API tests

@@ -41,6 +41,7 @@ from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import canonicalize_url_identity
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.utils import PrismaClient
 
 # The actor the removed discovery write-back stamped rows with.
@@ -118,10 +119,11 @@ async def backfill_discovery_stamped_issuers(prisma_client: PrismaClient) -> int
     healed = 0
     for row in stamped:
         try:
-            await prisma_client.db.litellm_mcpservertable.update(
-                where={"server_id": row.server_id},
-                data={"issuer": None, "updated_by": _BACKFILL_ACTOR},
-            )
+            async with db_span("backfill_mcp_oauth_issuer", "LiteLLM_MCPServerTable"):
+                await prisma_client.db.litellm_mcpservertable.update(
+                    where={"server_id": row.server_id},
+                    data={"issuer": None, "updated_by": _BACKFILL_ACTOR},
+                )
         except Exception as exc:  # noqa: BLE001 - per-row best effort; the next boot retries
             verbose_proxy_logger.warning(
                 "MCP issuer stamp backfill: could not heal server_id=%s: %s", row.server_id, exc
