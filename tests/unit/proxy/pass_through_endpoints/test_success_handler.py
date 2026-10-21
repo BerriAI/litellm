@@ -52,6 +52,7 @@ async def test_chunk_processor_yields_raw_bytes(endpoint_type, url_route):
     # Mock inputs
     response = AsyncMock(spec=httpx.Response)
     response.status_code = 200
+    response.headers = httpx.Headers()
     raw_chunks = [
         b'{"id": "1", "content": "Hello"}',
         b'{"id": "2", "content": "World"}',
@@ -145,7 +146,10 @@ async def test_route_streaming_logging_runs_async_handler_for_sdk_passthrough():
             request_body={},
             endpoint_type=EndpointType.ANTHROPIC,
             start_time=datetime.now(),
-            raw_bytes=[],
+            raw_bytes=[
+                b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_test"}}\n\n',
+                b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+            ],
             end_time=datetime.now(),
         )
 

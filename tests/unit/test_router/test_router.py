@@ -16856,6 +16856,33 @@ async def test_anthropic_messages_streaming_iterator_flushes_buffered_lifecycle_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("separator", (b"\n", b"\r\n", b"\r"))
+@pytest.mark.parametrize("space", (b" ", b""))
+@pytest.mark.parametrize("split_at", range(1, 28))
+async def test_anthropic_content_split_across_reads_reaches_client_before_upstream_ends(
+    separator: bytes, space: bytes, split_at: int
+) -> None:
+    router = _anthropic_messages_make_router()
+    start = _anthropic_messages_message_start_chunk()
+    delta = _anthropic_messages_content_chunk("hello").replace(b": ", b":" + space).replace(b"\n", separator)
+    chunks = (start, delta[:split_at], delta[split_at:])
+
+    async def source() -> AsyncIterator[bytes]:
+        for chunk in chunks:
+            yield chunk
+        pytest.fail("the router read past complete content instead of forwarding it")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source(), initial_kwargs={"model": "primary"}
+    )
+    try:
+        received = tuple([await wrapped.__anext__() for _ in chunks])
+        assert received == chunks
+    finally:
+        await wrapped.aclose()
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_streaming_iterator_flushes_buffered_frames_on_stream_end():
     """Regression: if the primary stream ends with only lifecycle frames and
     no content and no error, the buffered frames must still reach the
