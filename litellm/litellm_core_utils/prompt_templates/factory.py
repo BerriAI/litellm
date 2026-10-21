@@ -6307,7 +6307,7 @@ class _ExchangeFunction(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
-    arguments: str = ""
+    arguments: JsonValue = ""
 
 
 class _ExchangeChatToolCall(BaseModel):
@@ -6319,7 +6319,7 @@ class _ExchangeChatToolCall(BaseModel):
 class _ExchangeToolUse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    type: Literal["tool_use"]
+    type: Literal["tool_use", "server_tool_use", "mcp_tool_use"]
     name: str
     input: JsonValue = None
 
@@ -6327,13 +6327,14 @@ class _ExchangeToolUse(BaseModel):
 class _ExchangeToolResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    type: Literal["tool_result"]
+    type: Literal["tool_result", "mcp_tool_result"]
     content: str | tuple[object, ...] = ""
 
 
 _EXCHANGE_PARTS: Final = TypeAdapter(tuple[object, ...])
 _EXCHANGE_TEXT_BLOCK: Final = TypeAdapter(_ExchangeTextBlock)
 _EXCHANGE_CHAT_TOOL_CALL: Final = TypeAdapter(_ExchangeChatToolCall)
+_EXCHANGE_FUNCTION: Final = TypeAdapter(_ExchangeFunction)
 _EXCHANGE_BLOCK: Final[TypeAdapter[_ExchangeToolUse | _ExchangeToolResult]] = TypeAdapter(
     _ExchangeToolUse | _ExchangeToolResult
 )
@@ -6361,10 +6362,19 @@ def _exchange_content_text(content: object) -> str:
     return " ".join(texts).strip()
 
 
+def _call_text(function: _ExchangeFunction) -> str:
+    arguments: Final = (
+        function.arguments
+        if isinstance(function.arguments, str)
+        else json.dumps(function.arguments, ensure_ascii=False)
+    )
+    return f"{function.name}({arguments})"
+
+
 def _block_exchange(part: object) -> tuple[ToolExchangeKind, str] | None:
     match _validated_or_none(_EXCHANGE_BLOCK, part):
         case _ExchangeToolUse(name=name, input=arguments):
-            return ("tool call", f"{name}({json.dumps(arguments)})")
+            return ("tool call", _call_text(_ExchangeFunction(name=name, arguments=arguments)))
         case _ExchangeToolResult(content=content):
             result: Final = _exchange_content_text(content)
             return ("tool result", result) if result else None
@@ -6377,18 +6387,23 @@ def tool_exchange_texts(message: Mapping[str, object]) -> tuple[tuple[ToolExchan
 
     Chat completions puts calls on an assistant turn's `tool_calls` and each result on its own `tool` role,
     while Anthropic Messages puts both inside content blocks, `tool_use` on the assistant turn and
-    `tool_result` on the next user turn, so this reads both places. Responses API input reaches callers
-    already resolved to the chat-completions shape by `resolve_structured_messages`.
+    `tool_result` on the next user turn, so this reads both places. The legacy `function_call` field and
+    `function` role, and Anthropic's server and MCP tool blocks, read the same way. Responses API input reaches
+    callers already resolved to the chat-completions shape by `resolve_structured_messages`.
     """
-    if message.get("role") == "tool":
+    if message.get("role") in ("tool", "function"):
         result: Final = _exchange_content_text(message.get("content"))
         return (("tool result", result),) if result else ()
     block_exchanges: Final = tuple(
         exchange for part in _exchange_parts(message.get("content")) if (exchange := _block_exchange(part)) is not None
     )
     chat_calls: Final[tuple[tuple[ToolExchangeKind, str], ...]] = tuple(
-        ("tool call", f"{call.function.name}({call.function.arguments})")
+        ("tool call", _call_text(call.function))
         for part in _exchange_parts(message.get("tool_calls"))
         if (call := _validated_or_none(_EXCHANGE_CHAT_TOOL_CALL, part)) is not None
     )
-    return (*block_exchanges, *chat_calls)
+    legacy_call: Final = _validated_or_none(_EXCHANGE_FUNCTION, message.get("function_call"))
+    legacy_calls: Final[tuple[tuple[ToolExchangeKind, str], ...]] = (
+        (("tool call", _call_text(legacy_call)),) if legacy_call is not None else ()
+    )
+    return (*block_exchanges, *chat_calls, *legacy_calls)

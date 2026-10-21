@@ -1305,7 +1305,8 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
         default=DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
         ge=0,
         description=(
-            "Number of prior user turns (tool output and harness reminders excluded) to include as context "
+            "Number of prior user turns (harness reminders excluded, tool traffic sent only through "
+            "classifier_context_include_tool_turns) to include as context "
             "in the LLM or JEV classifier input, so a follow-up like 'now do the same for the streaming path' is "
             "classified against what it refers to. Counts turns of both roles when "
             "classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier "
@@ -1329,7 +1330,8 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "Code requests, the extracted system-role text sit outside this budget and are sent in full, as does "
             "the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and "
             "suppresses the block; set classifier_context_window_size to 0 to turn context off "
-            "deliberately. Applies to LLM and JEV classification."
+            "deliberately. The tool calls and results classifier_context_include_tool_turns adds get a "
+            "budget of the same size of their own. Applies to LLM and JEV classification."
         ),
     )
     classifier_context_per_turn_chars: int | None = Field(
@@ -1365,15 +1367,21 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "the work done on it so far, so an agent loop's continuation turn is classified on what "
             "its tools turned up rather than on the ask alone: 'What is in TASK.md?' stays SIMPLE "
             "until the file it reads describes a complex task, and the turns after that classify "
-            "as that task. Takes effect on every request that is classified, which with "
-            "classification_mode='every_request' is every turn of the loop. The block is bounded "
+            "as that task. With classification_mode='every_request' every turn of the loop is "
+            "classified this way. With classification_mode='user_turn' the tier pinned for the ask "
+            "is a floor for its tool turns: each one is classified, and only a higher tier moves the "
+            "session up and replaces the pin, so a loop never drops back mid-task, at the cost of a "
+            "classifier call per tool turn. Under heuristic_first and hybrid a turn with tool traffic "
+            "always goes to the classifier model, since the local scorer reads only the ask. The block is bounded "
             "on its own by classifier_context_budget_chars and classifier_context_per_turn_chars, "
             "newest first, but not by classifier_context_window_size, since one ask can run dozens "
             "of tool calls; setting the window size to 0 still turns all context off. Tool output "
             "such as file contents is sent to the classifier model, which may be a different "
             "deployment or provider than the routed completion model. Off by default because "
             "enabling it shifts tier decisions, and therefore spend, for an already-deployed "
-            "router. Applies to LLM and JEV classification."
+            "router. Requires classifier_type llm, oss_classifier, heuristic_first, or hybrid, the ones "
+            "that send the conversation to a classifier model, and cannot be combined with "
+            "session_affinity, which replays its pin without classifying."
         ),
     )
 
@@ -2319,6 +2327,24 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             raise ValueError(
                 "plugins and adaptive=True cannot both be set: adaptive's bandit selection doesn't yet "
                 "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_tool_turn_context(self) -> "ComplexityRouterConfig":
+        if not self.classifier_context_include_tool_turns:
+            return self
+        if self.classifier_type not in ("llm", "oss_classifier", "heuristic_first", "hybrid"):
+            raise ValueError(
+                "classifier_context_include_tool_turns requires classifier_type llm, oss_classifier, "
+                f"heuristic_first, or hybrid: '{self.classifier_type}' never sends the conversation to a "
+                "classifier model, so the tool calls and results would not reach it."
+            )
+        if self.session_affinity:
+            raise ValueError(
+                "classifier_context_include_tool_turns cannot be combined with session_affinity, which "
+                "replays its pin on every turn without classifying, so no tool turn would be classified. "
+                "Use classification_mode='user_turn' to hold the ask's tier as a floor instead."
             )
         return self
 

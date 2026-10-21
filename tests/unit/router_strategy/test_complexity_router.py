@@ -11162,17 +11162,46 @@ class _TaskAwareJevClient:
         )
 
 
+class _ScriptedJevClient:
+    """Answers the n-th classification with the n-th scripted tier, and fails it where the script says None."""
+
+    def __init__(self, tiers: tuple[str | None, ...]) -> None:
+        self._tiers: Final = tiers
+        self.states: list[str] = []
+
+    async def evaluate(
+        self, request: JevSystemOneRequest, timeout_s: float, request_kwargs: Mapping[str, object] | None = None
+    ) -> JevSystemOneResponse:
+        self.states.append(request.state)
+        tier: Final = self._tiers[len(self.states) - 1]
+        if tier is None:
+            raise httpx.ConnectError("classifier unreachable")
+        return JevSystemOneResponse(
+            model="jev-1.13.0",
+            answers={"tier": JevChoiceAnswer(type="choice", choice=tier, probabilities={tier: 1.0}, confidence=0.9)},
+            usage=JevUsage(input_tokens=10, output_tokens=2),
+        )
+
+
 _AGENT_TIERS: Final = {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"}
+_RUN_TESTS_TURNS: Final = (
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_2", "type": "function", "function": {"name": "run_tests", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "call_2", "content": "3 passed"},
+)
 
 
 class TestAgentProgressReachesClassifier:
     """An agent loop's tool calls and results reach the classifier once classifier_context_include_tool_turns is on."""
 
     @staticmethod
-    def _jev_router(client: _TaskAwareJevClient, **overrides: object) -> ComplexityRouter:
+    def _jev_router(client: _TaskAwareJevClient | _ScriptedJevClient, **overrides: object) -> ComplexityRouter:
         return ComplexityRouter(
             "test-router",
-            MagicMock(),
+            MagicMock(cache=DualCache()),
             {
                 "classifier_type": "jev",
                 "jev_classifier_config": {"api_key": "test", "timeout_ms": 100},
@@ -11244,7 +11273,7 @@ class TestAgentProgressReachesClassifier:
 
         assert response is not None
         assert response.model == "cheap"
-        assert "Work the agent has done" not in client.states[-1]
+        assert "read_file(" not in client.states[-1]
 
     @pytest.mark.asyncio
     async def test_budget_keeps_the_newest_tool_result(self) -> None:
@@ -11285,6 +11314,130 @@ class TestAgentProgressReachesClassifier:
 
         assert response is not None
         assert response.model == "cheap"
+
+    @pytest.mark.asyncio
+    async def test_harness_reminder_inside_a_tool_result_does_not_move_the_tier(self) -> None:
+        """A reminder the harness appends to a tool result is its own text, not the work the tool found."""
+        client: Final = _TaskAwareJevClient()
+        router: Final = self._jev_router(client, classifier_context_include_tool_turns=True)
+        reminded_result: Final = {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": f"TODO list is empty\n<system-reminder>{_TASK_FILE}</system-reminder>",
+        }
+
+        response: Final = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={},
+            messages=[*_tool_loop_continuation("chat_completions")[:2], reminded_result],
+        )
+
+        assert response is not None
+        assert response.model == "cheap"
+        assert "TODO list is empty" in client.states[-1]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "include_tool_turns,expected_models", [(True, "cheap strong strong"), (False, "cheap " * 3)]
+    )
+    async def test_user_turn_holds_the_ask_tier_as_a_floor_and_moves_up_on_tool_results(
+        self, include_tool_turns: bool, expected_models: str
+    ) -> None:
+        """The customer's ask: keep the current tier as a baseline and move up when the task turns out harder.
+        The third turn grades SIMPLE again, and the loop must stay where the second turn took it."""
+        client: Final = _ScriptedJevClient(("SIMPLE", "COMPLEX", "SIMPLE"))
+        router: Final = self._jev_router(
+            client, classification_mode="user_turn", classifier_context_include_tool_turns=include_tool_turns
+        )
+        loop: Final = _tool_loop_continuation("chat_completions")
+
+        responses: Final = [
+            await router.async_pre_routing_hook(
+                model="test-router", request_kwargs={"metadata": {"session_id": "agent-loop"}}, messages=turn
+            )
+            for turn in (loop[:1], loop, [*loop, *_RUN_TESTS_TURNS])
+        ]
+
+        assert [response.model for response in responses if response is not None] == expected_models.split()
+        assert len(client.states) == (3 if include_tool_turns else 1)
+
+    @pytest.mark.asyncio
+    async def test_user_turn_classifier_failure_keeps_the_held_tier(self) -> None:
+        """A failed classifier decided nothing, so its fallback's verdict on the ask alone must not move the loop."""
+        client: Final = _ScriptedJevClient(("SIMPLE", None))
+        router: Final = self._jev_router(
+            client, classification_mode="user_turn", classifier_context_include_tool_turns=True
+        )
+        reasoning_loop: Final = [
+            {"role": "user", "content": "Let's think step by step and reason through this problem carefully."},
+            *_tool_loop_continuation("chat_completions")[1:],
+        ]
+
+        responses: Final = [
+            await router.async_pre_routing_hook(
+                model="test-router", request_kwargs={"metadata": {"session_id": "agent-loop"}}, messages=turn
+            )
+            for turn in (reasoning_loop[:1], reasoning_loop)
+        ]
+
+        assert [response.model for response in responses if response is not None] == ["cheap", "cheap"]
+        assert len(client.states) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "classifier_type,local_setting",
+        [("heuristic_first", {"heuristic_first_max_tier": "SIMPLE"}), ("hybrid", {"hybrid_boundary_margin": 0.01})],
+    )
+    @pytest.mark.parametrize(
+        "include_tool_turns,expected_model", [(True, "claude-sonnet-4-20250514"), (False, "gpt-4o-mini")]
+    )
+    async def test_local_scorer_never_settles_a_turn_with_tool_traffic(
+        self,
+        llm_classifier_config: dict[str, object],
+        classifier_type: str,
+        local_setting: dict[str, object],
+        include_tool_turns: bool,
+        expected_model: str,
+    ) -> None:
+        """The local scorer reads only the ask, so its cheap verdict says nothing about what the tools found."""
+        dependency: Final = MagicMock(acompletion=AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}')))
+        router: Final = ComplexityRouter(
+            "test-complexity-router",
+            dependency,
+            {
+                **llm_classifier_config,
+                **local_setting,
+                "classifier_type": classifier_type,
+                "classifier_context_include_tool_turns": include_tool_turns,
+            },
+        )
+
+        response: Final = await router.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=_tool_loop_continuation("chat_completions")
+        )
+
+        assert response is not None
+        assert response.model == expected_model
+
+    @pytest.mark.parametrize(
+        "overrides,accepted",
+        [
+            ({"classifier_type": "llm"}, True),
+            ({"classifier_type": "llm", "classification_mode": "user_turn"}, True),
+            ({"classifier_type": "heuristic"}, False),
+            ({"classifier_type": "heuristic_v2"}, False),
+            ({"classifier_type": "llm", "session_affinity": True}, False),
+        ],
+    )
+    def test_config_rejects_combinations_that_never_classify_tool_turns(
+        self, llm_classifier_config: dict[str, object], overrides: dict[str, object], accepted: bool
+    ) -> None:
+        config: Final = {**llm_classifier_config, **overrides, "classifier_context_include_tool_turns": True}
+        if accepted:
+            assert ComplexityRouterConfig.model_validate(config).classifier_context_include_tool_turns
+            return
+        with pytest.raises(ValidationError, match="classifier_context_include_tool_turns"):
+            ComplexityRouterConfig.model_validate(config)
 
 
 # The shape a coding agent actually sends, taken from a captured classifier payload: the session
