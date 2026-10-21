@@ -1386,3 +1386,41 @@ async def test_streaming_tool_arguments_stay_valid_json_with_special_chars(monke
     assert json.loads(tool_args) == {"name": _SPECIALS_ORIGINAL}
     assert json.loads(fc_args) == {"name": _SPECIALS_ORIGINAL}
     assert content == f"Hi {_SPECIALS_ORIGINAL}"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_a_responses_item_whose_type_is_not_a_string():
+    gr = _make_guardrail()
+    data = {"input": [{"type": 5, "output": "Email Marie Dupont"}]}
+
+    out = await gr.async_pre_call_hook(None, None, data, "aresponses")
+
+    assert out["input"][0]["output"] == "Email <PERSON_1>"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_stashes_the_map_when_metadata_is_null():
+    gr = _make_guardrail()
+    data = {"messages": [{"role": "user", "content": "Email Marie Dupont"}], "metadata": None}
+
+    out = await gr.async_pre_call_hook(None, None, data, "acompletion")
+
+    assert out["metadata"]["privaite_map"] == {"<PERSON_1>": "Marie Dupont"}
+
+
+@pytest.mark.asyncio
+async def test_post_call_restores_a_dict_shaped_response():
+    gr = _make_guardrail()
+    response = {"choices": [{"message": {"content": "Sending to <PERSON_1>"}}]}
+
+    out = await gr.async_post_call_success_hook({"metadata": {"privaite_map": _FAKES}}, None, response)
+
+    assert out["choices"][0]["message"]["content"] == "Sending to Marie Dupont"
+
+
+@pytest.mark.asyncio
+async def test_engine_for_a_privaite_without_pii_engine_recommends_the_install(monkeypatch):
+    monkeypatch.delattr(sys.modules["privaite.pii.engine"], "PIIEngine")
+
+    with pytest.raises(RuntimeError, match=r"pip install 'privaite>=0\.7\.2'"):
+        await _make_guardrail()._engine_for(["en"])
