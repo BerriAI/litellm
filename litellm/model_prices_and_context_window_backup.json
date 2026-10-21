@@ -26338,6 +26338,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_audio_token_batches": 5e-07,
         "input_cost_per_token_batches": 1.5e-07,
@@ -26450,6 +26451,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query"
     },
     "gemini-3-pro-image-preview": {
@@ -26501,6 +26503,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-image": {
@@ -26547,6 +26550,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-image-preview": {
@@ -26589,6 +26593,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-lite-image": {
@@ -26679,6 +26684,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -26740,6 +26746,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token_batches": 2.5e-07
@@ -26799,6 +26806,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -26885,6 +26893,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_audio_token_batches": 5e-08,
         "input_cost_per_token_batches": 5e-08,
@@ -26939,6 +26948,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
         "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
@@ -26985,6 +26995,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
         "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
@@ -27171,6 +27182,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "search_free_requests": {"count": 10000, "period": "day", "shared_group": "gemini-2.5-pro"},
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_token_above_200k_tokens_priority": 4.5e-06,
         "input_cost_per_token_batches": 6.25e-07,
@@ -27198,6 +27210,7 @@
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "output_cost_per_token_batches": 6e-06,
         "output_cost_per_image": 0.00012,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -27293,6 +27306,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -27349,6 +27363,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-3-flash-preview": {
@@ -27363,6 +27378,7 @@
         "max_tokens": 65535,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -27460,6 +27476,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_batches": 7.5e-07,
@@ -27523,6 +27540,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -27582,6 +27600,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -27603,6 +27622,7 @@
         "output_cost_per_token_batches": 1.875e-06,
         "output_cost_per_token_flex": 1.875e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -27746,6 +27766,7 @@
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "output_cost_per_token_batches": 6e-06,
         "output_cost_per_image": 0.00012,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -27847,6 +27868,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -28174,6 +28196,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "supports_reasoning": false
     },
@@ -28218,6 +28241,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3.1-flash-lite-preview": {
@@ -28279,6 +28303,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token_batches": 2.5e-07
@@ -28428,6 +28453,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_audio_token_batches": 5e-07,
         "input_cost_per_token_batches": 1.5e-07,
@@ -28538,6 +28564,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "supports_reasoning": false
     },
@@ -28602,6 +28629,7 @@
         "output_cost_per_token_batches": 1.5e-06,
         "rpm": 1000,
         "tpm": 4000000,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -28757,6 +28785,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_audio_token_batches": 1.5e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -28960,6 +28989,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "search_free_requests": {"count": 10000, "period": "day", "shared_group": "gemini-2.5-pro"},
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_token_batches": 6.25e-07,
         "input_cost_per_token_flex": 6.25e-07,
@@ -29055,6 +29085,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token_batches": 2.5e-07
@@ -29115,6 +29146,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -29171,6 +29203,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token_batches": 5e-07,
@@ -29234,6 +29267,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_batches": 7.5e-07,
@@ -29299,6 +29333,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -29360,6 +29395,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -29421,6 +29457,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -29516,6 +29553,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_flex": 1e-06,
@@ -29579,6 +29617,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_flex": 1e-06,
@@ -29597,6 +29636,7 @@
         "mode": "chat",
         "output_cost_per_reasoning_token": 3e-06,
         "output_cost_per_token": 3e-06,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -29726,6 +29766,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_batches": 7.5e-07,
@@ -29789,6 +29830,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -29848,6 +29890,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -29868,6 +29911,7 @@
         "output_cost_per_token": 3.75e-06,
         "output_cost_per_token_batches": 1.875e-06,
         "output_cost_per_token_flex": 1.875e-06,
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -49878,6 +49922,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -49940,6 +49985,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token_batches": 2.5e-07
@@ -50000,6 +50046,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },

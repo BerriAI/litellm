@@ -4501,7 +4501,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.104.5"
+version = "1.104.6"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -4961,7 +4961,7 @@ proxy-dev = [
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.71"
+version = "0.1.71.post1"
 source = { editable = "enterprise" }
 
 [[package]]
