@@ -146,11 +146,11 @@ def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
 
 
-def test_foundry_gpt_6_astra_keeps_sampling_params_when_reasoning_effort_is_none(_local_model_cost_map):
+def test_foundry_gpt_6_sol_keeps_sampling_params_when_reasoning_effort_is_none(_local_model_cost_map):
     optional_params = AzureAIStudioConfig().map_openai_params(
         non_default_params={"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9},
         optional_params={},
-        model="gpt-6-astra",
+        model="gpt-6-sol",
         drop_params=False,
     )
 
@@ -166,6 +166,16 @@ def test_a_gpt_5_name_without_a_foundry_row_keeps_reading_its_own_entry(
     top_p and logprobs down with it."""
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://example-resource.openai.azure.com")
     monkeypatch.setenv("AZURE_AI_API_KEY", "placeholder")
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gpt-5.1-chat-latest",
+        {
+            **litellm.model_cost["gpt-5.1-chat-latest"],
+            "supports_none_reasoning_effort": True,
+            "default_reasoning_effort": "none",
+        },
+    )
 
     optional_params = litellm.utils.get_optional_params(
         model="gpt-5.1-chat-latest",

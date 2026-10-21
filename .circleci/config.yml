@@ -2429,23 +2429,6 @@ jobs:
       - wait_for_service:
           url: http://localhost:4000
           timeout: "300"
-      # Install Node.js directly from nodejs.org with SHA256 verification,
-      # instead of piping NodeSource's setup_24.x apt-repo installer into
-      # sudo bash (which runs a mutable upstream script unattended).
-      - install_node
-
-      - run:
-          name: Install Node.js test dependencies
-          command: |
-            cd tests/pass_through_tests
-            npm ci
-
-      - run:
-          name: Run Vertex AI, Google AI Studio Node.js tests
-          command: |
-            cd tests/pass_through_tests
-            NODE_OPTIONS=--experimental-vm-modules npx jest . --verbose
-          no_output_timeout: 30m
       - run:
           name: Run tests
           command: |

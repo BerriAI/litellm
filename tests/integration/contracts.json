@@ -191,6 +191,12 @@
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_denial_prevents_provider_and_preserves_allowed_control": [
       "other.observability.guardrails.denial_prevents_provider_with_allowed_control"
     ],
+    "tests/integration/mcp/test_mcp_protocol_errors.py::test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_caller[67108864]": [
+      "other.mcp.transport.large_sse_tool_result_reaches_caller"
+    ],
+    "tests/integration/mcp/test_mcp_protocol_errors.py::test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_caller[4096]": [
+      "other.mcp.transport.large_sse_tool_result_reaches_caller"
+    ],
     "tests/integration/mcp/test_mcp_protocol_errors.py::test_jsonrpc_error_and_malformed_tool_result_remain_errors": [
       "other.mcp.errors.protocol_and_malformed_results_cannot_be_empty_success"
     ],
@@ -1632,6 +1638,318 @@
     ],
     "tests/integration/spend/test_responses_bridge_spend_once.py::test_bridged_chat_completion_above_log_offload_threshold_logs_and_charges_once": [
       "quota_management.spend_tracking.responses_bridge.logs_and_charges_once_above_offload_threshold"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_sync_call_retries_a_native_output_rejection_once_with_the_json_tool[converse]": [
+      "other.provider_wire.sync_call_retries_a_native_output_rejection_once_with_the_json_tool"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_sync_call_retries_a_native_output_rejection_once_with_the_json_tool[converse_stream]": [
+      "other.provider_wire.sync_call_retries_a_native_output_rejection_once_with_the_json_tool"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_sync_call_retries_a_native_output_rejection_once_with_the_json_tool[invoke]": [
+      "other.provider_wire.sync_call_retries_a_native_output_rejection_once_with_the_json_tool"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_async_call_retries_a_native_output_rejection_once_with_the_json_tool[converse]": [
+      "other.provider_wire.async_call_retries_a_native_output_rejection_once_with_the_json_tool"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_async_call_retries_a_native_output_rejection_once_with_the_json_tool[converse_stream]": [
+      "other.provider_wire.async_call_retries_a_native_output_rejection_once_with_the_json_tool"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_async_call_retries_a_native_output_rejection_once_with_the_json_tool[invoke]": [
+      "other.provider_wire.async_call_retries_a_native_output_rejection_once_with_the_json_tool"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_sends_what_a_deployment_without_native_output_sends[reasoning_effort-converse]": [
+      "other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_sends_what_a_deployment_without_native_output_sends[reasoning_effort-converse_stream]": [
+      "other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_sends_what_a_deployment_without_native_output_sends[reasoning_effort-invoke]": [
+      "other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_sends_what_a_deployment_without_native_output_sends[constrained_schema-converse]": [
+      "other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_sends_what_a_deployment_without_native_output_sends[constrained_schema-converse_stream]": [
+      "other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_sends_what_a_deployment_without_native_output_sends[constrained_schema-invoke]": [
+      "other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_sends_what_a_deployment_without_native_output_sends[response_format_and_output_config_format-converse]": [
+      "other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_sends_what_a_deployment_without_native_output_sends[response_format_and_output_config_format-converse_stream]": [
+      "other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_sends_what_a_deployment_without_native_output_sends[response_format_and_output_config_format-invoke]": [
+      "other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_sends_what_a_deployment_without_native_output_sends[adaptive_thinking_with_effort-converse]": [
+      "other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_sends_what_a_deployment_without_native_output_sends[adaptive_thinking_with_effort-converse_stream]": [
+      "other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_sends_what_a_deployment_without_native_output_sends[adaptive_thinking_with_effort-invoke]": [
+      "other.provider_wire.the_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_keeps_the_callers_continuation_message[converse]": [
+      "other.provider_wire.the_retry_keeps_the_callers_continuation_message"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_keeps_the_callers_continuation_message[converse_stream]": [
+      "other.provider_wire.the_retry_keeps_the_callers_continuation_message"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_keeps_the_callers_continuation_message[invoke]": [
+      "other.provider_wire.the_retry_keeps_the_callers_continuation_message"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_a_messages_retry_sends_what_a_deployment_without_native_output_sends[converse]": [
+      "other.provider_wire.a_messages_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_a_messages_retry_sends_what_a_deployment_without_native_output_sends[invoke]": [
+      "other.provider_wire.a_messages_retry_sends_what_a_deployment_without_native_output_sends"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_signs_with_the_credentials_of_a_deprecated_aws_bedrock_client[converse]": [
+      "other.provider_wire.the_retry_signs_with_the_credentials_of_a_deprecated_aws_bedrock_client"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_signs_with_the_credentials_of_a_deprecated_aws_bedrock_client[converse_stream]": [
+      "other.provider_wire.the_retry_signs_with_the_credentials_of_a_deprecated_aws_bedrock_client"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_fallback_sdk.py::test_the_retry_signs_with_the_credentials_of_a_deprecated_aws_bedrock_client[invoke]": [
+      "other.provider_wire.the_retry_signs_with_the_credentials_of_a_deprecated_aws_bedrock_client"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_register_model_sdk.py::test_a_register_model_native_output_opt_in_reaches_every_call_but_a_deployment_that_opts_out[converse]": [
+      "other.provider_wire.a_register_model_native_output_opt_in_reaches_every_call_but_a_deployment_that_opts_out"
+    ],
+    "tests/integration/sdk/test_bedrock_native_output_register_model_sdk.py::test_a_register_model_native_output_opt_in_reaches_every_call_but_a_deployment_that_opts_out[invoke]": [
+      "other.provider_wire.a_register_model_native_output_opt_in_reaches_every_call_but_a_deployment_that_opts_out"
+    ],
+    "tests/integration/providers/test_bedrock_batch_files_wire.py::test_completions_and_responses_batch_records_upload_as_anthropic_user_messages": [
+      "other.provider_wire.completions_and_responses_batch_records_upload_as_anthropic_user_messages"
+    ],
+    "tests/integration/providers/test_bedrock_batch_files_wire.py::test_json_schema_batch_record_with_thinking_uploads_the_json_tool_and_no_native_output[haiku_5_5]": [
+      "other.provider_wire.json_schema_batch_record_with_thinking_uploads_the_json_tool_and_no_native_output"
+    ],
+    "tests/integration/providers/test_bedrock_batch_files_wire.py::test_json_schema_batch_record_with_thinking_uploads_the_json_tool_and_no_native_output[opus_4_8]": [
+      "other.provider_wire.json_schema_batch_record_with_thinking_uploads_the_json_tool_and_no_native_output"
+    ],
+    "tests/integration/sdk/test_bedrock_converse_stream_sync_decoder_wire.py::test_k04_sync_stream_open_400_carries_the_bedrock_body_as_text": [
+      "other.provider_wire.k04_sync_stream_open_400_carries_the_bedrock_body_as_text"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_thinking_request_on_a_bedrock_native_model_gets_native_output_and_keeps_reasoning[converse]": [
+      "other.provider_wire.thinking_request_on_a_bedrock_native_model_gets_native_output_and_keeps_reasoning"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_thinking_request_on_a_bedrock_native_model_gets_native_output_and_keeps_reasoning[converse_stream]": [
+      "other.provider_wire.thinking_request_on_a_bedrock_native_model_gets_native_output_and_keeps_reasoning"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_thinking_request_on_a_bedrock_native_model_gets_native_output_and_keeps_reasoning[invoke]": [
+      "other.provider_wire.thinking_request_on_a_bedrock_native_model_gets_native_output_and_keeps_reasoning"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_responses_reasoning_effort_on_a_bedrock_native_model_gets_native_output_and_keeps_reasoning": [
+      "other.provider_wire.responses_reasoning_effort_on_a_bedrock_native_model_gets_native_output_and_keeps_reasoning"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_messages_thinking_on_a_bedrock_converse_native_model_gets_native_output_and_keeps_reasoning": [
+      "other.provider_wire.messages_thinking_on_a_bedrock_converse_native_model_gets_native_output_and_keeps_reasoning"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_native_model_without_thinking_keeps_the_forced_json_tool[converse]": [
+      "other.provider_wire.bedrock_native_model_without_thinking_keeps_the_forced_json_tool"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_native_model_without_thinking_keeps_the_forced_json_tool[invoke]": [
+      "other.provider_wire.bedrock_native_model_without_thinking_keeps_the_forced_json_tool"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_thinking_request_follows_the_bedrock_native_key_the_model_resolves_to[neither_key]": [
+      "other.provider_wire.thinking_request_follows_the_bedrock_native_key_the_model_resolves_to"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_thinking_request_follows_the_bedrock_native_key_the_model_resolves_to[deployment_opt_in]": [
+      "other.provider_wire.thinking_request_follows_the_bedrock_native_key_the_model_resolves_to"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_thinking_request_follows_the_bedrock_native_key_the_model_resolves_to[deployment_opt_out]": [
+      "other.provider_wire.thinking_request_follows_the_bedrock_native_key_the_model_resolves_to"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it[converse_chat]": [
+      "other.provider_wire.a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it[converse_responses]": [
+      "other.provider_wire.a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it[converse_messages]": [
+      "other.provider_wire.a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it[invoke_chat]": [
+      "other.provider_wire.a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it[invoke_messages]": [
+      "other.provider_wire.a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_fable_5_json_schema_takes_the_json_tool_instead_of_the_native_output_bedrock_rejects": [
+      "other.provider_wire.fable_5_json_schema_takes_the_json_tool_instead_of_the_native_output_bedrock_rejects"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_object_closed[converse_chat]": [
+      "other.provider_wire.native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_object_closed"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_object_closed[converse_output_config]": [
+      "other.provider_wire.native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_object_closed"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_object_closed[invoke_chat]": [
+      "other.provider_wire.native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_object_closed"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_object_closed[invoke_messages]": [
+      "other.provider_wire.native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_object_closed"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_open_object_schema_takes_the_json_tool_on_a_native_model_and_keeps_the_dict_open[converse]": [
+      "other.provider_wire.open_object_schema_takes_the_json_tool_on_a_native_model_and_keeps_the_dict_open"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_open_object_schema_takes_the_json_tool_on_a_native_model_and_keeps_the_dict_open[invoke]": [
+      "other.provider_wire.open_object_schema_takes_the_json_tool_on_a_native_model_and_keeps_the_dict_open"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_thinking_with_a_caller_tool_on_a_bedrock_native_model_sends_only_the_callers_tool": [
+      "other.provider_wire.thinking_with_a_caller_tool_on_a_bedrock_native_model_sends_only_the_callers_tool"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_non_anthropic_native_model_gets_the_callers_schema_with_objects_closed[limits_kept]": [
+      "other.provider_wire.non_anthropic_native_model_gets_the_callers_schema_with_objects_closed"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_non_anthropic_native_model_gets_the_callers_schema_with_objects_closed[nullable_object_closed]": [
+      "other.provider_wire.non_anthropic_native_model_gets_the_callers_schema_with_objects_closed"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_messages_on_bedrock_invoke_follows_the_bedrock_native_key_without_thinking[closed_schema_native]": [
+      "other.provider_wire.messages_on_bedrock_invoke_follows_the_bedrock_native_key_without_thinking"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_messages_on_bedrock_invoke_follows_the_bedrock_native_key_without_thinking[open_object_inlined]": [
+      "other.provider_wire.messages_on_bedrock_invoke_follows_the_bedrock_native_key_without_thinking"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy_error[properties_list]": [
+      "other.provider_wire.malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy_error"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy_error[ref_not_string]": [
+      "other.provider_wire.malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy_error"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy_error[defs_list]": [
+      "other.provider_wire.malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy_error"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy_error[type_list_without_properties]": [
+      "other.provider_wire.malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy_error"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy_error[required_string]": [
+      "other.provider_wire.malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy_error"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_numeric_formats_and_wide_schemas_follow_the_bedrock_native_key[numeric_formats_old_key]": [
+      "other.provider_wire.numeric_formats_and_wide_schemas_follow_the_bedrock_native_key"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_numeric_formats_and_wide_schemas_follow_the_bedrock_native_key[numeric_formats_new_key_invoke]": [
+      "other.provider_wire.numeric_formats_and_wide_schemas_follow_the_bedrock_native_key"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_numeric_formats_and_wide_schemas_follow_the_bedrock_native_key[wide_old_key]": [
+      "other.provider_wire.numeric_formats_and_wide_schemas_follow_the_bedrock_native_key"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_numeric_formats_and_wide_schemas_follow_the_bedrock_native_key[wide_new_key]": [
+      "other.provider_wire.numeric_formats_and_wide_schemas_follow_the_bedrock_native_key"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it[converse_chat-The model returned the following errors: output_config.format: Extra inputs are not permitted]": [
+      "other.provider_wire.bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it[converse_chat-The model returned the following errors: output_config.format.schema: Unsupported regex feature in pattern field: pattern is too complex for structured output: reduce the {n,m} upper bound, narrow the character class range, or avoid nesting quantified groups]": [
+      "other.provider_wire.bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it[converse_chat_stream-The model returned the following errors: compilation exceeded limits: Schema is too complex.]": [
+      "other.provider_wire.bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it[converse_responses-The model returned the following errors: output_config.format: Extra inputs are not permitted]": [
+      "other.provider_wire.bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it[converse_messages-The model returned the following errors: output_config.format: Extra inputs are not permitted]": [
+      "other.provider_wire.bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it[converse_output_config-The model returned the following errors: output_config.format: Extra inputs are not permitted]": [
+      "other.provider_wire.bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it[invoke_chat-The model returned the following errors: output_config.format: Extra inputs are not permitted]": [
+      "other.provider_wire.bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it[invoke_chat_stream-The model returned the following errors: output_config.format: Extra inputs are not permitted]": [
+      "other.provider_wire.bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it[invoke_messages-The model returned the following errors: compilation exceeded limits: Schema is too complex.]": [
+      "other.provider_wire.bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it[invoke_messages_stream-The model returned the following errors: output_config.format: Extra inputs are not permitted]": [
+      "other.provider_wire.bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output[converse-other_400]": [
+      "other.provider_wire.bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output[converse-native_model]": [
+      "other.provider_wire.bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output[invoke-other_400]": [
+      "other.provider_wire.bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output[invoke-native_model]": [
+      "other.provider_wire.bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_messages_400_on_bedrock_invoke_reaches_the_caller_after_one_call_unless_it_rejects_opt_in_native_output[other_400]": [
+      "other.provider_wire.messages_400_on_bedrock_invoke_reaches_the_caller_after_one_call_unless_it_rejects_opt_in_native_output"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_messages_400_on_bedrock_invoke_reaches_the_caller_after_one_call_unless_it_rejects_opt_in_native_output[native_model]": [
+      "other.provider_wire.messages_400_on_bedrock_invoke_reaches_the_caller_after_one_call_unless_it_rejects_opt_in_native_output"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_a_messages_retry_without_native_output_still_omits_the_deployments_dropped_params": [
+      "other.provider_wire.a_messages_retry_without_native_output_still_omits_the_deployments_dropped_params"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_messages_retry_without_native_output_keeps_the_thinking_signature_fix[rejection_first]": [
+      "other.provider_wire.messages_retry_without_native_output_keeps_the_thinking_signature_fix"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_messages_retry_without_native_output_keeps_the_thinking_signature_fix[signature_first]": [
+      "other.provider_wire.messages_retry_without_native_output_keeps_the_thinking_signature_fix"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_a_request_retried_without_native_output_lands_one_success_spend_row[converse_chat]": [
+      "other.provider_wire.a_request_retried_without_native_output_lands_one_success_spend_row"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_a_request_retried_without_native_output_lands_one_success_spend_row[invoke_messages]": [
+      "other.provider_wire.a_request_retried_without_native_output_lands_one_success_spend_row"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_a_malformed_caller_output_config_on_an_opt_in_model_gets_bedrocks_own_400_after_one_call": [
+      "other.provider_wire.a_malformed_caller_output_config_on_an_opt_in_model_gets_bedrocks_own_400_after_one_call"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_a_caller_output_config_bedrock_refuses_is_sent_once_on_an_opt_in_model[no_thinking]": [
+      "other.provider_wire.a_caller_output_config_bedrock_refuses_is_sent_once_on_an_opt_in_model"
+    ],
+    "tests/integration/providers/test_bedrock_native_structured_output_wire.py::test_a_caller_output_config_bedrock_refuses_is_sent_once_on_an_opt_in_model[adaptive_thinking]": [
+      "other.provider_wire.a_caller_output_config_bedrock_refuses_is_sent_once_on_an_opt_in_model"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open[anthropic]": [
+      "other.provider_wire.native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open[azure_ai]": [
+      "other.provider_wire.native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced[forced_tool_refused-anthropic]": [
+      "other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced[forced_tool_refused-vertex_ai]": [
+      "other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced[thinking]": [
+      "other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced[caller_tools]": [
+      "other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced[effort_none-anthropic]": [
+      "other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced[effort_none-azure_ai]": [
+      "other.provider_wire.open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_json_mode_answer_keeps_the_thinking_that_preceded_the_json_tool_call[vertex_ai]": [
+      "other.provider_wire.json_mode_answer_keeps_the_thinking_that_preceded_the_json_tool_call"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_json_mode_answer_keeps_the_thinking_that_preceded_the_json_tool_call[bedrock_invoke]": [
+      "other.provider_wire.json_mode_answer_keeps_the_thinking_that_preceded_the_json_tool_call"
+    ],
+    "tests/integration/providers/test_vertex_anthropic_structured_output_wire.py::test_vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_object": [
+      "other.provider_wire.vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_object"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_streaming_passthrough_request_tags_reach_spend_log": [
+      "other.observability.passthrough.streaming_tags_reach_spend"
     ]
   },
   "browser": {

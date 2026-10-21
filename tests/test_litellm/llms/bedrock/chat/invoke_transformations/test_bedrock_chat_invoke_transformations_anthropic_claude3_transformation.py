@@ -1,15 +1,17 @@
 import asyncio
 import json
 import uuid
+from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
 import httpx
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
-
 import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
@@ -19,9 +21,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 def test_get_supported_params_thinking():
     config = AmazonAnthropicClaudeConfig()
-    params = config.get_supported_openai_params(
-        model="anthropic.claude-sonnet-4-20250514-v1:0"
-    )
+    params = config.get_supported_openai_params(model="anthropic.claude-sonnet-4-20250514-v1:0")
     assert "thinking" in params
 
 
@@ -74,53 +74,23 @@ def test_aws_params_filtered_from_request_body():
     result_json = json.dumps(result)
 
     # Verify AWS authentication params are NOT in the request body
-    assert (
-        "aws_access_key_id" not in result_json
-    ), "AWS access key should not be in request body"
-    assert (
-        "aws_secret_access_key" not in result_json
-    ), "AWS secret key should not be in request body"
-    assert (
-        "aws_session_token" not in result_json
-    ), "AWS session token should not be in request body"
-    assert (
-        "aws_region_name" not in result_json
-    ), "AWS region should not be in request body"
-    assert (
-        "aws_role_name" not in result_json
-    ), "AWS role name should not be in request body"
-    assert (
-        "aws_session_name" not in result_json
-    ), "AWS session name should not be in request body"
-    assert (
-        "aws_profile_name" not in result_json
-    ), "AWS profile name should not be in request body"
-    assert (
-        "aws_web_identity_token" not in result_json
-    ), "AWS web identity token should not be in request body"
-    assert (
-        "aws_sts_endpoint" not in result_json
-    ), "AWS STS endpoint should not be in request body"
-    assert (
-        "aws_bedrock_runtime_endpoint" not in result_json
-    ), "AWS bedrock endpoint should not be in request body"
-    assert (
-        "aws_external_id" not in result_json
-    ), "AWS external ID should not be in request body"
-    assert (
-        "aws_session_tags" not in result_json
-    ), "AWS session tags should not be in request body"
+    assert "aws_access_key_id" not in result_json, "AWS access key should not be in request body"
+    assert "aws_secret_access_key" not in result_json, "AWS secret key should not be in request body"
+    assert "aws_session_token" not in result_json, "AWS session token should not be in request body"
+    assert "aws_region_name" not in result_json, "AWS region should not be in request body"
+    assert "aws_role_name" not in result_json, "AWS role name should not be in request body"
+    assert "aws_session_name" not in result_json, "AWS session name should not be in request body"
+    assert "aws_profile_name" not in result_json, "AWS profile name should not be in request body"
+    assert "aws_web_identity_token" not in result_json, "AWS web identity token should not be in request body"
+    assert "aws_sts_endpoint" not in result_json, "AWS STS endpoint should not be in request body"
+    assert "aws_bedrock_runtime_endpoint" not in result_json, "AWS bedrock endpoint should not be in request body"
+    assert "aws_external_id" not in result_json, "AWS external ID should not be in request body"
+    assert "aws_session_tags" not in result_json, "AWS session tags should not be in request body"
 
     # Also check that the sensitive values themselves are not in the response
-    assert (
-        "AKIAIOSFODNN7EXAMPLE" not in result_json
-    ), "AWS access key value leaked in request body"
-    assert (
-        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" not in result_json
-    ), "AWS secret key value leaked in request body"
-    assert (
-        "arn:aws:iam::123456789012:role/test-role" not in result_json
-    ), "AWS role ARN leaked in request body"
+    assert "AKIAIOSFODNN7EXAMPLE" not in result_json, "AWS access key value leaked in request body"
+    assert "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" not in result_json, "AWS secret key value leaked in request body"
+    assert "arn:aws:iam::123456789012:role/test-role" not in result_json, "AWS role ARN leaked in request body"
     assert "test-session" not in result_json, "AWS session name leaked in request body"
 
     # Verify normal params ARE still in the request body
@@ -129,9 +99,7 @@ def test_aws_params_filtered_from_request_body():
     assert result["top_p"] == 0.9, "top_p should be in request body"
 
     # Verify Bedrock-specific params are added
-    assert (
-        result["anthropic_version"] == "bedrock-2023-05-31"
-    ), "anthropic_version should be set"
+    assert result["anthropic_version"] == "bedrock-2023-05-31", "anthropic_version should be set"
     assert "model" not in result, "model should be removed for Bedrock Invoke API"
     assert "stream" not in result, "stream should be removed for Bedrock Invoke API"
 
@@ -188,9 +156,7 @@ def test_output_format_conversion_to_inline_schema():
     )
 
     # Verify output_format was removed from the request
-    assert (
-        "output_format" not in result
-    ), "output_format should be removed from request body"
+    assert "output_format" not in result, "output_format should be removed from request body"
 
     # Verify the schema was added to the last user message content
     assert "messages" in result
@@ -341,9 +307,7 @@ def test_opus_4_5_model_detection():
     ]
 
     for model in non_opus_4_5_models:
-        assert not config._is_claude_opus_4_5(
-            model
-        ), f"Should not detect {model} as Opus 4.5"
+        assert not config._is_claude_opus_4_5(model), f"Should not detect {model} as Opus 4.5"
 
 
 # def test_structured_outputs_beta_header_filtered_for_bedrock_invoke():
@@ -447,7 +411,7 @@ def test_output_config_format_converted_for_bedrock_chat_invoke_request():
 
     with patch(  # test-quality-ok: pin non-native path
         "litellm.llms.bedrock.common_utils._bedrock_model_supports",
-        side_effect=lambda _model, key: key == "supports_output_config",
+        side_effect=lambda _model, key, *_: key == "supports_output_config",
     ):
         result = config.transform_request(
             model="anthropic.claude-opus-4-7",
@@ -468,12 +432,180 @@ def test_output_config_format_converted_for_bedrock_chat_invoke_request():
     assert json.loads(last_content[-1]["text"]) == schema
 
 
-def test_output_config_format_forwarded_for_bedrock_chat_invoke_request():
+@pytest.mark.parametrize("model", ["anthropic.claude-opus-4-7", "us.anthropic.claude-opus-4-8"])
+def test_output_config_format_inlined_for_bedrock_chat_invoke_profile_without_native_output(
+    set_native_structured_output, model
+):
+    """On a profile without native structured output the Invoke chat path inlines the
+    schema into the last user message and keeps effort."""
+    set_native_structured_output(model, None)
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={
+            "max_tokens": 100,
+            "output_config": {"effort": "xhigh", "format": {"type": "json_schema", "schema": schema}},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "xhigh"}
+    assert json.loads(result["messages"][-1]["content"][-1]["text"]) == schema
+
+
+TREE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"root": {"$ref": "#/$defs/Node"}},
+    "$defs": {
+        "Node": {
+            "type": "object",
+            "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+        }
+    },
+}
+OPEN_OBJECT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"counts": {"type": "object", "additionalProperties": {"type": "integer"}}},
+}
+
+
+def _invoke_params_for_schema(
+    model: str, schema: Mapping[str, object], thinking_params: Mapping[str, object] | None = None
+) -> Mapping[str, object]:
+    return AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={
+            "response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}},
+            **({"thinking": {"type": "adaptive"}} if thinking_params is None else thinking_params),
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("native_key", "thinking_params", "native"),
+    [
+        ("legacy", {}, True),
+        ("bedrock", {}, False),
+        ("bedrock", {"thinking": {"type": "adaptive"}}, True),
+        ("bedrock", {"reasoning_effort": "low"}, True),
+    ],
+    ids=["legacy-key", "bedrock-key-no-thinking", "bedrock-key-adaptive", "bedrock-key-effort"],
+)
+def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
+    set_native_structured_output, native_key, thinking_params, native
+):
+    model = "us.anthropic.claude-haiku-5-5"
+    set_native_structured_output(model, native_key)
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+
+    result = _invoke_params_for_schema(model, schema, thinking_params)
+
+    assert ("output_format" in result) is native
+    assert ("tools" in result) is not native
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+@pytest.mark.parametrize("schema", [TREE_SCHEMA, OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"])
+def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_native_profile(
+    set_native_structured_output, schema, native_key
+):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+
+    result = _invoke_params_for_schema(model, schema)
+
+    assert "output_format" not in result
+    assert [tool["name"] for tool in result["tools"]] == ["json_tool_call"]
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_closed_schema_goes_native_on_either_native_key(set_native_structured_output, native_key):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+    schema = {"type": "object", "properties": {"age": {"type": "integer", "minimum": 0}}, "required": ["age"]}
+
+    result = _invoke_params_for_schema(model, schema)
+
+    assert result["output_format"]["schema"]["properties"]["age"]["type"] == "integer"
+    assert "minimum" not in result["output_format"]["schema"]["properties"]["age"]
+    assert "tools" not in result
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(set_native_structured_output, native_key):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+    party_ref = {"$ref": "#/$defs/Party"}
+    schema = {
+        "type": "object",
+        "properties": {"buyer": party_ref, "seller": party_ref},
+        "required": ["buyer", "seller"],
+        "$defs": {
+            "Party": {
+                "type": "object",
+                "properties": {"email": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+                "required": ["email"],
+            }
+        },
+    }
+
+    result = _invoke_params_for_schema(model, schema)
+
+    sent = result["output_format"]["schema"]
+    assert sent["properties"]["buyer"] == party_ref
+    assert json.dumps(sent).count('"anyOf"') == 1
+    assert "tools" not in result
+
+
+class Relabel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    box: str
+    new_label: str
+
+
+class PuzzleAnswer(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    relabels: list[Relabel]
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_nested_pydantic_response_format_reaches_native_output_with_refs_that_resolve(
+    set_native_structured_output, native_key
+):
+    model = "us.anthropic.claude-haiku-5-5"
+    set_native_structured_output(model, native_key)
+    config: Final = AmazonAnthropicClaudeConfig()
+
+    result: Final = config.map_openai_params(
+        non_default_params={
+            "response_format": config.get_json_schema_from_pydantic_object(PuzzleAnswer),
+            "thinking": {"type": "adaptive"},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    sent: Final = result["output_format"]["schema"]
+    item_ref: Final = sent["properties"]["relabels"]["items"]["$ref"]
+    assert item_ref.removeprefix("#/$defs/") in sent["$defs"]
+    assert "tools" not in result
+
+
+def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(set_native_structured_output):
     """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
     for models with native structured-output support (Claude Opus 4.7)."""
+    set_native_structured_output("anthropic.claude-opus-4-7", "legacy")
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "additionalProperties": False},
     }
 
     result = AmazonAnthropicClaudeConfig().transform_request(
@@ -499,9 +631,7 @@ def test_output_config_format_forwarded_for_bedrock_chat_invoke_request():
         ("anthropic.claude-opus-4-7", "xhigh"),
     ],
 )
-def test_output_config_effort_normalized_for_bedrock_chat_invoke_request(
-    model, expected_effort
-):
+def test_output_config_effort_normalized_for_bedrock_chat_invoke_request(model, expected_effort):
     """Bedrock Invoke chat path accepts ``xhigh`` and forwards the provider-safe effort."""
     config = AmazonAnthropicClaudeConfig()
 
@@ -572,9 +702,9 @@ def test_output_format_removed_from_bedrock_invoke_request():
     )
 
     # Verify output_format is not in the request
-    assert (
-        "output_format" not in result
-    ), f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+    assert "output_format" not in result, (
+        f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+    )
 
 
 def test_bedrock_chat_invoke_forwards_output_config_format_natively(local_model_cost_map):
@@ -616,7 +746,7 @@ def test_bedrock_chat_invoke_drop_params_keeps_native_output_config_format(local
     monkeypatch.setattr(litellm, "drop_params", True)
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}, "additionalProperties": False},
     }
 
     result = AmazonAnthropicClaudeConfig().transform_request(
@@ -658,10 +788,11 @@ def test_bedrock_chat_invoke_drop_params_still_inlines_for_non_native(local_mode
     "model",
     ["us.anthropic.claude-fable-5-1", "anthropic.claude-fable-5-1"],
 )
-def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice(local_model_cost_map, model):
-    """Regression: Bedrock rejects both native ``output_config.format`` and forced
-    tool_choice for Fable 5.1, so invoke must use the tool-based path without a
+def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice(set_native_structured_output, model):
+    """Regression: Bedrock rejects forced tool_choice for Fable 5.1, so on a profile
+    without native structured output invoke must use the tool-based path without a
     forced ``tool_choice``."""
+    set_native_structured_output(model, None)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {
@@ -683,7 +814,10 @@ def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice
 
 
 @pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-5", "us.anthropic.claude-fable-5-1"])
-def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_thinking(local_model_cost_map, model):
+def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_thinking(
+    set_native_structured_output, model
+):
+    set_native_structured_output(model, None)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {
@@ -770,7 +904,9 @@ async def test_bedrock_invoke_claude_async_completion_inlines_remote_images_off_
     assert async_only_image_fetch.base64_png in captured["body"]
 
 
-async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sources_off_the_event_loop(async_only_image_fetch):
+async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sources_off_the_event_loop(
+    async_only_image_fetch,
+):
     pdf_url = f"http://docs.example/{uuid.uuid4()}.pdf"
     captured = {}
 
@@ -915,3 +1051,65 @@ def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_clie
     )
 
     assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+
+
+_CITY_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+    "additionalProperties": False,
+}
+
+
+_CITY_RESPONSE_FORMAT: Final = {"type": "json_schema", "json_schema": {"name": "city", "schema": _CITY_SCHEMA}}
+
+
+def _invoke_chat_params(
+    model: str, model_info: Mapping[str, object] | None, non_default_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    return AmazonAnthropicClaudeConfig(model_info=model_info).map_openai_params(
+        non_default_params=dict(non_default_params), optional_params={}, model=model, drop_params=False
+    )
+
+
+@pytest.mark.parametrize(
+    "thinking_params",
+    [{"thinking": {"type": "adaptive"}}, {"reasoning_effort": "low"}],
+    ids=["adaptive", "reasoning_effort"],
+)
+@pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
+def test_invoke_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
+    local_model_cost_map, model, thinking_params
+):
+    optional_params: Final = _invoke_chat_params(
+        model, None, {"response_format": _CITY_RESPONSE_FORMAT, **thinking_params}
+    )
+
+    assert AmazonAnthropicClaudeConfig().uses_opt_in_native_output(model, optional_params, {})
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info", "request_params"),
+    [
+        ("us.anthropic.claude-opus-4-8", None, {"response_format": _CITY_RESPONSE_FORMAT}),
+        (
+            "us.anthropic.claude-opus-4-8",
+            {"supports_bedrock_native_structured_output": False},
+            {"response_format": _CITY_RESPONSE_FORMAT, "thinking": {"type": "adaptive"}},
+        ),
+        (
+            "us.anthropic.claude-sonnet-4-6",
+            None,
+            {"response_format": _CITY_RESPONSE_FORMAT, "thinking": {"type": "adaptive"}},
+        ),
+    ],
+    ids=["no_thinking", "deployment_opt_out", "native_model"],
+)
+def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_come_from_the_opt_in(
+    local_model_cost_map, model, model_info, request_params
+):
+    optional_params: Final = _invoke_chat_params(model, model_info, request_params)
+
+    assert not AmazonAnthropicClaudeConfig().uses_opt_in_native_output(
+        model, optional_params, {"model_info": model_info}
+    )

@@ -32,6 +32,7 @@ PRICE_FIELDS: Final = (
     "cache_read_input_token_cost",
 )
 PUBLISHED_DBU_PER_MILLION: Final = {
+    "databricks/databricks-claude-opus-5-5": ("57.143", "285.714", "71.429", "2.857"),
     "databricks/databricks-claude-fable-5-1": ("142.858", "714.286", "178.572", "3.572"),
     "databricks/databricks-claude-fable-5": ("142.858", "714.286", "178.572", "14.286"),
     "databricks/databricks-claude-opus-5": ("71.429", "357.143", "89.286", "7.143"),
@@ -153,7 +154,17 @@ def test_uncached_request_bills_every_prompt_token_at_the_input_rate(local_model
     assert completion_cost == pytest.approx(200 * info["output_cost_per_token"])
 
 
-def test_legacy_endpoint_names_still_resolve(local_model_cost_map: None) -> None:
+def test_legacy_endpoint_names_still_resolve(local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "databricks/databricks-mixtral-8x7b-instruct",
+        {
+            "litellm_provider": "databricks",
+            "mode": "chat",
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+        },
+    )
     info: Final = _model_info("databricks/databricks-mixtral-8x7b-instruct")
     usage: Final = Usage(prompt_tokens=100, completion_tokens=100, total_tokens=200)
 

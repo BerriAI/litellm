@@ -860,16 +860,16 @@ async def test_arouter_amoderation_with_credential_name(mock_amoderation):
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "text-moderation-stable",
+                "model_name": "omni-moderation-latest",
                 "litellm_params": {
-                    "model": "text-moderation-stable",
+                    "model": "omni-moderation-latest",
                     "litellm_credential_name": "my-custom-auth",
                 },
             },
         ],
     )
 
-    await router.amoderation(input="I love everyone!", model="text-moderation-stable")
+    await router.amoderation(input="I love everyone!", model="omni-moderation-latest")
 
     mock_amoderation.assert_called_once()
     call_kwargs = mock_amoderation.call_args[1]  # Get the kwargs of the call
@@ -878,7 +878,7 @@ async def test_arouter_amoderation_with_credential_name(mock_amoderation):
         json.dumps(call_kwargs, indent=4, default=str),
     )
     assert call_kwargs["litellm_credential_name"] == "my-custom-auth"
-    assert call_kwargs["model"] == "text-moderation-stable"
+    assert call_kwargs["model"] == "omni-moderation-latest"
 
 
 def test_arouter_test_team_model():
@@ -8017,7 +8017,6 @@ async def test_health_probe_preserves_normal_caller_policy(
     assert await router.cooldown_cache.async_get_active_cooldowns(["dep-0", "dep-1"], parent_otel_span=None) == []
 
 
-
 @pytest.mark.asyncio
 async def test_async_get_fully_unhealthy_model_names_keeps_name_when_partial():
     router = _router_with_two_deployments([False, False])
@@ -12412,7 +12411,6 @@ def test_model_group_info_reasoning_efforts_are_unknown_when_any_deployment_is_o
 
     assert result is not None
     assert result.supported_reasoning_efforts is None
-
 
 
 @pytest.mark.parametrize(

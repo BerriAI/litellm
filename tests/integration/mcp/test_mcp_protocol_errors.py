@@ -1,13 +1,17 @@
 import json
 import queue
 import uuid
+from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
-
+import yaml
 from integration._support.client import Gateway
 from integration._support.mcp import McpPeer, call_tool, register_mcp, tool_names
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
+from pydantic import JsonValue, TypeAdapter
 
 
 @pytest.mark.covers("other.mcp.errors.protocol_and_malformed_results_cannot_be_empty_success")
@@ -84,3 +88,94 @@ def test_jsonrpc_error_and_malformed_tool_result_remain_errors(gateway: Gateway)
             control: Final = call_tool(gateway, key, identity, names["add"], {"a": 3, "b": 5})
             assert control.status_code == 200 and control.json()["isError"] is False, control.text
             assert control.json()["content"][0]["text"] == "8"
+
+
+@pytest.mark.covers("other.mcp.transport.large_sse_tool_result_reaches_caller")
+@pytest.mark.parametrize("limit", (64 * 1024 * 1024, 4096))
+def test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_caller(tmp_path: Path, limit: int) -> None:
+    payload: Final = "x" * (3 * 1024 * 1024)
+    request_json: Final = TypeAdapter(dict[str, JsonValue])
+
+    def provider(request: Request) -> Reply:
+        if request.method != "POST":
+            return Reply(status=405)
+        body: Final = request_json.validate_json(request.body)
+        if "id" not in body:
+            return Reply(status=202)
+        method: Final = body["method"]
+        if method == "initialize":
+            params: Final = request_json.validate_python(body["params"])
+            return Reply(
+                body=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "protocolVersion": params["protocolVersion"],
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "large-result", "version": "1"},
+                        },
+                    }
+                ).encode()
+            )
+        if method == "tools/list":
+            return Reply(
+                body=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "tools": [{"name": "add", "inputSchema": {"type": "object"}}],
+                        },
+                    }
+                ).encode()
+            )
+        assert method == "tools/call"
+        call_params: Final = request_json.validate_python(body["params"])
+        arguments: Final = request_json.validate_python(call_params["arguments"])
+        size: Final = TypeAdapter(int).validate_python(arguments["size"])
+        response: Final = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": {"content": [{"type": "text", "text": payload[:size]}], "isError": False},
+            }
+        )
+        return Reply(content_type="text/event-stream", body=f"event: message\ndata: {response}\n\n".encode())
+
+    key: Final = "sk-local-mcp-sse-limit-regression-key"
+    with wire_server(provider) as wire, httpx.Client() as client:
+        config: Final = tmp_path / "sse-limit.yaml"
+        config.write_text(
+            yaml.safe_dump(
+                {
+                    "general_settings": {"master_key": key, "store_model_in_db": False},
+                    "mcp_servers": {"big": {"url": wire.url + "/mcp", "transport": "http"}},
+                }
+            )
+        )
+        seed: Final = Gateway(client, key, wire.url)
+        with owned_proxy(
+            seed,
+            tmp_path / "proxy",
+            {
+                "STORE_MODEL_IN_DB": "False",
+                "DISABLE_SCHEMA_UPDATE": "true",
+                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+                "LITELLM_MCP_MAX_SSE_EVENT_SIZE_BYTES": str(limit),
+            },
+            config=config,
+            remove_environment=("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "DIRECT_URL"),
+        ) as gateway:
+            listed: Final = gateway.client.get("/mcp-rest/tools/list", headers={"x-litellm-api-key": key})
+            assert listed.status_code == 200, listed.text[:500]
+            assert {tool["name"] for tool in listed.json()["tools"]} == {"add"}
+            for size in (512, len(payload), 512):
+                response: Final = call_tool(gateway, key, "big", "add", {"size": size})
+                assert response.status_code == 200, response.text[:500]
+                body: Final = response.json()
+                assert body["isError"] is (size > limit), response.text[:500]
+                if size > limit:
+                    assert str(limit) in body["content"][0]["text"], response.text[:500]
+                else:
+                    assert body["content"][0]["text"] == payload[:size]

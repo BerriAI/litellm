@@ -8,6 +8,9 @@ This test file verifies the fixes for Issue #19923:
 """
 
 
+from typing import Final
+
+import litellm
 import pytest
 
 
@@ -256,20 +259,14 @@ def test_openrouter_glm_transform_moves_cache_control_to_content():
     assert user_message["content"][0]["cache_control"] == {"type": "ephemeral"}
 
 
-def test_openrouter_supports_thinking_param_for_reasoning_models():
-    """OpenRouter should support thinking parameter for reasoning-capable models."""
-    config = OpenrouterConfig()
+def test_openrouter_supports_thinking_param_for_reasoning_models(reasoning_model: str):
+    supported_params = OpenrouterConfig().get_supported_openai_params(model=reasoning_model)
+    assert "thinking" in supported_params
+    assert "reasoning_effort" in supported_params
 
-    # Test MiniMax (supports reasoning)
-    supported_params_minimax = config.get_supported_openai_params(
-        model="openrouter/minimax/minimax-m2"
-    )
-    assert "thinking" in supported_params_minimax
-    assert "reasoning_effort" in supported_params_minimax
 
-    # Test GLM (supports reasoning)
-    supported_params_glm = config.get_supported_openai_params(
-        model="openrouter/z-ai/glm-4.6"
-    )
-    assert "thinking" in supported_params_glm
-    assert "reasoning_effort" in supported_params_glm
+@pytest.fixture
+def reasoning_model(monkeypatch: pytest.MonkeyPatch) -> str:
+    model: Final = "openrouter/test-reasoning-model"
+    monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "openrouter", "mode": "chat", "supports_reasoning": True})
+    return model

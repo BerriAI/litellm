@@ -49,7 +49,12 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_TOOL_LISTING_TIMEOUT
+from litellm.constants import (
+    MCP_CLIENT_TIMEOUT,
+    MCP_MAX_SSE_EVENT_SIZE_BYTES,
+    MCP_NPM_CACHE_DIR,
+    MCP_TOOL_LISTING_TIMEOUT,
+)
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
@@ -395,6 +400,7 @@ class MCPClient:
         transport_ctx: Final = streamable_http_client(
             url=self.server_url,
             http_client=http_client,
+            max_sse_event_size=MCP_MAX_SSE_EVENT_SIZE_BYTES,
         )
         return transport_ctx, http_client
 

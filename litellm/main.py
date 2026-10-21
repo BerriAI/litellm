@@ -8,7 +8,6 @@
 # +-----------------------------------------------+
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
-
 import asyncio
 import contextvars
 import datetime
@@ -27,6 +26,8 @@ from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 from urllib.parse import urlsplit
+
+from pydantic import TypeAdapter
 
 from litellm._logging import _redact_string
 from litellm._uuid import uuid
@@ -104,7 +105,12 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock.common_utils import (
+    BedrockModelInfo,
+    NativeOutputFallback,
+    deployment_model_info,
+    without_bedrock_native_output_opt_in,
+)
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -196,6 +202,9 @@ from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM
+from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeConfig
+from .llms.bedrock.chat.native_output_fallback import NativeOutputAttemptResult, call_with_native_output_fallback
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image_edit.handler import BedrockImageEdit
 from .llms.bedrock.image_generation.image_handler import BedrockImageGeneration
@@ -4040,6 +4049,49 @@ def _complete_sagemaker(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     )
 
 
+_OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+_AWS_BEDROCK_CLIENT_CREDENTIAL_KEYS: Final = (
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
+)
+
+
+def _native_output_fallback(
+    ctx: _CompletionDispatchContext,
+    first_attempt_params: Mapping[str, object],
+    first_attempt_litellm_params: Mapping[str, object],
+) -> NativeOutputFallback:
+    litellm_params: Final = without_bedrock_native_output_opt_in(first_attempt_litellm_params)
+    remapped_params: Final = ctx.optional_params_for_model_info(deployment_model_info(litellm_params))
+    return NativeOutputFallback(
+        optional_params={  # mutable-ok: provider handlers consume request options in place
+            **{  # mutable-ok: request options need independent ownership
+                key: value for key, value in remapped_params.items() if key != "aws_bedrock_client"
+            },
+            **{  # mutable-ok: preserve only credentials resolved by the first attempt
+                key: first_attempt_params[key]
+                for key in _AWS_BEDROCK_CLIENT_CREDENTIAL_KEYS
+                if key in first_attempt_params
+            },
+        },
+        litellm_params=litellm_params,
+    )
+
+
+def _converse_native_output_fallback(
+    ctx: _CompletionDispatchContext,
+    first_attempt_params: Mapping[str, object],
+    first_attempt_litellm_params: Mapping[str, object],
+) -> NativeOutputFallback | None:
+    fallback: Final = _native_output_fallback(ctx, first_attempt_params, first_attempt_litellm_params)
+    return None if AmazonConverseConfig.sends_native_text_format(fallback.optional_params) else fallback
+
+
 def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -4106,22 +4158,40 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
         )
     elif bedrock_route == "converse":
         model = model.replace("converse/", "")
-        response = bedrock_converse_chat_completion.completion(
-            model=model,
-            messages=messages,
-            custom_prompt_dict=custom_prompt_dict,
-            model_response=model_response,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            logger_fn=logger_fn,
-            encoding=_get_encoding(),
-            logging_obj=logging,
-            extra_headers=headers,  # Use merged headers instead of original extra_headers
-            timeout=timeout,
-            acompletion=acompletion,
-            client=client,
-            api_base=api_base,
-            api_key=api_key,
+        converse_model: Final = model
+
+        def converse_attempt(fallback: NativeOutputFallback | None) -> NativeOutputAttemptResult:
+            return bedrock_converse_chat_completion.completion(
+                model=converse_model,
+                messages=messages,
+                custom_prompt_dict=custom_prompt_dict,
+                model_response=model_response,
+                optional_params=optional_params
+                if fallback is None
+                else dict(fallback.optional_params),  # mutable-ok: handler pops request options
+                litellm_params=litellm_params
+                if fallback is None
+                else dict(fallback.litellm_params),  # mutable-ok: handler mutates private request metadata
+                logger_fn=logger_fn,
+                encoding=_get_encoding(),
+                logging_obj=logging,
+                extra_headers=headers,  # Use merged headers instead of original extra_headers
+                timeout=timeout,
+                acompletion=acompletion,
+                client=client,
+                api_base=api_base,
+                api_key=api_key,
+            )
+
+        converse_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
+        response = call_with_native_output_fallback(
+            converse_attempt,
+            (
+                partial(_converse_native_output_fallback, ctx, converse_params, MappingProxyType(litellm_params.copy()))
+                if AmazonConverseConfig().uses_opt_in_native_output(converse_model, converse_params, litellm_params)
+                else None
+            ),
+            converse_model,
         )
     elif bedrock_route == "converse_like":
         model = model.replace("converse_like/", "")
@@ -4143,22 +4213,40 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
             client=client,
         )
     else:
-        response = base_llm_http_handler.completion(
-            model=model,
-            stream=stream,
-            messages=messages,
-            acompletion=acompletion,
-            api_base=api_base,
-            model_response=model_response,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            custom_llm_provider="bedrock",
-            timeout=timeout,
-            headers=headers,
-            encoding=_get_encoding(),
-            api_key=api_key,
-            logging_obj=logging,
-            client=client,
+
+        def invoke_attempt(fallback: NativeOutputFallback | None) -> NativeOutputAttemptResult:
+            return base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params
+                if fallback is None
+                else dict(fallback.optional_params),  # mutable-ok: handler pops request options
+                litellm_params=litellm_params
+                if fallback is None
+                else dict(fallback.litellm_params),  # mutable-ok: handler mutates private request metadata
+                custom_llm_provider="bedrock",
+                timeout=timeout,
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
+
+        invoke_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
+        response = call_with_native_output_fallback(
+            invoke_attempt,
+            (
+                partial(_native_output_fallback, ctx, invoke_params, MappingProxyType(litellm_params.copy()))
+                if isinstance(provider_config, AmazonAnthropicClaudeConfig)
+                and provider_config.uses_opt_in_native_output(model, invoke_params, litellm_params)
+                else None
+            ),
+            model,
         )
 
     return response
@@ -5495,7 +5583,15 @@ def completion(
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
-        optional_params = get_optional_params(**optional_param_args, **non_default_params)
+        mapping_args: Final = MappingProxyType(dict(optional_param_args))
+        mapping_special_params: Final = MappingProxyType(dict(non_default_params))
+
+        def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
+            return get_optional_params(**mapping_args, model_info=deployment_info, **mapping_special_params)
+
+        optional_params = optional_params_for_model_info(
+            _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
+        )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
@@ -5684,6 +5780,7 @@ def completion(
             model=model,
             model_response=model_response,
             optional_params=optional_params,
+            optional_params_for_model_info=optional_params_for_model_info,
             organization=organization,
             provider_config=provider_config,
             shared_session=shared_session,

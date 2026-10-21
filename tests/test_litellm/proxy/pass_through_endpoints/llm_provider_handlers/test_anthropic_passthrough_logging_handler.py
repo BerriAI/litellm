@@ -591,7 +591,7 @@ class TestAzureAnthropicCostCalculation:
     def test_passthrough_logging_sets_response_cost_with_server_tool_use_dict(self):
         from litellm.types.utils import Choices, Message, ModelResponse
 
-        logging_obj = self._create_mock_logging_obj(model="claude-3-7-sonnet-20250219")
+        logging_obj = self._create_mock_logging_obj(model="claude-sonnet-4-6")
         logging_obj.get_router_model_id.return_value = None
         logging_obj.litellm_params = {}
 
@@ -605,7 +605,7 @@ class TestAzureAnthropicCostCalculation:
                 )
             ],
             created=1234567890,
-            model="claude-3-7-sonnet-20250219",
+            model="claude-sonnet-4-6",
             usage={
                 "prompt_tokens": 10,
                 "completion_tokens": 5,
@@ -616,7 +616,7 @@ class TestAzureAnthropicCostCalculation:
 
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=response,
-            model="claude-3-7-sonnet-20250219",
+            model="claude-sonnet-4-6",
             kwargs={},
             start_time=datetime.now(),
             end_time=datetime.now(),
@@ -2374,13 +2374,13 @@ class TestAnthropicResponseCostRecordedOnModelCallDetails:
                 )
             ],
             created=1234567890,
-            model="claude-3-7-sonnet-20250219",
+            model="claude-sonnet-4-6",
             usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         )
 
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=response,
-            model="claude-3-7-sonnet-20250219",
+            model="claude-sonnet-4-6",
             kwargs={},
             start_time=datetime.now(),
             end_time=datetime.now(),

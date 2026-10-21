@@ -112,12 +112,12 @@ def test_get_cost_for_built_in_tools_file_search():
 def test_get_cost_for_anthropic_web_search():
     """
     Test that Anthropic web search cost is tracked when usage.server_tool_use.web_search_requests
-    is set. Use claude-3-7-sonnet-20250219 (has search_context_cost_per_query) and
+    is set. Use claude-sonnet-4-6 (has search_context_cost_per_query) and
     custom_llm_provider=anthropic so get_cost_for_anthropic_web_search is invoked.
     """
     from litellm.types.utils import ServerToolUse, Usage
 
-    model = "claude-3-7-sonnet-20250219"
+    model = "claude-sonnet-4-6"
     usage = Usage(server_tool_use=ServerToolUse(web_search_requests=1))
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
         model=model,
@@ -154,7 +154,7 @@ def test_anthropic_web_search_cost_from_raw_response_dict_when_usage_drops_serve
     """
     from litellm.types.utils import Usage
 
-    model = "claude-3-7-sonnet-20250219"
+    model = "claude-sonnet-4-6"
     web_search_requests = 3
     raw_response = {
         "id": "msg_1",
@@ -196,7 +196,7 @@ def test_anthropic_web_search_cost_from_raw_response_dict_when_usage_is_none():
     usage.server_tool_use.web_search_requests on the dict instead of falling back to
     the flat search_context_size_medium tier.
     """
-    model = "claude-3-7-sonnet-20250219"
+    model = "claude-sonnet-4-6"
     web_search_requests = 4
     raw_response = {
         "id": "msg_1",
@@ -288,7 +288,7 @@ def test_anthropic_response_usage_block_preserves_server_tool_use():
 
 
 @pytest.mark.parametrize(
-    "model", ["gemini/gemini-2.0-flash-001", "gemini-2.0-flash-001"]
+    "model", ["gemini/gemini-2.5-flash", "gemini-2.5-flash"]
 )
 def test_get_cost_for_gemini_web_search(model):
     """
@@ -486,15 +486,15 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
     Regression for the provider-prefix fallback in _handle_web_search_cost. When the initial
     get_model_info lookup fails for a "/"-containing model, the retry re-resolves model_info from
     the prefix and must adopt that prefix's provider for routing. Otherwise an unrelated model
-    (here OpenRouter, which carries no web search pricing) is re-resolved but still routed through
+    (here Azure, which carries no web search pricing) is re-resolved but still routed through
     the request's vertex_ai Gemini calculator, which charges its $0.035 per_prompt default for a
     model that should cost nothing for web search.
     """
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
-    model = "openrouter/google/gemini-3.1-flash-lite"
+    model = "azure/gpt-4o"
     model_info = litellm.get_model_info(model)
-    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["litellm_provider"] == "azure"
     assert not model_info.get("search_context_cost_per_query")
 
     usage = Usage(

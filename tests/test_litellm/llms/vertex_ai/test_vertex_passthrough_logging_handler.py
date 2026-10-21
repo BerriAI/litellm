@@ -241,6 +241,15 @@ def test_audio_predict_response_supports_bytes_base64_encoded(
 def test_image_predict_response_is_not_billed_as_audio(
     local_model_cost_map: None,
 ) -> None:
+    litellm.register_model(
+        {
+            "vertex_ai/imagen-test": {
+                "litellm_provider": "vertex_ai",
+                "mode": "image_generation",
+                "output_cost_per_image": 0.02,
+            }
+        }
+    )
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
     response = httpx.Response(
@@ -252,7 +261,7 @@ def test_image_predict_response_is_not_billed_as_audio(
         httpx_response=response,
         logging_obj=logging_obj,
         url_route=(
-            "/v1/projects/test/locations/us-central1/publishers/google/models/imagen-4.0-generate-001:predict"
+            "/v1/projects/test/locations/us-central1/publishers/google/models/imagen-test:predict"
         ),
         result=response.text,
         start_time=datetime.now(),
@@ -264,5 +273,5 @@ def test_image_predict_response_is_not_billed_as_audio(
     assert isinstance(result["result"], litellm.ImageResponse)
     assert logging_obj.call_type == PassthroughCallTypes.passthrough_image_generation.value
     assert result["kwargs"]["response_cost"] == pytest.approx(
-        litellm.model_cost["vertex_ai/imagen-4.0-generate-001"]["output_cost_per_image"]
+        litellm.model_cost["vertex_ai/imagen-test"]["output_cost_per_image"]
     )

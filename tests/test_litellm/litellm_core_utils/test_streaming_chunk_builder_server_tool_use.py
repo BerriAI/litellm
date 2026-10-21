@@ -35,7 +35,7 @@ def _make_text_chunk(text: str) -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-test-26153",
         created=1700000000,
-        model="claude-3-haiku-20240307",
+        model="claude-haiku-4-5",
         object="chat.completion.chunk",
         choices=[
             StreamingChoices(
@@ -52,7 +52,7 @@ def _make_finish_chunk_with_usage_dict_server_tool_use() -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-test-26153",
         created=1700000000,
-        model="claude-3-haiku-20240307",
+        model="claude-haiku-4-5",
         object="chat.completion.chunk",
         choices=[
             StreamingChoices(

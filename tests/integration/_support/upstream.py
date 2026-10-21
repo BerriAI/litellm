@@ -1,25 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import struct
+import zlib
 from collections import deque
 from collections.abc import Mapping
-import json
 from dataclasses import dataclass, field
-import os
 from pathlib import Path
 from queue import SimpleQueue
-import struct
 from typing import Final, cast
-import zlib
 
 import httpx
 import uvicorn
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
-
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
 from integration.cost_calculation.cost_tracking_case import (
     EventStreamResponse,
@@ -27,6 +21,11 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
     StoredResponse,
 )
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 CASES_FILE: Final = Path(__file__).resolve().parents[1] / "cost_calculation" / "cost_tracking_cases.json"
@@ -76,9 +75,7 @@ def _aws_str_header(name: str, value: str) -> bytes:
 
 
 def _aws_event_frame(event_type: str, payload: Mapping[str, JsonValue], scenario_id: str) -> bytes:
-    payload_bytes: Final = json.dumps(payload, separators=(",", ":")).replace(
-        "$REQUEST_ID", scenario_id
-    ).encode()
+    payload_bytes: Final = json.dumps(payload, separators=(",", ":")).replace("$REQUEST_ID", scenario_id).encode()
     headers_bytes: Final = (
         _aws_str_header(":event-type", event_type)
         + _aws_str_header(":content-type", "application/json")
@@ -134,7 +131,13 @@ class Provider:
             status: Final = script.popleft()
             if status != 200:
                 return JSONResponse(
-                    {"error": {"message": "Controlled provider failure", "type": error_type(status), "code": str(status)}},
+                    {
+                        "error": {
+                            "message": "Controlled provider failure",
+                            "type": error_type(status),
+                            "code": str(status),
+                        }
+                    },
                     status_code=status,
                 )
         return await chat_completions(request)
@@ -206,15 +209,13 @@ class Provider:
         match response:
             case JsonResponse():
                 return Response(
-                    content=json.dumps(response.body, separators=(",", ":")).replace(
-                        "$REQUEST_ID", scenario_id
-                    ).encode(),
+                    content=json.dumps(response.body, separators=(",", ":"))
+                    .replace("$REQUEST_ID", scenario_id)
+                    .encode(),
                     media_type=response.content_type,
                 )
             case SseResponse():
-                stream_body: Final = ("\n\n".join(response.frames) + "\n\n").replace(
-                    "$REQUEST_ID", scenario_id
-                )
+                stream_body: Final = ("\n\n".join(response.frames) + "\n\n").replace("$REQUEST_ID", scenario_id)
                 return Response(content=stream_body.encode(), media_type=response.content_type)
             case EventStreamResponse():
                 event_body: Final = b"".join(
@@ -285,3 +286,21 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _aws_int_header(name: str, value: int) -> bytes:
+    name_bytes: Final = name.encode()
+    return struct.pack("!B", len(name_bytes)) + name_bytes + struct.pack("!B", 4) + struct.pack("!i", value)
+
+
+def aws_event_stream_frame(headers: Mapping[str, str | int], payload: bytes) -> bytes:
+    """One AWS event-stream frame: a string header is wire type 7, an int header wire type 4 (int32)."""
+    headers_bytes: Final = b"".join(
+        _aws_str_header(name, value) if isinstance(value, str) else _aws_int_header(name, value)
+        for name, value in headers.items()
+    )
+    total_length: Final = 12 + len(headers_bytes) + len(payload) + 4
+    prelude: Final = struct.pack("!II", total_length, len(headers_bytes))
+    prelude_crc: Final = struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF)
+    message: Final = prelude + prelude_crc + headers_bytes + payload
+    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)

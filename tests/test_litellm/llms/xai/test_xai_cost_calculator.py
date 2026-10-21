@@ -156,7 +156,7 @@ class TestXAICostCalculator:
         """Absent the provider figure, nothing changes for existing callers."""
         usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(model="grok-4.3", usage=usage)
 
         assert prompt_cost > 0.0
         assert completion_cost > 0.0
@@ -166,7 +166,7 @@ class TestXAICostCalculator:
         usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
         setattr(usage, "cost", "not-a-number")
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(model="grok-4.3", usage=usage)
 
         assert prompt_cost > 0.0
         assert completion_cost > 0.0
@@ -176,7 +176,7 @@ class TestXAICostCalculator:
         usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
         setattr(usage, "cost", True)
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(model="grok-4.3", usage=usage)
 
         assert prompt_cost > 0.0
         assert completion_cost > 0.0
@@ -198,7 +198,7 @@ class TestXAICostCalculator:
         )
         setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 3})
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(model="grok-4.3", usage=usage)
 
         assert prompt_cost > 0.0
         assert completion_cost > 0.0
@@ -222,7 +222,7 @@ class TestXAICostCalculator:
             )
             setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 3})
 
-            prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+            prompt_cost, completion_cost = cost_per_token(model="grok-4.3", usage=usage)
 
             assert math.isfinite(prompt_cost), reported_cost
             assert math.isfinite(completion_cost), reported_cost

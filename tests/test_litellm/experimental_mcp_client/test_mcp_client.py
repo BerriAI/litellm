@@ -1095,15 +1095,11 @@ def test_mcp_extra_matches_proxy_extra_and_supports_streamable_http():
 
     sdk2_names: Final = frozenset(("mcp", "httpx2", "pydantic"))
     mcp_extra: Final = {Requirement(req).name: req for req in extras["mcp"]}
-    assert mcp_extra == {
-        name: req
-        for req in extras["proxy"]
-        if (name := Requirement(req).name) in sdk2_names
-    }
+    assert mcp_extra == {name: req for req in extras["proxy"] if (name := Requirement(req).name) in sdk2_names}
 
     specifier: Final = Requirement(mcp_extra["mcp"]).specifier
-    assert not specifier.contains("1.28.1")
-    assert specifier.contains("2.2.0")
+    assert not specifier.contains("2.2.0")
+    assert specifier.contains("2.3.0")
     with (pyproject_path.parent / "uv.lock").open("rb") as f:
         locked = tomllib.load(f)
     mcp_versions: Final = [package["version"] for package in locked["package"] if package["name"] == "mcp"]
@@ -1497,7 +1493,9 @@ async def test_http_response_handler_preserves_success_and_http_errors(status_co
 
 @pytest.mark.asyncio
 async def test_http_status_check_allows_auth_refresh_before_rejecting() -> None:
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import ClientCredentialsBearerAuth
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+        ClientCredentialsBearerAuth,
+    )
 
     seen = []
 
@@ -1751,6 +1749,7 @@ async def test_sse_read_failure_is_preserved() -> None:
 @pytest.mark.parametrize("mode", ["ok", "closed", "silent"])
 async def test_transport_completion_and_normal_messages(transport: MCPTransport, mode: str) -> None:
     from mcp import ClientSession
+
     from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
 
     logging_callback: Final = AsyncMock()
@@ -2053,13 +2052,19 @@ async def test_optional_discovery_preserves_cancellation(method: str) -> None:
             await asyncio.wait_for(task, timeout=3)
 
 
-
 def test_client_import_before_proxy_credentials_succeeds_in_fresh_process():
     import subprocess
 
     result = subprocess.run(
-        [sys.executable, "-c", "import litellm.experimental_mcp_client.client; from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager; print(MCPServerManager.__name__)"],
-        capture_output=True, text=True, timeout=60, check=False,
+        [
+            sys.executable,
+            "-c",
+            "import litellm.experimental_mcp_client.client; from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager; print(MCPServerManager.__name__)",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "MCPServerManager"
@@ -2092,8 +2097,10 @@ async def test_request_auth_preview_uses_the_same_effective_headers_as_egress() 
     from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
 
     client: Final = MCPClient(
-        server_url="https://upstream.example/mcp", auth_type=MCPAuth.bearer_token,
-        resolved_auth=StaticHeaderAuth("Bearer resolved"), extra_headers={"X-Trace": "trace"},
+        server_url="https://upstream.example/mcp",
+        auth_type=MCPAuth.bearer_token,
+        resolved_auth=StaticHeaderAuth("Bearer resolved"),
+        extra_headers={"X-Trace": "trace"},
     )
     request: Final = await client.prepare_request_auth()
     assert request.method == "POST"
@@ -2117,18 +2124,29 @@ async def test_expired_session_preserves_sdk_error_and_next_operation_reinitiali
             return httpx2.Response(202)
         requests.append((payload["method"], request.headers.get("mcp-session-id")))
         if payload["method"] == "initialize":
-            return httpx2.Response(200, headers={"mcp-session-id": f"session-{len(requests)}"}, json={
-                "jsonrpc": "2.0", "id": payload["id"], "result": {
-                    "protocolVersion": "2025-06-18", "capabilities": {},
-                    "serverInfo": {"name": "expiry-test", "version": "1"},
+            return httpx2.Response(
+                200,
+                headers={"mcp-session-id": f"session-{len(requests)}"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "serverInfo": {"name": "expiry-test", "version": "1"},
+                    },
                 },
-            })
+            )
         if len(requests) == 2:
             if rpc_error:
-                return httpx2.Response(404, json={
-                    "jsonrpc": "2.0", "id": payload["id"],
-                    "error": {"code": METHOD_NOT_FOUND, "message": "Tool catalog unavailable"},
-                })
+                return httpx2.Response(
+                    404,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": payload["id"],
+                        "error": {"code": METHOD_NOT_FOUND, "message": "Tool catalog unavailable"},
+                    },
+                )
             return httpx2.Response(404)
         return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": {"tools": []}})
 
@@ -2144,7 +2162,12 @@ async def test_expired_session_preserves_sdk_error_and_next_operation_reinitiali
             streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
         )
     assert result.tools == []
-    assert requests == [("initialize", None), ("tools/list", "session-1"), ("initialize", None), ("tools/list", "session-3")]
+    assert requests == [
+        ("initialize", None),
+        ("tools/list", "session-1"),
+        ("initialize", None),
+        ("tools/list", "session-3"),
+    ]
 
 
 @pytest.mark.asyncio

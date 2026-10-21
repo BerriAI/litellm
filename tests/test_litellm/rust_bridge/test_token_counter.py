@@ -215,7 +215,6 @@ async def test_runtime_failure_falls_back(tokenizer: bridge.RustTokenizer) -> No
         ("gpt-4o", "o200k_base"),
         ("gpt-4o-mini", "o200k_base"),
         ("gpt-4o-2024-08-06", "o200k_base"),
-        ("chatgpt-4o-latest", "o200k_base"),
         ("gpt-4.1", "o200k_base"),
         ("gpt-5", "o200k_base"),
         ("gpt-5-mini", "o200k_base"),

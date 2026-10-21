@@ -1,15 +1,13 @@
 # What is this?
 ## Unit testing for the 'get_model_info()' function
 import os
-
-
-from typing import List, Dict, Any
+from typing import Any, Dict, Final, List
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 import litellm
 from litellm import get_model_info
-from unittest.mock import MagicMock, patch
 
 
 def test_get_model_info_simple_model_name():
@@ -114,19 +112,13 @@ def test_get_model_info_ft_model_with_provider_prefix():
     assert info["key"] == "ft:gpt-3.5-turbo"
 
 
-def _enforce_bedrock_converse_models(
-    model_cost: List[Dict[str, Any]], whitelist_models: List[str]
-):
+def _enforce_bedrock_converse_models(model_cost: List[Dict[str, Any]], whitelist_models: List[str]):
     """
     Assert all new bedrock chat models are added as `bedrock_converse` unless explicitly whitelisted.
     """
     # Check for unwhitelisted models
     for model, info in litellm.model_cost.items():
-        if (
-            info["litellm_provider"] == "bedrock"
-            and info["mode"] == "chat"
-            and model not in whitelist_models
-        ):
+        if info["litellm_provider"] == "bedrock" and info["mode"] == "chat" and model not in whitelist_models:
             raise AssertionError(
                 f"New bedrock chat model detected: {model}. Please set `litellm_provider='bedrock_converse'` for this model."
             )
@@ -147,9 +139,7 @@ def test_model_info_bedrock_converse(monkeypatch):
     except FileNotFoundError:
         pytest.skip("whitelisted_bedrock_models.txt not found")
 
-    _enforce_bedrock_converse_models(
-        model_cost=litellm.model_cost, whitelist_models=whitelist_models
-    )
+    _enforce_bedrock_converse_models(model_cost=litellm.model_cost, whitelist_models=whitelist_models)
 
 
 @pytest.mark.flaky(retries=6, delay=2)
@@ -173,9 +163,7 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
 
         # Check for unwhitelisted models
         with pytest.raises(AssertionError):
-            _enforce_bedrock_converse_models(
-                model_cost=litellm.model_cost, whitelist_models=whitelist_models
-            )
+            _enforce_bedrock_converse_models(model_cost=litellm.model_cost, whitelist_models=whitelist_models)
     except FileNotFoundError as e:
         pytest.skip("whitelisted_bedrock_models.txt not found")
 
@@ -213,14 +201,11 @@ def test_get_model_info_custom_provider():
     # Get registered model info
     from litellm import get_model_info
 
-    get_model_info(
-        model="my-custom-llm/my-fake-model"
-    )  # 💥 "Exception: This model isn't mapped yet." in v1.56.10
+    get_model_info(model="my-custom-llm/my-fake-model")  # 💥 "Exception: This model isn't mapped yet." in v1.56.10
 
 
 def test_get_model_info_custom_model_router():
-    from litellm import Router
-    from litellm import get_model_info
+    from litellm import Router, get_model_info
 
     litellm._turn_on_debug()
 
@@ -248,6 +233,7 @@ def test_get_model_info_custom_model_router():
 def test_get_model_info_bedrock_models():
     """
     Check for drift in base model info for bedrock models and regional model info for bedrock models.
+    GovCloud regions may lag their commercial base on Bedrock native structured output, never lead it.
     """
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
@@ -267,11 +253,7 @@ def test_get_model_info_bedrock_models():
                     k = k.replace(f"{commitment}/", "")
             base_model = BedrockModelInfo.get_base_model(k)
             # get_base_model() returns model id without "bedrock/" prefix; cost map keys use "bedrock/<model>"
-            base_model_key = (
-                base_model
-                if base_model in litellm.model_cost
-                else f"bedrock/{base_model}"
-            )
+            base_model_key = base_model if base_model in litellm.model_cost else f"bedrock/{base_model}"
             if base_model_key not in litellm.model_cost:
                 continue
             base_model_info = litellm.model_cost[base_model_key]
@@ -279,18 +261,21 @@ def test_get_model_info_bedrock_models():
                 if "invoke/" in k:
                     continue
                 if base_model_key.startswith("supports_"):
-                    assert (
-                        base_model_key in v
-                    ), f"{base_model_key} is not in model cost map for {k}"
-                    assert (
-                        v[base_model_key] == base_model_value
-                    ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
+                    assert base_model_key in v, f"{base_model_key} is not in model cost map for {k}"
+                    if _govcloud_may_lag(k, base_model_key):
+                        assert base_model_value or not v[base_model_key], f"{base_model_key} is on {k} but not its base"
+                        continue
+                    assert v[base_model_key] == base_model_value, (
+                        f"{base_model_key} is not equal to {base_model_value} for model {k}"
+                    )
 
 
 def test_get_model_info_bedrock_cross_region_capability_parity():
     """
     Cross-region inference profiles carry litellm_provider "bedrock_converse", so the
     regional drift check above (which filters on "bedrock") never reaches them.
+    GovCloud is a separate AWS partition that gets features later, so a us-gov profile
+    may lack Bedrock native structured output its commercial base has, never the reverse.
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -312,9 +297,10 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
             if not cap.startswith("supports_"):
                 continue
             assert cap in v, f"{cap} is on {base_model_key} but missing from {k}"
-            assert (
-                v[cap] == base_value
-            ), f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"
+            if _govcloud_may_lag(k, cap):
+                assert base_value or not v[cap], f"{cap} is on {k} but not on {base_model_key}"
+                continue
+            assert v[cap] == base_value, f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"
 
     assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
@@ -375,23 +361,17 @@ def test_get_model_info_case_insensitive_lookup(monkeypatch):
     )
 
     # Test 1: Exact case should work
-    info = litellm.get_model_info(
-        model="Qwen/Qwen3-Next-80B-A3B-Thinking", custom_llm_provider="together_ai"
-    )
+    info = litellm.get_model_info(model="Qwen/Qwen3-Next-80B-A3B-Thinking", custom_llm_provider="together_ai")
     assert info is not None
     assert info["supports_function_calling"] is True
 
     # Test 2: Lowercase should also work (case-insensitive lookup)
-    info_lower = litellm.get_model_info(
-        model="qwen/qwen3-next-80b-a3b-thinking", custom_llm_provider="together_ai"
-    )
+    info_lower = litellm.get_model_info(model="qwen/qwen3-next-80b-a3b-thinking", custom_llm_provider="together_ai")
     assert info_lower is not None
     assert info_lower["supports_function_calling"] is True
 
     # Test 3: Mixed case should also work
-    info_mixed = litellm.get_model_info(
-        model="QWEN/qwen3-NEXT-80b-a3b-thinking", custom_llm_provider="together_ai"
-    )
+    info_mixed = litellm.get_model_info(model="QWEN/qwen3-NEXT-80b-a3b-thinking", custom_llm_provider="together_ai")
     assert info_mixed is not None
     assert info_mixed["supports_function_calling"] is True
 
@@ -419,13 +399,17 @@ def test_get_model_info_case_insensitive_supports_function_calling(monkeypatch):
     from litellm.utils import supports_function_calling
 
     # Exact case
-    assert (
-        supports_function_calling("TestModel-ABC", custom_llm_provider="test_provider")
-        is True
-    )
+    assert supports_function_calling("TestModel-ABC", custom_llm_provider="test_provider") is True
 
     # Lowercase (should now work with case-insensitive lookup)
-    assert (
-        supports_function_calling("testmodel-abc", custom_llm_provider="test_provider")
-        is True
+    assert supports_function_calling("testmodel-abc", custom_llm_provider="test_provider") is True
+
+
+GOVCLOUD_LAGGING_CAPABILITIES: Final = frozenset({"supports_bedrock_native_structured_output"})
+
+
+def _govcloud_may_lag(model_key: str, capability: str) -> bool:
+    is_govcloud: Final = model_key.startswith("us-gov.") or any(
+        part.startswith("us-gov-") for part in model_key.split("/")
     )
+    return is_govcloud and capability in GOVCLOUD_LAGGING_CAPABILITIES

@@ -19,9 +19,6 @@ from jsonschema import validate
 
 import litellm
 from litellm._internal_context import is_internal_call
-from litellm.caching.caching import Cache
-from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
-from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm._logging import (
     CorrelationContextFilter,
     JsonFormatter,
@@ -29,14 +26,18 @@ from litellm._logging import (
     trace_id_var,
     verbose_logger,
 )
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
-from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.utils import (
+    ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
     Choices,
     Delta,
@@ -46,7 +47,6 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     StreamingChoices,
     Usage,
-    ADDRESSED_RESPONSE_ID_FIELD,
     all_litellm_params,
     bedrock_batch_litellm_params,
 )
@@ -723,23 +723,50 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
+                "cache_creation_input_token_cost_above_32k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_100k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_100k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_flex": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_priority": {"type": "number"},
+                "cache_creation_input_token_cost_above_200k_tokens_batches": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
+                "cache_creation_input_token_cost_batches": {"type": "number"},
+                "cache_creation_input_token_cost_decisions": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "cache_read_input_token_cost_decisions": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "input_cost_per_token_decisions": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+                "output_cost_per_token_decisions": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
+                "cache_creation_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "explicit_cache_read_input_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
                 "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_200k_tokens_batches": {"type": "number"},
                 "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_flex": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
+                "cache_read_input_token_cost_batches": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
+                "cache_creation_input_token_cost_above_1hr_above_100k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -752,24 +779,37 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_video_token": {"type": "number"},
+                "input_cost_per_token_above_32k_tokens": {"type": "number"},
+                "input_cost_per_token_above_100k_tokens": {"type": "number"},
+                "input_cost_per_token_above_100k_tokens_batches": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
+                "input_cost_per_token_above_200k_tokens_batches": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
                 "input_cost_per_token_above_512k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
+                "cache_read_input_token_cost_balanced": {"type": "number"},
+                "cache_read_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_flex": {"type": "number"},
                 "input_cost_per_token_priority": {"type": "number"},
+                "input_cost_per_token_balanced": {"type": "number"},
+                "input_cost_per_token_ultrafast": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_batches": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_flex": {"type": "number"},
                 "input_cost_per_audio_token_priority": {"type": "number"},
                 "output_cost_per_token_flex": {"type": "number"},
                 "output_cost_per_token_priority": {"type": "number"},
+                "output_cost_per_token_balanced": {"type": "number"},
+                "output_cost_per_token_ultrafast": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_batches": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
                 "regional_endpoint_uplift_multiplier": {"type": "number"},
                 "regional_processing_uplift_multiplier_eu": {"type": "number"},
@@ -777,7 +817,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
+                "cost_per_second": {"type": "number"},
                 "input_cost_per_second": {"type": "number"},
+                "input_cost_per_text_message": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
                 "input_cost_per_token_above_128k_tokens": {"type": "number"},
                 "input_cost_per_audio_token_batches": {"type": "number"},
@@ -814,6 +856,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "image_edit",
                         "embedding",
                         "evaluation",
+                        "extraction",
                         "guardrail",
                         "image_generation",
                         "video_generation",
@@ -830,17 +873,31 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_character": {"type": "number"},
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
+                "output_cost_per_image_512": {"type": "number"},
+                "output_cost_per_image_1024": {"type": "number"},
+                "output_cost_per_image_1536": {"type": "number"},
+                "output_cost_per_image_0.5K": {"type": "number"},
+                "output_cost_per_image_1K": {"type": "number"},
+                "output_cost_per_image_2K": {"type": "number"},
+                "output_cost_per_image_4K": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
+                "output_cost_per_image_token_batches": {"type": "number"},
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_480p": {"type": "number"},
                 "output_cost_per_second_720p": {"type": "number"},
+                "output_cost_per_second_768p": {"type": "number"},
+                "output_cost_per_second_2k": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
                 "output_cost_per_second_4k": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
+                "output_cost_per_token_above_32k_tokens": {"type": "number"},
+                "output_cost_per_token_above_100k_tokens": {"type": "number"},
+                "output_cost_per_token_above_100k_tokens_batches": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
+                "output_cost_per_token_above_200k_tokens_batches": {"type": "number"},
                 "output_cost_per_token_above_256k_tokens": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens": {"type": "number"},
                 "output_cost_per_token_above_512k_tokens": {"type": "number"},
@@ -855,6 +912,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "source": {"type": "string"},
                 "comment": {"type": "string"},
                 "supports_assistant_prefill": {"type": "boolean"},
+                "supports_anthropic_compaction": {"type": "boolean"},
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
                 "gemini_native_audio": {"type": "boolean"},
@@ -876,8 +934,20 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_tool_choice": {"type": "boolean"},
                 "supports_tool_search": {"type": "boolean"},
                 "supports_video_input": {"type": "boolean"},
+                "supports_box_questions": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
+                "token_count_framing": {"type": "integer"},
+                "token_count_model": {
+                    "type": "object",
+                    "properties": {"model": {"type": "string"}, "region": {"type": "string"}},
+                    "required": ["model"],
+                },
+                "token_count_tokenizer": {"type": "string", "enum": ["kimi_k3"]},
+                "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
+                "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
@@ -920,6 +990,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "enum": ["low", "medium", "high", "max", "xhigh"],
                 },
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
+                "supports_regex_lookaround": {"type": "boolean"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
                     "type": "array",
@@ -941,8 +1012,11 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/v1/videos",
                             "/vertex_ai/live",
                             "/v1/listen",
+                            "/v1/systemone",
+                            "/v1/decisions",
                             "/v1beta/interactions",
                         ],
                     },
@@ -970,6 +1044,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "string",
                     "enum": ["per_prompt", "per_query"],
                 },
+                "search_free_requests": {
+                    "type": "object",
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 1},
+                        "period": {"type": "string", "enum": ["day", "month"]},
+                        "shared_group": {"type": "string"},
+                    },
+                    "required": ["count", "period", "shared_group"],
+                    "additionalProperties": False,
+                },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
                     "type": "array",
@@ -988,6 +1072,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_native_streaming": {"type": "boolean"},
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
+                "supports_bedrock_native_structured_output": {"type": "boolean"},
                 "use_openai_responses_path": {"type": "boolean"},
                 "off_peak_pricing": {
                     "type": "object",
@@ -1070,6 +1155,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
         "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
+        "fal_ai/bytedance/seedance-2.0/text-to-video",
+        "fal_ai/bytedance/seedance-2.0/image-to-video",
+        "fal_ai/bytedance/seedance-2.0/reference-to-video",
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
@@ -1432,8 +1520,13 @@ class TestProxyFunctionCalling:
             ("command-nightly", "litellm_proxy/command-nightly", False),
         ],
     )
-    def test_proxy_function_calling_support_consistency(self, direct_model, proxy_model, expected_result):
+    def test_proxy_function_calling_support_consistency(self, direct_model, proxy_model, expected_result, monkeypatch):
         """Test that proxy models have the same function calling support as their direct counterparts."""
+        monkeypatch.setitem(
+            litellm.model_cost,
+            direct_model,
+            {**litellm.model_cost.get(direct_model, {}), "supports_function_calling": expected_result},
+        )
         direct_result = supports_function_calling(direct_model)
         proxy_result = supports_function_calling(proxy_model)
 
@@ -5760,6 +5853,8 @@ def test_get_model_info_gemini(monkeypatch):
             and "veo" not in model
             and "lyria" not in model
             and "robotics" not in model
+            and "3.8-flash-tts" not in model
+            and "3.8-flash-lite-tts" not in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"

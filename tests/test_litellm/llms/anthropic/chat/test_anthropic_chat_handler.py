@@ -10,7 +10,8 @@ import pytest
 import litellm
 from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call
+from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
@@ -2452,3 +2453,333 @@ def test_served_model_reaches_assembled_stream_through_custom_stream_wrapper():
         assert chunk._hidden_params["provider_response_model"] == served_model
     assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks), messages=[{"role": "user", "content": "hi"}])
     assert assembled._hidden_params["provider_response_model"] == served_model
+
+
+_STREAMED_RISK_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"tier": {"type": "integer"}, "summary": {"type": "string"}},
+    "required": ["tier", "summary"],
+}
+
+
+_STREAMED_RISK_OBJECT: Final = {"tier": 3, "summary": "Two-hour read-only window on the loyalty APIs"}
+
+
+_STREAMED_CONTACT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
+    "additionalProperties": False,
+}
+
+
+_STREAMED_BOOK_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "parameters": {
+            "type": "object",
+            "properties": {"title": {"type": "string"}, "author": {"type": "string"}},
+            "required": ["title", "author"],
+        },
+    },
+    "required": ["name", "parameters"],
+    "additionalProperties": False,
+}
+
+
+_STREAMED_CONTACT: Final = {"name": "Ada", "email": "ada@example.com"}
+
+
+_STREAMED_PERSON_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+    "required": ["name", "age"],
+}
+
+
+_STREAMED_PERSON: Final = {"name": "Ada", "age": 36}
+
+
+def _json_tool_events(fragments: tuple[str, ...]) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-emulated-structured-output",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {}},
+        },
+        *(
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": fragment}}
+            for fragment in fragments
+        ),
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 20},
+        },
+    )
+
+
+def _streamed_json_mode_contents(
+    fragments: tuple[str, ...], schema: dict[str, object] = _STREAMED_RISK_SCHEMA
+) -> tuple[str, ...]:
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        json_mode=True,
+        response_format_schema=response_format_schema(schema),
+    )
+    chunks = tuple(iterator.chunk_parser(event) for event in _json_tool_events(fragments))
+    assert all(chunk.choices[0].delta.tool_calls is None for chunk in chunks)
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    return tuple(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+def test_streamed_json_mode_envelope_is_unwrapped_when_the_block_ends():
+    envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})
+    fragments = (envelope[:9], envelope[9:40], envelope[40:])
+
+    contents = _streamed_json_mode_contents(fragments)
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+    assert contents[:-2] == ("",) * (len(contents) - 2)
+
+
+def test_streamed_json_mode_schema_object_streams_as_it_arrives():
+    answer = json.dumps(_STREAMED_RISK_OBJECT)
+    fragments = (answer[:4], answer[4:12], answer[12:])
+
+    contents = _streamed_json_mode_contents(fragments)
+
+    assert "".join(contents) == answer
+    assert contents[3] == answer[:12]
+    assert contents[4] == answer[12:]
+    assert contents[5] == ""
+
+
+def test_streamed_json_mode_truncated_output_is_passed_through_untouched():
+    contents = _streamed_json_mode_contents(('{"na', 'me": "json_tool_call", "parameters": {"tier": 3'))
+
+    assert "".join(contents) == '{"name": "json_tool_call", "parameters": {"tier": 3'
+
+
+def test_streamed_json_mode_tool_name_envelope_is_unwrapped_when_name_is_a_schema_property():
+    envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_CONTACT})
+
+    contents = _streamed_json_mode_contents((envelope[:6], envelope[6:24], envelope[24:]), _STREAMED_CONTACT_SCHEMA)
+
+    assert json.loads("".join(contents)) == _STREAMED_CONTACT
+    assert contents[:-2] == ("",) * (len(contents) - 2)
+
+
+def test_streamed_json_mode_name_property_answer_streams_once_its_name_value_is_known():
+    answer = json.dumps(_STREAMED_CONTACT)
+
+    contents = _streamed_json_mode_contents((answer[:6], answer[6:24], answer[24:]), _STREAMED_CONTACT_SCHEMA)
+
+    assert "".join(contents) == answer
+    assert contents[2] == ""
+    assert contents[3] == answer[:24]
+    assert contents[4] == answer[24:]
+
+
+def test_streamed_json_mode_partial_name_value_waits_for_the_value_to_close():
+    answer = json.dumps({"name": "Ada"})
+
+    contents = _streamed_json_mode_contents((answer[:11], answer[11:]), _STREAMED_CONTACT_SCHEMA)
+
+    assert "".join(contents) == answer
+    assert contents[2] == ""
+    assert contents[3] == answer
+
+
+@pytest.mark.parametrize(
+    "schema, answer",
+    [
+        pytest.param(
+            {"type": "object", "additionalProperties": {"type": "integer"}},
+            {"alpha": 1, "beta": 2, "gamma": 3},
+            id="schema_without_properties",
+        ),
+        pytest.param(
+            _STREAMED_RISK_SCHEMA,
+            {"rev": 2, **_STREAMED_RISK_OBJECT},
+            id="undeclared_first_key_holding_a_number",
+        ),
+        pytest.param(
+            {"type": "object", "properties": {"score": {"type": "integer"}}},
+            {"note": "read-only window", "meta": {"score": 7}},
+            id="string_first_key_on_a_schema_without_required_keys",
+        ),
+        pytest.param(
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "additionalProperties": {"type": "object"},
+            },
+            {"user_1": {"summary": "likes tea", "visits": 3}},
+            id="undeclared_key_the_schema_allows",
+        ),
+    ],
+)
+def test_streamed_json_mode_answer_that_cannot_be_an_envelope_streams_as_it_arrives(
+    schema: dict[str, object], answer: dict[str, object]
+):
+    encoded = json.dumps(answer)
+
+    contents = _streamed_json_mode_contents((encoded[:12], encoded[12:24], encoded[24:]), schema)
+
+    assert "".join(contents) == encoded
+    assert contents[2:5] == (encoded[:12], encoded[12:24], encoded[24:])
+
+
+def test_streamed_json_mode_string_label_answer_streams_once_the_next_key_is_declared():
+    answer = json.dumps({"note": "read-only window", **_STREAMED_RISK_OBJECT})
+
+    contents = _streamed_json_mode_contents((answer[:12], answer[12:40], answer[40:]))
+
+    assert "".join(contents) == answer
+    assert contents[2] == ""
+    assert contents[3] == answer[:40]
+    assert contents[4] == answer[40:]
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        pytest.param(
+            {"parameter_name": "RiskAssessment", "parameter_value": _STREAMED_RISK_OBJECT}, id="schema_name_label"
+        ),
+        pytest.param(
+            {"$FUNCTION_NAME": RESPONSE_FORMAT_TOOL_NAME, "PARAMETER_VALUE": _STREAMED_RISK_OBJECT},
+            id="foreign_tool_name_key",
+        ),
+    ],
+)
+def test_streamed_json_mode_string_label_envelope_is_unwrapped_when_the_block_ends(envelope: dict[str, object]):
+    encoded = json.dumps(envelope)
+
+    contents = _streamed_json_mode_contents((encoded[:12], encoded[12:40], encoded[40:]))
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+    assert contents[:-2] == ("",) * (len(contents) - 2)
+
+
+def test_streamed_json_mode_two_level_envelope_is_unwrapped_when_the_block_ends():
+    envelope = json.dumps({"parameter": {"value": _STREAMED_RISK_OBJECT}})
+
+    contents = _streamed_json_mode_contents((envelope[:9], envelope[9:30], envelope[30:]))
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+    assert contents[:-2] == ("",) * (len(contents) - 2)
+
+
+def test_streamed_json_mode_accepted_answer_naming_the_tool_is_kept_whole():
+    answer = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"title": "Dune", "author": "Frank Herbert"}})
+
+    contents = _streamed_json_mode_contents((answer[:9], answer[9:40], answer[40:]), _STREAMED_BOOK_SCHEMA)
+
+    assert json.loads("".join(contents)) == json.loads(answer)
+    assert contents[:-2] == ("",) * (len(contents) - 2)
+
+
+@pytest.mark.parametrize(
+    "answer, schema",
+    [
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"title":"Dune","author":"Frank Herbert"}}',
+            _STREAMED_BOOK_SCHEMA,
+            id="answer_naming_the_tool",
+        ),
+        pytest.param('{"city":"café 東京","country":"France"}', _STREAMED_RISK_SCHEMA, id="string_labels_only"),
+    ],
+)
+def test_streamed_json_mode_held_answer_without_an_envelope_keeps_the_model_text(
+    answer: str, schema: dict[str, object]
+):
+    contents = _streamed_json_mode_contents((answer[:9], answer[9:30], answer[30:]), schema)
+
+    assert "".join(contents) == answer
+    assert contents[:-2] == ("",) * (len(contents) - 2)
+
+
+def test_envelope_verdict_holds_a_prefix_that_stays_undecided_past_the_limit():
+    schema = response_format_schema(_STREAMED_RISK_SCHEMA)
+    assert schema is not None
+    never_closing_key = '{"' + "k" * 5000
+
+    assert _envelope_verdict(never_closing_key[:100], schema, RESPONSE_FORMAT_TOOL_NAME) == "undecided"
+    assert _envelope_verdict(never_closing_key, schema, RESPONSE_FORMAT_TOOL_NAME) == "hold"
+
+
+def test_streamed_json_mode_answer_with_a_foreign_name_matches_the_non_streamed_answer():
+    answer = {"name": "Person", "parameters": _STREAMED_PERSON}
+    encoded = json.dumps(answer)
+    schema = response_format_schema(_STREAMED_PERSON_SCHEMA)
+    assert schema is not None
+
+    contents = _streamed_json_mode_contents((encoded[:16], encoded[16:34], encoded[34:]), _STREAMED_PERSON_SCHEMA)
+
+    assert "".join(contents) == encoded
+    assert unwrap_response_format_envelope(answer, schema, RESPONSE_FORMAT_TOOL_NAME) == answer
+
+
+def test_json_envelope_split_before_its_value_keeps_the_schema_object() -> None:
+    envelope: Final = json.dumps({"parameters": _STREAMED_RISK_OBJECT})
+    split: Final = envelope.index(":") + 1
+    contents: Final = _streamed_json_mode_contents((envelope[:split], envelope[split:]))
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+
+
+@pytest.mark.parametrize(
+    "schema, values",
+    [
+        pytest.param(
+            {"type": "object", "additionalProperties": True}, {"alpha": 1, "beta": 2}, id="schema_without_properties"
+        ),
+        pytest.param(
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "additionalProperties": {"type": "object"},
+            },
+            {"user_1": {"summary": "likes tea"}},
+            id="undeclared_key_the_schema_allows",
+        ),
+        pytest.param(_STREAMED_RISK_SCHEMA, [3, 5, 8], id="values_holding_a_list"),
+    ],
+)
+def test_streamed_json_mode_values_wrapper_is_unwrapped_like_the_non_stream_answer(
+    schema: dict[str, object], values: object
+):
+    wrapped = {"values": values}
+    encoded = json.dumps(wrapped)
+
+    contents = _streamed_json_mode_contents((encoded[:6], encoded[6:14], encoded[14:]), schema)
+
+    assert json.loads("".join(contents)) == values
+    assert json.loads("".join(contents)) == unwrap_response_format_envelope(
+        wrapped, response_format_schema(schema), RESPONSE_FORMAT_TOOL_NAME
+    )
+
+def test_streamed_json_mode_declared_values_key_streams_as_it_arrives():
+    schema = {"type": "object", "properties": {"values": {"type": "array"}}, "required": ["values"]}
+    answer = json.dumps({"values": [3, 5, 8]})
+
+    contents = _streamed_json_mode_contents((answer[:6], answer[6:14], answer[14:]), schema)
+
+    assert "".join(contents) == answer
+    assert any(contents[:-2])

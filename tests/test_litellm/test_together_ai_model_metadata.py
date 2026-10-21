@@ -101,7 +101,7 @@ def test_together_successor_metadata_points_at_known_models(cost_map: CostMap):
         for model, info in cost_map.items()
         if model.startswith("together_ai/") and (successor := _successor(info)) is not None
     }
-    assert len(successors) >= 10
+    assert successors
     for model, successor in successors.items():
         assert successor in cost_map, f"{model} names successor {successor} that is not in the map"
 

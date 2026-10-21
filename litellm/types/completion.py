@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Coroutine, Iterable
+from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Union
 
@@ -227,6 +227,7 @@ class _CompletionDispatchContext:
     model: str
     model_response: ModelResponse
     optional_params: dict
+    optional_params_for_model_info: Callable[[Mapping[str, object] | None], dict[str, object]]
     organization: str | None
     provider_config: BaseConfig | None
     shared_session: ClientSession | None

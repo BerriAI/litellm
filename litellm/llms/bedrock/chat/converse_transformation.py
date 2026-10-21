@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,6 +28,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _parse_content_for_reasoning,
+    is_object_schema,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
@@ -41,7 +43,16 @@ from litellm.llms.anthropic.chat.transformation import (
     AnthropicConfig,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
+from litellm.llms.bedrock.common_utils import (
+    bedrock_capability_model,
+    bedrock_chat_uses_native_structured_output,
+    bedrock_cleaned_output_schema,
+    bedrock_native_output_format,
+    bedrock_native_output_is_opt_in,
+    deployment_model_info,
+    requests_output_config_format,
+)
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     bedrock_request_metadata_is_owned,
@@ -117,6 +128,18 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
     "prompt-caching",  # Prompt caching not supported in Converse API
     "compact-2026-01-12",  # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
+
+
+_OUTPUT_CONFIG_BLOCK: Final = TypeAdapter(OutputConfigBlock)
+
+
+def _has_native_text_format(output_config: object) -> bool:
+    if not isinstance(output_config, Mapping):
+        return False
+    try:
+        return _OUTPUT_CONFIG_BLOCK.validate_python(output_config).get("textFormat") is not None
+    except ValidationError:
+        return False
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -880,17 +903,22 @@ class AmazonConverseConfig(BaseConfig):
         return _tool
 
     @staticmethod
-    def _supports_native_structured_outputs(model: str, custom_llm_provider: str | None = None) -> bool:
-        """Check if the Bedrock model supports native structured outputs (outputConfig.textFormat).
+    def _supports_native_structured_outputs(
+        model: str,
+        custom_llm_provider: str | None,
+        thinking_requested: bool,
+        model_info: Mapping[str, object] | None,
+    ) -> bool:
+        """Check if the Bedrock model takes native structured outputs (outputConfig.textFormat) for this request.
 
-        Delegates to the standard ``supports_native_structured_output`` utility
-        which looks up the flag in ``litellm.model_cost`` via
-        ``_get_model_info_helper``.
+        ``supports_native_structured_output`` in ``litellm.model_cost`` turns it on for every request, and
+        ``supports_bedrock_native_structured_output`` (the deployment's ``model_info`` first) only when the
+        request asks for thinking, which the json tool path would drop.
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
         """
-        from litellm.utils import supports_native_structured_output
-
-        return supports_native_structured_output(model=model, custom_llm_provider=custom_llm_provider)
+        return bedrock_chat_uses_native_structured_output(
+            model, thinking_requested, custom_llm_provider or "bedrock_converse", model_info
+        )
 
     @staticmethod
     def _add_additional_properties_to_schema(schema: dict) -> dict:
@@ -905,9 +933,9 @@ class AmazonConverseConfig(BaseConfig):
         if not isinstance(schema, dict):
             return schema
 
-        result: Final = dict(schema)
+        result: Final[dict[str, object]] = dict(schema)  # mutable-ok: recursively normalize a private JSON schema copy
 
-        if result.get("type") == "object" and "additionalProperties" not in result:
+        if is_object_schema(result) and "additionalProperties" not in result:
             result["additionalProperties"] = False
 
         # Recurse into nested schemas
@@ -918,15 +946,49 @@ class AmazonConverseConfig(BaseConfig):
         if "items" in result and isinstance(result["items"], dict):
             result["items"] = AmazonConverseConfig._add_additional_properties_to_schema(result["items"])
         for defs_key in ("$defs", "definitions"):
-            if defs_key in result and isinstance(result[defs_key], dict):
+            if isinstance(definitions := result.get(defs_key), dict):
                 result[defs_key] = {
-                    k: AmazonConverseConfig._add_additional_properties_to_schema(v) for k, v in result[defs_key].items()
+                    k: AmazonConverseConfig._add_additional_properties_to_schema(v) for k, v in definitions.items()
                 }
         for key in ("anyOf", "allOf", "oneOf"):
-            if key in result and isinstance(result[key], list):
-                result[key] = [AmazonConverseConfig._add_additional_properties_to_schema(item) for item in result[key]]
+            if isinstance(variants := result.get(key), list):
+                result[key] = [  # mutable-ok: schema unions serialize as JSON arrays
+                    AmazonConverseConfig._add_additional_properties_to_schema(item) for item in variants
+                ]
 
         return result
+
+    def _native_output_schema(
+        self,
+        model: str,
+        json_schema: Mapping[str, object],
+        thinking_requested: bool,
+        model_info: Mapping[str, object] | None,
+    ) -> Mapping[str, object] | None:
+        if not self._supports_native_structured_outputs(
+            model, self.custom_llm_provider, thinking_requested, model_info
+        ):
+            return None
+        if BedrockModelInfo.get_base_model(model).startswith("anthropic"):
+            return bedrock_cleaned_output_schema(model, json_schema, self.custom_llm_provider or "bedrock_converse")
+        return json_schema
+
+    def _output_config_for_anthropic_format(
+        self, model: str, output_config_format: Mapping[str, object], model_info: Mapping[str, object] | None
+    ) -> OutputConfigBlock | None:
+        native_format: Final = bedrock_native_output_format(
+            model, output_config_format, self.custom_llm_provider or "bedrock_converse", model_info
+        )
+        if native_format is None:
+            return None
+        schema, name, description = (native_format.get(key) for key in ("schema", "name", "description"))
+        return AmazonConverseConfig._create_output_config_for_response_format(
+            json_schema={**schema}  # mutable-ok: legacy schema normalizer requires a dict
+            if isinstance(schema, Mapping)
+            else None,
+            name=name if isinstance(name, str) else None,
+            description=description if isinstance(description, str) else None,
+        )
 
     @staticmethod
     def _create_output_config_for_response_format(
@@ -987,6 +1049,7 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        model_info: Mapping[str, object] | None = None,
     ) -> dict:
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
         base_model: Final = BedrockModelInfo.get_base_model(model)
@@ -1003,6 +1066,7 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params=optional_params,
                     non_default_params=non_default_params,
                     is_thinking_enabled=is_thinking_enabled,
+                    model_info=model_info,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = (
@@ -1167,6 +1231,7 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: dict,
         non_default_params: dict,
         is_thinking_enabled: bool,
+        model_info: Mapping[str, object] | None = None,
     ) -> dict:
         """
         Handles translation of response_format parameter to Bedrock format.
@@ -1190,13 +1255,23 @@ class AmazonConverseConfig(BaseConfig):
         if "type" in value and value["type"] == "text":
             return optional_params
 
-        if self._supports_native_structured_outputs(model, self.custom_llm_provider) and json_schema is not None:
+        native_schema: Final = (
+            self._native_output_schema(
+                model,
+                json_schema,
+                self.is_thinking_requested(REQUEST_PARAMS.validate_python(non_default_params)),
+                model_info,
+            )
+            if json_schema is not None
+            else None
+        )
+        if native_schema is not None:
             # Use Bedrock's native structured outputs API (outputConfig.textFormat)
             # No synthetic tool injection, no fake_stream needed.
             # Requires an explicit schema — json_object with no schema falls through
             # to the tool-call path below.
             output_config: Final = self._create_output_config_for_response_format(
-                json_schema=json_schema,
+                json_schema=dict(native_schema),  # mutable-ok: legacy schema normalizer requires a dict
                 name=name,
                 description=description,
             )
@@ -1229,6 +1304,22 @@ class AmazonConverseConfig(BaseConfig):
 
         optional_params["json_mode"] = True
         return optional_params
+
+    @staticmethod
+    def sends_native_text_format(optional_params: Mapping[str, object]) -> bool:
+        return _has_native_text_format(optional_params.get("outputConfig"))
+
+    def uses_opt_in_native_output(
+        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> bool:
+        native_output_requested: Final = (
+            optional_params.get("json_mode") is True and self.sends_native_text_format(optional_params)
+        ) or requests_output_config_format(optional_params)
+        return native_output_requested and bedrock_native_output_is_opt_in(
+            bedrock_capability_model(model, litellm_params.get("base_model")),
+            self.custom_llm_provider or "bedrock_converse",
+            deployment_model_info(litellm_params),
+        )
 
     def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
         """
@@ -1401,7 +1492,11 @@ class AmazonConverseConfig(BaseConfig):
             tool_choice.pop("type", None)
 
     def _prepare_request_params(
-        self, optional_params: dict, model: str, drop_params: bool = False
+        self,
+        optional_params: dict,
+        model: str,
+        drop_params: bool = False,
+        model_info: Mapping[str, object] | None = None,
     ) -> tuple[dict, dict, dict, OutputConfigBlock | None]:
         """Prepare and separate request parameters."""
         # Consume the internal ``_output_config_normalized`` marker set by
@@ -1444,17 +1539,12 @@ class AmazonConverseConfig(BaseConfig):
             and output_config_format is not None
             and output_config_format.get("type") == "json_schema"
             and base_model.startswith("anthropic")
-            and self._supports_native_structured_outputs(model, self.custom_llm_provider)
         ):
-            output_config = self._create_output_config_for_response_format(
-                json_schema=output_config_format.get("schema"),
-                name=output_config_format.get("name"),
-                description=output_config_format.get("description"),
-            )
-        elif output_config is None and output_config_format is not None:
+            output_config = self._output_config_for_anthropic_format(model, output_config_format, model_info)
+        if output_config is None and output_config_format is not None:
             litellm.verbose_logger.warning(
                 "Bedrock Converse: dropping `output_config.format` for model=%s — "
-                "model does not advertise `supports_native_structured_output` in "
+                "model does not take native structured output for this schema per "
                 "model_prices_and_context_window.json. The schema will not be "
                 "enforced; pass `response_format` to use the synthetic tool-call "
                 "fallback.",
@@ -1733,7 +1823,7 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params,
             request_metadata,
             output_config,
-        ) = self._prepare_request_params(optional_params, model, drop_params)
+        ) = self._prepare_request_params(optional_params, model, drop_params, deployment_model_info(litellm_params))
 
         original_tools: Final = inference_params.pop("tools", [])
 
