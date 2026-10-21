@@ -2675,17 +2675,18 @@ async def add_litellm_data_to_request(
     # metadata (sent via multipart/form-data or extra_body) wouldn't be a
     # dict yet at the earlier strip point and the isinstance(dict) guard
     # would silently skip the field.
+    request_body: Final = cast("dict[str, object]", data)  # cast-ok: data is the untyped request body dict
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
-        _strip_client_pricing_overrides(data)
-    _strip_router_reserved_metadata(data)
-    _strip_client_cache_key_overrides(data)
+        _strip_client_pricing_overrides(request_body)
+    _strip_router_reserved_metadata(request_body)
+    _strip_client_cache_key_overrides(request_body)
 
     # Same reason as the strips above: runs after the metadata string-to-dict parse
     # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
-    _strip_client_callback_credentials(data)
+    _strip_client_callback_credentials(request_body)
 
     if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
-        _strip_client_message_redaction_opt_out(data)
+        _strip_client_message_redaction_opt_out(request_body)
 
     # Fill in the proxy_server_request body snapshot now that metadata has
     # been parsed. Consumers (standard_logging_payload, lago,
