@@ -1189,6 +1189,23 @@ class TestNeuralTrustGuardrail:
         assert _finish_reasons(received) == []
         assert received == []
 
+    def test_incremental_diff_scans_once_at_end_of_stream(self) -> None:
+        """Sampled rounds cannot reduce leakage under a full holdback, so they are off by default."""
+        guardrail = _guardrail(event_hook="post_call", streaming_transform_mode="incremental_diff")
+        assert guardrail.streaming_end_of_stream_only is True
+
+    def test_block_only_keeps_sampled_rounds(self) -> None:
+        """block_only releases chunks as they arrive, so sampled rounds still catch content early."""
+        guardrail = _guardrail(event_hook="post_call", streaming_transform_mode="block_only")
+        assert guardrail.streaming_end_of_stream_only is False
+
+    def test_guardrail_config_can_restore_sampled_rounds(self) -> None:
+        """Operators who prefer an early abort over fewer evaluate calls can opt back in."""
+        guardrail = _guardrail(event_hook="post_call", streaming_transform_mode="incremental_diff")
+        guardrail.guardrail_config = {"streaming_end_of_stream_only": False}
+        resolved = UnifiedLLMGuardrails().resolve_streaming_flag(guardrail, "streaming_end_of_stream_only", False)
+        assert resolved is False
+
     @pytest.mark.asyncio
     async def test_default_streaming_mode_leaves_the_transform_off_the_wire(self) -> None:
         """Default stays block_only, where the framework streams the raw model chunks and drops rewrites."""

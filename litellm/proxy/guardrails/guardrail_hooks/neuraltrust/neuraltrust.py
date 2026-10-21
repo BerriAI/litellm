@@ -276,6 +276,18 @@ class NeuralTrustGuardrail(CustomGuardrail):
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
             streaming_transform_mode or "block_only"
         )
+        # Read off the instance by UnifiedLLMGuardrails.resolve_streaming_flag, which lets
+        # guardrail_config and optional_params override it.
+        #
+        # Under incremental_diff _with_holdback withholds the whole reply on every round, so
+        # nothing reaches the client until the end-of-stream round flushes it. Sampled rounds
+        # therefore cannot reduce leakage: each one re-sends the entire reply for another
+        # evaluate (a 400-chunk reply at the default sampling_rate of 5 costs 81 calls) and buys
+        # only an earlier stream abort on a blocking verdict, which saves upstream generation
+        # rather than protecting the client. One end-of-stream scan is the honest cost here.
+        # Set streaming_end_of_stream_only to False in guardrail_config to restore sampled
+        # rounds when ending a blocked stream early matters more than the evaluate volume.
+        self.streaming_end_of_stream_only: bool = self.streaming_transform_mode == "incremental_diff"
         initializer_adapter: Final[TypeAdapter[_GuardrailInitializer]] = TypeAdapter(_GuardrailInitializer)
         initialize: Final = initializer_adapter.validate_python(vars(CustomGuardrail)["__init__"])
         initialize(self, guardrail_name, self.get_supported_event_hooks(), event_hook, bool(default_on))

@@ -68,6 +68,18 @@ distinguishable from an exhausted monthly quota.
 
 Under `incremental_diff` the reply is held until the end-of-stream evaluate returns, so the first token arrives with the last. TrustGuard re-reads the whole reply on every scan and its redaction spans move as the reply grows, so releasing tokens early would let a later scan try to rewrite text already on the wire. Holding them also means a blocking verdict ends the stream with nothing sent at all.
 
+### Evaluate volume
+
+Under `incremental_diff` the guardrail defaults to a single end-of-stream evaluate rather than the framework's
+sampled rounds. Because the whole reply is withheld until the end anyway, a sampled round cannot stop anything
+reaching the client; it only re-sends the reply for another evaluate, so a 400-chunk reply at the default
+`streaming_sampling_rate` of 5 would cost 81 calls instead of 1.
+
+The trade-off is that a blocking verdict is reached only once the model has finished generating, so a blocked
+stream is no longer aborted early. Nothing is delivered either way. Set `streaming_end_of_stream_only: false`
+under `guardrail_config` to restore sampled rounds where cutting off a blocked generation matters more than the
+evaluate volume.
+
 ### Surface coverage
 
 `incremental_diff` is implemented for OpenAI chat completions streaming only. Every other streamed surface —
