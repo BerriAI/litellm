@@ -1,7 +1,8 @@
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
@@ -18,14 +19,17 @@ from litellm.types.utils import LlmProviders
 
 _PROJECT_PATH_PREFIX: Final = ("api", "projects")
 _RESPONSES_PATH: Final = ("openai", "v1", "responses")
-_AGENT_OWNED_PARAMS: Final = frozenset({"instructions", "temperature", "top_p", "tools", "text", "reasoning"})
+_AGENT_OWNED_PARAMS: Final = frozenset({"temperature", "top_p", "tools", "text", "reasoning"})
+
+
+def _project_root(base_url: httpx.URL) -> tuple[str, ...]:
+    segments: Final = tuple(segment for segment in base_url.path.split("/") if segment)
+    return segments[:3] if segments[:2] == _PROJECT_PATH_PREFIX else ()
 
 
 def _responses_url(api_base: str) -> str:
     base_url: Final = httpx.URL(api_base)
-    segments: Final = tuple(segment for segment in base_url.path.split("/") if segment)
-    project_root: Final = segments[:3] if segments[:2] == _PROJECT_PATH_PREFIX else ()
-    return str(base_url.copy_with(path="/" + "/".join((*project_root, *_RESPONSES_PATH)), query=None))
+    return str(base_url.copy_with(path="/" + "/".join((*_project_root(base_url), *_RESPONSES_PATH)), query=None))
 
 
 class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
@@ -47,10 +51,17 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         params: Final = litellm_params or GenericLiteLLMParams()
+        api_base: Final = AzureFoundryModelInfo.get_api_base(params.api_base)
+        on_project: Final = api_base is not None and bool(_project_root(httpx.URL(api_base)))
+        auth_params: Final = (
+            params.model_copy(update={"azure_scope": params.azure_scope or AZURE_AI_AGENTS_SCOPE})
+            if on_project
+            else params
+        )
         auth_headers: Final = get_azure_ai_auth_headers(
             api_key=AzureFoundryModelInfo.get_api_key(params.api_key),
-            litellm_params=params.model_dump(),
-            api_key_header=api_key_header_for_base(AzureFoundryModelInfo.get_api_base(params.api_base)),
+            litellm_params=auth_params.model_dump(),
+            api_key_header="Authorization" if on_project else api_key_header_for_base(api_base),
         )
         return {
             **headers,
@@ -78,18 +89,19 @@ def _agent_reference(model: str) -> FoundryAgentReference:
     return FoundryAgentReference(type="agent_reference", name=name)
 
 
-class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
-    def validate_environment(
-        self,
-        headers: dict[str, str],  # mutable-ok: signature fixed by the override contract
-        model: str,
-        litellm_params: GenericLiteLLMParams | None,
-    ) -> dict[str, str]:  # mutable-ok: same
-        params: Final = litellm_params or GenericLiteLLMParams()
-        return super().validate_environment(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # parent returns a bare dict
-            headers, model, params.model_copy(update={"azure_scope": params.azure_scope or AZURE_AI_AGENTS_SCOPE})
-        )
+_INPUT_ITEMS: Final = TypeAdapter(list[object])
 
+
+def _with_system_prompt(instructions: str, request_input: object) -> Sequence[object]:
+    conversation: Final = (
+        [{"type": "message", "role": "user", "content": request_input}]
+        if isinstance(request_input, str)
+        else _INPUT_ITEMS.validate_python(request_input)
+    )
+    return [{"type": "message", "role": "system", "content": instructions}, *conversation]
+
+
+class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
     def should_fake_stream(
         self, model: str | None, stream: bool | None, custom_llm_provider: str | None = None
     ) -> bool:
@@ -127,8 +139,14 @@ class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
+        instructions: Final = request.get("instructions")
         return {
-            **{key: value for key, value in request.items() if key != "model"},
+            **{key: value for key, value in request.items() if key not in ("model", "instructions")},
+            **(
+                {"input": _with_system_prompt(instructions, request.get("input"))}
+                if isinstance(instructions, str) and instructions
+                else {}
+            ),
             "agent_reference": _agent_reference(model),
         }
 

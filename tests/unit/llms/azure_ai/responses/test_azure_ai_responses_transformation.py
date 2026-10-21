@@ -163,19 +163,26 @@ def test_native_websocket_stays_off():
     assert AzureAIResponsesAPIConfig().supports_native_websocket() is False
 
 
-def test_validate_environment_sends_api_key_header():
+@pytest.mark.parametrize(
+    "api_base,expected_auth",
+    [
+        ("https://res.services.ai.azure.com", {"api-key": "secret"}),
+        (FOUNDRY_PROJECT_BASE, {"Authorization": "Bearer secret"}),
+    ],
+)
+def test_validate_environment_sends_the_api_key_the_way_the_endpoint_takes_it(api_base, expected_auth):
     headers = AzureAIResponsesAPIConfig().validate_environment(
         headers={"x-custom": "1"},
         model="gpt-5.6-luna",
-        litellm_params=GenericLiteLLMParams(api_key="secret", api_base=FOUNDRY_PROJECT_BASE),
+        litellm_params=GenericLiteLLMParams(api_key="secret", api_base=api_base),
     )
-    assert headers == {"x-custom": "1", "api-key": "secret", "Content-Type": "application/json"}
+    assert headers == {"x-custom": "1", **expected_auth, "Content-Type": "application/json"}
 
 
 def test_validate_environment_reads_api_key_from_env(monkeypatch):
     monkeypatch.setenv("AZURE_AI_API_KEY", "env-secret")
     headers = AzureAIResponsesAPIConfig().validate_environment(
-        headers={}, model="gpt-5.6-luna", litellm_params=GenericLiteLLMParams(api_base=FOUNDRY_PROJECT_BASE)
+        headers={}, model="gpt-5.6-luna", litellm_params=GenericLiteLLMParams(api_base="https://res.services.ai.azure.com")
     )
     assert headers["api-key"] == "env-secret"
 
@@ -230,7 +237,10 @@ def _assert_native_responses_request(route, expected_url, expected_model):
     request = route.calls.last.request
     body = json.loads(request.content)
     assert f"{request.url.scheme}://{request.url.host}{request.url.path}" == expected_url
-    assert request.headers["api-key"] == "fake-key"
+    on_project: Final = expected_url == FOUNDRY_RESPONSES_URL
+    assert request.headers.get("authorization" if on_project else "api-key") == (
+        "Bearer fake-key" if on_project else "fake-key"
+    )
     assert body["model"] == expected_model
     assert body["input"] == "What is the weather in SF?"
     assert "messages" not in body
@@ -447,7 +457,6 @@ async def test_router_aresponses_keeps_the_deployment_agent_over_extra_body():
 
 
 AGENT_OWNED_PARAMS = {
-    "instructions": "Answer in French",
     "temperature": 0.2,
     "top_p": 0.5,
     "tools": [WEATHER_TOOL],
@@ -517,6 +526,39 @@ async def test_aresponses_rejects_agent_owned_params_without_drop_params(param):
     assert not route.called
 
 
+SYSTEM_PROMPT = {"type": "message", "role": "system", "content": "Answer in French"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "request_input,expected_input",
+    [
+        ("What is 2+2?", [SYSTEM_PROMPT, {"type": "message", "role": "user", "content": "What is 2+2?"}]),
+        (
+            [{"type": "message", "role": "user", "content": "What is 2+2?"}],
+            [SYSTEM_PROMPT, {"type": "message", "role": "user", "content": "What is 2+2?"}],
+        ),
+    ],
+)
+async def test_aresponses_sends_instructions_to_the_agent_as_a_leading_system_message(request_input, expected_input):
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/agents/support-agent",
+        input=request_input,
+        instructions="Answer in French",
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+    )
+
+    body = json.loads(route.calls.last.request.content)
+    assert "instructions" not in body
+    assert body["input"] == expected_input
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_aresponses_streams_agent_answers_from_foundry():
@@ -553,7 +595,7 @@ async def test_aresponses_streams_agent_answers_from_foundry():
     "configured_scope,expected_scope",
     [(None, AZURE_AI_AGENTS_SCOPE), ("api://custom-app/.default", "api://custom-app/.default")],
 )
-async def test_aresponses_mints_the_service_principal_token_for_the_agents_scope(configured_scope, expected_scope):
+async def test_aresponses_mints_the_service_principal_token_for_the_project_scope(configured_scope, expected_scope):
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
         return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
     )
@@ -574,6 +616,32 @@ async def test_aresponses_mints_the_service_principal_token_for_the_agents_scope
         tenant_id="tenant", client_id="client", client_secret="secret", scope=expected_scope
     )
     assert route.calls.last.request.headers["Authorization"] == "Bearer agent-sp-token"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_aget_responses_mints_the_service_principal_token_for_the_project_scope():
+    route = respx.get(url__regex=r".*/api/projects/proj/openai/v1/responses/resp_123(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:  # test-quality-ok: stubs the Entra token fetch to assert the scope a follow-up on a project endpoint requests; live service principal path proven by the PR's Foundry e2e QA
+        mock_entra_id.return_value = lambda: "project-sp-token"
+        response = await litellm.aget_responses(
+            response_id="resp_123",
+            custom_llm_provider="azure_ai",
+            model="azure_ai/agents/support-agent",
+            api_base=FOUNDRY_PROJECT_BASE,
+            tenant_id="tenant",
+            client_id="client",
+            client_secret="secret",
+        )
+
+    mock_entra_id.assert_called_once_with(
+        tenant_id="tenant", client_id="client", client_secret="secret", scope=AZURE_AI_AGENTS_SCOPE
+    )
+    assert route.calls.last.request.headers["Authorization"] == "Bearer project-sp-token"
+    assert response.status == "completed"
 
 
 def _agent_answer_payload(text: str) -> dict:
@@ -600,7 +668,7 @@ async def test_acompletion_reaches_the_agent_through_the_project_responses_api()
 
     response = await litellm.acompletion(
         model="azure_ai/agents/support-agent",
-        messages=[{"role": "user", "content": "What is 2+2?"}],
+        messages=[{"role": "system", "content": "Answer in French"}, {"role": "user", "content": "What is 2+2?"}],
         api_base=FOUNDRY_PROJECT_BASE,
         api_key="fake-key",
     )
@@ -608,4 +676,6 @@ async def test_acompletion_reaches_the_agent_through_the_project_responses_api()
     body = json.loads(route.calls.last.request.content)
     assert body["agent_reference"] == {"type": "agent_reference", "name": "support-agent"}
     assert "model" not in body
+    assert "instructions" not in body
+    assert body["input"][0] == SYSTEM_PROMPT
     assert response.choices[0].message.content == "4"
