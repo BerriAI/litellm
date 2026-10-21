@@ -12,6 +12,7 @@ import type {
   ModelActivityData,
   SpendMetrics,
 } from "@/components/UsagePage/types";
+import type { DailyActivityTagPageResponse } from "@/components/UsagePage/dailyActivityApi";
 import EntityUsage from "./EntityUsage";
 import { getGlobalTopKeys, getTopAPIKeys } from "./entityUsageAggregations";
 
@@ -33,6 +34,37 @@ const emptySpendMetrics: SpendMetrics = {
   cache_read_input_tokens: 0,
   cache_creation_input_tokens: 0,
 };
+
+const tagSpendRow = (
+  tag: string,
+  spend: number,
+  apiRequests: number,
+): DailyActivityTagPageResponse["tags"][number] => ({
+  tag,
+  spend,
+  prompt_tokens: apiRequests * 10,
+  completion_tokens: apiRequests * 5,
+  total_tokens: apiRequests * 15,
+  api_requests: apiRequests,
+  successful_requests: apiRequests,
+  failed_requests: 0,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+});
+
+const tagSpendPage = (offset: number): DailyActivityTagPageResponse => ({
+  tags:
+    offset === 0
+      ? [
+          tagSpendRow("project:rag-v2", 0.25, 1),
+          tagSpendRow("cost-center:cc-42", 0.5, 2),
+          ...Array.from({ length: 48 }, (_, index) => tagSpendRow(`tag-${index}`, 0.01, 1)),
+        ]
+      : Array.from({ length: 10 }, (_, index) => tagSpendRow(`next-${index}`, 0.01, 1)),
+  total_tags: 60,
+  offset,
+  limit: 50,
+});
 
 const createKeyMetrics = (spend: number, metadata: KeyMetadata): KeyMetricWithMetadata => ({
   metrics: { ...emptySpendMetrics, spend },
@@ -68,6 +100,7 @@ vi.mock("@/components/networking", () => ({
   dailyActivityKeyPageCall: vi.fn(),
   dailyActivityKeySearchCall: vi.fn(),
   dailyActivityModelTopKeysCall: vi.fn(),
+  dailyActivityTagPageCall: vi.fn(),
   dailyActivityExportCall: vi.fn(),
 }));
 
@@ -171,6 +204,7 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
 describe("EntityUsage", () => {
   const mockDailyActivityAggregatedCall = vi.mocked(networking.dailyActivityAggregatedCall);
   const mockDailyActivityKeyPageCall = vi.mocked(networking.dailyActivityKeyPageCall);
+  const mockDailyActivityTagPageCall = vi.mocked(networking.dailyActivityTagPageCall);
   const mockTagDailyActivityCall = vi.fn();
   const mockTeamDailyActivityCall = vi.fn();
   const mockOrganizationDailyActivityCall = vi.fn();
@@ -482,6 +516,7 @@ describe("EntityUsage", () => {
   beforeEach(() => {
     mockDailyActivityAggregatedCall.mockReset();
     mockDailyActivityKeyPageCall.mockReset();
+    mockDailyActivityTagPageCall.mockReset();
     const emptyKeyPage = {
       api_keys: [],
       total_api_keys: 0,
@@ -489,6 +524,7 @@ describe("EntityUsage", () => {
       limit: 50,
     };
     mockDailyActivityKeyPageCall.mockResolvedValue(emptyKeyPage);
+    mockDailyActivityTagPageCall.mockImplementation((request) => Promise.resolve(tagSpendPage(request.offset)));
     mockDailyActivityAggregatedCall.mockImplementation((entity, request) =>
       (
         entityMocks[entity] as unknown as (
@@ -616,44 +652,7 @@ describe("EntityUsage", () => {
     expect(screen.queryByText(/^team-user-spend:/)).not.toBeInTheDocument();
   });
 
-  const tagSpendFor = (tags: Record<string, { spend: number; api_requests: number }>) => ({
-    results: [
-      {
-        date: "2025-01-01",
-        metrics: { ...emptySpendMetrics },
-        breakdown: {
-          models: {},
-          model_groups: {},
-          mcp_servers: {},
-          providers: {},
-          api_keys: {},
-          entities: Object.fromEntries(
-            Object.entries(tags).map(([tag, { spend, api_requests }]) => [
-              tag,
-              {
-                metrics: { ...emptySpendMetrics, spend, api_requests, successful_requests: api_requests },
-                metadata: {},
-                api_key_breakdown: {},
-              },
-            ]),
-          ),
-        },
-      },
-    ],
-    metadata: { total_spend: 0, total_api_requests: 0 },
-  });
-
-  it("shows one selected team's spend per tag from a group_by=tag request", async () => {
-    mockTeamDailyActivityCall.mockImplementation((request: { groupBy?: string }) =>
-      Promise.resolve(
-        request.groupBy === "tag"
-          ? tagSpendFor({
-              "project:rag-v2": { spend: 0.25, api_requests: 1 },
-              "cost-center:cc-42": { spend: 0.5, api_requests: 2 },
-            })
-          : mockSpendData,
-      ),
-    );
+  it("shows one selected team's tag page in API order and loads the next page", async () => {
     const user = userEvent.setup();
     render(<StatefulEntityUsage {...defaultProps} entityType="team" />);
     expect(screen.queryByTestId("team-tag-spend-card")).not.toBeInTheDocument();
@@ -663,14 +662,22 @@ describe("EntityUsage", () => {
     const card = await screen.findByTestId("team-tag-spend-card");
     expect(within(card).getByRole("heading", { name: "Spend Per Tag" })).toBeInTheDocument();
     const rows = (await within(card).findAllByRole("row")).slice(1);
-    expect(rows.map((row) => within(row).getAllByRole("cell")[0].textContent)).toEqual([
-      "cost-center:cc-42",
+    expect(rows.slice(0, 2).map((row) => within(row).getAllByRole("cell")[0].textContent)).toEqual([
       "project:rag-v2",
+      "cost-center:cc-42",
     ]);
-    expect(within(rows[0]).getByText("$0.5000")).toBeInTheDocument();
-    expect(mockTeamDailyActivityCall).toHaveBeenCalledWith(
-      expect.objectContaining({ entityIds: ["team-1"], groupBy: "tag" }),
+    expect(within(card).getByText("Showing 1-50 of 60")).toBeInTheDocument();
+    expect(mockDailyActivityTagPageCall).toHaveBeenCalledWith(
+      expect.objectContaining({ teamId: "team-1", offset: 0, limit: 50 }),
     );
+
+    await user.click(within(card).getByRole("button", { name: "Go to next page" }));
+    await waitFor(() =>
+      expect(mockDailyActivityTagPageCall).toHaveBeenCalledWith(
+        expect.objectContaining({ teamId: "team-1", offset: 50, limit: 50 }),
+      ),
+    );
+    expect(await within(card).findByText("Showing 51-60 of 60")).toBeInTheDocument();
   });
 
   it("asks for tag spend only for exactly one team in the team view", async () => {
@@ -708,7 +715,7 @@ describe("EntityUsage", () => {
     });
     expect(screen.queryByTestId("team-tag-spend-card")).not.toBeInTheDocument();
 
-    expect(mockTeamDailyActivityCall).not.toHaveBeenCalledWith(expect.objectContaining({ groupBy: "tag" }));
+    expect(mockDailyActivityTagPageCall).not.toHaveBeenCalled();
   });
 
   it("should render with organization entity type and call organization API", async () => {

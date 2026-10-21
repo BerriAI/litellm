@@ -1,4 +1,4 @@
-import type { components, operations } from "@/lib/http/schema";
+import type { components } from "@/lib/http/schema";
 import type { BreakdownMetrics, DailyData, KeyMetadata, KeyMetricWithMetadata, MetricWithMetadata } from "./types";
 
 export type DailyActivityEntity = "user" | "team" | "tag" | "organization" | "customer" | "agent";
@@ -11,10 +11,22 @@ export type KeyActivityRow = components["schemas"]["KeyActivityRow"];
 export type KeySpendActivityRow = components["schemas"]["KeySpendActivityRow"];
 export type DailyActivityKeySearchResponse = components["schemas"]["DailyActivityKeySearchResponse"];
 export type DailyActivityKeyPageResponse = components["schemas"]["DailyActivityKeyPageResponse"];
+export type DailyActivityTagPageResponse = components["schemas"]["DailyActivityTagPageResponse"];
+export type DailyActivityTagSpendRow = components["schemas"]["TagSpendRow"];
 export type ModelTopKeysResponse = components["schemas"]["ModelTopKeysResponse"];
 export type CacheLeakageKeysResponse = components["schemas"]["CacheLeakageKeysResponse"];
 export type UserActivityRow = components["schemas"]["UserActivityRow"];
 export type DailyActivityUserPageResponse = components["schemas"]["DailyActivityUserPageResponse"];
+
+export interface DailyActivityTagPageRequest {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  teamId: string;
+  offset: number;
+  limit: number;
+  signal?: AbortSignal;
+}
 
 export interface DailyActivityRequest {
   accessToken: string;
@@ -26,13 +38,7 @@ export interface DailyActivityRequest {
   model?: string | null;
   includeCurrentUtcDay?: boolean;
   apiKeyLimit?: number;
-  groupBy?: TeamGroupBy;
 }
-
-type TeamAggregatedQuery = NonNullable<
-  operations["get_team_daily_activity_aggregated_team_daily_activity_aggregated_get"]["parameters"]["query"]
->;
-export type TeamGroupBy = NonNullable<TeamAggregatedQuery["group_by"]>;
 
 export const EMPTY_DAILY_ACTIVITY_METADATA: DailyActivityMetadata = {
   has_more: false,
