@@ -588,3 +588,11 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
         "unknown_root-new_family_models",
         "vertex_ai-new_family_models",
     ]
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_mirrored_catalog_validates_against_its_schema(path: Path) -> None:
+    schema: Final = json.loads((REPO_ROOT / "model_prices_and_context_window.schema.json").read_text())
+    validator: Final = jsonschema.validators.validator_for(schema)(schema)
+    errors: Final = tuple(error.message for error in validator.iter_errors(json.loads(path.read_text())))
+    assert errors == ()
