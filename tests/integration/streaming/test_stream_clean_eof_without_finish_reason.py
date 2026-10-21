@@ -2,17 +2,22 @@ import asyncio
 import itertools
 import json
 import uuid
+from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from pathlib import Path
 from typing import Final, Literal
 
 import anthropic
 import openai
 import pytest
 from integration._support.anthropic_sse import CONTENT_BLOCK_START, CONTENT_TAIL, message_start, text_delta
-from integration._support.client import Gateway, Scenario, string_value
+from integration._support.client import Gateway, Scenario, eventually, string_value
+from integration._support.database import read_rows, scratch_database
+from integration._support.database_relay import DatabaseRelay, database_relay
 from integration._support.openai_wire import answering_model_discovery, posted_targets
+from integration._support.process import owned_proxy
 from integration._support.responses_stream import data_frames, spend_row, sse_events
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._count_tokens_system_lift import (
@@ -456,3 +461,58 @@ def test_concurrent_burst_ends_each_stream_by_whether_its_provider_finished_it(g
         assert tuple(spend_row(call_id)["status"] for _, call_id in outcomes) == tuple(
             "success" if ending == "ending-complete" else "failure" for _, ending, _ in cases
         )
+
+
+_SPEND_LOG_INSERT: Final = b'INSERT INTO "public"."LiteLLM_SpendLogs"'
+Outcomes = tuple[tuple[bool, str], ...]
+
+
+def _spend_statuses(database_url: str) -> Counter[tuple[str, str]]:
+    rows: Final = read_rows('SELECT litellm_call_id, status FROM "LiteLLM_SpendLogs"', (), database_url=database_url)
+    return Counter((string_value(row["litellm_call_id"]), string_value(row["status"])) for row in rows)
+
+
+def _bursts_until_recovered(relay: DatabaseRelay, burst: Callable[[], Outcomes]) -> Iterator[tuple[bool, Outcomes]]:
+    """Bursts until the proxy reconnects after the outage, each marked by whether the database was down when it began"""
+    while not relay.reconnected.is_set():
+        yield relay.tripped.is_set(), burst()
+
+
+def test_spend_log_outage_mid_burst_keeps_each_stream_ending_and_lands_every_row_once(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    endings: Final[tuple[Ending, ...]] = ("ending-complete", "ending-clean-eof")
+    cases: Final = tuple(itertools.product(_BRIDGED_FAMILY, endings))
+    with (
+        scratch_database() as database_url,
+        database_relay(database_url, _SPEND_LOG_INSERT) as (relay, relayed_url),
+        owned_proxy(gateway, tmp_path, {"DATABASE_URL": relayed_url}, workers=2) as candidate,
+        ExitStack() as wires,
+        candidate.scenario() as scenario,
+        ThreadPoolExecutor(max_workers=len(cases)) as pool,
+    ):
+        models: Final = {
+            route: _deploy(scenario, family, wires.enter_context(wire_server(_upstream(family))))
+            for route, family in _BRIDGED_FAMILY.items()
+        }
+
+        def burst() -> Outcomes:
+            return tuple(pool.map(lambda case: _stream_outcome(candidate, models[case[0]], case[0], case[1]), cases))
+
+        relay.arm()
+        waves: Final = tuple(itertools.islice(_bursts_until_recovered(relay, burst), 60))
+        assert relay.reconnected.is_set(), "the proxy never reconnected to the database after the outage"
+        assert relay.refused >= 1 and any(down for down, _ in waves), (relay.refused, len(waves))
+        finished: Final = tuple(ending == "ending-complete" for _, ending in cases)
+        assert all(tuple(done for done, _ in outcomes) == finished for _, outcomes in waves), waves
+        sent: Final = tuple(itertools.chain.from_iterable(outcomes for _, outcomes in waves))
+        expected: Final = Counter(
+            (call_id, "success" if ending == "ending-complete" else "failure")
+            for (_, ending), (_, call_id) in zip(cases * len(waves), sent, strict=True)
+        )
+        landed: Final = eventually(
+            lambda: _spend_statuses(database_url),
+            lambda rows: {call_id for call_id, _ in expected} <= {call_id for call_id, _ in rows},
+            seconds=120,
+        )
+        assert landed == expected
