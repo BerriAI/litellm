@@ -1565,6 +1565,66 @@ async def test_can_team_access_model_access_group_ids_denied():
             )
 
 
+@pytest.mark.asyncio
+async def test_can_team_access_model_empty_models_access_group_denied():
+    """Test can_team_access_model denies access when team has empty models and model is not in access groups."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy._types import ModelAccessDeniedProxyException
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        models=[],
+        access_group_ids=["ag-with-gpt4"],
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["gpt-4"],
+        ),
+        pytest.raises(ModelAccessDeniedProxyException),
+    ):
+        await can_team_access_model(
+            model="claude-3",
+            team_object=team_object,
+            llm_router=None,
+            team_model_aliases=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_can_team_access_model_empty_models_empty_access_group_denied():
+    """Test can_team_access_model denies access when team has empty models and access groups have no models."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy._types import ModelAccessDeniedProxyException
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        models=[],
+        access_group_ids=["ag-empty"],
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        pytest.raises(ModelAccessDeniedProxyException),
+    ):
+        await can_team_access_model(
+            model="gpt-4",
+            team_object=team_object,
+            llm_router=None,
+            team_model_aliases=None,
+        )
+
+
 # ---------------------------------------------------------------------------
 # can_key_call_model with access_group_ids fallback
 # ---------------------------------------------------------------------------
@@ -1595,6 +1655,86 @@ async def test_can_key_call_model_via_access_group_ids():
         "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
         new_callable=AsyncMock,
         return_value=["gpt-4"],
+    ):
+        await can_key_call_model(
+            model="gpt-4",
+            llm_model_list=[],
+            valid_token=user_api_key_object,
+            llm_router=router,
+        )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_access_group_ids_denied_for_unlisted_model():
+    """Test can_key_call_model denies access when key has access_group_ids but requested model is not in access group."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy._types import ModelAccessDeniedProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    user_api_key_object = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["ag-with-gpt4"],
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test"},
+            },
+            {
+                "model_name": "claude-3",
+                "litellm_params": {"model": "anthropic/claude-3", "api_key": "test"},
+            },
+        ]
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["gpt-4"],
+        ),
+        pytest.raises(ModelAccessDeniedProxyException),
+    ):
+        await can_key_call_model(
+            model="claude-3",
+            llm_model_list=[],
+            valid_token=user_api_key_object,
+            llm_router=router,
+        )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_access_group_ids_empty_models_denied():
+    """Test can_key_call_model denies access when key has access_group_ids but access groups contain no models."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy._types import ModelAccessDeniedProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    user_api_key_object = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["ag-empty"],
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test"},
+            }
+        ]
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        pytest.raises(ModelAccessDeniedProxyException),
     ):
         await can_key_call_model(
             model="gpt-4",
