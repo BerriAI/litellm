@@ -1,21 +1,21 @@
-import sys
-import ast, asyncio, os
+import ast
+import asyncio
+import importlib
 import inspect
 import json
+import os
+import sys
 from unittest import mock
+from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
 
-
-import importlib
-
 import litellm
-from litellm import constants, get_llm_provider, MorphChatConfig
+from litellm import MorphChatConfig, constants, get_llm_provider
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import patch
 
 
 def _build_constant_env_var_map() -> dict[str, str]:

@@ -1,8 +1,10 @@
 import datetime
+import os
 import time
 from collections.abc import Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal, cast
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -11,7 +13,16 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import TranscriptionResponse, model_cost
-from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
+from litellm.cost_calculator import (
+    BaseTokenUsageProcessor,
+    RealtimeAPITokenUsageProcessor,
+    ResponsesWebSocketTokenUsageProcessor,
+    batch_cost_calculator,
+    completion_cost,
+    cost_per_token,
+    handle_realtime_stream_cost_calculation,
+    response_cost_calculator,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
@@ -23,11 +34,25 @@ from litellm.llms.together_ai.cost_calculator import get_model_params_and_catego
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import (
+    CallTypes,
+    Choices,
+    CompletionTokensDetailsWrapper,
+    EmbeddingResponse,
+    ImageObject,
+    ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
+    LiteLLMRealtimeStreamLoggingObject,
+    Message,
+    ModelInfo,
+    ModelResponse,
+    PromptTokensDetails,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 from litellm.types.videos.main import VideoObject
 from litellm.utils import supports_prompt_caching
-import os
-from unittest.mock import MagicMock, patch
 
 
 @pytest.fixture
@@ -7801,7 +7826,7 @@ def test_completion_cost_model_response_cost(response_model, custom_llm_provider
 
 def test_select_model_name_for_cost_calc():
     from litellm.cost_calculator import select_model_name_for_cost_calc
-    from litellm.types.utils import ModelResponse, Choices, Usage, Message
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
     args = {
         "model": "Mistral-large-nmefg",

@@ -137,13 +137,15 @@ async def test_modern_input_request_uses_existing_elicitation_callback(
     modern_caller: bool, sampling: bool, elicitation_mode: str
 ) -> None:
     from queue import SimpleQueue
+
     from mcp.types import (
-        ElicitResult,
-        ElicitRequestParams,
-        TextContent,
         CreateMessageRequestParams,
         CreateMessageResult,
+        ElicitRequestParams,
+        ElicitResult,
+        TextContent,
     )
+
     from litellm.proxy._experimental.mcp_server.interactions import BoundInputRequiredResult
 
     observed: Final[SimpleQueue[str]] = SimpleQueue()
@@ -1883,7 +1885,9 @@ async def test_http_response_handler_preserves_success_and_http_errors(status_co
 
 @pytest.mark.asyncio
 async def test_http_status_check_allows_auth_refresh_before_rejecting() -> None:
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import ClientCredentialsBearerAuth
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+        ClientCredentialsBearerAuth,
+    )
 
     seen = []
 
@@ -2148,6 +2152,7 @@ def test_sse_read_failure_is_preserved() -> None:
 @pytest.mark.parametrize("mode", ["ok", "closed", "silent"])
 async def test_transport_completion_and_normal_messages(transport: MCPTransport, mode: str, protocol_version: str) -> None:
     from mcp import ClientSession
+
     from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
 
     logging_callback: Final = AsyncMock()
@@ -3637,7 +3642,13 @@ def test_modern_upstream_rejects_legacy_sse_transport() -> None:
     ("resources/templates/list", "resourceTemplates", {"name": "second", "uriTemplate": "status://{name}"}),
 ])
 async def test_single_catalog_page_preserves_cursor_metadata_and_request_cursor(method, field, item):
-    from mcp.types import ListToolsRequest, ListPromptsRequest, ListResourcesRequest, ListResourceTemplatesRequest, PaginatedRequestParams
+    from mcp.types import (
+        ListPromptsRequest,
+        ListResourcesRequest,
+        ListResourceTemplatesRequest,
+        ListToolsRequest,
+        PaginatedRequestParams,
+    )
 
     def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method != "POST":
@@ -3691,7 +3702,10 @@ async def test_single_catalog_page_preserves_cursor_metadata_and_request_cursor(
 @pytest.mark.parametrize("cursor", [None, "continuation"])
 async def test_optional_catalog_distinguishes_absent_capability_from_failed_continuation(method, failure, cursor):
     from mcp.types import (
-        ListPromptsRequest, ListResourcesRequest, ListResourceTemplatesRequest, PaginatedRequestParams,
+        ListPromptsRequest,
+        ListResourcesRequest,
+        ListResourceTemplatesRequest,
+        PaginatedRequestParams,
     )
 
     methods = []
