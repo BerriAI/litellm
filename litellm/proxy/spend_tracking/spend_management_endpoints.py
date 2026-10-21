@@ -2612,12 +2612,19 @@ async def ui_view_spend_logs(
             "match inside start_date/end_date, which stay required"
         ),
     ),
+    project_ids: Annotated[  # mutable-ok: FastAPI and Prisma bind repeated query parameters as a list
+        list[str] | None,
+        fastapi.Query(description="Exact Project IDs, repeated per value. Only supported by v2 ungrouped logs."),
+    ] = None,
 ):
     """
     View spend logs with pagination support.
     Available at both `/spend/logs/v2` (public API) and `/spend/logs/ui` (internal UI).
 
     Returns paginated response with data, total, page, page_size, and total_pages.
+    On v2 ungrouped logs, repeated `project_ids` intersect the authorized scope with exact
+    string metadata.user_api_key_project_id values before counting and pagination. Filtered
+    responses add `project_filter: {version: 1, project_ids: [...]}`; omitted parameters keep the legacy response.
 
     Example:
     ```
@@ -2639,6 +2646,22 @@ async def ui_view_spend_logs(
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
     is_v2: Final = "/spend/logs/v2" in get_request_route(request)
+
+    if project_ids is not None:
+        if not is_v2 or group_by_session is True or session_cursor is not None:
+            raise ProxyException(
+                message="project_ids requires /spend/logs/v2 with group_by_session=false and no session_cursor",
+                type="bad_request",
+                param="project_ids",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+        if any(not project_id.strip() for project_id in project_ids):
+            raise ProxyException(
+                message="project_ids must contain nonblank identifiers",
+                type="bad_request",
+                param="project_ids",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
 
     # Validate sort_by and sort_order
     valid_sort_fields: Final = {
@@ -2927,6 +2950,12 @@ async def ui_view_spend_logs(
             sql_params.append(max_spend)
             p += 1
 
+        if project_ids is not None:
+            sql_conditions.append("jsonb_typeof(metadata->'user_api_key_project_id') = 'string'")
+            sql_conditions.append(f"metadata->>'user_api_key_project_id' = ANY(${p}::text[])")
+            sql_params.append(project_ids)
+            p += 1  # rebind-ok: advances the shared SQL placeholder counter
+
         # Metadata JSON filters (PostgreSQL JSONB operators)
         if key_alias is not None:
             sql_conditions.append(f"metadata->>'user_api_key_alias' LIKE ${p}")
@@ -3062,7 +3091,7 @@ async def ui_view_spend_logs(
 
         verbose_proxy_logger.debug("data= %s", json.dumps(data, indent=4, default=str))
 
-        return await _build_ui_spend_logs_response(
+        response: Final = await _build_ui_spend_logs_response(
             prisma_client,
             data,
             total_records,
@@ -3072,6 +3101,12 @@ async def ui_view_spend_logs(
             enrich_session_counts=not is_v2,
             total_is_capped=total_is_capped,
         )
+        if project_ids is None:
+            return response
+        return {  # mutable-ok: FastAPI response body
+            **response,
+            "project_filter": {"version": 1, "project_ids": project_ids},  # mutable-ok: FastAPI response body
+        }
     except Exception as e:
         verbose_proxy_logger.exception("Error in ui_view_spend_logs: %s", e)
         raise handle_exception_on_proxy(e)
