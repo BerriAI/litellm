@@ -655,3 +655,42 @@ describe("KeyInfoView handleKeyUpdate soft_budget", () => {
     expect(keyUpdateCallMock).not.toHaveBeenCalled();
   });
 });
+
+describe("KeyInfoView handleKeyUpdate organization", () => {
+  it("should show no organization after a save clears the one a key list row carried as org_id", async () => {
+    const adminAuth = {
+      accessToken: "access_abc",
+      userId: "user_1",
+      userRole: "Admin",
+      premiumUser: true,
+      token: "token_123",
+      userEmail: "test@example.com",
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    };
+    keyUpdateCallMock.mockResolvedValueOnce({ ...baseKeyData, organization_id: null });
+    mockUseAuthorized.mockReturnValue(adminAuth);
+
+    render(
+      <KeyInfoView
+        keyId="tok_123"
+        onClose={() => {}}
+        keyData={{ ...baseKeyData, org_id: "org-1" } as any}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Settings"));
+    expect(screen.getByText("Organization", { selector: "p" }).nextElementSibling).toHaveTextContent("org-1");
+
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = { token: "tok_123", organization_id: null };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Organization", { selector: "p" }).nextElementSibling).toHaveTextContent("Not Set");
+    });
+  });
+});
