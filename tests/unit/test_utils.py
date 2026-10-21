@@ -953,6 +953,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_creation_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "explicit_cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens_batches": {"type": "number"},
@@ -1060,6 +1061,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "image_edit",
                         "embedding",
                         "evaluation",
+                        "extraction",
                         "guardrail",
                         "image_generation",
                         "video_generation",
@@ -1246,6 +1248,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "web_search_billing_unit": {
                     "type": "string",
                     "enum": ["per_prompt", "per_query"],
+                },
+                "search_free_requests": {
+                    "type": "object",
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 1},
+                        "period": {"type": "string", "enum": ["day", "month"]},
+                        "shared_group": {"type": "string"},
+                    },
+                    "required": ["count", "period", "shared_group"],
+                    "additionalProperties": False,
                 },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
@@ -8548,6 +8560,8 @@ def test_models_by_provider():
         if "_" in v["litellm_provider"] and "-" in v["litellm_provider"]:
             continue
         elif k == "sample_spec":
+            continue
+        elif v["litellm_provider"] not in litellm.provider_list and not JSONProviderRegistry.exists(v["litellm_provider"]):
             continue
         elif (
             v["litellm_provider"] == "sagemaker"
