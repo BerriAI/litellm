@@ -11,13 +11,14 @@ enable_preview_features=True to be enabled.
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from itertools import chain
 from typing import Final
 
 import httpx
 import pytest
 import respx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -339,6 +340,37 @@ def _gemini_response(native_id: str | None, stream: bool) -> httpx.Response:
     return httpx.Response(200, json=body)
 
 
+def _gemini_answer() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [
+                {"content": {"role": "model", "parts": [{"text": "Sunny"}]}, "finishReason": "STOP", "index": 0}
+            ],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 1, "totalTokenCount": 10},
+        },
+    )
+
+
+class _GeminiTurn(TypedDict):
+    role: ReadOnly[str]
+    parts: ReadOnly[Sequence[Mapping[str, object]]]
+
+
+class _GeminiRequestBody(TypedDict):
+    contents: ReadOnly[Sequence[_GeminiTurn]]
+
+
+def _is_bounded(tool_call_id: object) -> bool:
+    return isinstance(tool_call_id, str) and BOUNDED_TOOL_CALL_ID.fullmatch(tool_call_id) is not None
+
+
+def _replayed_signatures(sent_body: _GeminiRequestBody) -> list[object]:
+    model_turns: Final = [turn for turn in sent_body["contents"] if turn["role"] == "model"]
+    model_parts: Final = chain.from_iterable(turn["parts"] for turn in model_turns)
+    return [part["thoughtSignature"] for part in model_parts if "function_call" in part]
+
+
 def _returned_tool_calls(
     native_id: str | None, stream: bool, request_params: Mapping[str, object]
 ) -> tuple[list[Mapping[str, object]], Mapping[str, object]]:
@@ -369,7 +401,7 @@ def test_tool_call_id_stays_bounded_when_thought_signature_kept_out_of_it(stream
 
     tool_call_ids: Final = [call["id"] for call in tool_calls if call["id"]]
     assert len(tool_call_ids) == 1
-    assert BOUNDED_TOOL_CALL_ID.fullmatch(tool_call_ids[0])
+    assert _is_bounded(tool_call_ids[0])
     assert native_id is None or tool_call_ids[0] == native_id
     assert tool_calls[0]["provider_specific_fields"]["thought_signature"] == LONG_SIGNATURE
     assert "thought_signature_in_tool_call_id" not in json.dumps(sent_body)
@@ -400,17 +432,7 @@ def test_bounded_tool_call_id_round_trips_to_gemini(client_keeps_provider_fields
     }
 
     with respx.mock:
-        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "candidates": [
-                        {"content": {"role": "model", "parts": [{"text": "Sunny"}]}, "finishReason": "STOP", "index": 0}
-                    ],
-                    "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 1, "totalTokenCount": 10},
-                },
-            )
-        )
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
         litellm.completion(
             model="gemini/gemini-3.5-flash",
             messages=[
@@ -424,9 +446,7 @@ def test_bounded_tool_call_id_round_trips_to_gemini(client_keeps_provider_fields
         )
         sent_body: Final = json.loads(route.calls.last.request.content)
 
-    model_turns: Final = [turn for turn in sent_body["contents"] if turn["role"] == "model"]
-    model_parts: Final = chain.from_iterable(turn["parts"] for turn in model_turns)
-    replayed_signatures: Final = [part["thoughtSignature"] for part in model_parts if "function_call" in part]
+    replayed_signatures: Final = _replayed_signatures(sent_body)
     assert len(replayed_signatures) == 1
     assert (replayed_signatures[0] == LONG_SIGNATURE) is client_keeps_provider_fields
     assert replayed_signatures[0]
@@ -435,17 +455,7 @@ def test_bounded_tool_call_id_round_trips_to_gemini(client_keeps_provider_fields
 def test_tool_result_with_bare_id_matches_call_whose_id_the_client_re_signed():
     bare_id: Final = "call_601401"
     with respx.mock:
-        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "candidates": [
-                        {"content": {"role": "model", "parts": [{"text": "Sunny"}]}, "finishReason": "STOP", "index": 0}
-                    ],
-                    "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 1, "totalTokenCount": 10},
-                },
-            )
-        )
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
         litellm.completion(
             model="gemini/gemini-3.5-flash",
             messages=[
@@ -514,7 +524,7 @@ async def test_messages_tool_use_keeps_thought_signature_kept_out_of_its_id(
     tool_uses: Final = await _messages_tool_use_blocks(stream)
 
     assert len(tool_uses) == 1
-    assert BOUNDED_TOOL_CALL_ID.fullmatch(tool_uses[0]["id"])
+    assert _is_bounded(tool_uses[0]["id"])
     assert tool_uses[0]["provider_specific_fields"]["signature"] == LONG_SIGNATURE
 
 
@@ -545,8 +555,86 @@ def test_responses_function_call_keeps_thought_signature_kept_out_of_its_id(stre
     function_calls: Final = _responses_function_call_items(stream)
 
     assert len(function_calls) == 1
-    assert BOUNDED_TOOL_CALL_ID.fullmatch(function_calls[0].call_id)
+    assert _is_bounded(function_calls[0].call_id)
     assert function_calls[0].provider_specific_fields["thought_signature"] == LONG_SIGNATURE
+
+
+@pytest.mark.parametrize("client_keeps_provider_fields", [True, False])
+def test_responses_function_call_replays_its_thought_signature_to_gemini(client_keeps_provider_fields: bool):
+    function_call: Final = _responses_function_call_items(False)[0]
+    replayed_item: Final = {
+        "type": "function_call",
+        "call_id": function_call.call_id,
+        "name": function_call.name,
+        "arguments": function_call.arguments,
+        **(
+            {"provider_specific_fields": function_call.provider_specific_fields}
+            if client_keeps_provider_fields
+            else {}
+        ),
+    }
+
+    with respx.mock:
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        litellm.responses(
+            model="gemini/gemini-3.5-flash",
+            input=[
+                {"role": "user", "content": USER_TURN["content"]},
+                replayed_item,
+                {"type": "function_call_output", "call_id": function_call.call_id, "output": '{"temp_c": 21}'},
+            ],
+            tools=[RESPONSES_WEATHER_TOOL],
+            api_key="test-gemini-key",
+            thought_signature_in_tool_call_id=False,
+        )
+        sent_body: Final = json.loads(route.calls.last.request.content)
+
+    replayed_signatures: Final = _replayed_signatures(sent_body)
+    assert len(replayed_signatures) == 1
+    assert (replayed_signatures[0] == LONG_SIGNATURE) is client_keeps_provider_fields
+    assert replayed_signatures[0]
+
+
+@pytest.mark.parametrize("requested_value", ["false", "False", 0])
+def test_request_setting_given_as_a_string_or_number_keeps_ids_bounded(requested_value: object):
+    tool_calls, _ = _returned_tool_calls(None, False, {"thought_signature_in_tool_call_id": requested_value})
+
+    assert _is_bounded(tool_calls[0]["id"])
+    assert tool_calls[0]["provider_specific_fields"]["thought_signature"] == LONG_SIGNATURE
+
+
+async def _complete(use_async: bool, **request_params: object) -> litellm.ModelResponse:
+    request: Final = {
+        "model": "gemini/gemini-3.5-flash",
+        "messages": [USER_TURN],
+        "tools": [WEATHER_TOOL],
+        "api_key": "test-gemini-key",
+        **request_params,
+    }
+    return await litellm.acompletion(**request) if use_async else litellm.completion(**request)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_request_setting_that_is_not_a_boolean_answers_400(use_async: bool):
+    with respx.mock(assert_all_called=False):
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
+        with pytest.raises(litellm.BadRequestError, match="thought_signature_in_tool_call_id") as raised:
+            await _complete(use_async, thought_signature_in_tool_call_id="maybe")
+
+    assert raised.value.status_code == 400
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_request_setting_that_is_not_a_boolean_is_dropped_under_drop_params(
+    use_async: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
+        response: Final = await _complete(use_async, thought_signature_in_tool_call_id="maybe", drop_params=True)
+
+    tool_call_id: Final = response.choices[0].message.tool_calls[0].id
+    assert get_thought_signature_from_tool({"id": tool_call_id}) == LONG_SIGNATURE
 
 
 @pytest.mark.parametrize("configured_value", ["false", "False", 0, False])
@@ -567,7 +655,7 @@ def test_deployment_setting_given_as_a_string_or_number_keeps_ids_bounded(config
         respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
         response: Final = router.completion(model="gemini-agentcore", messages=[USER_TURN], tools=[WEATHER_TOOL])
 
-    assert BOUNDED_TOOL_CALL_ID.fullmatch(response.choices[0].message.tool_calls[0].id)
+    assert _is_bounded(response.choices[0].message.tool_calls[0].id)
 
 
 def test_deployment_setting_rejects_a_value_that_is_not_a_boolean():

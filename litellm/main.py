@@ -381,6 +381,27 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             return assert_never(control)
 
 
+def _supplemental_provider_params(kwargs: Mapping[str, object], model: str) -> GenericLiteLLMParams | None:
+    supplemental: Final = {key: kwargs[key] for key in OPTIONAL_KWARGS_KEYS if key in kwargs}
+    if not supplemental:
+        return None
+    try:
+        return GenericLiteLLMParams.model_validate(supplemental)
+    except ValidationError as error:
+        invalid: Final = tuple(detail for detail in error.errors() if detail["loc"])
+        invalid_keys: Final = frozenset(str(detail["loc"][0]) for detail in invalid)
+        if litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True:
+            return GenericLiteLLMParams.model_validate(
+                {key: value for key, value in supplemental.items() if key not in invalid_keys}
+            )
+        raise litellm.BadRequestError(
+            message="; ".join(f"{detail['loc'][0]}: {detail['msg']}" for detail in invalid),
+            model=model,
+            llm_provider=None,
+            body={"param": ", ".join(sorted(invalid_keys))},
+        ) from error
+
+
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -672,17 +693,15 @@ async def acompletion(
         "enable_json_schema_validation": enable_json_schema_validation,
     }
     if custom_llm_provider is None:
-        _supplemental: Final = cast(  # cast-ok: kwargs values are request-scoped objects
-            "dict[str, object]", {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
-        )
+        request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=cast(  # cast-ok: api_base arrives as a str in the request kwargs
-                "str | None", kwargs.get("api_base")
+                "str | None", request_kwargs.get("api_base")
             )
             or base_url,
-            litellm_params=(GenericLiteLLMParams.model_validate(_supplemental) if _supplemental else None),
+            litellm_params=_supplemental_provider_params(request_kwargs, model),
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -5657,16 +5676,15 @@ def completion(
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
-        _supplemental_provider_params: Final = {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             api_key=api_key,
-            litellm_params=(
-                GenericLiteLLMParams.model_validate(_supplemental_provider_params)
-                if _supplemental_provider_params
-                else None
+            litellm_params=_supplemental_provider_params(
+                routing_kwargs,
+                cast(str, model),  # cast-ok: model is the alias-resolved request model name
             ),
         )
 
@@ -5680,7 +5698,6 @@ def completion(
                 cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
             ),
         )
-        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         drop_unsupported_reasoning: Final = (
             litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True
         )

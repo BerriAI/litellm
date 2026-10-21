@@ -221,6 +221,7 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
 
 _OLLAMA_USER_ROLES: Final = frozenset({"user", "tool", "function"})
 _DECODED_JSON: Final = TypeAdapter(object)
+_OPTIONAL_BOOL: Final = TypeAdapter[bool | None](bool | None)
 
 
 def _ollama_bad_message(model: str, message: AllMessageValues, msg_i: int, detail: str) -> "litellm.BadRequestError":
@@ -1269,7 +1270,10 @@ def _same_tool_call(tool_call_id: str, other_tool_call_id: str) -> bool:
 
 
 def embeds_thought_signature_in_tool_call_id(litellm_params: Mapping[str, object]) -> bool:
-    return litellm_params.get("thought_signature_in_tool_call_id") is not False
+    try:
+        return _OPTIONAL_BOOL.validate_python(litellm_params.get("thought_signature_in_tool_call_id")) is not False
+    except ValidationError:
+        return True
 
 
 def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
