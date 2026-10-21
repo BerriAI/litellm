@@ -6,8 +6,9 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final, Literal, TypedDict
 
 import fastapi
@@ -42,7 +43,6 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
-    reject_server_owned_wif_params,
 )
 from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -80,6 +80,8 @@ from litellm.router_utils.clientside_credential_handler import (
 )
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
+from litellm.types.router import reject_server_owned_wif_fields
+from litellm.types.utils import AdminApiKeySecretReference, admin_api_key_secret_reference
 
 #### Health ENDPOINTS ####
 
@@ -159,6 +161,16 @@ def _request_inherits_config_credentials(
     if allow_client_side_credentials:
         return True
     return not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS)
+
+
+def _admin_api_key_from_request(
+    request_litellm_params: Mapping[str, object], call_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    """Only reached once the model auth check passed, which refuses an ``oidc/`` api_key from anyone but a proxy
+    admin."""
+    marked: Final = admin_api_key_secret_reference({**call_params, "api_key": request_litellm_params.get("api_key")})
+    api_key: Final = marked.get("api_key")
+    return MappingProxyType({"api_key": api_key} if isinstance(api_key, AdminApiKeySecretReference) else {})
 
 
 def _config_base_for_health_check(
@@ -265,6 +277,63 @@ services = (
 )
 
 
+_SERVICES_WITH_DEDICATED_CHECK: Final = frozenset(
+    (
+        "slack_budget_alerts",
+        "email",
+        "langfuse",
+        "slack",
+        "ms_teams",
+        "webhook",
+        "datadog",
+        "datadog_metrics",
+        "arize",
+        "galileo",
+        "newrelic",
+        "pointfive",
+        "sqs",
+        "aws_sqs",
+    )
+)
+_SERVICES_TESTABLE_ONLY_VIA_SUCCESS_CALLBACK: Final = frozenset(("custom_callback_api",))
+
+
+def _testable_services() -> frozenset[str]:
+    return (
+        _SERVICES_WITH_DEDICATED_CHECK
+        | _SERVICES_TESTABLE_ONLY_VIA_SUCCESS_CALLBACK
+        | frozenset(
+            litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # no public alias for the callback Literal's args
+        )
+    )
+
+
+def _is_testable_service(service: str) -> bool:
+    return service in _testable_services()
+
+
+def _callback_matches(service: str, cb: object) -> bool:
+    callback_name: Final = getattr(cb, "callback_name", None)
+    if service in (cb, callback_name, get_callback_identifier(cb)):
+        return True
+    return (
+        not callback_name
+        and service not in _SERVICES_WITH_DEDICATED_CHECK
+        and service in _unnamed_callback_aliases(type(cb))
+    )
+
+
+def _unnamed_callback_aliases(callback_type: type) -> frozenset[str]:
+    """A logger built from a bare config string carries no name, so its class aliases and its package name stand in."""
+    return frozenset(CustomLoggerRegistry.get_all_callback_strs_from_class_type(callback_type)) | frozenset(
+        callback_type.__module__.split(".")
+    )
+
+
+def _service_configured_in(service: str, callbacks: Sequence[object]) -> bool:
+    return any(_callback_matches(service, cb) for cb in callbacks)
+
+
 class _ServiceTestErrorDetail(TypedDict):
     error: ReadOnly[str]
 
@@ -326,53 +395,24 @@ async def health_services_endpoint(
         if service is None:
             raise HTTPException(status_code=400, detail={"error": "Service must be specified."})
 
-        if service not in [
-            "slack_budget_alerts",
-            "email",
-            "langfuse",
-            "langfuse_otel",
-            "slack",
-            "ms_teams",
-            "openmeter",
-            "webhook",
-            "braintrust",
-            "otel",
-            "custom_callback_api",
-            "langsmith",
-            "datadog",
-            "datadog_metrics",
-            "datadog_llm_observability",
-            "generic_api",
-            "arize",
-            "galileo",
-            "newrelic",
-            "pointfive",
-            "signoz",
-            "sqs",
-        ]:
+        if not _is_testable_service(service):
             raise HTTPException(
                 status_code=400,
-                detail={"error": f"Service must be in list. Service={service} not in {services}"},
+                detail={"error": f"Service must be in list. Service={service} not in {sorted(_testable_services())}"},
             )
 
-        service_in_success_callbacks = False
-        if service in litellm.success_callback:
-            service_in_success_callbacks = True
-        else:
-            for cb in litellm.success_callback:
-                if getattr(cb, "callback_name", None) == service:
-                    service_in_success_callbacks = True
-                    break
-                cb_id = get_callback_identifier(cb)
-                if cb_id == service:
-                    service_in_success_callbacks = True
-                    break
+        service_in_success_callbacks: Final = _service_configured_in(service, litellm.success_callback)
+        logger_without_dedicated_check_configured: Final = (
+            service not in _SERVICES_WITH_DEDICATED_CHECK
+            and _service_configured_in(service, litellm.logging_callback_manager.get_all_callbacks())
+        )
 
         if (
             service == "openmeter"
             or service == "braintrust"
             or service == "generic_api"
-            or (service_in_success_callbacks and service not in ("langfuse", "pointfive"))
+            or (service_in_success_callbacks and service not in ("langfuse", "pointfive", "sqs", "aws_sqs"))
+            or logger_without_dedicated_check_configured
         ):
             _ = await litellm.acompletion(
                 model="openai/litellm-mock-response-model",
@@ -506,7 +546,11 @@ async def health_services_endpoint(
                 type="user_budget",
                 user_info=user_info,
             )
-        elif service == "sqs":
+            return {
+                "status": "success",
+                "message": "Mock Webhook Alert sent, verify Webhook Alert Received",
+            }
+        elif service in ("sqs", "aws_sqs"):
             from litellm.integrations.sqs import SQSLogger
 
             sqs_logger: Final = SQSLogger()
@@ -628,6 +672,13 @@ async def health_services_endpoint(
                 "status": "success",
                 "message": "Mock Email Alert sent, verify Email Alert Received",
             }
+
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Service={service} is not configured as a callback, add it to litellm_settings.callbacks."
+            },
+        )
 
     except Exception as e:
         verbose_proxy_logger.error("litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - %s", e)
@@ -1464,7 +1515,7 @@ async def shared_health_check_status_endpoint(
         )
 
 
-def _read_license_data() -> EnterpriseLicenseData | None:
+def read_license_data() -> EnterpriseLicenseData | None:
     from litellm.proxy.proxy_server import _license_check, premium_user_data
 
     license_data: EnterpriseLicenseData | None = premium_user_data or _license_check.airgapped_license_data
@@ -1509,7 +1560,7 @@ async def health_license_endpoint(
     """Return metadata about the configured LiteLLM license without exposing the key."""
     from litellm.proxy.proxy_server import _license_check, premium_user
 
-    license_data: Final = _read_license_data()
+    license_data: Final = read_license_data()
     has_license: Final = bool(getattr(_license_check, "license_str", None))
     license_type: Final = "enterprise" if premium_user else "community"
 
@@ -1703,9 +1754,9 @@ def callback_name(callback):
 DISABLE_NO_REDIS_WARNING_ENV_VAR: Final = "LITELLM_DISABLE_NO_REDIS_WARNING"
 
 
-async def _show_no_redis_warning() -> bool:
+async def no_redis_on_multiple_workers() -> bool:
     """
-    Whether the UI should warn that no Redis is configured.
+    Whether this proxy runs without Redis on more than one worker.
 
     Redis is what makes rate limits, budgets, router state, and cache
     invalidation consistent across workers, so a proxy running without it is
@@ -1716,22 +1767,34 @@ async def _show_no_redis_warning() -> bool:
     routing on its own. A deployment whose worker-heartbeat census proves it
     is exactly one worker needs no cross-worker coordination, so it never
     warns; when the census is unavailable or shows more than one worker, the
-    warning stands unless LITELLM_DISABLE_NO_REDIS_WARNING=true silences it.
+    warning stands.
     """
-    from litellm.proxy.proxy_server import llm_router, prisma_client, redis_usage_cache
+    from litellm.proxy.proxy_server import prisma_client
 
-    if redis_usage_cache is not None:
-        return False
-    if llm_router is not None and llm_router.cache.redis_cache is not None:
-        return False
-    if get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is True:
+    if _redis_configured():
         return False
     if prisma_client is None:
         return True
     return await count_live_proxy_workers(prisma_client) != 1
 
 
-def _show_env_credential_login_warning() -> bool:
+def _redis_configured() -> bool:
+    from litellm.proxy.proxy_server import llm_router, redis_usage_cache
+
+    return redis_usage_cache is not None or (llm_router is not None and llm_router.cache.redis_cache is not None)
+
+
+def no_redis_warning_disabled_by_env() -> bool:
+    return get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is True
+
+
+async def _show_no_redis_warning() -> bool:
+    if _redis_configured() or no_redis_warning_disabled_by_env():
+        return False
+    return await no_redis_on_multiple_workers()
+
+
+def env_credential_login_enabled() -> bool:
     from litellm.proxy.auth.login_utils import is_env_credential_login_enabled
     from litellm.proxy.proxy_server import general_settings
 
@@ -1779,7 +1842,7 @@ async def _get_health_readiness_details(
         log_level_name: Final = logging.getLevelName(verbose_logger.getEffectiveLevel())
         is_detailed_debug: Final = verbose_logger.isEnabledFor(logging.DEBUG)
         show_no_redis_warning: Final = await _show_no_redis_warning()
-        show_env_credential_login_warning: Final = _show_env_credential_login_warning()
+        show_env_credential_login_warning: Final = env_credential_login_enabled()
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
@@ -2240,7 +2303,7 @@ async def test_model_connection(
                 )
 
         selected_by_id: Final = deployment_by_id is not None
-        reject_server_owned_wif_params(request_litellm_params)
+        reject_server_owned_wif_fields(request_litellm_params)
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
             **_config_base_for_health_check(
@@ -2290,6 +2353,10 @@ async def test_model_connection(
         )
         health_check_params: Final = {
             **_OBJECT_MAPPING.validate_python(litellm_params),
+            **_admin_api_key_from_request(
+                _OBJECT_MAPPING.validate_python(request_litellm_params),
+                _OBJECT_MAPPING.validate_python(litellm_params),
+            ),
             "secret_fields": SecretFields(raw_headers=RedactedDict(raw_headers)),
         }
 

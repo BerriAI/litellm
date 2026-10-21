@@ -16,6 +16,7 @@ from litellm.types.router import (
     holds_secret_pointer,
     reject_server_owned_wif_params,
     server_owned_wif_fields_named,
+    server_owned_wif_fields_written,
     server_owned_wif_fields_present,
 )
 from litellm.types.utils import (
@@ -63,6 +64,7 @@ def test_custom_pricing_params_keeps_every_field_it_had():
         "output_cost_per_character",
         "cache_read_input_token_cost",
         "cache_creation_input_token_cost",
+        "cache_creation_input_token_cost_above_1hr",
         "cost_per_second",
         "input_cost_per_second",
         "cache_read_input_token_cost_flex",
@@ -311,6 +313,23 @@ def test_server_owned_wif_fields_named_is_derived_from_the_shared_list():
     )
 
 
+@pytest.mark.parametrize(
+    "api_key", ["oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token", "oidc/env/SA_TOKEN", "oidc/google/aud"]
+)
+def test_an_oidc_reference_api_key_is_server_owned(api_key: str):
+    assert server_owned_wif_fields_present({"api_key": api_key}) == ("api_key",)
+    assert server_owned_wif_fields_written({"api_key": api_key}) == ("api_key",)
+    with pytest.raises(ValueError, match="api_key holds an oidc/ secret reference"):
+        reject_server_owned_wif_params({"api_key": api_key})
+
+
+@pytest.mark.parametrize("api_key", ["sk-static", "os.environ/MISTRAL_API_KEY", None])
+def test_a_plain_api_key_stays_client_settable(api_key: str | None):
+    assert server_owned_wif_fields_present({"api_key": api_key}) == ()
+    assert server_owned_wif_fields_written({"api_key": api_key}) == ()
+    reject_server_owned_wif_params({"api_key": api_key})
+
+
 @pytest.mark.parametrize("param_name", ["anthropic_issuer_signing_key_ref", "anthropic_keycloak_client_secret_ref"])
 def test_wif_ref_fields_hold_secret_pointers(param_name: str):
     assert holds_secret_pointer(param_name)
@@ -372,3 +391,9 @@ def test_server_owned_wif_fields_present_reports_openai_fields():
 def test_reject_server_owned_wif_params_names_each_openai_field(param_name: str):
     with pytest.raises(ValueError, match=param_name):
         reject_server_owned_wif_params({param_name: "client-supplied"})
+
+
+@pytest.mark.parametrize("param_name", openai_wif_litellm_params)
+def test_reject_server_owned_wif_params_catches_the_array_form_key(param_name: str):
+    with pytest.raises(ValueError, match=param_name):
+        reject_server_owned_wif_params({f"{param_name}[]": "client-supplied"})

@@ -13,8 +13,8 @@ import asyncio
 import importlib
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
-from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Protocol
 
 from litellm.harness.context import SessionContext
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
@@ -51,8 +51,15 @@ if TYPE_CHECKING:
     from langgraph.types import Command
 
     from litellm.llms.base_llm.harness.transformation import BaseHarnessConfig
+    from litellm.llms.deepagents.harness.sandbox_backend import SandboxBackend, ToolFilterMiddleware, UsageCallback
 
 _MODEL_NODE = "model"
+
+
+class _SandboxBackendModule(Protocol):
+    SandboxBackend: type[SandboxBackend]
+    UsageCallback: type[UsageCallback]
+    ToolFilterMiddleware: type[ToolFilterMiddleware]
 
 
 @dataclass(frozen=True)
@@ -65,7 +72,7 @@ class DeepAgentsDeps:
     command_cls: Callable[..., Command]
     subagent_defaults: Mapping[str, object]
     convert_to_openai_messages: Any
-    backend: ModuleType
+    backend: _SandboxBackendModule
 
 
 def load_deps() -> DeepAgentsDeps:
@@ -77,7 +84,7 @@ def load_deps() -> DeepAgentsDeps:
         memory = importlib.import_module("langgraph.checkpoint.memory")
         lg_types = importlib.import_module("langgraph.types")
         messages = importlib.import_module("langchain_core.messages")
-        backend = importlib.import_module("litellm.llms.deepagents.harness.sandbox_backend")
+        from litellm.llms.deepagents.harness import sandbox_backend as backend
     except ImportError as e:
         raise HarnessInstallFailed(f"{INSTALL_HINT} ({e})") from e
     return DeepAgentsDeps(
@@ -158,7 +165,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
         agent, deps = self._require_agent()
         snapshot = await agent.aget_state(self._run_config(ctx, None))
         messages = (snapshot.values or MappingProxyType({})).get("messages") or ()
-        converted: list[dict[str, Any]] = deps.convert_to_openai_messages(  # mutable-ok: LangChain returns a list
+        converted: list[dict[str, object]] = deps.convert_to_openai_messages(  # mutable-ok: LangChain returns a list
             messages
         )
         return converted

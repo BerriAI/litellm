@@ -424,6 +424,15 @@ def _split_vertex_batch_key(vertex_output_row: Mapping[str, object]) -> tuple[st
     return unquote(match["custom_id"]), int(match["index"]), int(match["total"])
 
 
+def vertex_batch_row_custom_id(vertex_row: Mapping[str, object]) -> str | None:
+    """The OpenAI `custom_id` a Vertex batch input or output row was written for, or None when it carries none."""
+    request_data: Final = vertex_row.get("request")
+    has_labels: Final = isinstance(request_data, Mapping) and "labels" in request_data
+    if vertex_row.get(_VERTEX_BATCH_KEY_FIELD) is None and not has_labels:
+        return None
+    return _split_vertex_batch_key(vertex_row)[0]
+
+
 def _vertex_embeddings_rows_to_openai_batch_output_row(
     custom_id: str,
     vertex_output_rows: tuple[_VertexEmbeddingBatchRow, ...],
@@ -672,7 +681,7 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
 
 def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_entry: dict[str, Any],
-    map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, object]],
+    map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
 ) -> tuple[Mapping[str, object], ...]:
     """
     Transforms a single OpenAI JSONL batch entry into the Vertex rows it maps to.
@@ -684,7 +693,9 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     if _is_embeddings_batch_entry(openai_entry):
         return _openai_batch_jsonl_entry_to_vertex_embeddings_rows(openai_entry)
 
-    openai_request_body: Final = openai_entry.get("body") or {}
+    if not isinstance(openai_entry.get("body"), dict):
+        raise TypeError("`body` on batch requests must be a JSON object, but was missing or not an object")
+    openai_request_body: Final = openai_entry["body"]
     chat_request_body: Final = (
         responses_batch_body_to_chat_body(openai_request_body, custom_llm_provider="vertex_ai")
         if _is_responses_batch_entry(openai_entry)
@@ -708,21 +719,40 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     return ({"request": vertex_request_body},)
 
 
-def _iter_stripped_lines(raw_lines: Iterable[str | bytes]) -> Iterator[str]:
-    """Decode (when needed), strip, and drop blank lines from an iterable of lines."""
-    for raw in raw_lines:
-        line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
-        line = line.strip()
+def _decode_batch_input_line(lineno: int, raw: str | bytes | bytearray) -> str:
+    if isinstance(raw, str):
+        return raw.removeprefix("\ufeff")
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise VertexAIError(
+            status_code=400,
+            message=f"Batch input file line {lineno} is not valid UTF-8: {e.reason}",
+        ) from e
+
+
+def _describe_batch_row_error(error: Exception) -> str:
+    match error:
+        case KeyError():
+            return f"missing field {error}"
+        case _:
+            return str(error)
+
+
+def _iter_numbered_stripped_lines(raw_lines: Iterable[str | bytes]) -> Iterator[tuple[int, str]]:
+    """Decode (when needed), strip trailing whitespace, and drop blank lines from an iterable of lines."""
+    for lineno, raw in enumerate(raw_lines, start=1):
+        line = _decode_batch_input_line(lineno, raw).rstrip()
         if line:
-            yield line
+            yield lineno, line
 
 
-def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
+def _iter_numbered_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[tuple[int, str]]:
     """
     Yield non-empty JSONL lines one at a time without materializing the whole
     payload, so peak memory stays bounded regardless of payload size. Mirrors
-    ``str.splitlines()`` + ``line.strip()`` for ``\\n`` / ``\\r\\n`` delimited
-    JSONL.
+    ``str.splitlines()`` + ``line.rstrip()`` for ``\\n`` / ``\\r\\n`` delimited
+    JSONL, keeping leading whitespace so JSON error columns match the file.
     """
     content: FileTypes | str = openai_file_content
     if isinstance(content, tuple):
@@ -733,24 +763,26 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
         # into a BytesIO just to iterate it line by line.
         newline: Final = ord("\n")
         start, length = 0, len(content)
+        lineno: int = 0  # rebind-ok: line counter advances for each streamed chunk
         while start < length:
             idx = content.find(newline, start)
             if idx == -1:
                 chunk, start = content[start:], length
             else:
                 chunk, start = content[start:idx], idx + 1
-            line = chunk.decode("utf-8").strip()
+            lineno += 1
+            line = _decode_batch_input_line(lineno, chunk).rstrip()
             if line:
-                yield line
+                yield lineno, line
         return
 
     if isinstance(content, str):
-        yield from _iter_stripped_lines(io.StringIO(content))
+        yield from _iter_numbered_stripped_lines(io.StringIO(content))
         return
 
     if isinstance(content, PathLike):
         with open(str(content), "rb") as handle:
-            yield from _iter_stripped_lines(handle)
+            yield from _iter_numbered_stripped_lines(handle)
         return
 
     if hasattr(content, "read"):
@@ -771,7 +803,7 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
                 "Batch upload file handle must be seekable so it can be re-read "
                 "for the GCS object name and the upload body."
             ) from e
-        yield from _iter_stripped_lines(content)
+        yield from _iter_numbered_stripped_lines(content)
         return
 
     raise ValueError("Unsupported file content type")
@@ -779,9 +811,30 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
 
 def _iter_openai_jsonl_entries(
     openai_file_content: FileTypes,
-) -> Iterator[dict[str, object]]:
-    for line in _iter_openai_jsonl_lines(openai_file_content):
-        yield json.loads(line)
+) -> Iterator[tuple[int, dict[str, object]]]:
+    for lineno, line in _iter_numbered_openai_jsonl_lines(openai_file_content):
+        entry = _load_openai_jsonl_row(lineno, line)
+        if not isinstance(entry, dict):
+            raise VertexAIError(
+                status_code=400,
+                message=f"Batch input file line {lineno} is not a JSON object",
+            )
+        yield lineno, entry
+
+
+def _load_openai_jsonl_row(lineno: int, line: str) -> object:
+    try:
+        return json.loads(line)
+    except json.JSONDecodeError as e:
+        raise VertexAIError(
+            status_code=400,
+            message=f"Batch input file line {lineno} is not valid JSON: {e.msg} at column {e.colno}",
+        ) from e
+    except (ValueError, RecursionError) as e:
+        raise VertexAIError(
+            status_code=400,
+            message=f"Batch input file line {lineno} could not be parsed: {e}",
+        ) from e
 
 
 def _parse_vertex_batch_output_row(line: str) -> _VertexBatchRow:
@@ -800,15 +853,23 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
     def __init__(
         self,
         openai_file_content: FileTypes,
-        map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, object]],
+        map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
     ) -> None:
         self._openai_file_content = openai_file_content
         self._map_openai_to_vertex_params = map_openai_to_vertex_params
 
     def _iter_vertex_jsonl_chunks(self) -> Iterator[bytes]:
         first = True
-        for entry in _iter_openai_jsonl_entries(self._openai_file_content):
-            for wrapped in _openai_batch_jsonl_entry_to_vertex_rows(entry, self._map_openai_to_vertex_params):
+        for lineno, entry in _iter_openai_jsonl_entries(self._openai_file_content):
+            try:
+                vertex_rows = _openai_batch_jsonl_entry_to_vertex_rows(entry, self._map_openai_to_vertex_params)
+            except Exception as e:
+                raise VertexAIError(
+                    status_code=400,
+                    message=f"Batch input file line {lineno} could not be converted to a Vertex AI request: "
+                    f"{_describe_batch_row_error(e)}",
+                ) from e
+            for wrapped in vertex_rows:
                 prefix = b"" if first else b"\n"
                 first = False
                 yield prefix + json.dumps(wrapped).encode("utf-8")
@@ -921,11 +982,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         `projects/../locations/../endpoints/<id>` batch job model instead of a
         nonexistent publisher model.
         """
-        raw_model: Final = (
-            deployment_model.removeprefix("vertex_ai/")
-            if deployment_model
-            else openai_jsonl_content[0].get("body", {}).get("model", "")
-        )
+        first_entry: Final = openai_jsonl_content[0]
+        body_model: Final = first_entry["body"].get("model") if isinstance(first_entry.get("body"), dict) else None
+        jsonl_model: Final = body_model if isinstance(body_model, str) else ""
+        raw_model: Final = deployment_model.removeprefix("vertex_ai/") if deployment_model else jsonl_model
         return _managed_batch_object_name(raw_model, passthrough=False)
 
     def _get_passthrough_gcs_object_name(self, deployment_model: str | None) -> str:
@@ -956,9 +1016,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             return self._get_passthrough_gcs_object_name(deployment_model)
         if purpose == "batch":
             ## 1. If jsonl, derive the object name from the deployment model (or the first entry's)
-            first_entry: Final = next(_iter_openai_jsonl_entries(file_data), None)
-            if first_entry is not None:
-                return self._get_gcs_object_name_from_batch_jsonl([first_entry], deployment_model=deployment_model)
+            first_numbered_entry: Final = next(_iter_openai_jsonl_entries(file_data), None)
+            if first_numbered_entry is not None:
+                return self._get_gcs_object_name_from_batch_jsonl(
+                    [first_numbered_entry[1]], deployment_model=deployment_model
+                )
 
         ## 2. If not jsonl, store under a server-generated managed object name
         filename, _ = extract_file_metadata(file_data)
@@ -1406,7 +1468,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # as large as the (multi-GB) input, so splitting into a list of rows
             # and building a second list of transformed rows peaks at several full
             # copies and OOMs on retrieval.
-            lines: Final = _iter_openai_jsonl_lines(content)
+            lines: Final = (line for _, line in _iter_numbered_openai_jsonl_lines(content))
             try:
                 first_line: Final = next(lines)
             except StopIteration:

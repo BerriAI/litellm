@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
-from collections.abc import AsyncGenerator, Iterator, Mapping
+import random
+import sys
+from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Final
@@ -18,14 +21,23 @@ from starlette.routing import Match
 import litellm
 from litellm.litellm_core_utils.decisions_pricing import apply_decisions_pricing
 from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature, attach_lazy_features
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.decisions_endpoints.endpoints import decisions, router, systemone
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import SafeRouteAdder
 from litellm.proxy.proxy_server import (
     app,
     cleanup_router_config_variables,
+    hash_token,
     initialize,
 )
 from litellm.types.decisions import DecisionsRequestBody, OpenAIDecisionRequestBody
+from tests._master_key import MASTER_KEY
+
+if sys.version_info >= (3, 14):
+    from compression import zstd
+else:
+    from backports import zstd
 
 _INPUT_TOKENS: Final[int] = 367
 _OUTPUT_TOKENS: Final[int] = 3
@@ -260,6 +272,58 @@ def test_proxy_decisions_dispatches_strands_decider(
     assert "authorization" not in upstream.calls[0].request.headers
 
 
+@pytest.mark.parametrize(
+    ("model", "env_base", "env_key"),
+    (
+        ("laya/english", "LAYA_API_BASE", "LAYA_API_KEY"),
+        ("bespoke/nimble-latest", "BESPOKE_API_BASE", "BESPOKE_API_KEY"),
+    ),
+    ids=("laya", "bespoke"),
+)
+def test_proxy_decisions_dispatches_oss_classifier_deployment(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    model: str,
+    env_base: str,
+    env_key: str,
+) -> None:
+    monkeypatch.delenv(env_base, raising=False)
+    monkeypatch.delenv(env_key, raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "oss-classifier",
+                "litellm_params": {
+                    "model": model,
+                    "api_base": "https://oss-decider.example",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    upstream: Final = respx_mock.post("https://oss-decider.example/v1/systemone").respond(json=_STRANDS_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/systemone",
+        json={
+            "model": "oss-classifier",
+            "state": {"source": "proxy-test"},
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _STRANDS_RESPONSE["answers"]
+    assert upstream.called
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": model.partition("/")[2],
+        "state": {"source": "proxy-test"},
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert "authorization" not in upstream.calls[0].request.headers
+
+
 def test_proxy_systemone_dispatches_databricks_serving_endpoint(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -368,6 +432,31 @@ def test_proxy_decisions_without_model_uses_the_proxy_default_model(
     assert response.json()["answers"] == _RESPONSE["answers"]
     assert upstream.called
     assert json.loads(upstream.calls[0].request.content)["model"] == "pplx-decider-v1-27b"
+
+
+def test_a_request_body_cannot_turn_on_box_questions_for_a_proxy_without_a_router(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_model", "openai/gpt-6-luna")
+    upstream: Final = respx_mock.post("https://fake-openai.example/v1/decisions").respond(json={})
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "openai/gpt-6-luna",
+            "input": "A phone screen with a diagonal crack.",
+            "questions": [{"type": "box", "name": "crack", "instructions": "Where is the crack?"}],
+            "model_info": {"supports_box_questions": True},
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "['box questions']" in response.json()["error"]["message"]
+    assert not upstream.called
 
 
 _OPENAI_FORMAT_REQUEST: Final[Mapping[str, object]] = {
@@ -520,15 +609,8 @@ def test_decisions_return_guardrail_information_when_requested(
                 }
             ],
         },
-        {
-            "model": "decider",
-            "input": [
-                {"role": "user", "content": [{"type": "input_image", "image_url": "data:image/png;base64,AA=="}]}
-            ],
-            "questions": [{"type": "predicate", "instructions": "Is this a defect?"}],
-        },
     ),
-    ids=("systemone_body", "colliding_choice_values", "image_input"),
+    ids=("systemone_body", "colliding_choice_values"),
 )
 def test_openai_format_decisions_rejects_bodies_it_cannot_translate(
     client: TestClient,
@@ -804,6 +886,190 @@ def test_a_non_string_safety_identifier_is_refused_unless_the_deployment_drops_p
     }
 
 
+_IMAGE_TEXT: Final = "Is the screen cracked?"
+_PNG_DATA_URL: Final = "data:image/png;base64,AA=="
+_IMAGE_ENDPOINTS: Final = ("/v1/decisions", "/v1/systemone")
+_IMAGE_REQUEST_BODIES: Final[tuple[Mapping[str, object], ...]] = (
+    {
+        "model": "decider",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": _IMAGE_TEXT},
+                    {"type": "input_image", "image_url": _PNG_DATA_URL},
+                ],
+            }
+        ],
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    },
+    {
+        "model": "decider",
+        "state": _IMAGE_TEXT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        "images": [_PNG_DATA_URL],
+    },
+)
+_IMAGE_REQUESTS: Final = tuple(zip(_IMAGE_ENDPOINTS, _IMAGE_REQUEST_BODIES, strict=True))
+_IMAGE_REQUEST_IDS: Final = ("openai_format", "systemone_format")
+
+
+def _route_decider_to(monkeypatch: pytest.MonkeyPatch, litellm_params: Mapping[str, object]) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        litellm.Router(model_list=[{"model_name": "decider", "litellm_params": dict(litellm_params)}]),
+    )
+
+
+@pytest.mark.parametrize(("endpoint", "request_body"), _IMAGE_REQUESTS, ids=_IMAGE_REQUEST_IDS)
+def test_images_reach_a_cloudflare_clef_deployment_as_its_images_field(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    request_body: Mapping[str, object],
+) -> None:
+    _route_decider_to(
+        monkeypatch,
+        {
+            "model": "cloudflare/clef",
+            "api_key": "cloudflare-key",
+            "api_base": "https://api.cloudflare.com/client/v4/accounts/acct/ai/run",
+        },
+    )
+    upstream: Final = respx_mock.post(
+        "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef"
+    ).respond(json=_RESPONSE)
+
+    response: Final = client.post(endpoint, json=request_body)
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "clef",
+        "state": _IMAGE_TEXT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        "images": [_PNG_DATA_URL],
+    }
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "request_body", "param"),
+    tuple(zip(_IMAGE_ENDPOINTS, _IMAGE_REQUEST_BODIES, ("input_image", "images"), strict=True)),
+    ids=_IMAGE_REQUEST_IDS,
+)
+def test_images_to_a_text_only_deployment_are_refused_without_drop_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    request_body: Mapping[str, object],
+    param: str,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(endpoint, json=request_body)
+
+    assert response.status_code == 400, response.text
+    assert f"['{param}']" in response.json()["error"]["message"]
+    assert not upstream.called
+
+
+@pytest.mark.parametrize(("endpoint", "request_body"), _IMAGE_REQUESTS, ids=_IMAGE_REQUEST_IDS)
+def test_images_to_a_text_only_deployment_are_dropped_when_it_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    request_body: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(
+        monkeypatch, {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key", "drop_params": True}
+    )
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(endpoint, json=request_body)
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": _IMAGE_TEXT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+def test_malformed_images_are_refused_unless_the_deployment_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_drops_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(
+        monkeypatch,
+        {
+            "model": "cloudflare/clef",
+            "api_key": "cloudflare-key",
+            "api_base": "https://api.cloudflare.com/client/v4/accounts/acct/ai/run",
+            "drop_params": deployment_drops_params,
+        },
+    )
+    upstream: Final = respx_mock.post(
+        "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef"
+    ).respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/systemone", json={**_IMAGE_REQUEST_BODIES[1], "images": [{"url": _PNG_DATA_URL}]}
+    )
+
+    if not deployment_drops_params:
+        assert response.status_code == 400, response.text
+        assert "images" in response.json()["error"]["message"]
+        assert not upstream.called
+        return
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "clef",
+        "state": _IMAGE_TEXT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+def test_malformed_assets_for_a_deployment_without_asset_support_are_dropped_only_when_it_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_drops_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(
+        monkeypatch,
+        {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key", "drop_params": deployment_drops_params},
+    )
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/systemone",
+        json={**_IMAGE_REQUEST_BODIES[1], "assets": {"photo-1": {"type": "image", "part": "file1"}}},
+    )
+
+    if not deployment_drops_params:
+        assert response.status_code == 400, response.text
+        assert "assets" in response.json()["error"]["message"]
+        assert not upstream.called
+        return
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": _IMAGE_TEXT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
 @pytest.mark.parametrize("endpoint", ("/v1/systemone", "/v1/decisions"))
 @pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
 def test_clips_for_a_model_without_media_support_are_refused_unless_the_deployment_drops_params(
@@ -1028,3 +1294,121 @@ def test_the_two_decisions_routes_document_different_request_formats(decisions_o
 
     assert "state" in properties("/v1/systemone") and "state" not in properties("/v1/decisions")
     assert "input" in properties("/v1/decisions") and "input" not in properties("/v1/systemone")
+
+
+def test_proxy_systemone_reads_a_zstd_compressed_request_body(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/systemone",
+        content=zstd.compress(json.dumps(_REQUEST).encode()),
+        headers={"content-type": "application/json", "content-encoding": "zstd"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _RESPONSE["answers"]
+    assert json.loads(upstream.calls[0].request.content)["questions"] == _REQUEST["questions"]
+
+
+@pytest.mark.parametrize(
+    ("content_encoding", "compress"),
+    (("gzip", gzip.compress), ("zstd", zstd.compress)),
+)
+def test_a_compressed_body_naming_a_model_outside_the_key_is_refused_by_auth(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    content_encoding: str,
+    compress: Callable[[bytes], bytes],
+) -> None:
+    user_key: Final = "sk-decider-only"
+    user_api_key_cache: Final = UserApiKeyCache()
+    user_api_key_cache.set_cache(
+        key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key), models=["decider"])
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", "no-db-needed-for-a-cached-key")
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/systemone",
+        content=compress(json.dumps({**_REQUEST, "model": "not-on-this-key"}).encode()),
+        headers={
+            "content-type": "application/json",
+            "content-encoding": content_encoding,
+            "authorization": f"Bearer {user_key}",
+        },
+    )
+
+    assert response.status_code == 403, response.text
+    assert "not-on-this-key" in response.text
+    assert not upstream.called
+
+
+@pytest.mark.parametrize(
+    ("content_encoding", "undecodable_body"),
+    (("gzip", gzip.compress(b"{}", mtime=0)[:-8]), ("zstd", zstd.compress(b"{}") + b"trailing")),
+)
+def test_a_browser_can_read_the_error_for_a_compressed_body_the_proxy_cannot_decode(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    content_encoding: str,
+    undecodable_body: bytes,
+) -> None:
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+    origin: Final = "https://app.example.test"
+
+    response: Final = client.post(
+        "/v1/systemone",
+        content=undecodable_body,
+        headers={"content-type": "application/json", "content-encoding": content_encoding, "origin": origin},
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.headers["access-control-allow-origin"] in ("*", origin)
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert not upstream.called
+
+
+def test_the_operator_request_size_limit_applies_to_the_decoded_body(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    max_request_size_mb: Final = 0.01
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setitem(litellm.proxy.proxy_server.general_settings, "max_request_size_mb", max_request_size_mb)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+    state_text: Final = "".join(random.Random(0).choices("abcd", k=20_000))
+    compressed: Final = zstd.compress(json.dumps({**_REQUEST, "state": {"source": state_text}}).encode())
+
+    response: Final = client.post(
+        "/v1/systemone",
+        content=compressed,
+        headers={"content-type": "application/json", "content-encoding": "zstd"},
+    )
+
+    assert len(compressed) < max_request_size_mb * 1024 * 1024
+    assert response.status_code == 413, response.text
+    assert response.json()["error"]["message"] == f"Request body is larger than {max_request_size_mb} MB when decoded"
+    assert not upstream.called
+
+
+def test_a_whole_number_request_size_limit_is_named_as_configured_in_the_413(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setitem(litellm.proxy.proxy_server.general_settings, "max_request_size_mb", 1)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post("/v1/systemone", json={**_REQUEST, "state": {"source": "a" * 1024 * 1024}})
+
+    assert response.status_code == 413, response.text
+    assert response.json() == {"error": "Request size is too large. Max size is 1 MB"}
+    assert not upstream.called

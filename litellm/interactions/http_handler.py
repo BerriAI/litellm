@@ -4,8 +4,8 @@ HTTP Handler for Interactions API requests.
 This module handles the HTTP communication for the Google Interactions API.
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
-from typing import Any, Final
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping
+from typing import Final, Protocol
 
 import httpx
 
@@ -34,6 +34,11 @@ from litellm.types.interactions import (
 from litellm.types.router import GenericLiteLLMParams
 
 
+class _ErrorClassSource(Protocol):
+    @property
+    def get_error_class(self) -> Callable[..., Exception]: ...
+
+
 class _BaseHTTPHandler:
     """
     Shared HTTP infrastructure for LiteLLM handler classes.
@@ -43,7 +48,7 @@ class _BaseHTTPHandler:
     not duplicate this boilerplate.
     """
 
-    def _handle_error(self, e: Exception, provider_config: Any) -> Exception:
+    def _handle_error(self, e: Exception, provider_config: _ErrorClassSource) -> Exception:
         if isinstance(e, httpx.HTTPStatusError):
             return provider_config.get_error_class(
                 error_message=e.response.text,
@@ -77,7 +82,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
     HTTP handler for Interactions API requests.
     """
 
-    # _handle_error is inherited from _BaseHTTPHandler (accepts Any provider_config).
+    # _handle_error is inherited from _BaseHTTPHandler (accepts any config exposing get_error_class).
     # AgentsHTTPHandler also extends this class and passes BaseAgentsAPIConfig, which
     # is structurally compatible but a different type — keeping the override here with
     # BaseInteractionsAPIConfig would cause type errors in the subclass.

@@ -21,7 +21,7 @@ from pydantic import SecretStr
 from typing_extensions import assert_never
 
 from litellm.experimental_mcp_client.client import MCPClient, strip_auth_scheme, to_basic_credentials
-from litellm.proxy._experimental.mcp_server.exceptions import MCPServerURLCredentialsError
+from litellm.proxy._experimental.mcp_server.exceptions import TOKEN_EXCHANGE_SUBJECT_ERROR, MCPServerURLCredentialsError
 from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
@@ -33,6 +33,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ClientSecretAuth,
     CredError,
     IdJagConfig,
+    IdJagResourceClient,
+    IdJagSubjectSource,
     NoneConfig,
     PassthroughConfig,
     PrivateKeyJwtAuth,
@@ -234,6 +236,10 @@ def _id_jag_spec(server: MCPServer, resource: str) -> ServerSpec | None:
     client_auth: Final = _id_jag_client_auth(server)
     if not org_token_endpoint or not resource_token_endpoint or not client_id or client_auth is None:
         return None
+    resource_client: Final = _id_jag_resource_client(server, client_id, client_auth)
+    subject_source: Final = _id_jag_subject_source(server)
+    if resource_client is None or subject_source is None:
+        return None
     return ServerSpec(
         server_id=server.server_id,
         resource=resource,
@@ -243,12 +249,27 @@ def _id_jag_spec(server: MCPServer, resource: str) -> ServerSpec | None:
             resource_token_endpoint=resource_token_endpoint,
             client_id=client_id,
             client_auth=client_auth,
+            resource_client=resource_client,
             subject_token_type=_id_jag_subject_token_type(server),
+            subject_source=subject_source,
             audience=server.audience,
             resource=server.id_jag_resource,
             scopes=tuple(server.scopes or ()),
         ),
     )
+
+
+def _id_jag_resource_client(server: MCPServer, client_id: str, client_auth: ClientAuth) -> IdJagResourceClient | None:
+    match (server.id_jag_resource_client_id, server.id_jag_resource_client_secret):
+        case (None, None):
+            return IdJagResourceClient(client_id=client_id, client_auth=client_auth)
+        case (resource_client_id, resource_client_secret) if resource_client_id and resource_client_secret:
+            return IdJagResourceClient(
+                client_id=resource_client_id,
+                client_auth=ClientSecretAuth(client_secret=SecretStr(resource_client_secret)),
+            )
+        case _:
+            return None
 
 
 def _id_jag_client_auth(server: MCPServer) -> ClientAuth | None:
@@ -262,6 +283,18 @@ def _id_jag_client_auth(server: MCPServer) -> ClientAuth | None:
     if server.client_secret:
         return ClientSecretAuth(client_secret=SecretStr(server.client_secret))
     return None
+
+
+def _id_jag_subject_source(server: MCPServer) -> IdJagSubjectSource | None:
+    """``None`` for a value that names no source, so the half-configured server defers like a missing
+    endpoint does instead of silently presenting the wrong token."""
+    configured: Final = server.id_jag_subject_source
+    if not configured:
+        return IdJagSubjectSource.login_assertion
+    try:
+        return IdJagSubjectSource(configured)
+    except ValueError:
+        return None
 
 
 def _id_jag_subject_token_type(server: MCPServer) -> str:
@@ -384,7 +417,7 @@ def raise_token_exchange_challenge(
     )
     raise HTTPException(
         status_code=401,
-        detail="Unauthorized",
+        detail="Unauthorized" if encoded_claims else TOKEN_EXCHANGE_SUBJECT_ERROR,
         headers={"WWW-Authenticate": www_authenticate},
     )
 

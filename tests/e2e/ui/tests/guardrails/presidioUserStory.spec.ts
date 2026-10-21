@@ -3,7 +3,7 @@ import { ADMIN_STORAGE_PATH, MOCK_PRESIDIO_URL, PROPAGATION_TIMEOUT_MS } from ".
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import { CHAT_MODEL_A, masterKey, rootPath, uniqueSuffix, waitForSpendLog } from "../../helpers/traffic";
-import { openPlayground, selectModel, sendButton, onlyVisible } from "../../helpers/playground";
+import { composer, openPlayground, selectModel, sendButton, onlyVisible } from "../../helpers/playground";
 
 const RAW_EMAIL = "jane.doe@example.com";
 const RAW_PHONE = "555-867-5309";
@@ -123,14 +123,12 @@ test.describe("Presidio PII guardrail, end to end from the dashboard", () => {
     await openPlayground(page);
     await selectModel(page, CHAT_MODEL_A);
 
-    const guardrailSelect = onlyVisible(page.getByPlaceholder("Select guardrails"));
-    await expect(guardrailSelect).toBeVisible({ timeout: 20_000 });
-    await guardrailSelect.click();
-    await guardrailSelect.fill(guardrailName);
+    await composer(page).getByRole("combobox", { name: "Guardrails" }).click();
+    await onlyVisible(page.getByPlaceholder("Search guardrails")).fill(guardrailName);
     await onlyVisible(page.getByRole("option", { name: guardrailName, exact: true })).click({ timeout: 20_000 });
     await page.keyboard.press("Escape");
 
-    const input = onlyVisible(page.getByPlaceholder("Type your message", { exact: false }));
+    const input = composer(page).getByRole("textbox", { name: "Message" });
     await expect(input).toBeVisible({ timeout: 15_000 });
 
     await input.fill(prompt);
