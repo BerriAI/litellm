@@ -519,6 +519,23 @@ def test_vector_store_tools_pop_exactly_the_store_ids_the_registry_reports_to_ru
     assert ran == checked
 
 
+@pytest.mark.asyncio
+async def test_vector_stores_to_run_ignore_a_vector_store_ids_object() -> None:
+    now: Final = datetime.now(timezone.utc)
+    registry: Final = VectorStoreRegistry(
+        [LiteLLM_ManagedVectorStore(vector_store_id="vs_registered", created_at=now, updated_at=now)]
+    )
+
+    ran: Final = (
+        registry.pop_vector_stores_to_run(non_default_params={"vector_store_ids": {"vs_registered": True}}),
+        await registry.pop_vector_stores_to_run_with_db_fallback(
+            non_default_params={"vector_store_ids": {"vs_registered": True}}
+        ),
+    )
+
+    assert ran == ([], [])
+
+
 class TestRegistriesDoNotShareDefaultState:
     def test_adding_to_one_registry_leaves_the_next_one_empty(self):
         VectorStoreRegistry().add_vector_store_to_registry(

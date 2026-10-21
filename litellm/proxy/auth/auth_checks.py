@@ -42,6 +42,7 @@ from litellm.constants import (
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
 )
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -163,6 +164,7 @@ from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 from litellm.utils import get_utc_datetime
+from litellm.vector_stores.vector_store_registry import listed_vector_store_ids, vector_store_ids_in_tool
 
 from .auth_checks_organization import (
     add_team_org_context_to_request_body,
@@ -7922,12 +7924,20 @@ def _tools(tools: object) -> tuple[object, ...]:
         return ()
 
 
-def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
+def _tool_fields(tool: object) -> Mapping[str, object]:
     try:
-        tool_fields: Final = _TOOL_ADAPTER.validate_python(tool, strict=True)
+        return _TOOL_ADAPTER.validate_python(tool, strict=True)
     except ValidationError:
-        return ()
-    return _validated_vector_store_ids(tool_fields.get("vector_store_ids"))
+        return MappingProxyType({})
+
+
+def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
+    return _validated_vector_store_ids(_tool_fields(tool).get("vector_store_ids"))
+
+
+def _legacy_tool_vector_store_ids(tool: object) -> tuple[str, ...]:
+    vector_store_ids: Final = _tool_fields(tool).get("vector_store_ids")
+    return (vector_store_ids,) if isinstance(vector_store_ids, str) else _validated_vector_store_ids(vector_store_ids)
 
 
 def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
@@ -7940,6 +7950,31 @@ def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tu
         chain(
             _validated_vector_store_ids(request_body.get("vector_store_ids")),
             chain.from_iterable(_tool_vector_store_ids(tool) for tool in _tools(request_body.get("tools"))),
+        )
+    )
+
+
+def _retrieved_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(
+        chain(
+            listed_vector_store_ids(request_body.get("vector_store_ids")),
+            chain.from_iterable(vector_store_ids_in_tool(tool) for tool in _tools(request_body.get("tools"))),
+        )
+    )
+
+
+def _legacy_requested_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    """
+    Under drop_params, reads the stores VectorStoreRegistry retrieval would use and skips malformed
+    values. Otherwise it is strict mode's parse, except that a tool's string vector_store_ids names
+    one store, the way the registry reads it.
+    """
+    if drops_unsupported_params(request_body.get("drop_params")):
+        return _retrieved_vector_store_ids(request_body)
+    return tuple(
+        chain(
+            _validated_vector_store_ids(request_body.get("vector_store_ids")),
+            chain.from_iterable(_legacy_tool_vector_store_ids(tool) for tool in _tools(request_body.get("tools"))),
         )
     )
 
@@ -8000,7 +8035,9 @@ async def vector_store_access_check(
     `object_permission.vector_stores`.
 
     Both modes read the same request fields, with or without a vector store registry, and answer 400
-    when a `vector_store_ids` field is not a list of strings.
+    when a `vector_store_ids` is not a list of strings. Legacy mode reads a tool's string
+    `vector_store_ids` as one store, the way the registry does, and under `drop_params` skips
+    malformed values the way registry retrieval does instead of answering 400.
 
     With `deny_by_default=False` (legacy), a key or team only restricts access when its list is
     nonempty.
@@ -8018,8 +8055,8 @@ async def vector_store_access_check(
     rescue nor restrict a key or team request.
 
     Raises ProxyException (401, `{key,team,user}_vector_store_access_denied`) on the first identity
-    that does not grant a requested store, and ProxyException (400, `invalid_request_error`) when a
-    `vector_store_ids` field is not a list of strings.
+    that does not grant a requested store, and ProxyException (400, `invalid_request_error`) on a
+    malformed `vector_store_ids`.
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -8031,7 +8068,11 @@ async def vector_store_access_check(
         return True
 
     typed_request_body: Final = _typed_request_body(request_body)
-    requested_ids: Final = _strict_requested_vector_store_ids(typed_request_body)
+    requested_ids: Final = (
+        _strict_requested_vector_store_ids(typed_request_body)
+        if deny_by_default
+        else _legacy_requested_vector_store_ids(typed_request_body)
+    )
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(typed_request_body)
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
     vector_store_ids_to_run: Final = tuple(dict.fromkeys((*requested_ids, *rag_ids)))

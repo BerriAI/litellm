@@ -1735,11 +1735,28 @@ def _file_search_tool_request(vector_store_id: str) -> dict[str, object]:
     }
 
 
+def _file_search_tool_string_id_request(vector_store_id: str) -> dict[str, object]:
+    return {
+        "model": "gpt-5.4-mini",
+        "input": "what is in this store?",
+        "tools": [{"type": "file_search", "vector_store_ids": vector_store_id}],
+    }
+
+
 def _vector_store_ids_request(vector_store_id: str) -> dict[str, object]:
     return {
         "model": "gpt-5.4-mini",
         "messages": [{"role": "user", "content": "what is in this store?"}],
         "vector_store_ids": [vector_store_id],
+    }
+
+
+def _drop_params_request(vector_store_ids: object) -> dict[str, object]:
+    return {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": "what is in this store?"}],
+        "drop_params": True,
+        "vector_store_ids": vector_store_ids,
     }
 
 
@@ -1769,6 +1786,45 @@ def _allowlist(object_permission_id: str, vector_stores: list[str] | None) -> Li
             id="key-vector-store-ids-other-store",
         ),
         pytest.param(["vs_allowed"], None, _vector_store_ids_request("vs_allowed"), None, id="key-vector-store-ids"),
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            _file_search_tool_string_id_request("vs_other_team"),
+            ProxyErrorTypes.team_vector_store_access_denied,
+            id="team-file-search-tool-string-id-other-store",
+        ),
+        pytest.param(
+            None,
+            None,
+            _file_search_tool_string_id_request("vs_other_team"),
+            None,
+            id="unrestricted-file-search-tool-string-id",
+        ),
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            _drop_params_request(["vs_other_team", {"id": "vs_allowed"}]),
+            ProxyErrorTypes.team_vector_store_access_denied,
+            id="team-drop-params-list-with-an-object-other-store",
+        ),
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            {
+                **_file_search_tool_request("vs_other_team"),
+                "drop_params": True,
+                "tools": [{"type": "file_search", "vector_store_ids": ["vs_other_team", 1]}],
+            },
+            ProxyErrorTypes.team_vector_store_access_denied,
+            id="team-drop-params-tool-with-an-int-other-store",
+        ),
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            _drop_params_request({"vs_other_team": True}),
+            None,
+            id="team-drop-params-object-names-no-store",
+        ),
     ],
 )
 @pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
@@ -1801,6 +1857,25 @@ async def test_vector_store_access_check_enforces_allowlists_on_the_stores_the_r
         await _assert_rag_query_outcome(
             vector_store_access_check(request_body=request_body, team_object=team_object, valid_token=valid_token),
             denied_by,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_litellm_settings_drop_params_skips_a_malformed_vector_store_ids(
+    vector_store_registry: VectorStoreRegistry | None,
+) -> None:
+    with patch("litellm.drop_params", True):  # test-quality-ok: litellm_settings.drop_params is this module global
+        assert await _common_checks_for_rag_query(
+            {},
+            _virtual_key(object_permission_id="key-permission"),
+            SimpleNamespace(vector_stores=["KBSTOREA"]),
+            request_body={
+                "model": "gpt-4o-mini",
+                "input": "what is in this KB?",
+                "vector_store_ids": {"KBSTOREB": True},
+            },
+            vector_store_registry=vector_store_registry,
         )
 
 
@@ -2306,10 +2381,35 @@ async def test_deny_by_default_ignores_tools_that_name_no_vector_store(
         {"tools": [{"type": "file_search", "vector_store_ids": "KBSTOREA"}]},
         {"tools": [{"type": "file_search", "vector_store_ids": [1]}]},
         {"vector_store_ids": "KBSTOREA"},
+    ],
+    ids=["string-tool-ids", "int-tool-id", "string-top-level-ids"],
+)
+async def test_deny_by_default_rejects_malformed_vector_store_ids_as_bad_request(request_body: Mapping[str, object]):
+    with pytest.raises(ProxyException) as exc_info:
+        await _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": True},
+            _virtual_key(object_permission_id="key-permission"),
+            SimpleNamespace(vector_stores=["KBSTOREA"]),
+            request_body={"model": "gpt-4o-mini", "input": "what is in this KB?", **request_body},
+        )
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
+        "invalid_request_error",
+        "vector_store_ids",
+        "400",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        {"vector_store_ids": "KBSTOREA"},
         {"vector_store_ids": {"KBSTOREB": True}},
         {"vector_store_ids": ["KBSTOREA", {"id": "KBSTOREB"}]},
+        {"tools": [{"type": "file_search", "vector_store_ids": ["KBSTOREA", {"id": "KBSTOREB"}]}]},
+        {"tools": [{"type": "file_search", "vector_store_ids": {"KBSTOREB": True}}]},
     ],
-    ids=["string-tool-ids", "int-tool-id", "string-top-level-ids", "object-top-level-ids", "object-top-level-id"],
+    ids=["string-top-level-ids", "object-top-level-ids", "object-top-level-id", "object-tool-id", "object-tool-ids"],
 )
 @pytest.mark.parametrize(
     "general_settings", [{"vector_store_deny_by_default": True}, {}], ids=["deny-by-default", "legacy"]
