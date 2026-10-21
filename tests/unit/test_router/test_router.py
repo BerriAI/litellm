@@ -29986,3 +29986,23 @@ def test_init_adaptive_router_deployment_during_a_concurrent_delete_prices_the_l
     )
 
     assert router.adaptive_routers["adaptive"][0].strategy.model_to_cost == {"model-3": 3e-06}
+
+
+def test_delete_of_an_unknown_deployment_returns_none_and_keeps_the_list() -> None:
+    router: Final = _concurrent_delete_router()
+
+    assert router.delete_deployment("deployment-9") is None
+    assert router.get_model_ids() == [f"deployment-{index}" for index in range(4)]
+
+
+def test_get_model_ids_by_name_skips_team_deployments_only_when_asked() -> None:
+    shared: Final = {"model_name": "shared", "litellm_params": {"model": "openai/gpt-shared", "api_key": "k"}}
+    router: Final = Router(
+        model_list=[
+            {**shared, "model_info": {"id": "global"}},
+            {**shared, "model_info": {"id": "team", "team_id": "team-1", "team_public_model_name": "public"}},
+        ]
+    )
+
+    assert router.get_model_ids("shared", exclude_team_models=True) == ["global"]
+    assert router.get_model_ids("shared") == ["global", "team"]
