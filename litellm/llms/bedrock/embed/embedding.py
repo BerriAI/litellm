@@ -36,7 +36,7 @@ from ..base_aws_llm import (
     pop_aws_auth_params,
     run_aws_signing,
 )
-from ..common_utils import BedrockError, split_bedrock_region_path
+from ..common_utils import BedrockError, get_all_bedrock_regions, split_bedrock_region_path
 from .amazon_nova_transformation import AmazonNovaEmbeddingConfig
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
 from .amazon_titan_multimodal_transformation import (
@@ -70,6 +70,14 @@ _OPTIONAL_STR: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 def _without_region_path(model: str) -> str:
     region, model_id = split_bedrock_region_path(model)
     return model if region is None else model_id
+
+
+def _response_model(model: str, path_region: str | None, routed_region: str, bedrock_model: str) -> str:
+    if path_region is None:
+        return model.replace("async_invoke/", "", 1)
+    if routed_region in get_all_bedrock_regions():
+        return f"{routed_region}/{bedrock_model}"
+    return bedrock_model
 
 
 class BedrockEmbedding(BaseAWSLLM):
@@ -421,11 +429,13 @@ class BedrockEmbedding(BaseAWSLLM):
         litellm_params: dict,
         api_key: str | None = None,
     ) -> EmbeddingResponse:
-        model_id_param: Final = _OPTIONAL_STR.validate_python(optional_params.pop("model_id", None))
-        region_from_model: Final = split_bedrock_region_path(model)[0] if model_id_param is None else None
+        model_id_param: Final = _OPTIONAL_STR.validate_python(optional_params.pop("model_id", None)) or None
+        path_region: Final = split_bedrock_region_path(model)[0] if model_id_param is None else None
         model_path: Final = _without_region_path(model)
         credentials, aws_region_name = self._load_credentials(
-            optional_params, bearer_token=bedrock_bearer_token(api_key), region_from_model=region_from_model
+            optional_params,
+            bearer_token=bedrock_bearer_token(api_key),
+            region_from_model=path_region or self._get_aws_region_from_model_arn(model_id_param),
         )
 
         ### TRANSFORMATION ###
@@ -438,9 +448,7 @@ class BedrockEmbedding(BaseAWSLLM):
         )
         has_async_invoke: Final = "async_invoke/" in model_path
         bedrock_model: Final = model_path.replace("async_invoke/", "", 1)
-        response_model: Final = (
-            model.replace("async_invoke/", "", 1) if region_from_model is None else f"{aws_region_name}/{bedrock_model}"
-        )
+        response_model: Final = _response_model(model, path_region, aws_region_name, bedrock_model)
         provider: Final = self.get_bedrock_embedding_provider(bedrock_model)
         if provider is None:
             raise Exception(
