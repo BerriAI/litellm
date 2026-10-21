@@ -6878,9 +6878,6 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
 
 
-
-
-
 def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call():
     thinking_block: Final = {"type": "thinking", "thinking": "The user wants a greeting.", "signature": "sig-1"}
     body: Final = _json_mode_message_body("tool_use", None)
@@ -6903,9 +6900,7 @@ class JsonModeMessageBody(TypedDict):
     content: ReadOnly[list[dict[str, JsonValue]]]
 
 
-def _json_mode_message_body(
-    stop_reason: str, stop_details: dict[str, JsonValue] | None
-) -> JsonModeMessageBody:
+def _json_mode_message_body(stop_reason: str, stop_details: dict[str, JsonValue] | None) -> JsonModeMessageBody:
     return {
         "id": "msg_json_mode",
         "type": "message",
@@ -7148,7 +7143,11 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
         ),
         pytest.param(_VALUES_SCHEMA, {"values": [1, 2]}, {"values": [1, 2]}, id="values_is_a_schema_property"),
         pytest.param(
-            {"type": "object", "properties": {"values": {"type": "object", "additionalProperties": {"type": "integer"}}}, "required": ["values"]},
+            {
+                "type": "object",
+                "properties": {"values": {"type": "object", "additionalProperties": {"type": "integer"}}},
+                "required": ["values"],
+            },
             {"values": {}},
             {"values": {}},
             id="empty_open_values_object_is_preserved",
@@ -7238,8 +7237,8 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
     ],
 )
 def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_envelope(
-    schema: dict, tool_input: dict, expected_content: dict
-):
+    schema: dict[str, object], tool_input: dict[str, JsonValue], expected_content: dict[str, JsonValue]
+) -> None:
     message = AnthropicConfig._convert_tool_response_to_message(
         tool_calls=_json_tool_call(tool_input),
         response_format_schema=_schema(schema),
@@ -7382,8 +7381,12 @@ def test_vertex_claude_tool_emulated_response_format_returns_the_object_the_mode
 
 
 def test_json_tool_without_arguments_has_no_message() -> None:
-    calls: Final = [ChatCompletionToolCallChunk(
-        id="toolu_empty", type="function", index=0,
-        function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME),
-    )]
+    calls: Final = [
+        ChatCompletionToolCallChunk(
+            id="toolu_empty",
+            type="function",
+            index=0,
+            function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME),
+        )
+    ]
     assert AnthropicConfig._convert_tool_response_to_message(calls, _schema(_RISK_SCHEMA)) is None
