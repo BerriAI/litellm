@@ -598,6 +598,7 @@ _LOG_FORMAT_PREFIX: Final = "%(asctime)s - %(name)s:%(levelname)s"
 _LOG_FORMAT_SUFFIX: Final = ": %(filename)s:%(lineno)s - %(message)s"
 _PLAIN_LOG_FORMAT: Final = _LOG_FORMAT_PREFIX + _LOG_FORMAT_SUFFIX
 _COLOR_LOG_FORMAT: Final = f"\033[92m{_LOG_FORMAT_PREFIX}\033[0m{_LOG_FORMAT_SUFFIX}"
+_ANSI_ESCAPE: Final = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _stream_is_tty(stream: TextIO | None) -> bool:
@@ -612,15 +613,18 @@ def _stream_is_tty(stream: TextIO | None) -> bool:
         return False
 
 
-def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
-    """The plain-text log format, colorized only when both streams are an interactive terminal.
+def _color_enabled(stream: TextIO | None) -> bool:
+    """True when ANSI colors written to the stream reach an interactive terminal.
 
     Honors the NO_COLOR convention from no-color.org: color is disabled when
     NO_COLOR is present with a non-empty value.
     """
-    if os.environ.get("NO_COLOR"):
-        return _PLAIN_LOG_FORMAT
-    return _COLOR_LOG_FORMAT if _stream_is_tty(stdout) and _stream_is_tty(stderr) else _PLAIN_LOG_FORMAT
+    return not os.environ.get("NO_COLOR") and _stream_is_tty(stream)
+
+
+def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
+    """The plain-text log format, colorized only when both streams are an interactive terminal."""
+    return _COLOR_LOG_FORMAT if _color_enabled(stdout) and _color_enabled(stderr) else _PLAIN_LOG_FORMAT
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
@@ -744,7 +748,7 @@ class JsonFormatter(Formatter):
         return dt.isoformat()
 
     def format(self, record):
-        message_str: Final = record.getMessage()
+        message_str: Final = _ANSI_ESCAPE.sub("", record.getMessage())
         json_record: Final[dict[str, object]] = {
             "message": message_str,
             "level": record.levelname,
@@ -800,12 +804,14 @@ class CorrelationPlainFormatter(logging.Formatter):
     """Appends trace_id/session_id to plain-text log lines stamped by CorrelationContextFilter.
 
     Mirrors JsonFormatter's handling of these two fields so request_correlation_in_logs
-    behaves the same whether or not json_logs is enabled.
+    behaves the same whether or not json_logs is enabled. Unless it was built with the color format,
+    it also drops the ANSI color codes a message carries, which a piped log would store as text.
     """
 
     def format(self, record: logging.LogRecord) -> str:
         rendered: Final = super().format(record)
-        formatted: Final = rendered if _is_redacted(record) else redact_string(rendered)
+        uncolored: Final = rendered if self._fmt == _COLOR_LOG_FORMAT else _ANSI_ESCAPE.sub("", rendered)
+        formatted: Final = uncolored if _is_redacted(record) else redact_string(uncolored)
         trace_id: Final = getattr(record, "trace_id", None)
         session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
@@ -899,23 +905,23 @@ verbose_proxy_logger.addFilter(_diagnostic_filter)
 verbose_proxy_stdout_logger.addFilter(_diagnostic_filter)
 verbose_logger.addFilter(_diagnostic_filter)
 
-_ANSI_ESCAPE: Final = re.compile(r"\x1b\[[0-9;]*m")
-
 
 def print_startup_message(message: str) -> None:
     """Write a boot-time message meant for the operator's terminal.
 
     LITELLM_SUPPRESS_STARTUP_OUTPUT or litellm_settings.suppress_startup_output turns every one of them
-    off. Plain mode prints it unchanged, colors and spacing included, and flushes it so a piped stdout
-    shows it at once. With JSON logs on, every line of stdout is read by a log pipeline, so the message
-    goes out as one INFO record of the proxy logger instead, on stdout like the print whatever handlers
-    the logging config gave that logger, with the ANSI color codes and surrounding blank lines removed,
-    located at the caller and emitted at any log level; a blank spacer produces no record.
+    off. Plain mode prints it with its spacing, keeping the ANSI colors only when stdout is a color
+    terminal by the same check as the plain log format, so a container log never stores escape codes.
+    With JSON logs on, every line of stdout is read by a log pipeline, so the message goes out as one
+    INFO record of the proxy logger instead, on stdout like the print whatever handlers the logging
+    config gave that logger, with the ANSI color codes and surrounding blank lines removed, located at
+    the caller and emitted at any log level; a blank spacer produces no record.
     """
     if litellm.suppress_startup_output is True:
         return
     if not litellm.json_logs:
-        print(message, flush=True)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
+        printed: Final = message if _color_enabled(sys.stdout) else _ANSI_ESCAPE.sub("", message)
+        print(printed, flush=True)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
         return
     text: Final = _ANSI_ESCAPE.sub("", message).strip("\n")
     if not text:

@@ -2088,6 +2088,36 @@ def test_ProxyConfig_parse_search_tools_missing_returns_none():
     assert pc.parse_search_tools({}) is None
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig_lists_search_tools_once_at_startup_not_on_every_reparse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+):
+    """The search tools reload job and add_deployment re-parse search_tools every config reload interval, so
+    the startup listing belongs to load_config alone, or a container log repeats it every 30 seconds."""
+    config_file: Final = tmp_path / "search.yaml"
+    config_file.write_text(
+        "model_list: []\n"
+        "search_tools:\n"
+        "  - search_tool_name: web-search\n"
+        "    litellm_params:\n"
+        "      search_provider: tavily\n"
+    )
+    monkeypatch.setattr(litellm, "json_logs", False)
+    monkeypatch.setattr(litellm, "suppress_startup_output", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    proxy_config: Final = ProxyConfig()
+
+    await proxy_config.load_config(router=None, config_file_path=str(config_file))
+    for _ in range(3):
+        assert proxy_config.parse_search_tools(proxy_config.get_config_state()) is not None
+
+    out: Final = capfd.readouterr().out
+    assert out.count("Proxy initialized with Search Tools:") == 1, out
+    assert out.count("web-search (tavily)") == 1, out
+
+
 def test_ProxyConfig_merge_config_and_db_search_tools_returns_superset():
     config_tools = [
         {

@@ -2,9 +2,10 @@
 
 A container runtime reads the proxy's stdout through a pipe and keeps every line. This contract boots an owned
 proxy with a search tool configured and a one-second config reload interval, serves a chat request, lets the
-search tools reload job run several times and reads everything the proxy wrote. With
-LITELLM_SUPPRESS_STARTUP_OUTPUT or litellm_settings.suppress_startup_output on, none of the startup messages
-arrive, in plain and JSON mode alike.
+search tools reload job run several times and reads everything the proxy wrote. With the setting off, every
+startup message arrives, the search tools listing once per worker however many reloads ran, and no line
+carries an ANSI color code, since the output is a pipe and not a terminal. With LITELLM_SUPPRESS_STARTUP_OUTPUT
+or litellm_settings.suppress_startup_output on, none of them arrive, in plain and JSON mode alike.
 """
 
 from __future__ import annotations
@@ -34,6 +35,8 @@ STARTUP_MESSAGES: Final = (
     SEARCH_TOOLS_HEADER,
     "Postgres connection budget",
 )
+ANSI_ESCAPE: Final = "\x1b["
+WORKER_COUNTS: Final = (1, 2)
 CACHE_SETTINGS: Final[Mapping[str, JsonValue]] = {"cache": True, "cache_params": {"type": "redis"}}
 
 
@@ -106,6 +109,20 @@ def _boot_reload_and_stop(
         assert reloads >= RELOADS_PER_WORKER * workers, reloads
         log: Final = owned.log
     return log.read_text(), search_tool
+
+
+@pytest.mark.parametrize("workers", WORKER_COUNTS)
+def test_startup_messages_reach_a_piped_stdout_once_and_without_color_codes(
+    gateway: Gateway, tmp_path: Path, workers: int
+) -> None:
+    log, search_tool = _boot_reload_and_stop(gateway, tmp_path, CACHE_SETTINGS, {}, workers)
+
+    for message in STARTUP_MESSAGES:
+        assert message in log, (message, log)
+    assert _lines_with(log, SEARCH_TOOLS_HEADER) == workers, log
+    assert _lines_with(log, f"{search_tool} (tavily)") == workers, log
+    colored: Final = tuple(line for line in log.splitlines() if ANSI_ESCAPE in line)
+    assert colored == (), "lines with ANSI color codes on a piped stdout:\n" + "\n".join(colored)
 
 
 @pytest.mark.parametrize(

@@ -6378,13 +6378,8 @@ class ProxyConfig:
 
         search_tools_parsed: Final[list[SearchToolTypedDict]] = []
 
-        print_startup_message("\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m")
-
         for search_tool in search_tools_raw:
-            # Display loaded search tool
             search_tool_name = search_tool.get("search_tool_name", "")
-            search_provider = search_tool.get("litellm_params", {}).get("search_provider", "")
-            print_startup_message(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")
 
             # Handle os.environ/ variables in litellm_params
             litellm_params = search_tool.get("litellm_params", {})
@@ -6560,7 +6555,7 @@ class ProxyConfig:
             reset_color_code: Final = "\033[0m"
             for key, value in litellm_settings.items():
                 if key == "cache" and value is True:
-                    print_startup_message(f"{blue_color_code}\nSetting Cache on Proxy")
+                    print_startup_message(f"\n{blue_color_code}Setting Cache on Proxy{reset_color_code}")
                     from litellm.caching.caching import Cache
 
                     cache_params = {}
@@ -7230,6 +7225,19 @@ class ProxyConfig:
 
         ## SEARCH TOOLS SETTINGS
         search_tools: Final[list[SearchToolTypedDict] | None] = self.parse_search_tools(config)
+        if search_tools:
+            print_startup_message(
+                "\n".join(
+                    (
+                        "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m",
+                        *(
+                            f"\033[32m    {tool.get('search_tool_name', '')} "
+                            f"({tool.get('litellm_params', {}).get('search_provider', '')})\033[0m"
+                            for tool in search_tools
+                        ),
+                    )
+                )
+            )
 
         ## SANDBOX TOOLS SETTINGS
         from litellm.sandbox.sandbox_tools import register_sandbox_tools

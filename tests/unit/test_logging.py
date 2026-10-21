@@ -1408,6 +1408,32 @@ def test_plain_log_format_survives_hostile_streams(stdout, stderr):
     assert _plain_log_format(stdout, stderr) == _PLAIN_LOG_FORMAT
 
 
+def _router_success_record() -> logging.LogRecord:
+    return logging.LogRecord(
+        "LiteLLM Router", logging.INFO, "router.py", 1, "litellm.acompletion(model=%s)\033[32m 200 OK\033[0m", ("gpt-5.6",), None
+    )
+
+
+@pytest.mark.parametrize(
+    ("log_format", "want_suffix"),
+    [
+        (_COLOR_LOG_FORMAT, "litellm.acompletion(model=gpt-5.6)\033[32m 200 OK\033[0m"),
+        (_PLAIN_LOG_FORMAT, "router.py:1 - litellm.acompletion(model=gpt-5.6) 200 OK"),
+    ],
+)
+def test_plain_formatter_keeps_message_colors_only_with_the_color_format(log_format: str, want_suffix: str):
+    """A message that embeds color codes keeps them on a color terminal. Piped, or under NO_COLOR, the plain
+    format is chosen and the codes go too, so a container log never stores them as text."""
+    assert CorrelationPlainFormatter(log_format).format(_router_success_record()).endswith(want_suffix)
+
+
+def test_json_formatter_drops_color_codes_from_the_message():
+    """A JSON log line is read by a log pipeline, never a terminal, so a colored message arrives as plain text."""
+    assert json.loads(JsonFormatter().format(_router_success_record()))["message"] == (
+        "litellm.acompletion(model=gpt-5.6) 200 OK"
+    )
+
+
 def test_level_routing_handler_falls_back_to_stderr_when_stdout_is_unusable(monkeypatch, capsys):
     logger = logging.getLogger("test_level_routing_fallback")
     logger.handlers.clear()
@@ -1827,15 +1853,39 @@ def test_print_verbose_formats_args_only_when_set_verbose_is_on(monkeypatch, cap
     assert capsys.readouterr().out == "key k1 value cached-vector\n"
 
 
-def test_print_startup_message_prints_plain_mode_text_unchanged(monkeypatch, capfd):
-    """Operators without JSON logs keep the colored, spaced terminal output exactly as before."""
+class _CapturedStream(StringIO):
+    def __init__(self, tty: bool) -> None:
+        super().__init__()
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+@pytest.mark.parametrize(
+    "stdout_tty, no_color, want_color",
+    [(True, None, True), (False, None, False), (True, "1", False)],
+)
+def test_print_startup_message_keeps_colors_only_on_a_color_terminal(
+    monkeypatch: pytest.MonkeyPatch, stdout_tty: bool, no_color: str | None, want_color: bool
+):
+    """Operators without JSON logs keep the colored, spaced output on a terminal. A container runtime reads
+    stdout through a pipe and stores the escape codes as text, so there, and under NO_COLOR, the colors go."""
     monkeypatch.setattr(litellm, "json_logs", False)
+    if no_color is None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+    else:
+        monkeypatch.setenv("NO_COLOR", no_color)
+    stdout: Final = _CapturedStream(stdout_tty)
+    monkeypatch.setattr(sys, "stdout", stdout)
 
     print_startup_message("\n\033[1;32mLiteLLM: Proxy initialized with Config, Set models:\033[0m\n")
 
-    out, err = capfd.readouterr()
-    assert out == "\n\033[1;32mLiteLLM: Proxy initialized with Config, Set models:\033[0m\n\n"
-    assert err == ""
+    assert stdout.getvalue() == (
+        "\n\033[1;32mLiteLLM: Proxy initialized with Config, Set models:\033[0m\n\n"
+        if want_color
+        else "\nLiteLLM: Proxy initialized with Config, Set models:\n\n"
+    )
 
 
 @pytest.mark.parametrize("json_logs", [False, True])
