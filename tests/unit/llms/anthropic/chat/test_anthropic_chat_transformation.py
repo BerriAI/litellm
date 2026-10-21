@@ -4,9 +4,9 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
-from httpx import Headers
 import pytest
 import respx
+from httpx import Headers
 
 import litellm
 from litellm.constants import (
@@ -21,8 +21,8 @@ from litellm.constants import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.anthropic.chat import ModelResponseIterator
-from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -1336,7 +1336,6 @@ def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(fiel
     assert ([tool["name"] for tool in optional_params.get("tools", [])] == ["json_tool_call"]) is not native
 
 
-
 @pytest.mark.parametrize(
     ("model", "thinking_params"),
     [
@@ -1349,7 +1348,13 @@ def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(fiel
             {"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]},
         ),
     ],
-    ids=["adaptive-thinking", "reasoning-effort", "reasoning-effort-none", "model-without-forced-tools", "caller-tools"],
+    ids=[
+        "adaptive-thinking",
+        "reasoning-effort",
+        "reasoning-effort-none",
+        "model-without-forced-tools",
+        "caller-tools",
+    ],
 )
 def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(model, thinking_params):
     optional_params: Final = AnthropicConfig().map_openai_params(
@@ -1374,6 +1379,7 @@ def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(m
 
     assert "output_format" in optional_params
     assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
+
 
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
     monkeypatch: pytest.MonkeyPatch,
@@ -7640,18 +7646,17 @@ async def test_anthropic_api_max_completion_tokens(model: str):
         print("request_body: ", request_body)
 
         assert request_body == {
-            "messages": [
-                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]}
-            ],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}],
             "max_tokens": 10,
             "model": model.split("/")[-1],
         }
 
 
 def test_anthropic_tool_cache_control():
-    from litellm.utils import return_raw_request
-    from litellm.types.utils import CallTypes
     import json
+
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
 
     tool_content = "Result: 4. " * 1000
     messages = [
@@ -7860,9 +7865,7 @@ async def test_anthropic_api_prompt_caching_with_content_str():
             "cache_control": {"type": "ephemeral"},
         },
     ]
-    translated_system_message = litellm.AnthropicConfig().translate_system_message(
-        messages=system_message
-    )
+    translated_system_message = litellm.AnthropicConfig().translate_system_message(messages=system_message)
 
     assert translated_system_message == [
         # System Message
@@ -7932,9 +7935,9 @@ async def test_anthropic_api_prompt_caching_with_content_str():
 
     assert len(translated_messages) == len(expected_messages)
     for idx, i in enumerate(translated_messages):
-        assert (
-            i == expected_messages[idx]
-        ), "Error on idx={}. Got={}, Expected={}".format(idx, i, expected_messages[idx])
+        assert i == expected_messages[idx], "Error on idx={}. Got={}, Expected={}".format(
+            idx, i, expected_messages[idx]
+        )
 
 
 @pytest.fixture
@@ -8048,3 +8051,27 @@ def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call():
     assert message.reasoning_content == thinking_block["thinking"]
     assert [block["signature"] for block in message.thinking_blocks] == [thinking_block["signature"]]
 
+
+def _json_mode_message_body(stop_reason: str, stop_details: dict | None) -> dict:
+    return {
+        "id": "msg_json_mode",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-fable-5",
+        "stop_reason": stop_reason,
+        "stop_details": stop_details,
+        "usage": {"input_tokens": 12, "output_tokens": 8},
+        "content": [
+            {"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": "Hello"}}
+        ],
+    }
+
+
+def _transform_json_mode_body(body: dict) -> litellm.ModelResponse:
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=body,
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=True,
+        prefix_prompt=None,
+    )

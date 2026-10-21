@@ -1,6 +1,8 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
@@ -112,20 +114,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        # Force tool-based structured outputs for Bedrock Invoke
-        # (similar to VertexAI fix in #19201) unless the model map advertises
-        # native structured output
-        from litellm.utils import supports_native_structured_output
-
         original_model: Final = model
         requested_thinking: Final = non_default_params.get("thinking")
         requested_display_updates: Final = self.is_thinking_display_updates_used(requested_thinking)
-        if "response_format" in non_default_params and not supports_native_structured_output(
-            model=model, custom_llm_provider="bedrock"
-        ):
-            # Use a model name that forces tool-based approach
-            model = "claude-3-sonnet-20240229"
-
         # Clamp ``reasoning_effort`` to the Bedrock effort ceiling before the
         # parent mapping converts it to ``output_config.effort`` and the
         # downstream effort gate runs. Mirrors the converse path's

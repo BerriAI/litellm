@@ -1454,6 +1454,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return None
         return AnthropicConfig.filter_anthropic_output_schema(dict(json_schema))
 
+    def uses_native_structured_output(self, model: str) -> bool:
+        return AnthropicConfig._supports_model_capability(
+            model, "supports_native_structured_output", self._resolved_provider
+        )
+
     def uses_native_structured_output_for_schema(
         self,
         model: str,

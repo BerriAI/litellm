@@ -1,3 +1,5 @@
+from pydantic import TypeAdapter
+
 """
 Common utility functions used for translating messages across providers
 """

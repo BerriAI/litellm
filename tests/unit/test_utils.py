@@ -1,13 +1,15 @@
-import asyncio, importlib, re
+import asyncio
 import base64
-import copy
 import contextlib
 import contextvars
+import copy
+import importlib
 import io
 import json
 import logging
 import os
 import queue
+import re
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -38,7 +40,6 @@ from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.humanloop import HumanloopLogger
-from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
 from litellm.integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.duration_parser import (
@@ -47,6 +48,7 @@ from litellm.litellm_core_utils.duration_parser import (
 )
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
+from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -77,28 +79,28 @@ from litellm.types.utils import (
 )
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
-    _invalidate_model_cost_lowercase_map,
-    add_custom_logger_callback_to_specific_event,
-    check_valid_key,
     CustomStreamWrapper,
-    filter_out_litellm_params,
-    get_applied_guardrails,
-    get_llm_provider,
-    get_optional_params_embeddings,
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
-    get_potential_model_names,
+    _invalidate_model_cost_lowercase_map,
     _is_litellm_router_call,
     _is_streaming_request,
     _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
+    add_custom_logger_callback_to_specific_event,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
     calculate_max_parallel_requests,
+    check_valid_key,
     client,
+    filter_out_litellm_params,
+    get_applied_guardrails,
+    get_llm_provider,
     get_non_default_completion_params,
+    get_optional_params_embeddings,
     get_optional_params_image_gen,
+    get_potential_model_names,
     get_prompt_cache_min_tokens,
     get_supported_openai_params,
     get_token_count,
@@ -106,8 +108,8 @@ from litellm.utils import (
     is_cached_message,
     is_prompt_caching_valid_prompt,
     trim_messages,
-    validate_environment,
     validate_chat_completion_tool_choice,
+    validate_environment,
 )
 
 
@@ -1604,10 +1606,10 @@ def test_vertex_params_not_stripped_for_vertex_family(model, custom_llm_provider
         assert optional_params["vertex_location"] == "us-central1"
 
 
-from litellm.utils import supports_function_calling
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from litellm import acompletion, completion
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.utils import supports_function_calling
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
 class TestProxyFunctionCalling:
@@ -3247,9 +3249,7 @@ class TestExtraBodyCannotOverrideModel:
                 }
             ]
 
-        untouched = litellm.get_optional_params(
-            model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools()
-        )
+        untouched = litellm.get_optional_params(model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools())
         assert untouched["tools"][0]["function"]["custom_marker"] == "LEAK", untouched
 
         result = litellm.get_optional_params(
@@ -4240,7 +4240,9 @@ def test_is_prompt_caching_valid_prompt_stops_counting_once_the_minimum_is_reach
     assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=long_prompt, min_token_count=1024) is True
     assert sum(counted_messages) < len(long_prompt), sum(counted_messages)
 
-    full_count = litellm.token_counter(model="claude-opus-4-8", messages=long_prompt, use_default_image_token_count=True)
+    full_count = litellm.token_counter(
+        model="claude-opus-4-8", messages=long_prompt, use_default_image_token_count=True
+    )
     assert (
         is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=long_prompt, min_token_count=full_count)
         is True
@@ -4707,7 +4709,13 @@ _SUCCESS_RESPONSES_BY_CALL_TYPE: Final = (
     pytest.param(EmbeddingResponse(model="text-embedding-3-small"), CallTypes.aembedding, id="embedding"),
     pytest.param(
         ResponsesAPIResponse(
-            id="resp_abc", created_at=1, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[], model="gpt-5.6"
+            id="resp_abc",
+            created_at=1,
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            model="gpt-5.6",
         ),
         CallTypes.aresponses,
         id="responses",
@@ -4735,7 +4743,9 @@ async def test_success_deployment_hook_raising_keeps_response_and_runs_later_hoo
 
     assert result is response
     assert second_hook.seen_responses == (response,)
-    failure_logs: Final = tuple(r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message)
+    failure_logs: Final = tuple(
+        r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message
+    )
     assert len(failure_logs) == 1
     assert "_ChatShapedSuccessDeploymentHook" in failure_logs[0].message
     assert str(call_type) in failure_logs[0].message
@@ -4872,17 +4882,13 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
         ({"metadata": None}, True, False),
     ],
 )
-def test_is_litellm_router_call_is_async_aware(
-    kwargs: Mapping[str, object], is_async: bool, expected: bool
-) -> None:
+def test_is_litellm_router_call_is_async_aware(kwargs: Mapping[str, object], is_async: bool, expected: bool) -> None:
     assert _is_litellm_router_call(kwargs, is_async=is_async) is expected
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
-async def test_router_aresponses_does_not_run_sdk_retries(
-    monkeypatch: pytest.MonkeyPatch, stream: bool
-) -> None:
+async def test_router_aresponses_does_not_run_sdk_retries(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     model_list: Final = [
@@ -4896,9 +4902,7 @@ async def test_router_aresponses_does_not_run_sdk_retries(
             },
         }
     ]
-    router: Final = litellm.Router(
-        model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True
-    )
+    router: Final = litellm.Router(model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True)
 
     try:
         with respx.mock(assert_all_called=True) as respx_mock:
@@ -4934,9 +4938,7 @@ def test_router_responses_keeps_sdk_retries_for_sync_router_call(
             },
         }
     ]
-    router: Final = litellm.Router(
-        model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True
-    )
+    router: Final = litellm.Router(model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True)
 
     try:
         with respx.mock(assert_all_called=True) as respx_mock:
@@ -6780,7 +6782,9 @@ def test_function_setup_logs_the_search_query_edit_prompt_and_ocr_document_summa
 
 
 @pytest.mark.parametrize("original_function", ("atext_completion", "text_completion"))
-def test_function_setup_without_a_prompt_leaves_the_missing_prompt_to_request_validation(original_function: str) -> None:
+def test_function_setup_without_a_prompt_leaves_the_missing_prompt_to_request_validation(
+    original_function: str,
+) -> None:
     assert _logged_request_messages(original_function, model="gpt-4o") is None
 
 
@@ -6822,6 +6826,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def setup_and_teardown():
     """
@@ -6835,6 +6840,7 @@ def setup_and_teardown():
     loop.close()
     asyncio.set_event_loop(None)
 
+
 MODEL: Final = "anthropic/claude-haiku-4-5"
 
 
@@ -6844,12 +6850,14 @@ def test_validate_tool_choice_none():
     result = validate_chat_completion_tool_choice(None, model=MODEL)
     assert result is None
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_string():
     """Test that string values are returned as-is."""
     assert validate_chat_completion_tool_choice("auto", model=MODEL) == "auto"
     assert validate_chat_completion_tool_choice("none", model=MODEL) == "none"
     assert validate_chat_completion_tool_choice("required", model=MODEL) == "required"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_standard_dict():
@@ -6858,12 +6866,14 @@ def test_validate_tool_choice_standard_dict():
     result = validate_chat_completion_tool_choice(tool_choice, model=MODEL)
     assert result == tool_choice
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_cursor_format():
     """Cursor IDE format {"type": "auto"} is unwrapped to the bare string."""
     assert validate_chat_completion_tool_choice({"type": "auto"}, model=MODEL) == "auto"
     assert validate_chat_completion_tool_choice({"type": "none"}, model=MODEL) == "none"
     assert validate_chat_completion_tool_choice({"type": "required"}, model=MODEL) == "required"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(
@@ -6886,6 +6896,7 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == MODEL
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("tool_choice", [123, []])
 def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
@@ -6896,6 +6907,7 @@ def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
         validate_chat_completion_tool_choice(tool_choice, model=MODEL)
     assert exc_info.value.status_code == 400
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_without_model_is_still_a_400():
     """Callers that predate the model argument keep getting a 400, with an empty model on the error."""
@@ -6904,11 +6916,13 @@ def test_validate_tool_choice_without_model_is_still_a_400():
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == ""
 
+
 @pytest.fixture()
 def _vcr_outcome_gate_local_testing(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
@@ -6962,6 +6976,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -7005,6 +7020,7 @@ def setup_and_teardown_local_testing():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
     "isolate_litellm_state",
@@ -7030,6 +7046,7 @@ def test_vertex_projects():
     assert "vertex_ai_project" in optional_params
     assert "vertex_ai_location" in optional_params
 
+
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
     "isolate_litellm_state",
@@ -7044,6 +7061,7 @@ def test_bedrock_embed_v2_regular():
     )
     print(f"received optional_params: {optional_params}")
     assert optional_params == {"dimensions": 512}
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -7062,6 +7080,7 @@ def test_bedrock_embed_v2_with_drop_params():
     )
     print(f"received optional_params: {optional_params}")
     assert optional_params == {"dimensions": 512, "embeddingTypes": ["binary"]}
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -7083,6 +7102,7 @@ def test_openai_non_text_embedding_3_with_allowed_openai_params():
     )
     print(f"received optional_params: {optional_params}")
     assert optional_params.get("dimensions") == 1024
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -7109,6 +7129,7 @@ def test_openai_non_text_embedding_3_without_allowed_openai_params_raises():
             )
     finally:
         litellm.drop_params = prev_drop_params
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -7138,6 +7159,7 @@ def test_openai_non_text_embedding_3_drop_params_per_call():
     finally:
         litellm.drop_params = prev_drop_params
 
+
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
     "isolate_litellm_state",
@@ -7165,11 +7187,13 @@ def test_openai_non_text_embedding_3_drop_params_global():
     finally:
         litellm.drop_params = prev_drop_params
 
+
 @pytest.fixture()
 def _vcr_outcome_gate_search_tests(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_search_tests")
 def test_search_tool_name_in_all_litellm_params():
@@ -7179,6 +7203,7 @@ def test_search_tool_name_in_all_litellm_params():
     If missing, it gets passed to provider APIs causing errors.
     """
     assert "search_tool_name" in all_litellm_params
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_search_tests")
 def test_filter_out_search_tool_name():
@@ -7205,6 +7230,7 @@ def test_filter_out_search_tool_name():
     assert "scrapeOptions" in filtered
     assert filtered["query"] == "latest ai developments"
     assert filtered["max_results"] == 5
+
 
 @pytest.mark.asyncio
 async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -7358,9 +7384,7 @@ def test_trimming_with_system_message_within_max_tokens():
             "content": "This is a medium normal message, let's say litellm is awesome.",
         },
     ]
-    trimmed_messages = trim_messages(
-        messages, max_tokens=30, model="gpt-4-0613"
-    )
+    trimmed_messages = trim_messages(messages, max_tokens=30, model="gpt-4-0613")
     assert len(trimmed_messages) == 2
     assert trimmed_messages[0]["content"] == "This is a short system message"
 
@@ -7543,9 +7567,7 @@ def test_aget_valid_models():
         print(valid_models)
 
         # list of openai supported llms on litellm
-        expected_models = (
-            litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
-        )
+        expected_models = litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
 
         assert set(valid_models) == set(expected_models)
 
@@ -7634,9 +7656,7 @@ def test_get_chat_completion_prompt():
         prompt_variables=None,
     )
 
-    assert litellm_logging_obj.messages == [
-        {"role": "user", "content": updated_message}
-    ]
+    assert litellm_logging_obj.messages == [{"role": "user", "content": updated_message}]
 
 
 def test_redact_msgs_from_logs():
@@ -7708,9 +7728,7 @@ def test_redact_embedding_response():
     litellm.turn_off_message_logging = True
 
     # Create a test EmbeddingResponse with usage data
-    original_usage = litellm.Usage(
-        prompt_tokens=10, completion_tokens=0, total_tokens=10
-    )
+    original_usage = litellm.Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10)
     original_data = [
         {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3, 0.4, 0.5]},
         {"object": "embedding", "index": 1, "embedding": [0.6, 0.7, 0.8, 0.9, 1.0]},
@@ -7746,9 +7764,7 @@ def test_redact_embedding_response():
 
     # Assert the redacted response preserves critical metadata
     assert _redacted_response_obj.usage == original_usage  # usage should be preserved
-    assert (
-        _redacted_response_obj.model == "text-embedding-3-small"
-    )  # model should be preserved
+    assert _redacted_response_obj.model == "text-embedding-3-small"  # model should be preserved
     assert _redacted_response_obj.object == "list"  # object should be preserved
 
     # Assert sensitive data is cleared
@@ -7802,12 +7818,8 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     )
 
     # Test Case 1: standard_callback_dynamic_params = False (or not set)
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(
-        turn_off_message_logging=False
-    )
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(turn_off_message_logging=False)
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -7816,12 +7828,8 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     assert _redacted_response_obj.choices[0].message.content == test_content
 
     # Test Case 2: standard_callback_dynamic_params = True
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(
-        turn_off_message_logging=True
-    )
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(turn_off_message_logging=True)
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -7832,9 +7840,7 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     # Test Case 3: standard_callback_dynamic_params does not set turn_off_message_logging
     # since litellm.turn_off_message_logging is True redaction should occur
     standard_callback_dynamic_params = StandardCallbackDynamicParams()
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -8022,8 +8028,10 @@ def test_async_http_handler_force_ipv4(mock_async_client):
 
     This is prod test - we need to ensure that httpx always uses ipv4 when litellm.force_ipv4 is True
     """
-    import httpx
     import ssl
+
+    import httpx
+
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     # Set force_ipv4 to True
@@ -8176,10 +8184,7 @@ def test_models_by_provider():
             continue
         elif k == "sample_spec":
             continue
-        elif (
-            v["litellm_provider"] == "sagemaker"
-            or v["litellm_provider"] == "bedrock_converse"
-        ):
+        elif v["litellm_provider"] == "sagemaker" or v["litellm_provider"] == "bedrock_converse":
             continue
         elif v.get("mode") in ("search", "decisions", "evaluation"):
             continue
@@ -8187,9 +8192,7 @@ def test_models_by_provider():
             providers.add(v["litellm_provider"])
 
     for provider in providers:
-        assert provider in models_by_provider.keys() or JSONProviderRegistry.exists(
-            provider
-        )
+        assert provider in models_by_provider.keys() or JSONProviderRegistry.exists(provider)
 
 
 @pytest.fixture
@@ -8211,16 +8214,11 @@ def restore_end_user_cost_tracking_flags(monkeypatch: pytest.MonkeyPatch) -> Non
         ({"user_api_key_end_user_id": "123"}, True, None),
     ],
 )
-def test_get_end_user_id_for_cost_tracking(
-    litellm_params, disable_end_user_cost_tracking, expected_end_user_id
-):
+def test_get_end_user_id_for_cost_tracking(litellm_params, disable_end_user_cost_tracking, expected_end_user_id):
     from litellm.utils import get_end_user_id_for_cost_tracking
 
     litellm.disable_end_user_cost_tracking = disable_end_user_cost_tracking
-    assert (
-        get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
-        == expected_end_user_id
-    )
+    assert get_end_user_id_for_cost_tracking(litellm_params=litellm_params) == expected_end_user_id
 
 
 @pytest.mark.usefixtures("restore_end_user_cost_tracking_flags")
@@ -8237,13 +8235,9 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
 ):
     from litellm.utils import get_end_user_id_for_cost_tracking
 
-    litellm.enable_end_user_cost_tracking_prometheus_only = (
-        enable_end_user_cost_tracking_prometheus_only
-    )
+    litellm.enable_end_user_cost_tracking_prometheus_only = enable_end_user_cost_tracking_prometheus_only
     assert (
-        get_end_user_id_for_cost_tracking(
-            litellm_params=litellm_params, service_type="prometheus"
-        )
+        get_end_user_id_for_cost_tracking(litellm_params=litellm_params, service_type="prometheus")
         == expected_end_user_id
     )
 
@@ -8258,20 +8252,14 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         ),
         # Test with only litellm_metadata field (new behavior)
         (
-            {
-                "litellm_metadata": {
-                    "user_api_key_end_user_id": "user_from_litellm_metadata"
-                }
-            },
+            {"litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}},
             "user_from_litellm_metadata",
         ),
         # Test with both fields - metadata should take precedence for user_api_key fields
         (
             {
                 "metadata": {"user_api_key_end_user_id": "user_from_metadata"},
-                "litellm_metadata": {
-                    "user_api_key_end_user_id": "user_from_litellm_metadata"
-                },
+                "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"},
             },
             "user_from_metadata",
         ),
@@ -8287,9 +8275,7 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         (
             {
                 "metadata": {},
-                "litellm_metadata": {
-                    "user_api_key_end_user_id": "user_from_litellm_metadata"
-                },
+                "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"},
             },
             "user_from_litellm_metadata",
         ),
@@ -8297,9 +8283,7 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         ({}, None),
     ],
 )
-def test_get_end_user_id_for_cost_tracking_metadata_handling(
-    litellm_params, expected_end_user_id
-):
+def test_get_end_user_id_for_cost_tracking_metadata_handling(litellm_params, expected_end_user_id):
     """
     Test that get_end_user_id_for_cost_tracking correctly handles both metadata and litellm_metadata
     fields using the get_litellm_metadata_from_kwargs helper function.
@@ -8339,9 +8323,10 @@ def test_token_counter_with_image_url_with_detail_high():
 
     PROD TEST this is importat - Can impact latency very badly
     """
-    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
-    from litellm._logging import verbose_logger
     import logging
+
+    from litellm._logging import verbose_logger
+    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
 
     verbose_logger.setLevel(logging.DEBUG)
 
@@ -8384,8 +8369,8 @@ def test_logprobs_type():
 
 
 def test_get_valid_models_openai_proxy(monkeypatch):
-    from litellm.utils import get_valid_models
     import litellm
+    from litellm.utils import get_valid_models
 
     litellm.turn_on_debug()
 
@@ -8557,17 +8542,15 @@ def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
     assert len(litellm.success_callback) == curr_len_success_callback
     assert len(litellm.failure_callback) == curr_len_failure_callback
 
-    assert any(
-        isinstance(callback, OpenMeterLogger) for callback in litellm.failure_callback
-    )
+    assert any(isinstance(callback, OpenMeterLogger) for callback in litellm.failure_callback)
 
 
 @pytest.mark.asyncio
 async def test_wrapper_kwargs_passthrough():
-    from litellm.utils import client
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObject,
     )
+    from litellm.utils import client
 
     mock_original = AsyncMock()
 
@@ -8656,20 +8639,14 @@ def test_validate_user_messages_invalid_content_type():
     [
         {
             "name": "default_on_guardrail",
-            "callbacks": [
-                CustomGuardrail(guardrail_name="test_guardrail", default_on=True)
-            ],
+            "callbacks": [CustomGuardrail(guardrail_name="test_guardrail", default_on=True)],
             "kwargs": {"metadata": {"requester_metadata": {"guardrails": []}}},
             "expected": ["test_guardrail"],
         },
         {
             "name": "request_specific_guardrail",
-            "callbacks": [
-                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
-            ],
-            "kwargs": {
-                "metadata": {"requester_metadata": {"guardrails": ["test_guardrail"]}}
-            },
+            "callbacks": [CustomGuardrail(guardrail_name="test_guardrail", default_on=False)],
+            "kwargs": {"metadata": {"requester_metadata": {"guardrails": ["test_guardrail"]}}},
             "expected": ["test_guardrail"],
         },
         {
@@ -8678,18 +8655,12 @@ def test_validate_user_messages_invalid_content_type():
                 CustomGuardrail(guardrail_name="default_guardrail", default_on=True),
                 CustomGuardrail(guardrail_name="request_guardrail", default_on=False),
             ],
-            "kwargs": {
-                "metadata": {
-                    "requester_metadata": {"guardrails": ["request_guardrail"]}
-                }
-            },
+            "kwargs": {"metadata": {"requester_metadata": {"guardrails": ["request_guardrail"]}}},
             "expected": ["default_guardrail", "request_guardrail"],
         },
         {
             "name": "empty_metadata",
-            "callbacks": [
-                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
-            ],
+            "callbacks": [CustomGuardrail(guardrail_name="test_guardrail", default_on=False)],
             "kwargs": {},
             "expected": [],
         },
@@ -9247,6 +9218,7 @@ def test_delta_tool_calls_sequential_indices():
     defaulting all tool calls to index=0.
     """
     import json
+
     from litellm.types.utils import Delta
 
     tool_calls_without_indices = [

@@ -1,9 +1,15 @@
-
-import asyncio, importlib, litellm, litellm.litellm_core_utils.get_model_cost_map as bedrock_govcloud_model_cost_map, pytest
+import asyncio
+import importlib
+from collections.abc import Iterator
 from typing import Final
+from unittest.mock import Mock, patch
 
+import pytest
 
-from litellm.llms.bedrock.common_utils import(
+import litellm
+import litellm.litellm_core_utils.get_model_cost_map as bedrock_govcloud_model_cost_map
+from litellm import completion
+from litellm.llms.bedrock.common_utils import (
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
     bedrock_native_output_is_opt_in,
@@ -16,11 +22,8 @@ from litellm.llms.bedrock.common_utils import(
     strip_bedrock_throughput_suffix,
     without_bedrock_native_output_opt_in,
 )
-from collections.abc import Iterator
-from litellm import completion
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import Mock, patch
 
 # --------------------------------------------------------------------------- #
 # get_bedrock_response_stream_shape lazy-load tests                           #
@@ -48,9 +51,7 @@ def test_bedrock_response_stream_shape_lazy_loads_once():
     import litellm.llms.bedrock.common_utils as mod
 
     sentinel = MagicMock()
-    with patch.object(
-        mod, "_load_bedrock_response_stream_shape", return_value=sentinel
-    ) as mock_load:
+    with patch.object(mod, "_load_bedrock_response_stream_shape", return_value=sentinel) as mock_load:
         assert mod.get_bedrock_response_stream_shape() is sentinel
         assert mod.get_bedrock_response_stream_shape() is sentinel
         mock_load.assert_called_once()
@@ -97,9 +98,7 @@ def test_bedrock_response_stream_shape_is_structure_shape():
     from litellm.llms.bedrock.common_utils import get_bedrock_response_stream_shape
 
     loaded_shape = get_bedrock_response_stream_shape()
-    assert (
-        loaded_shape is not None
-    ), "get_bedrock_response_stream_shape() is None — botocore may not be installed"
+    assert loaded_shape is not None, "get_bedrock_response_stream_shape() is None — botocore may not be installed"
     shape: StructureShape = loaded_shape
     assert isinstance(shape, StructureShape)
     assert shape.name == "ResponseStream"
@@ -164,9 +163,7 @@ def test_deepseek_cris():
     Test that DeepSeek models with cross-region inference prefix use converse route
     """
     bedrock_model_info = BedrockModelInfo
-    bedrock_route = bedrock_model_info.get_bedrock_route(
-        model="bedrock/us.deepseek.r1-v1:0"
-    )
+    bedrock_route = bedrock_model_info.get_bedrock_route(model="bedrock/us.deepseek.r1-v1:0")
     assert bedrock_route == "converse"
 
 
@@ -239,27 +236,19 @@ def test_govcloud_cross_region_inference_prefix():
     bedrock_model_info = BedrockModelInfo
 
     # Test us-gov prefix is stripped correctly for Claude models
-    base_model = bedrock_model_info.get_base_model(
-        model="bedrock/us-gov.anthropic.claude-haiku-4-5-20251001-v1:0"
-    )
+    base_model = bedrock_model_info.get_base_model(model="bedrock/us-gov.anthropic.claude-haiku-4-5-20251001-v1:0")
     assert base_model == "anthropic.claude-haiku-4-5-20251001-v1:0"
 
     # Test us-gov prefix is stripped correctly for different Claude versions
-    base_model = bedrock_model_info.get_base_model(
-        model="bedrock/us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    base_model = bedrock_model_info.get_base_model(model="bedrock/us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0")
     assert base_model == "anthropic.claude-sonnet-4-5-20250929-v1:0"
 
     # Test us-gov prefix is stripped correctly for Haiku models
-    base_model = bedrock_model_info.get_base_model(
-        model="bedrock/us-gov.anthropic.claude-3-haiku-20240307-v1:0"
-    )
+    base_model = bedrock_model_info.get_base_model(model="bedrock/us-gov.anthropic.claude-3-haiku-20240307-v1:0")
     assert base_model == "anthropic.claude-3-haiku-20240307-v1:0"
 
     # Test us-gov prefix is stripped correctly for Meta models
-    base_model = bedrock_model_info.get_base_model(
-        model="bedrock/us-gov.meta.llama3-8b-instruct-v1:0"
-    )
+    base_model = bedrock_model_info.get_base_model(model="bedrock/us-gov.meta.llama3-8b-instruct-v1:0")
     assert base_model == "meta.llama3-8b-instruct-v1:0"
 
 
@@ -273,23 +262,14 @@ def test_context_window_suffix_stripped_for_cost_lookup():
     """
     from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
-    assert (
-        get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1[1m]")
-        == "anthropic.claude-opus-4-6-v1"
-    )
-    assert (
-        get_bedrock_base_model("us.anthropic.claude-sonnet-4-6[1m]")
-        == "anthropic.claude-sonnet-4-6"
-    )
+    assert get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1[1m]") == "anthropic.claude-opus-4-6-v1"
+    assert get_bedrock_base_model("us.anthropic.claude-sonnet-4-6[1m]") == "anthropic.claude-sonnet-4-6"
     assert (
         get_bedrock_base_model("global.anthropic.claude-opus-4-5-20251101-v1:0[1m]")
         == "anthropic.claude-opus-4-5-20251101-v1:0"
     )
     # Ensure models without suffix are unaffected
-    assert (
-        get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1")
-        == "anthropic.claude-opus-4-6-v1"
-    )
+    assert get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1") == "anthropic.claude-opus-4-6-v1"
     # Ensure :51k throughput suffix still works
     assert (
         get_bedrock_base_model("anthropic.claude-3-5-sonnet-20241022-v2:0:51k")
@@ -339,9 +319,7 @@ def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch)
         ("us.anthropic.claude-opus-4-7", "xhigh"),
     ],
 )
-def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(
-    model, expected_ceiling
-):
+def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(model, expected_ceiling):
     from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
     model_info = GetModelCostMap.load_local_model_cost_map()[model]
@@ -360,54 +338,24 @@ def test_route_prefix_matched_as_path_segment_not_substring():
     or a ``/`` boundary.
     """
     # The bedrock_mantle/ provider prefix must NOT be read as the mantle/ route.
-    assert (
-        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
-    )
-    assert (
-        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "converse"
-    )
-    assert (
-        BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5")
-        is False
-    )
+    assert BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
+    assert BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "converse"
+    assert BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5") is False
 
     # A genuine mantle route still resolves, via the startswith branch...
-    assert (
-        BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview")
-        == "mantle"
-    )
+    assert BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview") == "mantle"
     # ...and via the mid-path "/mantle/" branch (after the bedrock/ provider prefix).
-    assert (
-        BedrockModelInfo.get_bedrock_route(
-            "bedrock/mantle/anthropic.claude-mythos-preview"
-        )
-        == "mantle"
-    )
+    assert BedrockModelInfo.get_bedrock_route("bedrock/mantle/anthropic.claude-mythos-preview") == "mantle"
 
 
 def test_model_has_route_prefix_exercises_both_branches():
     """``_model_has_route_prefix`` matches on ``startswith`` or a ``/`` boundary only."""
     # startswith branch
-    assert (
-        BedrockModelInfo._model_has_route_prefix(
-            "mantle/anthropic.claude-mythos-preview", "mantle/"
-        )
-        is True
-    )
+    assert BedrockModelInfo._model_has_route_prefix("mantle/anthropic.claude-mythos-preview", "mantle/") is True
     # f"/{prefix}" boundary branch
-    assert (
-        BedrockModelInfo._model_has_route_prefix(
-            "bedrock/mantle/anthropic.claude-mythos-preview", "mantle/"
-        )
-        is True
-    )
+    assert BedrockModelInfo._model_has_route_prefix("bedrock/mantle/anthropic.claude-mythos-preview", "mantle/") is True
     # neither branch: the token only appears glued to another segment
-    assert (
-        BedrockModelInfo._model_has_route_prefix(
-            "bedrock_mantle/openai.gpt-5.5", "mantle/"
-        )
-        is False
-    )
+    assert BedrockModelInfo._model_has_route_prefix("bedrock_mantle/openai.gpt-5.5", "mantle/") is False
 
 
 @pytest.mark.parametrize(
@@ -457,16 +405,10 @@ def test_explicit_invoke_route_does_not_match_async_invoke():
     """
     async_invoke_model = "async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
     assert BedrockModelInfo._explicit_invoke_route(async_invoke_model) is False
-    assert (
-        BedrockModelInfo._explicit_invoke_route(f"bedrock/{async_invoke_model}")
-        is False
-    )
+    assert BedrockModelInfo._explicit_invoke_route(f"bedrock/{async_invoke_model}") is False
     # ...while async_invoke/ is still detected as its own route.
     assert BedrockModelInfo._explicit_async_invoke_route(async_invoke_model) is True
-    assert (
-        BedrockModelInfo._explicit_async_invoke_route(f"bedrock/{async_invoke_model}")
-        is True
-    )
+    assert BedrockModelInfo._explicit_async_invoke_route(f"bedrock/{async_invoke_model}") is True
 
 
 def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_field(monkeypatch):
@@ -1183,6 +1125,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -1191,6 +1134,7 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -1225,6 +1169,7 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -1238,6 +1183,7 @@ _SCALAR_DEFAULTS = {
     "api_key": getattr(litellm, "api_key", None),
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestStripBedrockRoutingPrefix:
@@ -1269,6 +1215,7 @@ class TestStripBedrockRoutingPrefix:
             == "anthropic.claude-3-sonnet-20240229-v1:0"
         )
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestStripBedrockThroughputSuffix:
     """Tests for strip_bedrock_throughput_suffix function."""
@@ -1296,6 +1243,7 @@ class TestStripBedrockThroughputSuffix:
     def test_strip_throughput_suffix(self, input_model, expected):
         assert strip_bedrock_throughput_suffix(input_model) == expected
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestExtractModelNameFromBedrockArn:
     """Tests for extract_model_name_from_bedrock_arn function."""
@@ -1316,6 +1264,7 @@ class TestExtractModelNameFromBedrockArn:
         arn = "ARN:aws:bedrock:us-east-1:123456789012:model/my-model"
         assert extract_model_name_from_bedrock_arn(arn) == "my-model"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestGetBedrockCrossRegionInferenceRegions:
     """Tests for get_bedrock_cross_region_inference_regions function."""
@@ -1330,6 +1279,7 @@ class TestGetBedrockCrossRegionInferenceRegions:
     def test_returns_list(self):
         regions = get_bedrock_cross_region_inference_regions()
         assert isinstance(regions, list)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestGetBedrockBaseModel:
@@ -1394,6 +1344,7 @@ class TestGetBedrockBaseModel:
         """Test that throughput tier suffixes like :51k are stripped. Issue #19113."""
         assert get_bedrock_base_model(input_model) == expected
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockModelInfoWrappers:
     """Tests that BedrockModelInfo methods correctly wrap standalone functions."""
@@ -1414,6 +1365,7 @@ class TestBedrockModelInfoWrappers:
     def test_get_non_litellm_routing_model_name_matches_standalone(self):
         model = "bedrock/converse/claude-3"
         assert BedrockModelInfo.get_non_litellm_routing_model_name(model) == strip_bedrock_routing_prefix(model)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockTokenCounter:
@@ -1451,11 +1403,13 @@ class TestBedrockTokenCounter:
         )
         assert result is None
 
+
 @pytest.fixture
 def _pr4_bedrock_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "pr4-test-aws-access-key")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "pr4-test-aws-secret-key")
     monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+
 
 @pytest.fixture(scope="module")
 def _use_local_model_cost_map() -> Iterator[None]:
@@ -1464,6 +1418,7 @@ def _use_local_model_cost_map() -> Iterator[None]:
         importlib.reload(bedrock_govcloud_model_cost_map)
         importlib.reload(litellm)
         yield
+
 
 @pytest.mark.usefixtures(
     "_pr4_bedrock_env",
@@ -2005,6 +1960,7 @@ class TestBedrockGovCloudSupport:
 @pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
 def test_event_decoder_reports_only_missing_aws_dependency(missing):
     from unittest.mock import patch
+
     from litellm.llms.bedrock.common_utils import BedrockEventStreamDecoderBase
 
     failure = ModuleNotFoundError("missing dependency", name=missing)
@@ -2018,10 +1974,14 @@ def test_event_decoder_reports_only_missing_aws_dependency(missing):
         assert error.value is failure
 
 
-_FORMAT_REJECTION: Final = "The model returned the following errors: output_config.format: Extra inputs are not permitted"
+_FORMAT_REJECTION: Final = (
+    "The model returned the following errors: output_config.format: Extra inputs are not permitted"
+)
 
 
-_COMPILE_REJECTION: Final = "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+_COMPILE_REJECTION: Final = (
+    "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+)
 
 
 _SCHEMA_PATTERN_REJECTION: Final = (
@@ -2087,4 +2047,3 @@ def test_without_bedrock_native_output_opt_in_turns_the_opt_in_off_and_keeps_the
     assert turned_off["api_base"] == "https://bedrock.example"
     assert deployment_model_info(turned_off)["id"] == "deployment-1"
     assert litellm_params["model_info"] == {"id": "deployment-1"}
-

@@ -1,9 +1,11 @@
-import asyncio, base64, importlib
+import asyncio
+import base64
 import copy
+import importlib
 import json
 import uuid
-from types import SimpleNamespace
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -634,7 +636,6 @@ def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(set_nat
     assert "tools" not in result
 
 
-
 class Relabel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -670,6 +671,7 @@ def test_nested_pydantic_response_format_reaches_native_output_with_refs_that_re
     item_ref: Final = sent["properties"]["relabels"]["items"]["$ref"]
     assert item_ref.removeprefix("#/$defs/") in sent["$defs"]
     assert "tools" not in result
+
 
 def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_model_cost_map):
     """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
@@ -1386,6 +1388,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -1394,6 +1397,7 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -1427,6 +1431,7 @@ def setup_and_teardown(event_loop):
         task.cancel()
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
 
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
@@ -1498,6 +1503,7 @@ IN WITNESS WHEREOF, the parties have executed this Agreement.
 """
     * 8
 )  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropicPromptCachingRegression:
@@ -1660,6 +1666,7 @@ class TestBedrockAnthropicPromptCachingRegression:
             additional_fields = result["additionalModelRequestFields"]
             if "anthropic_beta" in additional_fields:
                 assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropic1MContextRegression:
@@ -1846,6 +1853,7 @@ class TestBedrockAnthropic1MContextRegression:
         assert "context-1m-2025-08-07" in beta_headers
         assert "computer-use-2024-10-22" in beta_headers
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropicCombinedRegressions:
     """
@@ -1992,4 +2000,3 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     assert not AmazonAnthropicClaudeConfig().uses_opt_in_native_output(
         model, optional_params, {"model_info": model_info}
     )
-
