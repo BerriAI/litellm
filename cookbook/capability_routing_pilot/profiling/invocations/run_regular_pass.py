@@ -29,7 +29,10 @@ from poc.run_profiling import (
 
 def main() -> None:
     config: Final = ProfileConfig(ROOT, (ROOT / "profiling" / "profiling_manifest.json" if (ROOT / "profiling" / "profiling_manifest.json").exists() else ROOT / "profiling_manifest.json"), MANIFEST_SHA256, PUBLIC_DEV_TENANT)
-    batches: Final = profile_batches(config)[1:]
+    first_batch: Final = int(sys.argv[sys.argv.index("--from-batch") + 1]) if "--from-batch" in sys.argv else 2
+    if first_batch < 2:
+        raise ValueError("batch 1 is complete and must not be replayed")
+    batches: Final = tuple(b for b in profile_batches(config)[1:] if b.index >= first_batch)
     if "--execute" not in sys.argv:
         print(json.dumps([{"batch": b.index, "tasks": [[t.task_id, t.model_order] for t in b.tasks]} for b in batches]))
         return
