@@ -142,13 +142,13 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
             setup.execute(
                 sql.SQL(
                     'CREATE TABLE {} (request_id text, "startTime" timestamp NOT NULL, payload text, '
-                    'PRIMARY KEY (request_id, "startTime"))'
+                    'PRIMARY KEY (request_id, "startTime")) WITH (autovacuum_enabled = false)'
                 ).format(logs)
             )
             setup.execute(
                 sql.SQL(
                     "CREATE TABLE {} (request_id text, tool_name text, start_time timestamp NOT NULL, "
-                    "PRIMARY KEY (request_id, tool_name))"
+                    "PRIMARY KEY (request_id, tool_name)) WITH (autovacuum_enabled = false)"
                 ).format(index)
             )
             setup.execute(sql.SQL("CREATE TABLE {} (param_name text PRIMARY KEY, param_value jsonb)").format(config))
