@@ -16,6 +16,8 @@ import pytest
 from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 
+import litellm
+
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import configuration
@@ -273,3 +275,44 @@ def test_session_tags_sign_the_request_and_stay_out_of_the_body(monkeypatch):
     sent = client.post.call_args.kwargs
     assert "Credential=ASIACONVERSETAGGED/" in sent["headers"]["Authorization"]
     assert "aws_session_tags" not in sent["data"]
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_converse_profile_override_records_cost_without_changing_response_model(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    configuration.rust(False)
+    model: Final = "openai.gpt-5.6-sol"
+    profile: Final = f"us.{model}"
+    prices: Final = litellm.get_model_info(profile, custom_llm_provider="bedrock")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/model/{profile}/converse"
+        return httpx.Response(200, json=CONVERSE_RESPONSE)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+        response: Final = litellm.completion(
+            model=f"bedrock/converse/{model}",
+            model_id=profile,
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="test-bearer",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(client=transport),
+            stream=stream,
+            fake_stream=stream,
+            max_tokens=16,
+        )
+        result: Final = litellm.stream_chunk_builder(list(response)) if stream else response
+
+    assert result is not None
+    assert result.model == model
+    assert result.choices[0].message.content == "hi"
+    cost: Final = (
+        response.logging_obj._response_cost_calculator(result) if stream else result._hidden_params.get("response_cost")
+    )
+    assert cost == pytest.approx(
+        CONVERSE_RESPONSE["usage"]["inputTokens"] * prices["input_cost_per_token"]
+        + CONVERSE_RESPONSE["usage"]["outputTokens"] * prices["output_cost_per_token"]
+    )

@@ -464,6 +464,7 @@ from .exceptions import (
     BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    ModelNotMappedError,
     NotFoundError,
     OpenAIError,
     PermissionDeniedError,
@@ -3341,7 +3342,10 @@ def register_model(
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
         for _registered_key, _registered_value in _registrations.items():
-            _runtime_registered_model_cost[_registered_key] = dict(_registered_value)  # mutable-ok: caller-owned
+            _runtime_registered_model_cost[_registered_key] = _update_dictionary(
+                dict(_runtime_registered_model_cost.get(_registered_key, {})),
+                dict(_RATE_TABLE.validate_python(_registered_value)),
+            )
 
     _skip_get_model_info_providers: Final = PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 
@@ -6053,9 +6057,7 @@ def _get_model_info_helper(
                     key, _model_info = generalization
 
             if _model_info is None or key is None:
-                raise ValueError(
-                    "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-                )
+                raise ModelNotMappedError(_model_not_mapped_message(model, custom_llm_provider))
             _input_cost_per_token: float | None = _model_info.get("input_cost_per_token")
             if _input_cost_per_token is None:
                 # default value to 0, be noisy about this
@@ -6272,11 +6274,18 @@ def _get_model_info_helper(
                 if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
                     returned_model_info[cost_key] = cost_value
             return returned_model_info
+    except ModelNotMappedError:
+        raise
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
-        raise Exception(
-            f"This model isn't mapped yet. model={model}, custom_llm_provider={custom_llm_provider}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json."
-        )
+        raise Exception(_model_not_mapped_message(model, custom_llm_provider))
+
+
+def _model_not_mapped_message(model: str, custom_llm_provider: str | None) -> str:
+    return (
+        f"This model isn't mapped yet. model={model}, custom_llm_provider={custom_llm_provider}. "
+        "Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json."
+    )
 
 
 def _build_model_info(

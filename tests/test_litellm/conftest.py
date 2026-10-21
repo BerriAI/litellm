@@ -365,6 +365,7 @@ def isolate_litellm_state():
         model_key: dict(model_value)
         for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
     }
+    original_runtime_registered_fields = dict(litellm_utils_module._runtime_registered_fields)
 
     original_live_routers = set(litellm_router_module._live_routers)
 
@@ -439,6 +440,8 @@ def isolate_litellm_state():
 
     litellm_utils_module._runtime_registered_model_cost.clear()
     litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
+    litellm_utils_module._runtime_registered_fields.clear()
+    litellm_utils_module._runtime_registered_fields.update(original_runtime_registered_fields)
     litellm_utils_module._invalidate_model_cost_lowercase_map()
 
     for _router in tuple(litellm_router_module._live_routers):

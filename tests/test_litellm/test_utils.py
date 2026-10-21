@@ -5872,3 +5872,23 @@ async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: 
 
     assert len(counting_logger.logged_results) == 1, counting_logger.logged_results
     assert counting_logger.logged_results[0] is inner_result
+
+
+@pytest.mark.parametrize(
+    "key", ("openai.test-converse", "bedrock/openai.test-converse", "bedrock/converse/openai.test-converse")
+)
+def test_runtime_model_cost_registrations_resolve_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    from litellm import utils as model_utils
+
+    rates: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    monkeypatch.setattr(
+        litellm, "model_cost", {**litellm.model_cost, key: {"litellm_provider": "bedrock_converse", "mode": "chat"}}
+    )
+    monkeypatch.setattr(model_utils, "_runtime_registered_fields", {})
+    litellm.register_model({key: rates}, persist_across_reloads=False)
+
+    registrations: Final = dict(
+        model_utils.runtime_model_cost_registrations("bedrock/converse/openai.test-converse", "bedrock")
+    )
+    assert registrations[key] == rates
+    assert model_utils.runtime_model_cost_registrations("bedrock/converse/openai.other-converse", "bedrock") == ()

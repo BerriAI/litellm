@@ -38,6 +38,8 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+from typing import Final
+from typing import cast
 
 
 @pytest.fixture
@@ -3714,3 +3716,85 @@ def test_vertex_regional_endpoint_uplift_scales_claude_haiku_5_5_over_100k_rates
 
     assert prompt_cost == pytest.approx((prompt_tokens - cached_tokens) * 5.5e-07 + cached_tokens * 5.5e-08)
     assert completion_cost == pytest.approx(completion_tokens * 2.75e-06)
+
+
+@pytest.mark.parametrize(
+    "field", ("output_cost_per_token", "cache_read_input_token_cost", "cache_creation_input_token_cost")
+)
+def test_flat_input_price_keeps_other_token_thresholds(field: str) -> None:
+    from typing import Final, cast
+    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
+
+    info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "cache_read_input_token_cost": 0.003,
+            "cache_creation_input_token_cost": 0.004,
+            f"{field}_above_300k_tokens": 0.005,
+        },
+    )
+    rates: Final = _get_token_base_cost(
+        model_info=info,
+        usage=Usage(prompt_tokens=300_001, completion_tokens=3, total_tokens=300_004),
+    )
+    assert rates[0] == 0.001
+    assert rates[1] == (0.005 if field == "output_cost_per_token" else 0.002)
+    assert rates[2] == (0.005 if field == "cache_creation_input_token_cost" else 0.004)
+    assert rates[4] == (0.005 if field == "cache_read_input_token_cost" else 0.003)
+
+
+@pytest.mark.parametrize("prompt_tokens", (200_000, 200_001, 512_000, 512_001))
+@pytest.mark.parametrize("higher_rate", (0.0, 0.009))
+def test_mixed_token_thresholds_preserve_each_crossed_rate(prompt_tokens: int, higher_rate: float) -> None:
+    from typing import Final, cast
+    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
+
+    info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "cache_read_input_token_cost": 0.003,
+            "cache_creation_input_token_cost": 0.004,
+            "input_cost_per_token_above_200k_tokens": 0.005,
+            "output_cost_per_token_above_200k_tokens": 0.006,
+            "cache_creation_input_token_cost_above_200k_tokens": 0.007,
+            "cache_read_input_token_cost_above_512k_tokens": higher_rate,
+            "output_cost_per_token_above_512k_tokens": higher_rate,
+        },
+    )
+    rates: Final = _get_token_base_cost(
+        model_info=info,
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=3, total_tokens=prompt_tokens + 3),
+    )
+    assert rates[0] == (0.005 if prompt_tokens > 200_000 else 0.001)
+    assert rates[1] == (higher_rate if prompt_tokens > 512_000 else 0.006 if prompt_tokens > 200_000 else 0.002)
+    assert rates[2] == (0.007 if prompt_tokens > 200_000 else 0.004)
+    assert rates[4] == (higher_rate if prompt_tokens > 512_000 else 0.003)
+
+
+@pytest.mark.parametrize("rate", (0.0, 0.001))
+def test_token_breakdown_uses_supplied_pricing_without_catalog_lookup(rate: float) -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+        "cache_read_input_token_cost": rate,
+        "cache_creation_input_token_cost": rate,
+    }
+    usage: Final = Usage(
+        prompt_tokens=20, completion_tokens=3, total_tokens=23,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=5), cache_creation_input_tokens=5,
+    )
+    prompt_cost, output_cost = generic_cost_per_token(
+        model="supplied-pricing-test", usage=usage, custom_llm_provider="bedrock", model_info=model_info,
+    )
+    breakdown: Final = get_token_type_cost_breakdown(
+        model="supplied-pricing-test", usage=usage, custom_llm_provider="bedrock", model_info=model_info,
+    )
+    assert breakdown.cache_read_cost == pytest.approx(5 * rate)
+    assert breakdown.cache_creation_cost == pytest.approx(5 * rate)
+    assert breakdown.rates is not None
+    assert prompt_cost == pytest.approx(10 * breakdown.rates.input_cost_per_token + breakdown.cache_read_cost + breakdown.cache_creation_cost)
+    assert output_cost == pytest.approx(3 * breakdown.rates.output_cost_per_token)

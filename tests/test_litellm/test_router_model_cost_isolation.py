@@ -727,6 +727,178 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
         _restore_model_cost_entries(model_keys)
 
 
+@pytest.mark.parametrize("service_tier", ("default", "priority", "flex"))
+@pytest.mark.parametrize(
+    "field",
+    ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost", "input_cost_per_token_priority"),
+)
+@pytest.mark.parametrize("rate", (0.0, 0.004))
+@pytest.mark.parametrize("explicit_base", (False, True))
+@pytest.mark.parametrize("provider", (None, "bedrock"))
+@pytest.mark.parametrize("registration_path", ("direct", "startup", "reload"))
+def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    rate: float,
+    explicit_base: bool,
+    provider: str | None,
+    registration_path: str,
+    service_tier: str,
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, Usage, PromptTokensDetailsWrapper
+
+    model: Final = "openai.gpt-5.6-sol"
+    profile: Final = f"us.{model}"
+    base_model: Final = f"global.{model}"
+    profile_prices: Final = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+        "cache_read_input_token_cost": 0.001,
+        "input_cost_per_token_priority": 0.05,
+        "output_cost_per_token_priority": 0.06,
+        "input_cost_per_token_flex": 0.007,
+        "output_cost_per_token_flex": 0.008,
+    }
+    base_prices: Final = {**profile_prices, "input_cost_per_token": 0.03, "output_cost_per_token": 0.04}
+    monkeypatch.setattr(
+        litellm, "model_cost", {**litellm.model_cost, profile: dict(profile_prices), base_model: dict(base_prices)}
+    )
+    deployment: Final = Deployment(
+        model_name="profile-priced",
+        litellm_params=LiteLLM_Params(
+            model=f"converse/{model}" if provider else f"bedrock/converse/{model}",
+            model_id=profile,
+            custom_llm_provider=provider,
+        ),
+        model_info=ModelInfo(
+            **{
+                "id": "profile-priced-deployment",
+                field: rate,
+                **({"base_model": f"bedrock/{base_model}"} if explicit_base else {}),
+            }
+        ),
+    )
+    if registration_path == "direct":
+        Router._register_deployment_pricing(deployment)
+    else:
+        router: Final = Router(model_list=[deployment.to_json(exclude_none=True)])
+        if registration_path == "reload":
+            router._replay_model_cost_registrations()
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=100,
+            completion_tokens=3,
+            total_tokens=103,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=5),
+        ),
+    )
+    catalog: Final = base_prices if explicit_base else profile_prices
+    input_field: Final = "input_cost_per_token" + (f"_{service_tier}" if service_tier != "default" else "")
+    output_field: Final = "output_cost_per_token" + (f"_{service_tier}" if service_tier != "default" else "")
+    input_rate: Final = rate if field == input_field else catalog[input_field]
+    output_rate: Final = rate if field == output_field else catalog[output_field]
+    cache_rate: Final = rate if field == "cache_read_input_token_cost" else 0.001
+    assert completion_cost(
+        model=model,
+        completion_response=response,
+        custom_llm_provider="bedrock",
+        custom_pricing=True,
+        router_model_id="profile-priced-deployment",
+        service_tier=service_tier,
+    ) == pytest.approx(95 * input_rate + 3 * output_rate + 5 * cache_rate)
+    assert litellm.model_cost[profile] == profile_prices
+
+
+@pytest.mark.parametrize("catalog_entry", (None, {"litellm_provider": 1, "mode": "chat"}))
+@pytest.mark.parametrize("known_model", (False, True))
+@pytest.mark.parametrize("explicit_base", (False, True))
+@pytest.mark.parametrize("service_tier", ("default", "priority", "flex"))
+@pytest.mark.parametrize("override", (None, "cache_read_input_token_cost", "input_cost_per_token_priority"))
+@pytest.mark.parametrize("reload", (False, True))
+def test_bedrock_deployment_keeps_custom_prices_when_profile_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    catalog_entry: dict[str, object] | None,
+    known_model: bool,
+    explicit_base: bool,
+    service_tier: str,
+    override: str | None,
+    reload: bool,
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, Usage, PromptTokensDetailsWrapper
+
+    model: Final = "anthropic.unmapped-profile-pricing-test"
+    profile: Final = (
+        "us.anthropic.invalid-profile-pricing-test"
+        if catalog_entry is not None
+        else "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/opaque-test"
+    )
+    configured_prices: Final = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "input_cost_per_token": 0.03,
+        "output_cost_per_token": 0.04,
+        "cache_read_input_token_cost": 0.001,
+        "input_cost_per_token_priority": 0.05,
+        "output_cost_per_token_priority": 0.06,
+        "input_cost_per_token_flex": 0.007,
+        "output_cost_per_token_flex": 0.008,
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            **({model: dict(configured_prices)} if known_model else {}),
+            **({profile: catalog_entry} if catalog_entry is not None else {}),
+        },
+    )
+    deployment: Final = Deployment(
+        model_name="custom-priced",
+        litellm_params=LiteLLM_Params(model=f"bedrock/converse/{model}", model_id=profile),
+        model_info=ModelInfo(
+            id="unmapped-profile-deployment",
+            input_cost_per_token=0.01,
+            output_cost_per_token=0.02,
+            **({override: 0.0} if override else {}),
+            **({"base_model": f"bedrock/{profile}"} if explicit_base else {}),
+        ),
+    )
+    router: Final = Router(model_list=[deployment.to_json(exclude_none=True)])
+    if reload:
+        router._replay_model_cost_registrations()
+    inherit_configured: Final = known_model and not explicit_base
+    tier_rates: Final = inherit_configured and service_tier != "default"
+    input_rate: Final = configured_prices[f"input_cost_per_token_{service_tier}"] if tier_rates else 0.01
+    output_rate: Final = configured_prices[f"output_cost_per_token_{service_tier}"] if tier_rates else 0.02
+    effective_input: Final = 0.0 if override == "input_cost_per_token_priority" and service_tier == "priority" else input_rate
+    cache_rate: Final = 0.0 if override == "cache_read_input_token_cost" else (0.001 if inherit_configured else effective_input)
+    assert completion_cost(
+        model=model,
+        completion_response=ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=100,
+                completion_tokens=3,
+                total_tokens=103,
+                prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=80),
+            ),
+        ),
+        custom_llm_provider="bedrock",
+        custom_pricing=True,
+        router_model_id="unmapped-profile-deployment",
+        service_tier=service_tier,
+    ) == pytest.approx(20 * effective_input + 80 * cache_rate + 3 * output_rate)
+    if known_model:
+        assert {
+            key: value for key, value in litellm.model_cost[model].items() if key in configured_prices
+        } == configured_prices
+
+
 def test_partial_custom_pricing_inherits_builtin_cache_pricing():
     """A deployment that overrides only input/output cost on a cache-supporting
     model must still bill cache_read and cache_creation tokens. Before the
@@ -1737,14 +1909,7 @@ def test_a_reload_rebuilds_exactly_what_a_fresh_boot_registered() -> None:
         )
 
         rebuilt = litellm.model_cost["priced-id"]
-        assert at_boot.items() <= rebuilt.items(), (
-            f"the rebuild changed or dropped a field the boot registration wrote: "
-            f"{ {k: (v, rebuilt.get(k)) for k, v in at_boot.items() if rebuilt.get(k) != v} }"
-        )
-        assert {field: rebuilt[field] for field in set(rebuilt) - set(at_boot)} == {
-            "db_model": False,
-            "member_auto_router": False,
-        }
+        assert at_boot == rebuilt
         assert "member_auto_router" not in litellm.model_cost["gpt-4o"]
         assert router.model_list
     finally:
