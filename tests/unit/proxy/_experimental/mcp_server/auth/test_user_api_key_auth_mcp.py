@@ -12699,14 +12699,18 @@ async def test_personal_key_mcp_access_is_denied_when_owner_teams_cannot_be_read
     [("team-a", {"srv-a", "srv-open"}), ("team-without-mcp", {"srv-open"})],
     ids=["team_grants_one_server", "team_grants_no_server"],
 )
-@pytest.mark.parametrize("is_session_token", [False, True], ids=["virtual_key", "cli_session"])
+@pytest.mark.parametrize(
+    "credential_shape",
+    [{"is_session_token": False}, {"is_session_token": True}, {"api_key": None, "jwt_claims": {"sub": "admin"}}],
+    ids=["virtual_key", "cli_session", "jwt"],
+)
 async def test_admin_owned_team_key_reaches_only_its_team_mcp_servers(
     monkeypatch: pytest.MonkeyPatch,
     personal_key_owner_teams: UserAPIKeyAuth,
     owner_role: LitellmUserRoles,
     key_team_id: str,
     expected_servers: set[str],
-    is_session_token: bool,
+    credential_shape: dict[str, object],
 ) -> None:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
     from litellm.proxy.auth import auth_checks
@@ -12716,7 +12720,7 @@ async def test_admin_owned_team_key_reaches_only_its_team_mcp_servers(
 
     monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
     team_key: Final = personal_key_owner_teams.model_copy(
-        update={"team_id": key_team_id, "user_role": owner_role, "is_session_token": is_session_token}
+        update={"team_id": key_team_id, "user_role": owner_role, **credential_shape}
     )
 
     assert set(await global_mcp_server_manager.get_allowed_mcp_servers(team_key)) == expected_servers

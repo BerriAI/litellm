@@ -1495,20 +1495,30 @@ async def test_concurrent_bridge_calls_use_their_own_served_metadata(monkeypatch
         ProxyLogging._callback_capabilities_cache.clear()
 
 
-def _toolset_gateway_manager(toolset_id: str, server_id: str) -> types.SimpleNamespace:
+TOOLSET_IDS_BY_NAME: Final = {"team-toolset": "ts-granted", "other-toolset": "ts-other"}
+
+
+def _toolset_gateway_manager(server_id: str) -> types.SimpleNamespace:
+    async def toolset_by_name(_prisma_client: object, name: str) -> types.SimpleNamespace:
+        return types.SimpleNamespace(toolset_id=TOOLSET_IDS_BY_NAME[name])
+
     return types.SimpleNamespace(
         catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
         get_allowed_mcp_servers=AsyncMock(return_value=[]),
         get_mcp_servers_from_ids=MagicMock(return_value=[]),
         get_mcp_server_by_name=MagicMock(return_value=None),
-        get_toolset_by_name_cached=AsyncMock(return_value=types.SimpleNamespace(toolset_id=toolset_id)),
+        get_toolset_by_name_cached=AsyncMock(side_effect=toolset_by_name),
         resolve_toolset_tool_permissions=AsyncMock(return_value={server_id: ["add"]}),
+        filter_server_ids_by_ip_with_info=MagicMock(side_effect=lambda server_ids, _client_ip: (server_ids, 0)),
     )
 
 
 async def _tools_listing_kwargs_for_toolset_url(
-    monkeypatch, team_toolset_id: str, owner_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER
+    monkeypatch,
+    team_toolset_id: str,
+    owner_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER,
+    requested_toolsets: tuple[str, ...] = ("team-toolset",),
 ) -> dict[str, object]:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import granted_toolset_ids
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
@@ -1517,7 +1527,7 @@ async def _tools_listing_kwargs_for_toolset_url(
     monkeypatch.setattr("litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers", mock_get_tools)
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-        _toolset_gateway_manager("ts-granted", "srv-1"),
+        _toolset_gateway_manager("srv-1"),
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
 
@@ -1530,7 +1540,9 @@ async def _tools_listing_kwargs_for_toolset_url(
     team_key: Final = UserAPIKeyAuth(api_key="sk-team", team_id="team-1", user_role=owner_role)
     await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
         user_api_key_auth=team_key,
-        mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/team-toolset"}],
+        mcp_tools_with_litellm_proxy=[
+            {"type": "mcp", "server_url": f"litellm_proxy/mcp/{name}"} for name in requested_toolsets
+        ],
         granted_toolsets=granted_through_team,
     )
     assert mock_get_tools.await_args is not None
@@ -1553,14 +1565,52 @@ async def test_toolset_gateway_url_scopes_a_team_granted_toolset_for_a_key_witho
     [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
     ids=["internal_user", "proxy_admin", "proxy_admin_viewer"],
 )
-async def test_toolset_gateway_url_lists_nothing_beyond_a_toolset_the_team_does_not_grant(
+async def test_toolset_gateway_url_answers_403_for_a_toolset_the_team_does_not_grant(
     monkeypatch: pytest.MonkeyPatch, owner_role: LitellmUserRoles
 ):
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import granted_toolset_ids
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    manager: Final = _toolset_gateway_manager("srv-1")
+    monkeypatch.setattr("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+    async def team_permission(context: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable:
+        return LiteLLM_ObjectPermissionTable(object_permission_id="op-team", mcp_toolsets=["ts-other"])
+
+    async def granted_through_team(context: UserAPIKeyAuth) -> frozenset[str]:
+        return await granted_toolset_ids(context, team_object_permission=team_permission, require_key_access=False)
+
+    with pytest.raises(HTTPException) as denial:
+        await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-team", team_id="team-1", user_role=owner_role),
+            mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/team-toolset"}],
+            granted_toolsets=granted_through_team,
+        )
+    assert denial.value.status_code == 403
+    assert "team-toolset" in str(denial.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_toolsets",
+    [("team-toolset", "other-toolset"), ("other-toolset", "team-toolset")],
+    ids=["granted_first", "denied_first"],
+)
+async def test_a_denied_toolset_beside_a_granted_one_adds_nothing_to_the_scoped_key(
+    monkeypatch: pytest.MonkeyPatch, requested_toolsets: tuple[str, ...]
+):
     kwargs: Final = await _tools_listing_kwargs_for_toolset_url(
-        monkeypatch, team_toolset_id="ts-other", owner_role=owner_role
+        monkeypatch,
+        team_toolset_id="ts-granted",
+        owner_role=LitellmUserRoles.PROXY_ADMIN,
+        requested_toolsets=requested_toolsets,
     )
-    assert kwargs["user_api_key_auth"].object_permission is None
-    assert kwargs["mcp_servers"] == ["team-toolset"]
+    scoped = kwargs["user_api_key_auth"].object_permission
+    assert scoped is not None
+    assert scoped.mcp_servers == ["srv-1"]
+    assert scoped.mcp_tool_permissions == {"srv-1": ["add"]}
 
 
 @pytest.mark.asyncio
