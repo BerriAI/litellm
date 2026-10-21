@@ -13993,6 +13993,23 @@ def _token_count_settings_model(deployment: _TokenCountDeployment, request_model
     return model, _non_empty_str(params.get("custom_llm_provider"))
 
 
+def _unreliable_estimate_provider_model(
+    deployment: _TokenCountDeployment, request_model: str
+) -> tuple[str, str | None]:
+    settings_model: Final = _token_count_settings_model(deployment, request_model)
+    if settings_model[1] is not None:
+        return settings_model
+    params: Final = deployment.get("litellm_params", {})
+    deployment_model: Final = _non_empty_str(params.get("model"))
+    if deployment_model is None:
+        return settings_model[0], None
+    try:
+        resolved: Final = litellm.get_llm_provider(model=deployment_model)
+    except litellm.exceptions.BadRequestError:
+        return settings_model[0], None
+    return resolved[0], resolved[1]
+
+
 _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
     {litellm.LlmProviders.GEMINI.value, litellm.LlmProviders.VERTEX_AI.value}
 )
@@ -14113,9 +14130,14 @@ async def count_request_tokens(
         return ladder
 
     if call_endpoint is True:
+        estimate_provider_model: Final = (
+            _unreliable_estimate_provider_model(deployment_view, request.model)
+            if custom_llm_provider is None
+            else (model_to_use, custom_llm_provider)
+        )
         unreliable_reason: Final = unreliable_local_estimate(
-            custom_llm_provider=custom_llm_provider,
-            model=model_to_use,
+            custom_llm_provider=estimate_provider_model[1],
+            model=estimate_provider_model[0],
             messages=messages,
             tools=tools,
         )

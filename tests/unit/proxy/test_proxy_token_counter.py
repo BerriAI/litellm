@@ -2722,19 +2722,46 @@ def test_unreliable_local_estimate_detects_nested_document_content(
     assert reason == expected
 
 
+_BEDROCK_COUNT_TOKENS_URL: Final = r"^https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/.+/count-tokens$"
+
+
 @pytest.mark.parametrize(
     ("resolved_model", "messages", "tools", "call_endpoint", "reject"),
     [
-        ("bedrock/meta.llama4-maverick", [{"role": "user", "content": [{"type": "document"}]}], None, True, True),
-        ("bedrock/meta.llama4-maverick", [{"role": "user", "content": "text"}], None, True, False),
-        ("bedrock/us.amazon.nova-2-lite", [{"role": "user", "content": "text"}], [{"name": "search"}], True, True),
-        ("bedrock/us.amazon.nova-2-lite", [{"role": "user", "content": "text"}], None, True, False),
+        (
+            "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0",
+            [{"role": "user", "content": [{"type": "document"}]}],
+            None,
+            True,
+            True,
+        ),
+        (
+            "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0",
+            [{"role": "user", "content": "text"}],
+            None,
+            True,
+            False,
+        ),
+        (
+            "bedrock/us.amazon.nova-2-lite-v1:0",
+            [{"role": "user", "content": "text"}],
+            [{"name": "search"}],
+            True,
+            True,
+        ),
+        (
+            "bedrock/us.amazon.nova-2-lite-v1:0",
+            [{"role": "user", "content": "text"}],
+            None,
+            True,
+            False,
+        ),
         ("azure_ai/deepseek-v4-pro", [{"role": "user", "content": "text"}], [{"name": "search"}], True, True),
         ("azure_ai/deepseek-v4-pro", [{"role": "user", "content": "text"}], None, True, False),
         ("azure_ai/grok-4-1-fast-reasoning", [{"role": "user", "content": "text"}], None, True, True),
         ("azure_ai/grok-4-1-fast-reasoning", [{"role": "user", "content": "text"}], [{"name": "search"}], True, False),
         (
-            "bedrock/meta.llama4-maverick",
+            "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0",
             [
                 {
                     "role": "user",
@@ -2766,21 +2793,30 @@ async def test_count_request_tokens_rejects_only_known_unreliable_estimates(
     call_endpoint: bool,
     reject: bool,
 ) -> None:
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "count-target",
-                "litellm_params": {"model": resolved_model, "api_key": "test-key", "api_base": "https://count.test"},
-            }
-        ]
+    is_bedrock: Final = resolved_model.startswith("bedrock/")
+    litellm_params: Final = (
+        {
+            "model": resolved_model,
+            "aws_access_key_id": "AKIATESTACCESSKEY",
+            "aws_secret_access_key": "test-secret",
+            "aws_region_name": "us-east-1",
+        }
+        if is_bedrock
+        else {"model": resolved_model, "api_key": "test-key", "api_base": "https://count.test"}
     )
+    router: Final = Router(model_list=[{"model_name": "count-target", "litellm_params": litellm_params}])
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    failure: Final = ProviderCountFailure(status_code=400, message="unsupported")
-    with patch.object(
-        proxy_server,
-        "_provider_token_count",
-        new=AsyncMock(return_value=failure),
-    ):
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+    should_count_with_provider: Final = is_bedrock and call_endpoint
+
+    with respx.mock(assert_all_called=should_count_with_provider) as upstream:
+        upstream.post(url__regex=_BEDROCK_COUNT_TOKENS_URL).mock(
+            return_value=httpx.Response(400, json={"message": "CountTokens rejected request"})
+        )
         if reject:
             with pytest.raises(ProxyException) as raised:
                 await count_request_tokens(
@@ -2813,28 +2849,34 @@ async def test_unreliable_document_estimate_preserves_transient_provider_errors(
     expected_type: str,
     expected_message: str,
 ) -> None:
+    model: Final = "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0"
     router: Final = Router(
         model_list=[
             {
                 "model_name": "count-target",
                 "litellm_params": {
-                    "model": "bedrock/meta.llama4-maverick",
-                    "api_key": "test-key",
-                    "api_base": "https://count.test",
+                    "model": model,
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-east-1",
                 },
             }
         ]
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    failure: Final = ProviderCountFailure(
-        status_code=status_code,
-        message=f"Provider count failed with {status_code}",
-    )
-    with patch.object(
-        proxy_server,
-        "_provider_token_count",
-        new=AsyncMock(return_value=failure),
-    ):
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(url__regex=_BEDROCK_COUNT_TOKENS_URL).mock(
+            return_value=httpx.Response(
+                status_code,
+                json={"message": f"Provider count failed with {status_code}"},
+            )
+        )
         with pytest.raises(ProxyException) as raised:
             await count_request_tokens(
                 request=TokenCountRequest(
@@ -2868,25 +2910,31 @@ async def test_unreliable_document_estimate_preserves_transient_provider_errors(
 async def test_count_request_tokens_rejects_nested_document_after_provider_count_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    model: Final = "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0"
     router: Final = Router(
         model_list=[
             {
                 "model_name": "count-target",
                 "litellm_params": {
-                    "model": "bedrock/meta.llama4-maverick",
-                    "api_key": "test-key",
-                    "api_base": "https://count.test",
+                    "model": model,
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-east-1",
                 },
             }
         ]
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    failure: Final = ProviderCountFailure(status_code=400, message="Runtime count rejected the document")
-    with patch.object(
-        proxy_server,
-        "_provider_token_count",
-        new=AsyncMock(return_value=failure),
-    ):
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(url__regex=_BEDROCK_COUNT_TOKENS_URL).mock(
+            return_value=httpx.Response(400, json={"message": "Runtime count rejected the document"})
+        )
         with pytest.raises(ProxyException) as raised:
             await count_request_tokens(
                 request=TokenCountRequest(
@@ -2956,31 +3004,31 @@ async def test_azure_ai_estimate_guard_runs_without_a_provider_counter(monkeypat
 
 @pytest.mark.asyncio
 async def test_document_block_keeps_successful_provider_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "bedrock/us.anthropic.claude-sonnet-4-6"
     router: Final = Router(
         model_list=[
             {
                 "model_name": "count-target",
                 "litellm_params": {
-                    "model": "bedrock/us.anthropic.claude-sonnet-4-6",
-                    "api_key": "test-key",
-                    "api_base": "https://count.test",
+                    "model": model,
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-east-1",
                 },
             }
         ]
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    provider_result: Final = TokenCountResponse(
-        total_tokens=17,
-        request_model="count-target",
-        model_used="anthropic.claude-sonnet-4-6",
-        tokenizer_type="openai_tokenizer",
-        count_source="provider",
-    )
-    with patch.object(
-        proxy_server,
-        "_provider_token_count",
-        new=AsyncMock(return_value=provider_result),
-    ):
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(url__regex=_BEDROCK_COUNT_TOKENS_URL).mock(
+            return_value=httpx.Response(200, json={"inputTokens": 17})
+        )
         result: Final = await count_request_tokens(
             request=TokenCountRequest(
                 model="count-target",
@@ -3004,4 +3052,63 @@ async def test_document_block_keeps_successful_provider_count(monkeypatch: pytes
             messages_format="anthropic",
         )
 
-    assert result is provider_result
+    assert result.total_tokens == 17
+    assert result.count_source == "provider"
+
+
+@pytest.mark.asyncio
+async def test_unreliable_estimate_uses_deployment_model_during_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "nova-count-target",
+                "litellm_params": {
+                    "model": "bedrock/us.amazon.nova-2-lite-v1:0",
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": {"id": "nova-cooldown-deployment"},
+            }
+        ]
+    )
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="nova-cooldown-deployment",
+        original_exception=Exception("rate limited"),
+        exception_status=429,
+        cooldown_time=60,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post(url__regex=_BEDROCK_COUNT_TOKENS_URL).mock(
+            return_value=httpx.Response(200, json={"inputTokens": 17})
+        )
+        with pytest.raises(ProxyException) as raised:
+            await count_request_tokens(
+                request=TokenCountRequest(
+                    model="nova-count-target",
+                    messages=[{"role": "user", "content": "Find a record."}],
+                    tools=[{"name": "search"}],
+                ),
+                call_endpoint=True,
+                messages_format="anthropic",
+            )
+        local: Final = await count_request_tokens(
+            request=TokenCountRequest(
+                model="nova-count-target",
+                messages=[{"role": "user", "content": "Find a record."}],
+            ),
+            call_endpoint=True,
+            messages_format="anthropic",
+        )
+
+    assert raised.value.code == "400"
+    assert local.count_source == "local_estimate"
