@@ -16,6 +16,7 @@ from litellm.repositories.daily_activity_sql import (
     build_key_page_sql,
     build_key_search_sql,
     build_model_top_keys_sql,
+    build_tag_page_sql,
     build_user_page_sql,
     build_where_clause,
 )
@@ -112,27 +113,6 @@ def test_where_clause_distinguishes_no_filter_from_empty_membership(
     assert params == expected_params
 
 
-def test_where_clause_scopes_tag_rows_to_one_team_without_user_agent_tags() -> None:
-    scope = replace(
-        _scope(table=DailyActivityTable.TAG, entity_ids=None, api_keys=("key-1",), model="gpt-test"),
-        team_id="team-a",
-    )
-
-    sql, params = build_where_clause(scope)
-
-    assert sql == (
-        "date >= $1 AND date <= $2 AND model = $3 AND api_key = ANY($4::text[]) AND team_id = $5 "
-        "AND NOT (LOWER(BTRIM(tag)) LIKE 'user-agent:%' OR LOWER(BTRIM(tag)) LIKE 'user agent:%')"
-    )
-    assert params == ("2026-01-01", "2026-01-31", "gpt-test", ["key-1"], "team-a")
-
-
-@pytest.mark.parametrize("table", [table for table in DailyActivityTable if table is not DailyActivityTable.TAG])
-def test_scope_rejects_a_team_id_on_any_table_but_the_tag_table(table: DailyActivityTable) -> None:
-    with pytest.raises(ValueError, match="team_id applies only to litellm_dailytagspend"):
-        replace(_scope(table=table), team_id="team-a")
-
-
 def test_key_page_sql_orders_exact_spend_and_binds_scope_before_page() -> None:
     query = build_key_page_sql(_scope(), offset=7, limit=3)
 
@@ -160,6 +140,51 @@ def test_key_page_sql_orders_exact_spend_and_binds_scope_before_page() -> None:
 def test_key_page_sql_rejects_invalid_page_bounds(offset: int, limit: int, error: str) -> None:
     with pytest.raises(ValueError, match=error):
         build_key_page_sql(_scope(), offset=offset, limit=limit)
+
+
+def test_tag_page_sql_scopes_to_team_excludes_user_agents_and_orders_tags() -> None:
+    query: Final = build_tag_page_sql(
+        _scope(table=DailyActivityTable.TEAM, entity_ids=("team-a",), api_keys=("key-1",), model="gpt-test"),
+        team_id="team-a",
+        offset=7,
+        limit=3,
+    )
+
+    assert query.params == (
+        "2026-01-01",
+        "2026-01-31",
+        "gpt-test",
+        ["key-1"],
+        "team-a",
+        PTU_SENTINEL_API_KEY,
+        3,
+        7,
+    )
+    assert 'FROM "LiteLLM_DailyTagSpend"' in query.sql
+    assert "team_id = $5" in query.sql
+    assert "api_key = ANY($4::text[])" in query.sql
+    assert "tag IS NOT NULL" in query.sql
+    assert "api_key <> $6" in query.sql
+    assert "NOT (LOWER(BTRIM(tag)) LIKE 'user-agent:%' OR LOWER(BTRIM(tag)) LIKE 'user agent:%')" in query.sql
+    assert "GROUP BY tag" in query.sql
+    assert "SUM(spend::numeric) AS rank_spend" in query.sql
+    assert "ORDER BY rank_spend DESC, tag ASC" in query.sql
+    assert "(SELECT COUNT(*) FROM ranked)::bigint AS total_tags" in query.sql
+    assert "LIMIT $7 OFFSET $8" in query.sql
+    assert '"tag" = ANY' not in query.sql
+
+
+@pytest.mark.parametrize(
+    ("offset", "limit", "error"),
+    (
+        (0, 0, "limit must be between"),
+        (0, constants.USAGE_TAG_PAGE_MAX + 1, "limit must be between"),
+        (-1, 1, "offset must be non-negative"),
+    ),
+)
+def test_tag_page_sql_rejects_invalid_page_bounds(offset: int, limit: int, error: str) -> None:
+    with pytest.raises(ValueError, match=error):
+        build_tag_page_sql(_scope(table=DailyActivityTable.TEAM), team_id="team-a", offset=offset, limit=limit)
 
 
 def test_user_page_sql_groups_by_user_id_with_deterministic_spend_order() -> None:

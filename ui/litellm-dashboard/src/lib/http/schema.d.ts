@@ -16631,6 +16631,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/daily/activity/aggregated/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Team Daily Activity Aggregated Tags */
+        get: operations["get_team_daily_activity_aggregated_tags_team_daily_activity_aggregated_tags_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/daily/activity/export": {
         parameters: {
             query?: never;
@@ -31256,6 +31273,17 @@ export interface components {
             /** Api Keys */
             api_keys: components["schemas"]["KeyActivityRow"][];
         };
+        /** DailyActivityTagPageResponse */
+        DailyActivityTagPageResponse: {
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Tags */
+            tags: components["schemas"]["TagSpendRow"][];
+            /** Total Tags */
+            total_tags: number;
+        };
         /** DailyActivityUserPageResponse */
         DailyActivityUserPageResponse: {
             /** Limit */
@@ -45853,6 +45881,29 @@ export interface components {
             soft_budget?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
+        };
+        /** TagSpendRow */
+        TagSpendRow: {
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Creation Input Tokens */
+            cache_creation_input_tokens: number;
+            /** Cache Read Input Tokens */
+            cache_read_input_tokens: number;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+            /** Tag */
+            tag: string;
+            /** Total Tokens */
+            total_tokens: number;
         };
         /**
          * TagSummaryMetrics
@@ -72862,7 +72913,6 @@ export interface operations {
                 api_key?: string | null;
                 exclude_team_ids?: string | null;
                 timezone?: number | null;
-                group_by?: "team" | "tag";
             };
             header?: never;
             path?: never;
@@ -72902,7 +72952,6 @@ export interface operations {
                 api_key?: string | null;
                 exclude_team_ids?: string | null;
                 timezone?: number | null;
-                group_by?: "team" | "tag";
             };
             header?: never;
             path?: never;
@@ -72943,7 +72992,6 @@ export interface operations {
                 api_key?: string | null;
                 exclude_team_ids?: string | null;
                 timezone?: number | null;
-                group_by?: "team" | "tag";
             };
             header?: never;
             path?: never;
@@ -72983,7 +73031,6 @@ export interface operations {
                 api_key?: string | null;
                 exclude_team_ids?: string | null;
                 timezone?: number | null;
-                group_by?: "team" | "tag";
             };
             header?: never;
             path?: never;
@@ -73011,6 +73058,45 @@ export interface operations {
             };
         };
     };
+    get_team_daily_activity_aggregated_tags_team_daily_activity_aggregated_tags_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityTagPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_team_daily_activity_export_team_daily_activity_export_get: {
         parameters: {
             query?: {
@@ -73023,7 +73109,6 @@ export interface operations {
                 api_key?: string | null;
                 exclude_team_ids?: string | null;
                 timezone?: number | null;
-                group_by?: "team" | "tag";
             };
             header?: never;
             path?: never;

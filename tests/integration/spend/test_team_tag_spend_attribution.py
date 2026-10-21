@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, eventually, object_value
+from integration._support.client import Gateway, eventually, list_value, object_value
 from integration._support.database import read_rows
 
 _SPEND_PER_CALL: Final = 20 * 0.001 + 20 * 0.002
@@ -22,29 +22,30 @@ def _tagged_chat(gateway: Gateway, model: str, key: str, tags: list[str]) -> Non
     assert reply["usage"]["total_tokens"] == 40, reply
 
 
-def _tag_breakdown(gateway: Gateway, team: str, *, key: str | None = None) -> dict[str, tuple[float, int]]:
-    """The team's per-tag (spend, requests) from /team/daily/activity/aggregated?group_by=tag."""
+def _tag_page(
+    gateway: Gateway,
+    team: str,
+    *,
+    offset: int = 0,
+    limit: int = 50,
+    key: str | None = None,
+) -> dict[str, object]:
     today: Final = datetime.now(timezone.utc)
     response: Final = gateway.request(
         "GET",
-        "/team/daily/activity/aggregated",
+        "/team/daily/activity/aggregated/tags",
         params={
             "team_ids": team,
-            "group_by": "tag",
             "start_date": (today - timedelta(days=1)).strftime("%Y-%m-%d"),
             "end_date": (today + timedelta(days=1)).strftime("%Y-%m-%d"),
             "timezone": "0",
+            "offset": offset,
+            "limit": limit,
         },
         key=key,
     )
     assert response.status_code == 200, response.text
-    totals: dict[str, tuple[float, int]] = {}
-    for day in object_value(response.json())["results"]:
-        for tag, bucket in object_value(object_value(object_value(day)["breakdown"])["entities"]).items():
-            metrics = object_value(object_value(bucket)["metrics"])
-            spend, requests = totals.get(tag, (0.0, 0))
-            totals[tag] = (spend + float(metrics["spend"]), requests + int(metrics["api_requests"]))
-    return totals
+    return object_value(response.json())
 
 
 def test_one_key_moved_between_teams_records_its_tag_once_per_team(gateway: Gateway) -> None:
@@ -84,7 +85,7 @@ def test_one_key_moved_between_teams_records_its_tag_once_per_team(gateway: Gate
             assert float(row["spend"]) == pytest.approx(calls_per_team[row["team_id"]] * _SPEND_PER_CALL), rows
 
 
-def test_group_by_tag_reports_one_teams_spend_per_tag(gateway: Gateway) -> None:
+def test_tag_page_reports_one_teams_spend_per_tag(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         shared: Final = f"cost-center:{uuid.uuid4().hex}"
@@ -93,23 +94,36 @@ def test_group_by_tag_reports_one_teams_spend_per_tag(gateway: Gateway) -> None:
         other_team: Final = scenario.team(models=[model])
         key: Final = scenario.key(team_id=team, models=[model])
         other_key: Final = scenario.key(team_id=other_team, models=[model])
+        no_team_key: Final = scenario.key(models=[model])
+        no_team_tag: Final = f"unassigned:{uuid.uuid4().hex}"
         _tagged_chat(gateway, model, key, [shared, own, "User-Agent: integration/1.0"])
         _tagged_chat(gateway, model, key, [shared])
         _tagged_chat(gateway, model, other_key, [shared])
+        _tagged_chat(gateway, model, no_team_key, [no_team_tag])
         eventually(
-            lambda: read_rows('SELECT api_requests FROM "LiteLLM_DailyTagSpend" WHERE tag IN (%s, %s)', (shared, own)),
-            lambda values: sum(int(row["api_requests"]) for row in values) == 4,
+            lambda: read_rows(
+                'SELECT api_requests FROM "LiteLLM_DailyTagSpend" WHERE tag IN (%s, %s, %s)',
+                (shared, own, no_team_tag),
+            ),
+            lambda values: sum(int(row["api_requests"]) for row in values) == 5,
             seconds=70,
         )
 
-        breakdown: Final = _tag_breakdown(gateway, team)
+        first_page: Final = _tag_page(gateway, team, limit=1)
+        next_page: Final = _tag_page(gateway, team, offset=1, limit=1)
+        assert first_page["total_tags"] == 2
+        assert next_page["total_tags"] == 2
+        first_tag: Final = object_value(list_value(first_page["tags"])[0])
+        next_tag: Final = object_value(list_value(next_page["tags"])[0])
+        assert first_tag["tag"] == shared
+        assert first_tag["spend"] == pytest.approx(2 * _SPEND_PER_CALL)
+        assert first_tag["api_requests"] == 2
+        assert next_tag["tag"] == own
+        assert next_tag["spend"] == pytest.approx(_SPEND_PER_CALL)
+        assert next_tag["api_requests"] == 1
 
-        assert set(breakdown) == {shared, own}, breakdown
-        assert breakdown[shared] == (pytest.approx(2 * _SPEND_PER_CALL), 2), breakdown
-        assert breakdown[own] == (pytest.approx(1 * _SPEND_PER_CALL), 1), breakdown
 
-
-def test_group_by_tag_keeps_the_team_routes_member_permissions(gateway: Gateway) -> None:
+def test_tag_page_keeps_the_team_routes_member_permissions(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         tag: Final = f"cost-center:{uuid.uuid4().hex}"
@@ -126,11 +140,15 @@ def test_group_by_tag_keeps_the_team_routes_member_permissions(gateway: Gateway)
             seconds=70,
         )
 
-        assert _tag_breakdown(gateway, team, key=member_key) == {tag: (pytest.approx(_SPEND_PER_CALL), 1)}
+        member_page: Final = _tag_page(gateway, team, key=member_key)
+        assert member_page["total_tags"] == 1
+        member_tag: Final = object_value(list_value(member_page["tags"])[0])
+        assert member_tag["tag"] == tag
+        assert member_tag["api_requests"] == 1
         denied: Final = gateway.request(
             "GET",
-            "/team/daily/activity/aggregated",
-            params={"team_ids": other_team, "group_by": "tag", "start_date": "2026-01-01", "end_date": "2026-01-02"},
+            "/team/daily/activity/aggregated/tags",
+            params={"team_ids": other_team, "start_date": "2026-01-01", "end_date": "2026-01-02"},
             key=member_key,
         )
         assert denied.status_code == 404, denied.text
