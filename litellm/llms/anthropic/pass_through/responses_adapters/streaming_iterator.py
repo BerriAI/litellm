@@ -3,7 +3,7 @@
 import asyncio
 import json
 from collections import deque
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncGenerator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import ConfigDict, field_validator
@@ -20,7 +20,10 @@ from litellm.llms.anthropic.pass_through.messages.utils import (
     refusal_stop_details,
     responses_output_refusal_text,
 )
-from litellm.responses.streaming_iterator import stream_error_status_and_message
+from litellm.responses.streaming_iterator import (
+    partial_responses_incomplete_event_on_disconnect,
+    stream_error_status_and_message,
+)
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -31,6 +34,7 @@ from .transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.types.llms.openai import ResponseIncompleteEvent
 
 
 class _UpstreamFailure(LiteLLMBaseModel):
@@ -484,8 +488,11 @@ class AnthropicResponsesStreamWrapper:
 
         raise StopAsyncIteration
 
-    async def async_anthropic_sse_wrapper(self) -> AsyncIterator[bytes]:
-        """Yield SSE-encoded bytes for each Anthropic event chunk."""
+    def async_anthropic_sse_wrapper(self) -> "AnthropicResponsesSSEByteStream":
+        """SSE-encoded bytes for each Anthropic event chunk."""
+        return AnthropicResponsesSSEByteStream(self)
+
+    async def _sse_frames(self) -> AsyncGenerator[bytes, None]:
         async for chunk in self:
             if isinstance(chunk, dict):
                 event_type: str = str(chunk.get("type", "message"))
@@ -493,3 +500,30 @@ class AnthropicResponsesStreamWrapper:
                 yield payload.encode()
             else:
                 yield chunk
+
+    def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
+        return partial_responses_incomplete_event_on_disconnect(self.responses_stream)
+
+
+class AnthropicResponsesSSEByteStream:
+    """
+    The byte stream the proxy relays for a default-route /v1/messages request.
+    Keeps the Responses API iterator reachable so a client disconnect can bill
+    the partial output the way native /v1/responses streams do.
+    """
+
+    def __init__(self, wrapper: AnthropicResponsesStreamWrapper) -> None:
+        self._wrapper: Final = wrapper
+        self._frames: Final = wrapper._sse_frames()  # pyright: ignore[reportPrivateUsage]  # the wrapper's own byte stream
+
+    def __aiter__(self) -> "AnthropicResponsesSSEByteStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        return await self._frames.__anext__()
+
+    async def aclose(self) -> None:
+        await self._frames.aclose()
+
+    def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
+        return self._wrapper.partial_response_on_disconnect()
