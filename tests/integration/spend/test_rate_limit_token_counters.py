@@ -7,17 +7,22 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from hashlib import sha256
+from pathlib import Path
 from typing import Final
 
 import anthropic
 import httpx
 import openai
 import pytest
-from integration._support.client import Gateway, Scenario, eventually, held
+import yaml
+from integration._support.client import Gateway, Scenario, eventually, held, object_value
 from integration._support.openai_wire import chat_reply, responses_reply
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 from redis import Redis
+
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 
 USAGE: Final = {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}
 WIRE_TOTAL_TOKENS: Final = 8
@@ -316,7 +321,7 @@ def test_every_endpoint_charges_only_the_rate_limited_scope(gateway: Gateway, en
         assert_only_charged(cache, identity.scopes, {"api_key"}, WIRE_TOTAL_TOKENS)
 
 
-def test_fallback_hop_charges_the_rate_limited_model_it_served(gateway: Gateway) -> None:
+def test_fallback_hop_charges_the_open_window_of_the_rate_limited_model_it_served(gateway: Gateway) -> None:
     prompt: Final = f"token counters fallback {uuid.uuid4().hex}"
     with (
         wire_server(outage) as primary_upstream,
@@ -332,11 +337,13 @@ def test_fallback_hop_charges_the_rate_limited_model_it_served(gateway: Gateway)
             key=lambda _model: {"model_tpm_limit": {fallback: 100000}},
         )
         identity: Final = caller(scenario, cell, fallback)
+        direct: Final = chat(gateway, identity, fallback, prompt + " direct")
+        assert direct.status_code == 200, direct.text
         response: Final = chat(gateway, identity, primary, prompt, fallbacks=[fallback])
         assert response.status_code == 200, response.text
         assert response.headers["x-litellm-model-group"] == fallback
         assert len(primary_upstream.drain()) == 1
-        assert len(fallback_upstream.drain()) == 1
+        assert len(fallback_upstream.drain()) == 2
 
         hashed: Final = sha256(identity.key.encode()).hexdigest()
         scopes: Final = {
@@ -346,7 +353,7 @@ def test_fallback_hop_charges_the_rate_limited_model_it_served(gateway: Gateway)
             cache,
             {**scopes, "primary_model_per_key": counter("model_per_key", f"{hashed}:{primary}")},
             {"model_per_key"},
-            USAGE["total_tokens"],
+            2 * USAGE["total_tokens"],
         )
 
 
@@ -419,4 +426,104 @@ def test_upstream_outage_charges_no_token_counter(gateway: Gateway) -> None:
             lambda: read_counters(cache, identity.scopes),
             lambda values: set(values.values()) == {None},
             holding=3,
+        )
+
+
+def test_numeric_body_user_is_charged_to_its_rate_limited_end_user_counter(gateway: Gateway) -> None:
+    customer: Final = uuid.uuid4().int % 10**15
+    with wire_server(completion) as upstream, gateway.scenario() as scenario, redis_counters() as cache:
+        model: Final = scenario.model(api_base=upstream.url + "/v1")
+        gateway.post("/customer/new", {"user_id": str(customer), "rpm_limit": 1000})
+        scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [str(customer)]})
+        identity: Final = replace(
+            caller(scenario, Cell("numeric_end_user", charged="end_user"), model), body={"user": customer}
+        )
+        response: Final = chat(gateway, identity, model, f"token counters numeric user {uuid.uuid4().hex}")
+        assert response.status_code == 200, response.text
+        assert [json.loads(seen.body)["user"] for seen in upstream.drain()] == [customer]
+
+        assert_only_charged(
+            cache,
+            {**identity.scopes, "end_user": counter("end_user", str(customer))},
+            {"end_user"},
+            USAGE["total_tokens"],
+        )
+
+
+USER_HEADER: Final = "x-integration-openwebui-user"
+
+
+def proxy_admin(scenario: Scenario, tpm_limit: int) -> str:
+    return scenario.user(user_id=LITELLM_PROXY_ADMIN_NAME, user_role="proxy_admin", tpm_limit=tpm_limit)
+
+
+def internal_user(scenario: Scenario, tpm_limit: int) -> str:
+    return scenario.user(user_role="internal_user", tpm_limit=tpm_limit)
+
+
+def master_key_request(scenario: Scenario, _user: str, body: Mapping[str, JsonValue]) -> httpx.Response:
+    return scenario.gateway.request("POST", "/v1/chat/completions", body)
+
+
+def header_mapped_service_key_request(
+    scenario: Scenario, user: str, body: Mapping[str, JsonValue]
+) -> httpx.Response:
+    return scenario.gateway.request(
+        "POST", "/v1/chat/completions", body, key=scenario.key(), headers={USER_HEADER: user}
+    )
+
+
+def config_with_user_header_mapping(directory: Path) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["general_settings"] = {
+        **object_value(config["general_settings"]),
+        "user_header_mappings": [{"header_name": USER_HEADER, "litellm_user_role": "internal_user"}],
+    }
+    path: Final = directory / "config.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+@pytest.mark.parametrize(
+    "limited_user, unchecked_request",
+    [(proxy_admin, master_key_request), (internal_user, header_mapped_service_key_request)],
+    ids=["master_key", "user_header_mapping"],
+)
+def test_unchecked_traffic_counts_toward_the_user_limit_another_request_opened(
+    gateway: Gateway,
+    tmp_path: Path,
+    limited_user: Callable[[Scenario, int], str],
+    unchecked_request: Callable[[Scenario, str, Mapping[str, JsonValue]], httpx.Response],
+) -> None:
+    redis_state: Final = {"REDIS_HOST": os.environ["REDIS_HOST"], "REDIS_PORT": os.environ["REDIS_PORT"]}
+    with (
+        wire_server(completion) as upstream,
+        owned_proxy(gateway, tmp_path, redis_state, config=config_with_user_header_mapping(tmp_path)) as candidate,
+        candidate.scenario() as scenario,
+        redis_counters() as cache,
+    ):
+        model: Final = scenario.model(api_base=upstream.url + "/v1")
+        user: Final = limited_user(scenario, 100000)
+        user_counter: Final = {"user": counter("user", user)}
+        cache.delete(counter("user", user), f"{{user:{user}}}:window")
+
+        checked: Final = candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": f"checked {uuid.uuid4().hex}"}]},
+            key=scenario.key(user_id=user),
+        )
+        assert checked.status_code == 200, checked.text
+        eventually(lambda: read_counters(cache, user_counter)["user"], lambda tokens: tokens == USAGE["total_tokens"])
+
+        unchecked: Final = unchecked_request(
+            scenario, user, {"model": model, "messages": [{"role": "user", "content": f"unchecked {uuid.uuid4().hex}"}]}
+        )
+        assert unchecked.status_code == 200, unchecked.text
+        assert len(upstream.drain()) == 2
+
+        eventually(
+            lambda: read_counters(cache, user_counter)["user"],
+            lambda tokens: tokens == 2 * USAGE["total_tokens"],
+            seconds=30,
         )
