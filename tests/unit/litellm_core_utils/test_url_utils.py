@@ -1,6 +1,8 @@
 import asyncio
 import socket
 import threading
+from collections.abc import Callable
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -587,7 +589,6 @@ async def test_async_safe_get_resolves_dns_off_the_event_loop(monkeypatch):
         ("https://api.test/v1/evals/cancel", "cancel", "https://api.test/v1/evals/cancel/cancel"),
         ("http://embeddings", "embeddings", "http://embeddings/embeddings"),
         ("http:/", "v1/files", "http://v1/files"),
-        ("https://", "v1/files", "https://v1/files"),
         ("https://gw.test/p/?x=1", "v1/messages", "https://gw.test/p?x=1/v1/messages"),
     ],
     ids=(
@@ -600,7 +601,6 @@ async def test_async_safe_get_resolves_dns_off_the_event_loop(monkeypatch):
         "id-equal-to-the-route",
         "host-named-like-the-route",
         "host-stripped-as-a-suffix-leaves-only-the-scheme",
-        "bare-scheme-base",
         "slash-before-the-query-matches-the-base-without-it",
     ),
 )
@@ -608,6 +608,15 @@ def test_join_api_base_always_appends_the_route_after_exactly_one_slash(
     api_base: str, route: str, expected: str
 ) -> None:
     assert join_api_base(api_base, route) == expected
+
+
+@pytest.mark.parametrize("api_base", ["https://", "http://", "https:///"])
+@pytest.mark.parametrize("route", ["v1/messages", "models/gemini-flash:generateContent"])
+@pytest.mark.parametrize("join", [join_api_base, ensure_api_route], ids=["join_api_base", "ensure_api_route"])
+def test_a_base_that_is_only_a_scheme_never_turns_the_route_into_the_host(
+    api_base: str, route: str, join: Callable[[str, str], str]
+) -> None:
+    assert urlsplit(join(api_base, route)).netloc == ""
 
 
 @pytest.mark.parametrize(
