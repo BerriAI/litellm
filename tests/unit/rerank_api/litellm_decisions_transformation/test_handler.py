@@ -154,6 +154,33 @@ async def test_unsupported_options_are_not_silently_ignored(parameter, value, re
 
 
 @pytest.mark.parametrize("sync", [True, False])
+@pytest.mark.parametrize("strategy", ["pointwise", "multiple_choice"])
+async def test_streaming_is_rejected_before_provider_calls(sync, strategy, respx_mock):
+    upstream = choice_response({"p0": 0.8, "p1": 0.2}) if strategy == "multiple_choice" else response()
+    respx_mock.post(URL).mock(return_value=upstream)
+    with pytest.raises(litellm.UnsupportedParamsError, match="stream"):
+        await rerank(sync, strategy=strategy, documents=["one", "two"], stream=True)
+    assert not respx_mock.calls
+
+
+@pytest.mark.parametrize("strategy", ["pointwise", "multiple_choice"])
+@pytest.mark.parametrize("stream", [False, None])
+async def test_unary_stream_values_preserve_one_aggregate_spend_event(strategy, stream, respx_mock, monkeypatch):
+    logger = RecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    upstream = choice_response({"p0": 0.8, "p1": 0.2}) if strategy == "multiple_choice" else response()
+    route = respx_mock.post(URL).mock(return_value=upstream)
+    result = await rerank(False, strategy=strategy, documents=["one", "two"], stream=stream)
+    await flush_logging()
+    assert len(result.results) == 2
+    assert route.call_count == (1 if strategy == "multiple_choice" else 2)
+    assert len(logger.events) == 1
+    assert logger.events[0]["status"] == "success"
+    assert logger.events[0]["prompt_tokens"] == 20
+    assert logger.events[0]["response_cost"] == pytest.approx(20 * RATE)
+
+
+@pytest.mark.parametrize("sync", [True, False])
 @pytest.mark.parametrize("probability", [-0.1, 1.1])
 async def test_invalid_upstream_probability_is_an_error(sync, probability, respx_mock):
     respx_mock.post(URL).mock(return_value=response(probability))
