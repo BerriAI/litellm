@@ -8583,6 +8583,21 @@ async def test_passthrough_mid_stream_drop_logs_model_from_url(
         ({"contents": []}, _VERTEX_FLASH_TARGET, "anthropic", "gemini-3.8-flash", "anthropic"),
         ({"custom_llm_provider": "from-body"}, _VERTEX_FLASH_TARGET, None, "gemini-3.8-flash", "from-body"),
         ({"contents": []}, _GEMINI_FLASH_TARGET, None, "gemini-3.8-flash", "gemini"),
+        (
+            {},
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash?key=provider-secret",
+            "gemini",
+            "gemini-3.8-flash",
+            "gemini",
+        ),
+        (
+            {},
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
+            "/publishers/google/models/gemini-3.8-flash?key=provider-secret",
+            None,
+            "gemini-3.8-flash",
+            "vertex_ai",
+        ),
         ({}, _VERTEX_CLAUDE_RAW_PREDICT_TARGET, None, "vertex_ai/claude-opus-5", "vertex_ai"),
         (
             {},
