@@ -167,6 +167,16 @@ def test_a_gpt_5_name_without_a_foundry_row_keeps_reading_its_own_entry(
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://example-resource.openai.azure.com")
     monkeypatch.setenv("AZURE_AI_API_KEY", "placeholder")
 
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gpt-5.1-chat-latest",
+        {
+            **litellm.model_cost["gpt-5.1-chat-latest"],
+            "supports_none_reasoning_effort": True,
+            "default_reasoning_effort": "none",
+        },
+    )
+
     optional_params = litellm.utils.get_optional_params(
         model="gpt-5.1-chat-latest",
         custom_llm_provider="azure_ai",
