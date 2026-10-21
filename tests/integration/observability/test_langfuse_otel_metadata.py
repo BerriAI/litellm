@@ -3,6 +3,7 @@ import binascii
 import json
 import threading
 import uuid
+from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
@@ -296,6 +297,12 @@ def _watched_spans(collector: Wire) -> Callable[[], tuple[dict[str, object], ...
         return tuple(drained)
 
     return snapshot
+
+
+def _assert_key_alias(spans: Sequence[Mapping[str, object]], key_alias: str | None) -> None:
+    assert spans, "no span landed"
+    for span in spans:
+        assert json.loads(str(span["langfuse.observation.metadata"]))["user_api_key_alias"] == key_alias, span
 
 
 def _v2_llm_span(collector: Wire, response_id: str) -> dict[str, object]:
@@ -677,11 +684,11 @@ def test_langfuse_otel_repeated_identical_requests_emit_one_span_each(gateway: G
 def test_langfuse_otel_sink_outage_mid_burst_lands_every_response_id_once(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-chaos-outage-" + uuid.uuid4().hex
     outage: Final = threading.Event()
-    rejected: Final = []  # mutable-ok: the wire server thread records each 503 it serves
+    rejected: Final[list[bytes]] = []  # mutable-ok: the wire server thread records each batch it answers 503
 
     def sink_reply(request: Request) -> Reply:
         if outage.is_set():
-            rejected.append(1)
+            rejected.append(request.body)
             return Reply(status=503, body=b'{"error": "sink outage"}')
         return Reply()
 
@@ -691,7 +698,13 @@ def test_langfuse_otel_sink_outage_mid_burst_lands_every_response_id_once(gatewa
     ):
         key, identity = _scenario_identity(scenario, rig.provider)
         anthropic_model: Final = scenario.model(model="anthropic/claude-sonnet-4-6", api_base=rig.provider.url)
-        watch: Final = _watched_spans(rig.collector)
+        received: Final[list[bytes]] = []  # mutable-ok: drain() consumes the wire queue, so batches accumulate
+
+        def watch() -> tuple[dict[str, object], ...]:
+            # The wire also records the batches the sink rejected; only the accepted ones landed.
+            received.extend(batch.body for batch in rig.collector.drain())
+            accepted: Final = Counter(received) - Counter(rejected)
+            return tuple(attributes for body in accepted.elements() for attributes in _span_attributes(body))
 
         def call(index: int) -> str:
             path: Final = ("/v1/chat/completions", "/v1/messages", "/v1/responses")[index % 3]
@@ -756,6 +769,7 @@ def test_langfuse_otel_sink_outage_mid_burst_lands_every_response_id_once(gatewa
         )
         assert landed == sorted(response_ids), sorted(set(response_ids) - set(landed))
         assert len(rejected) >= 1, "sink outage never served a 503"
+        _assert_key_alias([span for span in settled if _span_response_id(span) in response_ids], identity["key_alias"])
 
 
 def test_langfuse_otel_worker_kill_mid_burst_keeps_serving_and_exports(gateway: Gateway, tmp_path: Path) -> None:
@@ -805,6 +819,7 @@ def test_langfuse_otel_worker_kill_mid_burst_keeps_serving_and_exports(gateway: 
         )
         for rid in succeeded:
             assert sum(_span_response_id(s) == rid for s in settled) <= 1, rid
+        _assert_key_alias([span for span in settled if _span_response_id(span) in post_kill_ids], identity["key_alias"])
 
 
 def test_langfuse_otel_slow_sink_does_not_deadlock_exports(gateway: Gateway, tmp_path: Path) -> None:
@@ -844,6 +859,7 @@ def test_langfuse_otel_slow_sink_does_not_deadlock_exports(gateway: Gateway, tmp
         assert sorted(_span_response_id(span) for span in settled if _span_response_id(span) in response_ids) == sorted(
             response_ids
         )
+        _assert_key_alias([span for span in settled if _span_response_id(span) in response_ids], identity["key_alias"])
 
 
 def test_langfuse_otel_v2_mapper_emits_request_metadata_and_identity(gateway: Gateway, tmp_path: Path) -> None:
