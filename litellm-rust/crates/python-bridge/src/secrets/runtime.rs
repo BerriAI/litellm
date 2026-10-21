@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
-use litellm_host_python::{from_py, json_object_field, run_async_value, run_sync_value, to_py};
+use litellm_host_python::{from_py, json_object_field, to_py};
 use litellm_secrets::{
     KeyManagementSettings, KeyManagementSystem, Secret, SecretManager, load_native_manager,
     read_secret_from_python_manager,
@@ -12,6 +12,10 @@ use pyo3::{
     prelude::*,
     types::PyDict,
 };
+
+use crate::execution::{run_async_value, run_sync_value};
+
+const SECRET_MANAGER_MODULE: &str = "litellm.rust_bridge.host.secret_manager";
 
 #[derive(Clone, PartialEq)]
 struct Configuration {
@@ -99,7 +103,7 @@ impl NativeSecretManager {
             return Ok(Some(native));
         }
         let config = py
-            .import("litellm.rust_bridge.secret_manager")?
+            .import(SECRET_MANAGER_MODULE)?
             .getattr("native_secret_manager_config")?
             .call1((client,))?;
         if config.is_none() {

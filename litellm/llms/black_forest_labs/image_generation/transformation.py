@@ -8,9 +8,11 @@ API Reference: https://docs.bfl.ai/
 """
 
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -35,6 +37,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
@@ -218,7 +222,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         https://docs.bfl.ai/flux_models/flux_1_1_pro
         """
         # Build request body with prompt
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "prompt": prompt,
         }
 
@@ -275,7 +279,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
                 message=f"Error parsing BFL response: {e}",
             )
 
-        result: Final = response_data.get("result", {})
+        result: Final = _JSON_OBJECT.validate_python(response_data).get("result", {})
 
         if not model_response.data:
             model_response.data = []

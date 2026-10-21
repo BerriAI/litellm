@@ -1,7 +1,6 @@
 import asyncio
 import socket
 import threading
-import time
 
 import httpx
 import pytest
@@ -542,31 +541,33 @@ def test_assert_same_origin_error_message_does_not_leak_hostnames():
 
 
 async def test_async_safe_get_resolves_dns_off_the_event_loop(monkeypatch):
+    loop = asyncio.get_running_loop()
     loop_thread = threading.current_thread()
     resolver_threads = []
+    resolver_blocked = asyncio.Event()
+    loop_ran_while_resolver_blocked = threading.Event()
+    released_by_the_loop = []
 
-    def slow_getaddrinfo(host, port, *args, **kwargs):
+    def blocking_getaddrinfo(host, port, *args, **kwargs):
         resolver_threads.append(threading.current_thread())
-        time.sleep(0.4)
+        loop.call_soon_threadsafe(resolver_blocked.set)
+        released_by_the_loop.append(loop_ran_while_resolver_blocked.wait(timeout=5))
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 443))]
 
-    monkeypatch.setattr(url_utils.socket, "getaddrinfo", slow_getaddrinfo)
+    monkeypatch.setattr(url_utils.socket, "getaddrinfo", blocking_getaddrinfo)
 
     class FakeClient:
         async def get(self, url, **kwargs):
             return httpx.Response(200, request=httpx.Request("GET", url))
 
-    ticks = [time.perf_counter()]
+    async def release_resolver_from_the_loop() -> None:
+        await resolver_blocked.wait()
+        loop_ran_while_resolver_blocked.set()
 
-    async def heartbeat():
-        while True:
-            await asyncio.sleep(0.01)
-            ticks.append(time.perf_counter())
-
-    beating = asyncio.create_task(heartbeat())
+    releaser = asyncio.create_task(release_resolver_from_the_loop())
     response = await url_utils.async_safe_get(FakeClient(), "https://img.example/a.png")
-    beating.cancel()
+    await asyncio.wait_for(releaser, timeout=5)
 
     assert response.status_code == 200
     assert resolver_threads and all(thread is not loop_thread for thread in resolver_threads)
-    assert max(b - a for a, b in zip(ticks, ticks[1:])) < 0.2
+    assert released_by_the_loop and all(released_by_the_loop)

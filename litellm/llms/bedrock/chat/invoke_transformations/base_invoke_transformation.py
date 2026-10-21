@@ -14,9 +14,9 @@ from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
-    custom_prompt,
     deepseek_r1_pt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
@@ -28,7 +28,7 @@ from litellm.llms.bedrock.request_metadata import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.bedrock import GuardrailConfigBlock
 from litellm.types.llms.openai import AllMessageValues
@@ -51,8 +51,16 @@ _GUARDRAIL_CONFIG_EXPECTED_FORMAT: Final = (
     "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
 )
 
+_INVOKE_PROVIDERS: Final = TypeAdapter(tuple[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, ...]).validate_python(
+    get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL)
+)
 
-def _bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
+
+def _response_header(headers: Mapping[str, str], name: str) -> str | None:
+    return headers.get(name, None)
+
+
+def bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
     try:
         guardrail_config: Final = _GUARDRAIL_CONFIG_VALIDATOR.validate_python(raw_guardrail_config)
     except ValidationError as e:
@@ -394,8 +402,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             )
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        bedrock_input_tokens: Final = raw_response.headers.get("x-amzn-bedrock-input-token-count", None)
-        bedrock_output_tokens: Final = raw_response.headers.get("x-amzn-bedrock-output-token-count", None)
+        bedrock_input_tokens: Final = _response_header(raw_response.headers, "x-amzn-bedrock-input-token-count")
+        bedrock_output_tokens: Final = _response_header(raw_response.headers, "x-amzn-bedrock-output-token-count")
 
         prompt_tokens: Final = int(bedrock_input_tokens or litellm.token_counter(messages=messages))
 
@@ -432,7 +440,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         guardrail_headers: Final = (
             ()
             if raw_guardrail_config is None
-            else tuple(_bedrock_invoke_guardrail_headers(raw_guardrail_config).items())
+            else tuple(bedrock_invoke_guardrail_headers(raw_guardrail_config).items())
         )
         owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
         return merge_bedrock_invoke_headers(headers, guardrail_headers, metadata_headers, owned_names)
@@ -455,6 +463,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size
         completion_stream, response_headers = await make_call(
@@ -469,6 +478,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             json_mode=json_mode,
             stream_chunk_size=chunk_size,
+            timeout=timeout,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -494,9 +504,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         sync_client: Final = (
-            _get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
+            get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
         )
         chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size
         completion_stream, response_headers = make_sync_call(
@@ -512,6 +523,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             json_mode=json_mode,
             stream_chunk_size=chunk_size,
+            timeout=timeout,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -564,7 +576,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if provider is not None:
             return provider
 
-        for provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+        for provider in _INVOKE_PROVIDERS:
             if provider in model:
                 return provider
         return None
@@ -589,7 +601,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
 
-    def convert_messages_to_prompt(self, model, messages, provider, custom_prompt_dict) -> tuple[str, list | None]:
+    def convert_messages_to_prompt(self, model: str, messages, provider, custom_prompt_dict) -> tuple[str, list | None]:
         # handle anthropic prompts and amazon titan prompts
         prompt = ""
         chat_history: list | None = None
@@ -597,11 +609,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
-                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
-                messages=messages,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="bedrock"
             )
             return prompt, None
         ## ELSE

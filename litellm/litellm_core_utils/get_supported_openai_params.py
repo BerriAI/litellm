@@ -3,6 +3,7 @@ from typing import Final, Literal
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.types.utils import LlmProviders, LlmProvidersSet
 
 
@@ -104,7 +105,7 @@ def get_supported_openai_params(
     elif custom_llm_provider == "groq":
         return litellm.GroqChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "bedrock_mantle":
-        return litellm.BedrockMantleChatConfig().get_supported_openai_params(model=model)
+        return bedrock_mantle_chat_config(model).get_supported_openai_params(model=model)
     elif custom_llm_provider == "hosted_vllm":
         return litellm.HostedVLLMChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vllm":
@@ -281,7 +282,11 @@ def get_supported_openai_params(
             return ElevenLabsAudioTranscriptionConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "soniox":
         if request_type == "transcription":
-            return litellm.SonioxAudioTranscriptionConfig().get_supported_openai_params(model=model)
+            from litellm.llms.soniox.audio_transcription.transformation import (
+                SonioxAudioTranscriptionConfig,
+            )
+
+            return SonioxAudioTranscriptionConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider in litellm._custom_providers:
         if request_type == "chat_completion":
             provider_config = litellm.ProviderConfigManager.get_provider_chat_config(

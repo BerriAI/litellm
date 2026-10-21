@@ -1,5 +1,6 @@
+from collections.abc import Mapping
 from functools import lru_cache
-from typing import Final
+from typing import ClassVar, Final
 
 from openai.types.chat.completion_create_params import (
     CompletionCreateParamsNonStreaming,
@@ -22,9 +23,27 @@ from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.rerank import RerankRequest
 
 
+def peek_reasoning_summary_aliases(optional_params: Mapping[str, object]) -> object | None:
+    """Read AI-SDK-style reasoning summary from optional_params or nested extra_body.
+
+    Uses key membership (not ``or`` chains) so falsy values like ``""`` are not skipped.
+    """
+    if "reasoningSummary" in optional_params:
+        return optional_params["reasoningSummary"]
+    if "reasoning_summary" in optional_params:
+        return optional_params["reasoning_summary"]
+    extra_body: Final = optional_params.get("extra_body")
+    if isinstance(extra_body, dict):
+        if "reasoningSummary" in extra_body:
+            return extra_body["reasoningSummary"]
+        if "reasoning_summary" in extra_body:
+            return extra_body["reasoning_summary"]
+    return None
+
+
 class ModelParamHelper:
     # Cached at class level — deterministic set built from static OpenAI type annotations
-    _relevant_logging_args: frozenset = frozenset()
+    relevant_logging_args: ClassVar[frozenset[str]] = frozenset()
 
     @staticmethod
     def get_standard_logging_model_parameters(
@@ -32,7 +51,7 @@ class ModelParamHelper:
     ) -> dict:
         """ """
         standard_logging_model_parameters: Final[dict] = {}
-        supported_model_parameters: Final = ModelParamHelper._relevant_logging_args
+        supported_model_parameters: Final = ModelParamHelper.relevant_logging_args
 
         for key, value in model_parameters.items():
             if key in supported_model_parameters:
@@ -44,20 +63,22 @@ class ModelParamHelper:
         return set(["messages", "prompt", "input", "system"])
 
     @staticmethod
-    def _get_relevant_args_to_use_for_logging() -> set[str]:
+    def get_relevant_args_to_use_for_logging() -> set[str]:
         """
         Gets all relevant llm api params besides the ones with prompt content
         """
-        all_openai_llm_api_params: Final = ModelParamHelper._get_all_llm_api_params()
+        all_openai_llm_api_params: Final = ModelParamHelper.get_all_llm_api_params()
         # Exclude parameters that contain prompt content
         combined_kwargs: Final = all_openai_llm_api_params.difference(
             set(ModelParamHelper.get_exclude_params_for_model_parameters())
         )
         return combined_kwargs
 
+    _get_relevant_args_to_use_for_logging = get_relevant_args_to_use_for_logging
+
     @staticmethod
     @lru_cache(maxsize=1)
-    def _get_all_llm_api_params() -> set[str]:
+    def get_all_llm_api_params() -> set[str]:
         """
         Gets the supported kwargs for each call type and combines them.
 
@@ -87,6 +108,8 @@ class ModelParamHelper:
         )
         combined_kwargs = combined_kwargs.difference(exclude_kwargs)
         return combined_kwargs
+
+    _get_all_llm_api_params = get_all_llm_api_params
 
     @staticmethod
     def get_litellm_provider_specific_params_for_chat_params() -> set[str]:
@@ -185,4 +208,5 @@ class ModelParamHelper:
         return set(["metadata", "litellm_metadata"])
 
 
-ModelParamHelper._relevant_logging_args = frozenset(ModelParamHelper._get_relevant_args_to_use_for_logging())
+ModelParamHelper.relevant_logging_args = frozenset(ModelParamHelper.get_relevant_args_to_use_for_logging())
+ModelParamHelper._relevant_logging_args = ModelParamHelper.relevant_logging_args

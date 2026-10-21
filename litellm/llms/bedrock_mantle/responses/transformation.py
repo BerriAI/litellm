@@ -24,6 +24,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
+from litellm.llms.base_llm.responses.transformation import ReasoningSummaryLevel
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock_mantle.common_utils import (
@@ -72,6 +73,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK_MANTLE
+
+    def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
+        return "auto" if self.use_openai_path else super().auto_reasoning_summary()
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
@@ -173,15 +177,11 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             summary,
             sorted(_BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES),
         )
-        stripped: Final = {  # mutable-ok: map_openai_params contract returns a plain dict
-            key: value for key, value in reasoning.items() if key != "summary"
-        }
+        stripped: Final = {key: value for key, value in reasoning.items() if key != "summary"}
         return (
-            {**params, "reasoning": stripped}  # mutable-ok: map_openai_params contract returns a plain dict
+            {**params, "reasoning": stripped}
             if stripped
-            else {  # mutable-ok: map_openai_params contract returns a plain dict
-                key: value for key, value in params.items() if key != "reasoning"
-            }
+            else {key: value for key, value in params.items() if key != "reasoning"}
         )
 
     def transform_responses_api_request(
