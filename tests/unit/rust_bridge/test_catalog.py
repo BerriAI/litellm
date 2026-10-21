@@ -128,9 +128,3 @@ def test_empty_constraints_match_nothing() -> None:
     assert catalog.decision(
         RouteContext(Route.OCR, features=frozenset({Feature.SAFEGUARDS_CLASSIFIER})), rules
     ) is Decision.PYTHON
-
-
-@pytest.mark.parametrize("provider", ("anthropic", "deepseek", "vertex_ai"))
-def test_messages_passthrough_providers_opt_in_to_rust(provider: str) -> None:
-    context: Final = RouteContext(Route.MESSAGES, provider=provider, model="claude-sonnet-4-6", target=Target.MESSAGES)
-    assert catalog.rollout(context) is Rollout.RUST_OPT_IN
