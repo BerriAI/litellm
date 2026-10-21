@@ -75,7 +75,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
 )
-from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentMarker
+from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentFlag, SilentExperimentMarker
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
@@ -253,7 +253,6 @@ def _get_spend_logs_metadata(
             guardrail_information=None,
             internal_call_origin=None,
             litellm_roi_estimator=False,
-            is_silent_experiment=False,
             billed_retry_attempt=False,
             eval_information=None,
             cold_storage_object_key=cold_storage_object_key,
@@ -291,8 +290,12 @@ def _get_spend_logs_metadata(
         used_client_oauth_token=used_client_oauth_token,
         kubernetes_pod_routing=kubernetes_pod_routing,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
-        is_silent_experiment=SILENT_EXPERIMENT_METADATA_KEY in metadata
-        and metadata[SILENT_EXPERIMENT_METADATA_KEY] is SilentExperimentMarker.MIRRORED,
+        **(
+            SilentExperimentFlag(is_silent_experiment=True)
+            if SILENT_EXPERIMENT_METADATA_KEY in metadata
+            and metadata[SILENT_EXPERIMENT_METADATA_KEY] is SilentExperimentMarker.MIRRORED
+            else SilentExperimentFlag()
+        ),
         billed_retry_attempt=billed_retry_attempt,
         user_api_key_user_email=_stored_user_email(metadata),
     )

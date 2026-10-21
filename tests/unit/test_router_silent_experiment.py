@@ -284,7 +284,7 @@ async def test_standard_logging_payload_marks_only_the_mirrored_calls_as_silent_
     metadata_by_group: Final = {payload["model_group"]: payload["metadata"] for payload in payloads}
     assert metadata_by_group["shadow-a"]["is_silent_experiment"] is True
     assert metadata_by_group["shadow-b"]["is_silent_experiment"] is True
-    assert metadata_by_group["primary-model"]["is_silent_experiment"] is False
+    assert "is_silent_experiment" not in metadata_by_group["primary-model"]
 
 
 def _spend_row_is_silent_experiment(call: dict[str, object]) -> object:
@@ -297,7 +297,7 @@ def _spend_row_is_silent_experiment(call: dict[str, object]) -> object:
         start_time=now,
         end_time=now,
     )
-    return json.loads(row["metadata"])["is_silent_experiment"]
+    return json.loads(row["metadata"]).get("is_silent_experiment")
 
 
 @pytest.mark.asyncio
@@ -317,7 +317,7 @@ async def test_spend_rows_mark_only_the_mirrored_calls_when_the_caller_sends_lit
         call["standard_logging_object"]["model_group"]: _spend_row_is_silent_experiment(call)
         for call in recording_logger.success_kwargs
     }
-    assert silent_by_group == {"primary-model": False, "shadow-a": True, "shadow-b": True}
+    assert silent_by_group == {"primary-model": None, "shadow-a": True, "shadow-b": True}
 
 
 @pytest.mark.asyncio
@@ -343,8 +343,8 @@ async def test_a_caller_sent_silent_experiment_flag_does_not_mark_a_real_call_as
     await _wait_for_all_successes(recording_logger, expected=1)
 
     call: Final = recording_logger.success_kwargs[0]
-    assert call["standard_logging_object"]["metadata"]["is_silent_experiment"] is False
-    assert _spend_row_is_silent_experiment(call) is False
+    assert "is_silent_experiment" not in call["standard_logging_object"]["metadata"]
+    assert _spend_row_is_silent_experiment(call) is None
 
 
 def test_multiple_shadow_targets_fan_out_sync(recording_logger):

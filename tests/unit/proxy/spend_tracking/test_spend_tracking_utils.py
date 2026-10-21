@@ -169,14 +169,14 @@ def test_get_logging_payload_includes_kubernetes_pod_routing(
     ("silent_experiment_metadata", "expected"),
     [
         ({SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED}, True),
-        ({SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED.value}, False),
-        ({SILENT_EXPERIMENT_METADATA_KEY: True}, False),
-        ({"is_silent_experiment": True}, False),
-        ({}, False),
+        ({SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED.value}, None),
+        ({SILENT_EXPERIMENT_METADATA_KEY: True}, None),
+        ({"is_silent_experiment": True}, None),
+        ({}, None),
     ],
 )
 def test_get_logging_payload_records_whether_the_call_was_a_silent_experiment(
-    silent_experiment_metadata: dict[str, object], expected: bool
+    silent_experiment_metadata: dict[str, object], expected: bool | None
 ) -> None:
     now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
     payload: Final = get_logging_payload(
@@ -189,7 +189,7 @@ def test_get_logging_payload_records_whether_the_call_was_a_silent_experiment(
         end_time=now,
     )
 
-    assert json.loads(payload["metadata"])["is_silent_experiment"] is expected
+    assert json.loads(payload["metadata"]).get("is_silent_experiment") is expected
 
 
 @pytest.mark.parametrize("store_prompts,redact", [(True, False), (False, False), (True, True)])
@@ -6642,7 +6642,7 @@ def test_spend_logs_payload(model_id: str | None):
     )
 
     assert len(payload["request_id"]) > 0
-    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys()
+    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {"is_silent_experiment"}
 
     assert "metadata" in payload
     assert isinstance(payload["metadata"], str)

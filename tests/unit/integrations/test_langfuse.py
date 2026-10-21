@@ -838,25 +838,20 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         metadata = self._canary_request_metadata()
         self.use_real_langfuse_client()
 
-        with patch(
-            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
-            side_effect=lambda generation_params, **kw: generation_params,
-            create=True,
-        ):
-            self.logger._log_langfuse_v2(
-                user_id="user-1",
-                metadata=metadata,
-                litellm_params={"metadata": metadata},
-                output=None,
-                start_time=datetime.datetime(2024, 1, 1, 12, 0, 0),
-                end_time=datetime.datetime(2024, 1, 1, 12, 0, 1),
-                kwargs=kwargs,
-                optional_params={},
-                input=None,
-                response_obj=None,
-                level="INFO",
-                litellm_call_id="canary-call-id",
-            )
+        self.logger._log_langfuse_v2(
+            user_id="user-1",
+            metadata=metadata,
+            litellm_params={"metadata": metadata},
+            output=None,
+            start_time=datetime.datetime(2024, 1, 1, 12, 0, 0),
+            end_time=datetime.datetime(2024, 1, 1, 12, 0, 1),
+            kwargs=kwargs,
+            optional_params={},
+            input=None,
+            response_obj=None,
+            level="INFO",
+            litellm_call_id="canary-call-id",
+        )
 
         assert self.exported_generation_metadata()["is_silent_experiment"] is True
 

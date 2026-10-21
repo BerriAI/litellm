@@ -14,7 +14,6 @@
             ]
         },
         "langfuse.observation.level": "DEFAULT",
-        "langfuse.observation.metadata.is_silent_experiment": false,
         "langfuse.observation.model.name": "gemini-3-flash-preview",
         "langfuse.observation.model.parameters": {},
         "langfuse.observation.type": "generation",

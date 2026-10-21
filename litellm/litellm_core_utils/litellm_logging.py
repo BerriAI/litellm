@@ -155,7 +155,7 @@ from litellm.types.llms.openai import (
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
-from litellm.types.router import RouterRateLimitError, SilentExperimentMarker
+from litellm.types.router import RouterRateLimitError, SilentExperimentFlag, SilentExperimentMarker
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
     CachingDetails,
@@ -6437,10 +6437,12 @@ class StandardLoggingPayloadSetup:
                 proxy_stamped_used_client_oauth_token(metadata, litellm_params),
                 custom_llm_provider,
             ),
-            is_silent_experiment=(
-                metadata is not None
+            **(
+                SilentExperimentFlag(is_silent_experiment=True)
+                if metadata is not None
                 and SILENT_EXPERIMENT_METADATA_KEY in metadata
                 and metadata[SILENT_EXPERIMENT_METADATA_KEY] is SilentExperimentMarker.MIRRORED
+                else SilentExperimentFlag()
             ),
         )
         if isinstance(metadata, dict):

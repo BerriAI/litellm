@@ -10373,7 +10373,7 @@ def test_init_kwargs_client_metadata_cannot_mark_a_pass_through_call_as_a_silent
         start_time=started,
         end_time=started,
     )
-    assert json.loads(row["metadata"])["is_silent_experiment"] is False
+    assert "is_silent_experiment" not in json.loads(row["metadata"])
     assert result["litellm_params"]["metadata"]["client_key"] == "kept"
 
 @pytest.mark.asyncio
