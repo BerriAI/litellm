@@ -1000,6 +1000,8 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
         lg.propagate = False  # prevent bubbling to parent/root
+    if (configured_level := os.getenv("LITELLM_LOG")) is not None:
+        logging.getLogger().setLevel(resolve_log_level(configured_level))
 
 
 def _get_uvicorn_json_log_config():

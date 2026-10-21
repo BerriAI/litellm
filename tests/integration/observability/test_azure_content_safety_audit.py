@@ -15,6 +15,8 @@ from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _ATTACK_MARKER: Final = "synthetic-attack-marker"
 _MODERATION_MARKER: Final = "synthetic-moderation-marker"
 

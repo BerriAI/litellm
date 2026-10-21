@@ -342,6 +342,20 @@ EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
 
 
+def _accepts_cache_control(part: object) -> bool:
+    match part:
+        case {"type": "thinking" | "redacted_thinking"}:
+            return False
+        case dict():
+            return True
+        case _:
+            return False
+
+
+def _last_index_accepting_cache_control(parts: Sequence[object]) -> int | None:
+    return next((index for index in reversed(range(len(parts))) if _accepts_cache_control(parts[index])), None)
+
+
 class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def _request_value(request_kwargs: object, key: str) -> object:
@@ -740,10 +754,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # 1. if string, insert cache control in the message
         if isinstance(message_content, str):
             message["cache_control"] = control
-        # 2. list of objects - only apply to last item per Anthropic spec
+        # 2. list of objects - only apply to the last item Claude accepts a breakpoint on
         elif isinstance(message_content, list):
-            if len(message_content) > 0 and isinstance(message_content[-1], dict):
-                message_content[-1]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
+            markable_index: Final = _last_index_accepting_cache_control(message_content)
+            if markable_index is not None:
+                message_content[markable_index]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
         return message
 
     @staticmethod

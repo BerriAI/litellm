@@ -42,6 +42,7 @@ impl BaseMessagesConfig for MinimaxMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _optional_params: &MessagesOptionalParams,
         _params: &LitellmParams,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -183,7 +184,14 @@ mod tests {
                 .flatten()
         };
         let environment = MINIMAX_MESSAGES_CONFIG
-            .validate_environment(vec![], key, "test-model", &Default::default(), &env)
+            .validate_environment(
+                vec![],
+                key,
+                "test-model",
+                &MessagesOptionalParams::default(),
+                &Default::default(),
+                &env,
+            )
             .unwrap();
         assert!(matches!(
             environment.auth,

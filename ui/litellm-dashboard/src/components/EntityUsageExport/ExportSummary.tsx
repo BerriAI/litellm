@@ -3,7 +3,7 @@ import type { DateRangePickerValue } from "@/components/shared/date_picker_types
 
 interface ExportSummaryProps {
   dateRange: DateRangePickerValue;
-  selectedFilters: string[];
+  selectedFilters: readonly string[];
 }
 
 const ExportSummary: React.FC<ExportSummaryProps> = ({ dateRange, selectedFilters }) => {

@@ -45,7 +45,7 @@ _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _OUTAGE_STATUSES: Final = (529, 429, 503)
 _ROUTING_ENCODED_ID: Final = re.compile(r"resp_([A-Za-z0-9+/]+=*)")
 
-pytestmark = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 Endpoint = Literal["messages", "chat", "responses"]
 

@@ -9,6 +9,7 @@ class ProviderSpecificHeaderUtils:
     def get_provider_specific_headers(
         provider_specific_header: ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None,
         custom_llm_provider: str | None,
+        native_anthropic_messages: bool = False,
     ) -> Mapping[str, str]:
         """
         Get the provider specific headers for the given custom llm provider.
@@ -17,7 +18,8 @@ class ProviderSpecificHeaderUtils:
         carries its own comma-separated provider list, so headers that are safe for several
         providers and headers that are safe for exactly one can travel on the same request
         without sharing a scope. Entries whose provider list does not contain
-        `custom_llm_provider` contribute nothing.
+        `custom_llm_provider` contribute nothing, and entries marked
+        `native_anthropic_messages_only` contribute only to a provider's native Messages route.
 
         Returns:
             Dict: The provider specific headers for the given custom llm provider
@@ -31,6 +33,12 @@ class ProviderSpecificHeaderUtils:
 
         matched_headers: Final = {}
         for scoped_header in scoped_headers:
+            if (
+                "native_anthropic_messages_only" in scoped_header
+                and scoped_header["native_anthropic_messages_only"]
+                and not native_anthropic_messages
+            ):
+                continue
             stored_providers = scoped_header.get("custom_llm_provider", "")
             provider_list = [p.strip() for p in stored_providers.split(",")]
             if custom_llm_provider in provider_list:

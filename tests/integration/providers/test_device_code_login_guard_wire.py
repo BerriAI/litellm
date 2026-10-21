@@ -29,7 +29,7 @@ from integration._support.wire import Request
 from litellm.llms.chatgpt.authenticator import DEVICE_CODE_COOLDOWN_SECONDS
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(300)
+pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 Provider: TypeAlias = Literal["chatgpt", "copilot"]
 Endpoint: TypeAlias = Literal["chat", "responses", "messages"]
