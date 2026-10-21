@@ -300,12 +300,15 @@ _ENABLE_TEAM_STALE_ALIAS_BYPASS: bool | None = None
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as OtelSpan
 
+    from litellm.caching.dual_cache import DualCache
     from litellm.integrations.otel.model.destination import OtelDestination
     from litellm.models.tag import LiteLLM_TagTable
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.credential_endpoints.user_provider_credentials import GithubCopilotUserConnectionPayload
     from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.proxy.utils import PrismaClient
+    from litellm.repositories.prisma_protocols import DatabaseClient
     from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
 
     ProxyConfig = _ProxyConfig
@@ -3338,12 +3341,12 @@ async def _resolve_user_provider_credentials_for_request(
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 
-    from .credential_endpoints.user_provider_credentials import aget_user_provider_credentials
+    from .credential_endpoints.user_provider_credentials import aget_user_provider_connections
 
     if prisma_client is None:
         return
     try:
-        connections: Final = await aget_user_provider_credentials(
+        connections: Final = await aget_user_provider_connections(
             prisma_client=prisma_client,
             cache=user_api_key_cache,
             user_id=user_id,
@@ -3354,12 +3357,43 @@ async def _resolve_user_provider_credentials_for_request(
             "_resolve_user_provider_credentials_for_request: failed to load user provider credentials"
         )
         return
+    refreshed_connections: Final = await _refresh_user_provider_connections(
+        prisma_client=prisma_client,
+        cache=user_api_key_cache,
+        user_id=user_id,
+        connections=connections,
+    )
 
     secret_fields: Final = data.get("secret_fields")
     if not isinstance(secret_fields, dict):
         return
-    secret_fields["user_provider_credentials"] = RedactedDict(dict(connections))
+    secret_fields["user_provider_credentials"] = RedactedDict(
+        {
+            name: {"access_token": payload.access_token, "github_host": payload.github_host}
+            for name, payload in refreshed_connections.items()
+        }
+    )
     secret_fields["user_provider_credentials_user_id"] = user_id
+
+
+async def _refresh_user_provider_connections(
+    prisma_client: "DatabaseClient",
+    cache: "DualCache",
+    user_id: str,
+    connections: "Mapping[str, GithubCopilotUserConnectionPayload]",
+) -> "Mapping[str, GithubCopilotUserConnectionPayload]":
+    from .credential_endpoints.github_copilot_token_refresh import arefresh_expiring_connections
+
+    try:
+        return await arefresh_expiring_connections(
+            prisma_client=prisma_client,
+            cache=cache,
+            user_id=user_id,
+            connections=connections,
+        )
+    except Exception:  # noqa: BLE001  # refresh errors must not block the existing credential path
+        verbose_proxy_logger.exception("_refresh_user_provider_connections: refresh failed; using stored connections")
+        return connections
 
 
 def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> None:

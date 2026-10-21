@@ -1,6 +1,7 @@
 """Tests for the per-user provider credentials DB/cache module."""
 
 import json
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -12,12 +13,15 @@ from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.credential_endpoints.user_provider_credentials import (
     GithubCopilotUserConnectionPayload,
+    aget_user_provider_connections,
     aget_user_provider_credentials,
+    compare_and_set_user_provider_credential,
     decode_user_provider_credential,
     delete_user_provider_credential,
     delete_user_provider_credentials_for_credential,
     drop_user_provider_credential_cache,
     get_user_provider_credential,
+    get_user_provider_credential_row,
     invalidate_user_provider_credential_cache,
     set_user_provider_credential_cache,
     upsert_user_provider_credential,
@@ -180,6 +184,108 @@ async def test_legacy_connection_without_github_host_defaults_to_github_com(monk
             "github_host": GITHUB_COPILOT_DEFAULT_HOST,
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_aget_connections_returns_refresh_metadata_and_legacy_defaults(monkeypatch):
+    from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+
+    refreshed: Final = GithubCopilotUserConnectionPayload(
+        access_token="gho_access",
+        github_login="octo",
+        refresh_token="ghr_refresh",
+        access_token_expires_at=1000.0,
+        refresh_token_expires_at=2000.0,
+    )
+    legacy_ciphertext: Final = encrypt_value_helper(json.dumps({"access_token": "gho_legacy", "github_login": "octo"}))
+    table: Final = MagicMock()
+    table.find_many = AsyncMock(
+        return_value=[
+            _row(credential_name="copilot-cred", credential_b64=upc._encode(refreshed)),
+            _row(credential_name="legacy-cred", credential_b64=legacy_ciphertext),
+        ]
+    )
+    connections: Final = await aget_user_provider_connections(
+        _prisma(table),
+        DualCache(redis_cache=_fake_redis(monkeypatch)),
+        "user-a",
+        ["copilot-cred", "legacy-cred"],
+    )
+    assert connections == {
+        "copilot-cred": refreshed,
+        "legacy-cred": GithubCopilotUserConnectionPayload(
+            access_token="gho_legacy",
+            github_login="octo",
+        ),
+    }
+    assert connections["legacy-cred"].refresh_token is None
+    assert connections["legacy-cred"].access_token_expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_compare_and_set_updates_only_the_expected_ciphertext():
+    from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+
+    initial: Final = GithubCopilotUserConnectionPayload(access_token="gho_old", github_login="octo")
+    initial_ciphertext: Final = upc._encode(initial)
+    stored: dict[str, SimpleNamespace] = {"row": _row(credential_b64=initial_ciphertext)}
+
+    async def update_many(*, where: Mapping[str, str], data: Mapping[str, str]) -> int:
+        row = stored.get("row")
+        if (
+            row is None
+            or row.user_id != where["user_id"]
+            or row.credential_name != where["credential_name"]
+            or row.credential_b64 != where["credential_b64"]
+        ):
+            return 0
+        stored["row"] = _row(credential_b64=data["credential_b64"])
+        return 1
+
+    async def find_unique(*, where: Mapping[str, Mapping[str, str]]) -> SimpleNamespace | None:
+        return stored.get("row")
+
+    table: Final = MagicMock()
+    table.update_many = AsyncMock(side_effect=update_many)
+    table.find_unique = AsyncMock(side_effect=find_unique)
+    prisma_client: Final = _prisma(table)
+    rotated: Final = GithubCopilotUserConnectionPayload(
+        access_token="gho_new",
+        github_login="octo",
+        refresh_token="ghr_new",
+    )
+    assert await compare_and_set_user_provider_credential(
+        prisma_client,
+        "user-a",
+        "copilot-cred",
+        initial_ciphertext,
+        rotated,
+    )
+    assert (await get_user_provider_credential(prisma_client, "user-a", "copilot-cred")) == rotated
+    assert table.update_many.await_args.kwargs["where"] == {
+        "user_id": "user-a",
+        "credential_name": "copilot-cred",
+        "credential_b64": initial_ciphertext,
+    }
+
+
+@pytest.mark.asyncio
+async def test_compare_and_set_does_not_resurrect_a_missing_row():
+    table: Final = MagicMock()
+    table.update_many = AsyncMock(return_value=0)
+    table.find_unique = AsyncMock(return_value=None)
+    prisma_client: Final = _prisma(table)
+    payload: Final = GithubCopilotUserConnectionPayload(access_token="gho_new", github_login="octo")
+    assert not await compare_and_set_user_provider_credential(
+        prisma_client,
+        "user-a",
+        "copilot-cred",
+        "expected-ciphertext",
+        payload,
+    )
+    assert await get_user_provider_credential_row(prisma_client, "user-a", "copilot-cred") is None
+    table.update_many.assert_awaited_once()
+    table.upsert.assert_not_called()
 
 
 @pytest.mark.asyncio
