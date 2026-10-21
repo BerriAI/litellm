@@ -2084,6 +2084,73 @@ async def test_streaming_iterator_hook_delivers_legacy_hook_rewrite_on_a_text_co
     assert _warnings(caplog) == []
 
 
+class _FlatBlockGuardrail(CustomGuardrail):
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        if any("kumquat" in text for text in inputs.get("texts") or []):
+            raise HTTPException(status_code=400, detail="flat guardrail blocked kumquat")
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_delivers_a_flat_guardrail_block_on_a_text_completion_stream_under_a_pipeline(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Final[Dict[str, Any]] = {}
+    flat: Final = _FlatBlockGuardrail(
+        guardrail_name="flat-block", event_hook=GuardrailEventHooks.post_call, default_on=True
+    )
+    monkeypatch.setattr(litellm, "callbacks", [flat, _live_scan_guardrail(seen)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data: Final = {**_post_call_pipeline_data(stream=True), "prompt": "hi"}
+    chunks: Final = [
+        _text_completion_chunk("A kum"),
+        _text_completion_chunk("quat tart"),
+        _text_completion_chunk("", "stop"),
+    ]
+    auth: Final = make_user_api_key_auth(request_route="/v1/completions")
+
+    await proxy_logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="text_completion", guardrails_only=True)
+    delivered: Final = [
+        item
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=auth, response=_async_chunk_iter(chunks), request_data=data
+        )
+    ]
+
+    assert seen["texts"] == ["A kumquat tart"]
+    assert isinstance(delivered[-1], bytes)
+    assert json.loads(delivered[-1].decode().removeprefix("data: "))["error"]["message"] == (
+        "flat guardrail blocked kumquat"
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_live_pipeline_scans_what_a_disconnected_text_completion_client_received(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Final[Dict[str, Any]] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_live_scan_guardrail(seen)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data: Final = {**_post_call_pipeline_data(step=_DETECT_ONLY_STEP, stream=True), "prompt": "hi"}
+    chunks: Final = [
+        _text_completion_chunk("hello "),
+        _text_completion_chunk("world"),
+        _text_completion_chunk("", "stop"),
+    ]
+    auth: Final = make_user_api_key_auth(request_route="/v1/completions")
+
+    await proxy_logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="text_completion", guardrails_only=True)
+    stream: Final = proxy_logging.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=auth, response=_async_chunk_iter(chunks), request_data=data
+    )
+    first: Final = await stream.__anext__()
+    await stream.aclose()
+
+    assert first.choices[0].text == "hello "
+    assert seen["texts"] == ["hello "]
+    assert _post_call_statuses(data) == ["success"]
+
+
 @pytest.mark.asyncio
 async def test_streaming_iterator_hook_releases_stream_untouched_when_legacy_hook_returns_none(
     proxy_logging, make_user_api_key_auth, monkeypatch

@@ -205,17 +205,18 @@ class OpenAITextCompletionHandler(BaseTranslation):
 
     async def process_output_streaming_response(
         self,
-        responses_so_far: list[TextCompletionResponse],  # mutable-ok: rewrites the caller's buffered chunks in place
+        responses_so_far: list[object],  # mutable-ok: rewrites the caller's buffered chunks in place
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict[str, object] | None = None,  # mutable-ok: the hooks share and mutate the request payload
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
-    ) -> Sequence[TextCompletionResponse]:
-        if not self._check_streaming_has_ended(responses_so_far):
+    ) -> Sequence[object]:
+        chunks: Final = _text_completion_chunks(responses_so_far)
+        if not self._check_streaming_has_ended(chunks):
             return responses_so_far
-        assembled: Final = self._assemble_ended_stream(responses_so_far)
+        assembled: Final = self._assemble_ended_stream(chunks)
         pre_guardrail_texts: Final = _choice_texts(assembled)
         await self.process_output_response(
             response=assembled,
@@ -230,15 +231,32 @@ class OpenAITextCompletionHandler(BaseTranslation):
             after for before, after in zip(pre_guardrail_texts, _choice_texts(assembled)) if after != before
         )
         for choice_index, text in rewrites:
-            self._write_choice_text(responses_so_far, choice_index, text)
+            self._write_choice_text(chunks, choice_index, text)
         return responses_so_far
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
-        chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, TextCompletionResponse))
+        chunks: Final = _text_completion_chunks(responses_so_far)
         if not self._check_streaming_has_ended(chunks):
             return None
         assembled: Final = self._assemble_ended_stream(chunks)
         return StreamingScanKey(texts=tuple(text for _, text in _choice_texts(assembled)), stream_ended=True)
+
+    def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
+        chunks: Final = _text_completion_chunks(responses_so_far)
+        streamed_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in chunks))
+        finished_indices: Final = frozenset(choice.index for choice in streamed_choices if choice.finish_reason)
+        unfinished_indices: Final = tuple(
+            dict.fromkeys(choice.index for choice in streamed_choices if choice.index not in finished_indices)
+        )
+        if not unfinished_indices:
+            return tuple(responses_so_far)
+        terminator: Final = TextCompletionResponse(
+            id=chunks[0].id,
+            model=chunks[0].model,
+            object="text_completion",
+            choices=[TextChoices(index=index, text="", finish_reason="length") for index in unfinished_indices],
+        )
+        return (*responses_so_far, terminator)
 
     def build_stream_error_items(
         self,
@@ -291,6 +309,10 @@ class OpenAITextCompletionHandler(BaseTranslation):
         for choice in tail:
             if isinstance(stream_item_field(choice, "text"), str):
                 choice.text = ""
+
+
+def _text_completion_chunks(responses_so_far: Sequence[object]) -> tuple[TextCompletionResponse, ...]:
+    return tuple(item for item in responses_so_far if isinstance(item, TextCompletionResponse))
 
 
 def _choice_text(choice: TextChoices) -> str:
