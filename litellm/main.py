@@ -121,6 +121,7 @@ from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
     bedrock_route_for_request,
+    bedrock_strict_tools_fallback,
     deployment_model_info,
     without_bedrock_native_output_opt_in,
     without_bedrock_route_prefix,
@@ -4353,6 +4354,11 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
                 else None
             ),
             converse_model,
+            strict_tools_fallback=(
+                partial(bedrock_strict_tools_fallback, converse_params, dict(litellm_params))
+                if litellm.drop_params is True or normalize_drop_params(litellm_params.get("drop_params")) is True
+                else None
+            ),
         )
     elif bedrock_route == "converse_like":
         model = model.replace("converse_like/", "")

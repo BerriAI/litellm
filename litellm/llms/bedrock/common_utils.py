@@ -359,6 +359,44 @@ class NativeOutputFallback:
     litellm_params: Mapping[str, object]
 
 
+_BEDROCK_STRICT_TOOLS_REJECTION: Final = re.compile(
+    r"strict tools|grammar|compilation|tools\.\d+\.custom(?:\.strict)?: "
+)
+_TOOLS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_TOOL_FUNCTION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def is_bedrock_strict_tools_rejection(status_code: int, error_text: str) -> bool:
+    return status_code == 400 and _BEDROCK_STRICT_TOOLS_REJECTION.search(error_text) is not None
+
+
+def warn_bedrock_strict_tools_dropped(model: str) -> None:
+    verbose_logger.warning(
+        "Bedrock rejected the strict tool schemas for model=%s, so litellm sent the request again without `strict` "
+        "because drop_params is set.",
+        model,
+    )
+
+
+def _without_strict(tool: Mapping[str, object]) -> Mapping[str, object]:
+    if "function" not in tool:
+        return tool
+    function: Final = _TOOL_FUNCTION_ADAPTER.validate_python(tool["function"])
+    return {**tool, "function": {key: value for key, value in function.items() if key != "strict"}}
+
+
+def bedrock_strict_tools_fallback(
+    optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> NativeOutputFallback | None:
+    tools: Final = _TOOLS_ADAPTER.validate_python(optional_params.get("tools", ()))
+    tools_without_strict: Final = tuple(_without_strict(tool) for tool in tools)
+    if tools_without_strict == tools:
+        return None
+    return NativeOutputFallback(
+        optional_params={**optional_params, "tools": list(tools_without_strict)}, litellm_params=litellm_params
+    )
+
+
 def requests_output_config_format(optional_params: Mapping[str, object]) -> bool:
     match optional_params:
         case {"output_config": {"format": object()}}:
