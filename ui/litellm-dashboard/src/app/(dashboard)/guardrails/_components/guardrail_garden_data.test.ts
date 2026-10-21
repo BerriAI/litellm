@@ -84,6 +84,10 @@ describe("guardrail_garden_data logos", () => {
     expect(card).toBeDefined();
     expect(card?.eval).toBeUndefined();
   });
+
+  it("seeds the NeuralTrust card with both pre_call and post_call so replies are inspected", () => {
+    expect(GUARDRAIL_PRESETS.neuraltrust.mode).toEqual(["pre_call", "post_call"]);
+  });
 });
 
 describe("decision model presets", () => {
