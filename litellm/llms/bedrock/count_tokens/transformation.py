@@ -205,6 +205,10 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         encoded_body: Final = base64.b64encode(json.dumps(body_data).encode()).decode()
         return {"input": {"invokeModel": {"body": encoded_body}}}
 
+    @staticmethod
+    def count_tokens_model_id(model: str) -> str:
+        return get_bedrock_base_model(model).removeprefix("bedrock/")
+
     def get_bedrock_count_tokens_endpoint(
         self,
         model: str,
@@ -224,12 +228,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         Returns:
             Complete endpoint URL for CountTokens API
         """
-        # Use existing LiteLLM function to get the base model ID (removes region prefix)
-        model_id = get_bedrock_base_model(model)
-
-        # Remove bedrock/ prefix if present
-        model_id = model_id.removeprefix("bedrock/")  # Remove "bedrock/" prefix
-        encoded_model_id: Final = self.encode_model_id(model_id=model_id)
+        encoded_model_id: Final = self.encode_model_id(model_id=self.count_tokens_model_id(model))
 
         base_url, _ = self.get_runtime_endpoint(
             api_base=api_base,

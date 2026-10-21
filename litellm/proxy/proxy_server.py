@@ -15207,6 +15207,8 @@ async def count_request_tokens(
     responses_request: Mapping[str, object] | None = None,
     litellm_call_id: str | None = None,
 ) -> TokenCountResponse:
+    if request.prompt is None and request.messages is None and request.contents is None:
+        raise HTTPException(status_code=400, detail="prompt or messages or contents must be provided")
     return await logged_token_count(
         _count_request_tokens(
             request=request,
@@ -15236,12 +15238,6 @@ async def _count_request_tokens(
     contents: Final = request.contents
     tools: Final = request.tools
     system: Final = request.system
-
-    #########################################################
-    # Validate request
-    #########################################################
-    if prompt is None and messages is None and contents is None:
-        raise HTTPException(status_code=400, detail="prompt or messages or contents must be provided")
 
     deployment: dict[str, Any] | None = None
     litellm_model_name = None

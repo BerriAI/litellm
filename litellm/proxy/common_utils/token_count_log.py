@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -11,12 +12,16 @@ from litellm.proxy.common_utils.openai_error_payload import error_status_code
 from litellm.types.token_count import TokenCountSource
 from litellm.types.utils import TokenCountResponse
 
+_BARE_LOGFMT_VALUE: Final = re.compile(r"[\w.:/@+-]+", re.ASCII)
+_JSON_ESCAPED_BRACES: Final = str.maketrans({"{": "\\u007b", "}": "\\u007d"})
+
 
 def _logfmt_value(value: str | None) -> str:
     if value is None:
         return "None"
-    bare: Final = value != "" and value.isprintable() and not any(ch.isspace() or ch in '"=' for ch in value)
-    return value if bare else json.dumps(value)
+    if _BARE_LOGFMT_VALUE.fullmatch(value):
+        return value
+    return json.dumps(value).translate(_JSON_ESCAPED_BRACES)
 
 
 _Counted: Final = TypeVar("_Counted")

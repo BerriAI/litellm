@@ -41,7 +41,7 @@ from starlette.types import Message
 
 import litellm
 from litellm import Router
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import JsonFormatter, verbose_proxy_logger
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -3980,6 +3980,38 @@ def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(
             "status_code": 400,
         },
     )
+
+
+def test_utils_token_counter_request_with_nothing_to_count_writes_no_line(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+) -> None:
+    response: Final = _utils_token_counter(
+        monkeypatch, {"model": "count-log-gpt"}, {"x-litellm-call-id": "count-log-utils-empty"}
+    )
+
+    assert response.status_code == 400, response.text
+    assert token_count_log_lines() == ()
+
+
+def test_utils_token_counter_json_line_keeps_its_own_fields_when_the_call_id_is_a_dict(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    forged_call_id: Final = "{'component':'forged-comp','logger':'forged.py:1','injected_key':'injected'}"
+
+    _utils_token_counter(monkeypatch, _COUNTED_HELLO, {"x-litellm-call-id": forged_call_id})
+
+    (line,) = token_count_log_lines()
+    (record,) = (record for record in caplog.records if "count_source" in record.__dict__)
+    rendered: Final = json.loads(JsonFormatter().format(record))
+    assert line["litellm_call_id"] == forged_call_id
+    assert {key: rendered.get(key) for key in ("litellm_call_id", "component", "logger", "injected_key")} == {
+        "litellm_call_id": forged_call_id,
+        "component": verbose_proxy_logger.name,
+        "logger": f"{record.filename}:{record.lineno}",
+        "injected_key": None,
+    }
 
 
 def test_utils_token_counter_line_stays_one_line_when_the_model_carries_a_newline(
