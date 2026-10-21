@@ -61,6 +61,7 @@ beforeAll(() => {
 vi.mock("@/components/networking", () => ({
   dailyActivityAggregatedCall: vi.fn(),
   dailyActivityKeyPageCall: vi.fn(),
+  dailyActivityTagPageCall: vi.fn(),
   userDailyActivityUserPageCall: vi.fn(),
   dailyActivityKeySearchCall: vi.fn(),
   dailyActivityModelTopKeysCall: vi.fn(),
