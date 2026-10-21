@@ -3014,7 +3014,7 @@ class TestPollPageStarvation:
         prisma: Final = self._prisma([])
         prisma.db.litellm_managedobjecttable = table
         llm_router: Final = MagicMock()
-        llm_router.aretrieve_batch = AsyncMock(side_effect=RuntimeError("timed out"))
+        llm_router.aretrieve_batch = AsyncMock(side_effect=_A_REJECTED_KEY)
         poller: Final = self._instance(prisma, llm_router)
 
         for _ in range(FAILED_RETRIEVES_BEFORE_EXPIRY - 1):
@@ -4614,13 +4614,20 @@ _A_REJECTED_KEY: Final = litellm.AuthenticationError(message="invalid api key", 
             [_provider_batch("in_progress")] * FAILED_RETRIEVES_BEFORE_EXPIRY,
             "in_progress",
         ),
-        (_PAST_THE_STALENESS_CUTOFF, "in_progress", _CLAIM_UNIFIED_BATCH_ID, RuntimeError("timed out"), "stale_expired"),
+        (_PAST_THE_STALENESS_CUTOFF, "in_progress", _CLAIM_UNIFIED_BATCH_ID, RuntimeError("timed out"), "in_progress"),
         (
             _PAST_THE_STALENESS_CUTOFF,
             "in_progress",
             _CLAIM_UNIFIED_BATCH_ID,
             litellm.InternalServerError(message="upstream error", llm_provider="openai", model="gpt-4"),
-            "stale_expired",
+            "in_progress",
+        ),
+        (
+            _PAST_THE_STALENESS_CUTOFF,
+            "in_progress",
+            _CLAIM_UNIFIED_BATCH_ID,
+            litellm.RateLimitError(message="rate limited", llm_provider="openai", model="gpt-4"),
+            "in_progress",
         ),
         (_PAST_THE_STALENESS_CUTOFF, "in_progress", _CLAIM_UNIFIED_BATCH_ID, _A_REJECTED_KEY, "stale_expired"),
         (
@@ -4638,6 +4645,7 @@ _A_REJECTED_KEY: Final = litellm.AuthenticationError(message="invalid api key", 
         "still_running",
         "retrieve_timed_out",
         "provider_5xx",
+        "provider_429",
         "key_rejected",
         "unroutable",
         "inside_the_cutoff",
@@ -4665,15 +4673,14 @@ async def test_a_batch_the_poller_cannot_settle_expires_only_once_past_the_stale
 
 
 @pytest.mark.asyncio
-async def test_an_unfinished_batch_past_the_staleness_cutoff_expires_only_after_consecutive_failed_retrieves() -> None:
+async def test_an_unfinished_batch_past_the_staleness_cutoff_expires_only_after_consecutive_refused_retrieves() -> None:
     row: Final = _FakeManagedObjectRow()
     row.created_at = datetime.now(timezone.utc) - _PAST_THE_STALENESS_CUTOFF
-    timeout: Final = RuntimeError("timed out")
     router: Final = TestMultiPodBatchCostClaim._router()
     router.aretrieve_batch.side_effect = [
-        *([timeout] * (FAILED_RETRIEVES_BEFORE_EXPIRY - 1)),
+        *([_A_REJECTED_KEY] * (FAILED_RETRIEVES_BEFORE_EXPIRY - 1)),
         _provider_batch("in_progress"),
-        *([timeout] * FAILED_RETRIEVES_BEFORE_EXPIRY),
+        *([_A_REJECTED_KEY] * FAILED_RETRIEVES_BEFORE_EXPIRY),
     ]
     poller: Final = TestMultiPodBatchCostClaim._instance(TestMultiPodBatchCostClaim._prisma(row, []), router)
     statuses: Final = []
@@ -4777,14 +4784,14 @@ async def test_expiring_a_batch_past_the_staleness_cutoff_keeps_a_finished_statu
     row.created_at = datetime.now(timezone.utc) - _PAST_THE_STALENESS_CUTOFF
     router: Final = TestMultiPodBatchCostClaim._router()
 
-    async def _a_client_reads_the_finished_batch_while_the_last_poller_retrieve_times_out(
+    async def _a_client_reads_the_finished_batch_while_the_last_poller_retrieve_is_refused(
         *, model: str, batch_id: str, litellm_metadata: object
     ) -> LiteLLMBatch:
         if router.aretrieve_batch.call_count == FAILED_RETRIEVES_BEFORE_EXPIRY:
             row.status = "completed"
-        raise RuntimeError("timed out")
+        raise _A_REJECTED_KEY
 
-    router.aretrieve_batch.side_effect = _a_client_reads_the_finished_batch_while_the_last_poller_retrieve_times_out
+    router.aretrieve_batch.side_effect = _a_client_reads_the_finished_batch_while_the_last_poller_retrieve_is_refused
     poller: Final = TestMultiPodBatchCostClaim._instance(TestMultiPodBatchCostClaim._prisma(row, []), router)
 
     with TestMultiPodBatchCostClaim._billing_patches([]):

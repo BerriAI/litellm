@@ -395,6 +395,16 @@ class CheckBatchCost:
 
         return isinstance(error, (NotFoundError, openai.NotFoundError)) and _error_names_resource(error, batch_id)
 
+    @staticmethod
+    def _is_lasting_provider_failure(error: Exception) -> bool:
+        import openai
+
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        return isinstance(error, (BaseLLMException, openai.APIStatusError)) and not litellm.should_retry(
+            error.status_code
+        )
+
     def _batch_deployment_exists(self, model_id: str) -> bool:
         """A 404 only proves the batch is gone when it came from the batch's own
         deployment. Once that deployment leaves the router, default fallbacks can
@@ -1217,7 +1227,11 @@ class CheckBatchCost:
                     prom_logger.record_check_batch_cost_error("provider_retrieval_error")
                 if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
                     await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
-                elif self._is_past_staleness_cutoff(job) and job.status not in TERMINAL_MANAGED_OBJECT_STATUSES:
+                elif (
+                    self._is_past_staleness_cutoff(job)
+                    and job.status not in TERMINAL_MANAGED_OBJECT_STATUSES
+                    and self._is_lasting_provider_failure(e)
+                ):
                     await self._expire_unfinished_after_repeated_failures(job)
                 continue
             self._forget_failed_retrieves(job)
