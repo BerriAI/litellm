@@ -244,9 +244,10 @@ def test_anthropic_adapter_does_not_repeat_custom_stream_failure_dispatch() -> N
 
     events: Final = asyncio.run(_drain_sse(wrapper))
 
-    assert _parse_sse(events[-1])[0] == "error"
     assert async_recorder.started == 1
     assert async_recorder.completed == 1
+    assert sync_recorder.called.wait(timeout=5), "sync failure callback never ran"
+    assert _parse_sse(events[-1])[0] == "error"
     assert len(async_recorder.exceptions) == 1
     assert len(sync_recorder.exceptions) == 1
     assert async_recorder.usages == ((30, 1),)
