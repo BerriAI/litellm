@@ -35,6 +35,7 @@ from litellm._logging import (
     _plain_log_format,
     _stdout_truncation_marker,
     print_startup_message,
+    print_startup_warning,
     turn_on_json,
     format_base64_size,
     session_id_var,
@@ -1863,14 +1864,15 @@ class _CapturedStream(StringIO):
 
 
 @pytest.mark.parametrize(
-    "stdout_tty, no_color, want_color",
-    [(True, None, True), (False, None, False), (True, "1", False)],
+    "stdout_tty, stderr_tty, no_color, want_color",
+    [(True, True, None, True), (False, True, None, False), (True, False, None, False), (True, True, "1", False)],
 )
 def test_print_startup_message_keeps_colors_only_on_a_color_terminal(
-    monkeypatch: pytest.MonkeyPatch, stdout_tty: bool, no_color: str | None, want_color: bool
+    monkeypatch: pytest.MonkeyPatch, stdout_tty: bool, stderr_tty: bool, no_color: str | None, want_color: bool
 ):
     """Operators without JSON logs keep the colored, spaced output on a terminal. A container runtime reads
-    stdout through a pipe and stores the escape codes as text, so there, and under NO_COLOR, the colors go."""
+    stdout through a pipe and stores the escape codes as text, so there, and under NO_COLOR, the colors go.
+    The rule is the plain log format's, so a `2>file` run drops the colors from prints and log lines alike."""
     monkeypatch.setattr(litellm, "json_logs", False)
     if no_color is None:
         monkeypatch.delenv("NO_COLOR", raising=False)
@@ -1878,6 +1880,8 @@ def test_print_startup_message_keeps_colors_only_on_a_color_terminal(
         monkeypatch.setenv("NO_COLOR", no_color)
     stdout: Final = _CapturedStream(stdout_tty)
     monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", _CapturedStream(stderr_tty))
+    assert (_plain_log_format(sys.stdout, sys.stderr) == _COLOR_LOG_FORMAT) is want_color
 
     print_startup_message("\n\033[1;32mLiteLLM: Proxy initialized with Config, Set models:\033[0m\n")
 
@@ -1903,6 +1907,32 @@ def test_print_startup_message_writes_nothing_when_suppressed(
     print_startup_message("\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m\n\033[32m    web-search (tavily)\033[0m")
 
     assert capfd.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("json_logs", [False, True])
+def test_print_startup_warning_still_prints_when_suppressed(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], json_logs: bool
+):
+    """A warning names something the operator has to fix, like an ignored flag or a failed migration diff,
+    so suppress_startup_output leaves it in place, at the caller's location in JSON mode."""
+    monkeypatch.setattr(litellm, "json_logs", json_logs)
+    monkeypatch.setattr(litellm, "suppress_startup_output", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    if json_logs:
+        turn_on_json()
+
+    print_startup_warning("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
+    assert len(lines) == 1, lines
+    if json_logs:
+        record: Final = json.loads(lines[0])
+        assert record["message"] == "LiteLLM: --ciphers is not applied when using --run_granian."
+        assert str(record["logger"]).startswith("test_logging.py:"), record["logger"]
+    else:
+        assert lines[0] == "LiteLLM: --ciphers is not applied when using --run_granian."
 
 
 def test_print_startup_message_is_one_json_record_in_json_mode(monkeypatch, capfd):

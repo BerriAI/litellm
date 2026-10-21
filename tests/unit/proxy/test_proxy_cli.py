@@ -3964,7 +3964,12 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
     each worker prints before its load_config."""
 
     @staticmethod
-    def _env_after_boot(config_path: Path, litellm_settings: dict[str, object], name: str = "JSON_LOGS") -> str | None:
+    def _env_after_boot(
+        config_path: Path,
+        litellm_settings: dict[str, object],
+        name: str = "JSON_LOGS",
+        from_config_file_path_env: bool = False,
+    ) -> str | None:
         config_path.write_text(yaml.dump({"model_list": [], "litellm_settings": litellm_settings}))
         mock_proxy_config: Final = MagicMock()
         mock_proxy_config.return_value.get_config = AsyncMock(return_value=yaml.safe_load(config_path.read_text()))
@@ -3977,10 +3982,12 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
         clean_env: Final = {
             k: v
             for k, v in os.environ.items()
-            if k not in ("DATABASE_URL", "DIRECT_URL", "JSON_LOGS", "LITELLM_SUPPRESS_STARTUP_OUTPUT")
+            if k not in ("DATABASE_URL", "DIRECT_URL", "JSON_LOGS", "LITELLM_SUPPRESS_STARTUP_OUTPUT", "CONFIG_FILE_PATH")
         }
+        config_env: Final = {"CONFIG_FILE_PATH": str(config_path)} if from_config_file_path_env else {}
+        config_args: Final = [] if from_config_file_path_env else ["--config", str(config_path)]
         with (
-            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(os.environ, {**clean_env, **config_env}, clear=True),
             patch.dict(
                 "sys.modules",
                 {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
@@ -3988,7 +3995,7 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
             patch("atexit.register"),
             patch("litellm.turn_on_json"),  # test-quality-ok: it swaps every logger handler in this pytest worker
         ):
-            run_server.main(["--config", str(config_path), "--local", "--skip_server_startup"], standalone_mode=False)
+            run_server.main([*config_args, "--local", "--skip_server_startup"], standalone_mode=False)
             return os.environ.get(name)
 
     def test_json_logs_true_exports_json_logs_to_spawned_workers(self, tmp_path: Path, monkeypatch) -> None:
@@ -4007,12 +4014,21 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
         settings: Final = {"suppress_startup_output": setting}
         assert self._env_after_boot(tmp_path / "config.yaml", settings, "LITELLM_SUPPRESS_STARTUP_OUTPUT") == exported
 
+    @pytest.mark.parametrize("name", ["JSON_LOGS", "LITELLM_SUPPRESS_STARTUP_OUTPUT"])
+    def test_a_config_named_by_CONFIG_FILE_PATH_reaches_spawned_workers_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "json_logs", False)
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        settings: Final[dict[str, object]] = {"json_logs": True, "suppress_startup_output": True}
+        assert self._env_after_boot(tmp_path / "config.yaml", settings, name, from_config_file_path_env=True) == "true"
+
 
 class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:
     """With a config file, the `--enforce_prisma_migration_check` deprecation notice waits until the config
-    is read, so a `json_logs: true` set only there makes it a JSON record and a `suppress_startup_output: true`
-    set only there silences it. Otherwise it is printed once, and a boot whose config read fails still prints
-    it before the error, as it did before the wait."""
+    is read, so a `json_logs: true` set only there makes it a JSON record, while `suppress_startup_output: true`
+    leaves it, since it is a warning. Otherwise it is printed once, and a boot whose config read fails still
+    prints it before the error, as it did before the wait."""
 
     NOTICE: Final = "--enforce_prisma_migration_check is deprecated and has no effect"
 
@@ -4070,7 +4086,7 @@ class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:
         assert self.NOTICE in json.loads(notice_lines[0])["message"]
 
     @pytest.mark.parametrize("json_logs", [False, True])
-    def test_a_config_only_suppress_startup_output_silences_the_notice(
+    def test_a_config_only_suppress_startup_output_keeps_the_notice(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: bool
     ) -> None:
         monkeypatch.setattr(litellm, "json_logs", json_logs)
@@ -4079,7 +4095,7 @@ class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:
 
         self._boot(tmp_path / "config.yaml", AsyncMock(return_value=config))
 
-        assert self.NOTICE not in capsys.readouterr().out
+        assert capsys.readouterr().out.count(self.NOTICE) == 1
 
 
 def test_granian_flag_notices_are_json_records_in_json_mode(monkeypatch, capfd):

@@ -42,7 +42,7 @@ NO_ATTACHMENTS_WARNING: Final = (
 )
 
 
-class _Stdout(StringIO):
+class _Stream(StringIO):
     def __init__(self, terminal: bool) -> None:
         super().__init__()
         self._terminal = terminal
@@ -75,8 +75,9 @@ def test_policy_table_prints_unchanged_in_plain_mode(
     without color codes on a piped stdout."""
     monkeypatch.setattr(litellm, "json_logs", False)
     monkeypatch.delenv("NO_COLOR", raising=False)
-    stdout: Final = _Stdout(terminal)
+    stdout: Final = _Stream(terminal)
     monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", _Stream(terminal))
 
     _print_policies_on_startup(POLICIES, attachments)
 

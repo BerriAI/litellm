@@ -304,6 +304,7 @@ import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
 from litellm._logging import (
+    STARTUP_OUTPUT_SETTINGS,
     print_startup_message,
     redact_string,
     verbose_proxy_logger,
@@ -6549,6 +6550,8 @@ class ProxyConfig:
             from litellm.types.integrations.prometheus import validate_caller_identity_settings
 
             validate_caller_identity_settings(litellm_settings)
+            if STARTUP_OUTPUT_SETTINGS.validate_python(litellm_settings).get("suppress_startup_output") is True:
+                litellm.suppress_startup_output = True
 
             # ANSI escape code for blue text
             blue_color_code: Final = "\033[94m"
@@ -6870,6 +6873,8 @@ class ProxyConfig:
                     setattr(litellm, key, value)
                 elif key == "drop_params":
                     litellm.drop_params = drop_params_flag(value, "litellm_settings.drop_params", verbose_proxy_logger)
+                elif key == "suppress_startup_output":
+                    continue
                 else:
                     verbose_proxy_logger.debug(
                         "%s setting litellm.%s=%s%s",

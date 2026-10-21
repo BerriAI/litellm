@@ -10,10 +10,12 @@ import sys
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
+from types import FrameType
 from typing import Final, TextIO
 from urllib.parse import unquote
 
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -622,9 +624,14 @@ def _color_enabled(stream: TextIO | None) -> bool:
     return not os.environ.get("NO_COLOR") and _stream_is_tty(stream)
 
 
+def _terminal_colors(stdout: TextIO | None, stderr: TextIO | None) -> bool:
+    """True when both streams are an interactive color terminal, the one rule for log lines and startup prints."""
+    return _color_enabled(stdout) and _color_enabled(stderr)
+
+
 def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
     """The plain-text log format, colorized only when both streams are an interactive terminal."""
-    return _COLOR_LOG_FORMAT if _color_enabled(stdout) and _color_enabled(stderr) else _PLAIN_LOG_FORMAT
+    return _COLOR_LOG_FORMAT if _terminal_colors(stdout, stderr) else _PLAIN_LOG_FORMAT
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
@@ -662,6 +669,16 @@ def resolve_log_level(log_level: str) -> int:
 
 json_logs: Final = _parse_env_flag(os.getenv("JSON_LOGS"))
 suppress_startup_output: Final = _parse_env_flag(os.getenv("LITELLM_SUPPRESS_STARTUP_OUTPUT"))
+
+
+class StartupOutputSettings(TypedDict, total=False):
+    json_logs: ReadOnly[object]
+    suppress_startup_output: ReadOnly[object]
+
+
+STARTUP_OUTPUT_SETTINGS: Final = TypeAdapter(StartupOutputSettings)
+
+
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: Final[int] = resolve_log_level(log_level)
@@ -910,8 +927,9 @@ def print_startup_message(message: str) -> None:
     """Write a boot-time message meant for the operator's terminal.
 
     LITELLM_SUPPRESS_STARTUP_OUTPUT or litellm_settings.suppress_startup_output turns every one of them
-    off. Plain mode prints it with its spacing, keeping the ANSI colors only when stdout is a color
-    terminal by the same check as the plain log format, so a container log never stores escape codes.
+    off; a warning goes through print_startup_warning instead. Plain mode prints it with its spacing,
+    keeping the ANSI colors only on a color terminal by the same check as the plain log format, so a
+    container log never stores escape codes.
     With JSON logs on, every line of stdout is read by a log pipeline, so the message goes out as one
     INFO record of the proxy logger instead, on stdout like the print whatever handlers the logging
     config gave that logger, with the ANSI color codes and surrounding blank lines removed, located at
@@ -919,15 +937,25 @@ def print_startup_message(message: str) -> None:
     """
     if litellm.suppress_startup_output is True:
         return
+    frame: Final = inspect.currentframe()
+    _write_startup_message(message, frame.f_back if frame is not None else None)
+
+
+def print_startup_warning(message: str) -> None:
+    """Write a boot-time warning exactly as print_startup_message writes a message, even with
+    suppress_startup_output on, since it names something the operator has to fix."""
+    frame: Final = inspect.currentframe()
+    _write_startup_message(message, frame.f_back if frame is not None else None)
+
+
+def _write_startup_message(message: str, caller: FrameType | None) -> None:
     if not litellm.json_logs:
-        printed: Final = message if _color_enabled(sys.stdout) else _ANSI_ESCAPE.sub("", message)
+        printed: Final = message if _terminal_colors(sys.stdout, sys.stderr) else _ANSI_ESCAPE.sub("", message)
         print(printed, flush=True)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
         return
     text: Final = _ANSI_ESCAPE.sub("", message).strip("\n")
     if not text:
         return
-    frame: Final = inspect.currentframe()
-    caller: Final = frame.f_back if frame is not None else None
     record: Final = verbose_proxy_logger.makeRecord(
         verbose_proxy_logger.name,
         logging.INFO,

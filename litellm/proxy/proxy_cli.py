@@ -16,10 +16,11 @@ import click
 import httpx
 from click.core import ParameterSource
 from dotenv import load_dotenv
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm._logging import print_startup_message
+from litellm._logging import StartupOutputSettings, print_startup_message, print_startup_warning
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
 from litellm.proxy.db.pgbouncer import (
     PgBouncerError,
@@ -205,7 +206,7 @@ def deprecated_v2_flag_passed_on_cli() -> bool:
 
 
 def _print_enforce_prisma_migration_check_notice() -> None:
-    print_startup_message(
+    print_startup_warning(
         "\033[1;33mLiteLLM Proxy: --enforce_prisma_migration_check is "
         "deprecated and has no effect, because the proxy always exits "
         "when database setup fails at startup. You can safely remove it.\033[0m",
@@ -215,10 +216,9 @@ def _print_enforce_prisma_migration_check_notice() -> None:
 def _print_or_hold_enforce_prisma_migration_check_notice(
     *, reads_config_file: bool, returns_before_config: bool
 ) -> Callable[[], None] | None:
-    """Print the notice now, or, while a config file can still switch json_logs or suppress_startup_output
-    on, return a printer to call once it is read; a boot that fails before that prints the held notice on
-    the way out."""
-    if not reads_config_file or returns_before_config:
+    """Print the notice now, or, while a config file can still switch json_logs on, return a printer
+    to call once it is read; a boot that fails before that prints the held notice on the way out."""
+    if not reads_config_file or litellm.json_logs or returns_before_config:
         _print_enforce_prisma_migration_check_notice()
         return None
     print_once: Final = functools.cache(_print_enforce_prisma_migration_check_notice)
@@ -226,6 +226,28 @@ def _print_or_hold_enforce_prisma_migration_check_notice(
     if ctx is not None:
         ctx.call_on_close(print_once)
     return print_once
+
+
+class _ConfigStartupOutputSettings(TypedDict, total=False):
+    litellm_settings: ReadOnly[StartupOutputSettings | None]
+
+
+_CONFIG_STARTUP_OUTPUT_SETTINGS: Final = TypeAdapter(_ConfigStartupOutputSettings)
+
+
+def _apply_config_logging_settings(litellm_settings: StartupOutputSettings | None) -> None:
+    """Turn on the config's json_logs and suppress_startup_output before any worker starts. Workers that
+    uvicorn or granian spawn import litellm afresh and read both from the env at import, so they log JSON
+    and stay quiet from their first line instead of from when load_config reaches the key."""
+    if litellm_settings is None:
+        return
+    if litellm_settings.get("json_logs") is True:
+        litellm.json_logs = True
+        os.environ["JSON_LOGS"] = "true"
+        litellm.turn_on_json()
+    if litellm_settings.get("suppress_startup_output") is True:
+        litellm.suppress_startup_output = True
+        os.environ["LITELLM_SUPPRESS_STARTUP_OUTPUT"] = "true"
 
 
 class ProxyInitializationHelpers:
@@ -357,7 +379,7 @@ class ProxyInitializationHelpers:
             if "timeout_worker_healthcheck" in inspect.signature(uvicorn.Config.__init__).parameters:
                 uvicorn_args["timeout_worker_healthcheck"] = timeout_worker_healthcheck
             else:
-                print_startup_message(
+                print_startup_warning(
                     f"\033[1;33mLiteLLM Proxy: --timeout_worker_healthcheck "
                     f"requires uvicorn>=0.37.0, but installed uvicorn=={uvicorn.__version__}. "
                     f"Ignoring the flag.\033[0m",
@@ -380,7 +402,7 @@ class ProxyInitializationHelpers:
         import uvicorn
 
         if max_requests_before_restart is None:
-            print_startup_message(
+            print_startup_warning(
                 "\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
                 "has no effect without --max_requests_before_restart\033[0m\n",
             )
@@ -388,7 +410,7 @@ class ProxyInitializationHelpers:
         if "limit_max_requests_jitter" in inspect.signature(uvicorn.Config.__init__).parameters:
             uvicorn_args["limit_max_requests_jitter"] = jitter
         else:
-            print_startup_message(
+            print_startup_warning(
                 f"\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
                 f"requires uvicorn>=0.41.0, but installed uvicorn=={uvicorn.__version__}. "
                 f"Ignoring the flag.\033[0m",
@@ -555,12 +577,12 @@ class ProxyInitializationHelpers:
 
         print_startup_message(f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Granian\033[0m\n")
         if max_requests_before_restart is not None:
-            print_startup_message(
+            print_startup_warning(
                 "\033[1;33mLiteLLM: --max_requests_before_restart is not supported by Granian "
                 "(Granian uses workers_lifetime in seconds, not a per-request limit).\033[0m\n",
             )
         if ciphers is not None:
-            print_startup_message("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
+            print_startup_warning("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
 
         kwargs: Final[dict[str, object]] = {
             "target": "litellm.proxy.proxy_server:app",
@@ -682,7 +704,7 @@ class ProxyInitializationHelpers:
             gunicorn_options["max_requests"] = max_requests_before_restart
         if max_requests_before_restart_jitter is not None:
             if max_requests_before_restart is None:
-                print_startup_message(
+                print_startup_warning(
                     "\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
                     "has no effect without --max_requests_before_restart\033[0m\n",
                 )
@@ -723,7 +745,7 @@ class ProxyInitializationHelpers:
             with open(os.devnull, "w") as devnull:
                 subprocess.Popen(command, stdout=devnull, stderr=devnull)
         except Exception as e:
-            print_startup_message(f"""
+            print_startup_warning(f"""
                 LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
             """)
 
@@ -1202,9 +1224,11 @@ def run_server(
     if validate_config is True:
         ProxyInitializationHelpers.run_config_validation(config)
         return
+    env_config_file_path: Final = (os.environ.get("CONFIG_FILE_PATH") or None) if config is None else None
     held_prisma_notice: Final = (
         _print_or_hold_enforce_prisma_migration_check_notice(
-            reads_config_file=config is not None, returns_before_config=health is True or test is True
+            reads_config_file=config is not None or env_config_file_path is not None,
+            returns_before_config=health is True or test is True,
         )
         if enforce_prisma_migration_check
         else None
@@ -1316,29 +1340,9 @@ def run_server(
 
             ### LITELLM SETTINGS ###
             litellm_settings = _config.get("litellm_settings", None)
-            if (
-                litellm_settings is not None
-                and "json_logs" in litellm_settings
-                and litellm_settings["json_logs"] is True
-            ):
-                import litellm
-
-                litellm.json_logs = True
-                # Workers that uvicorn or granian spawn import litellm afresh and read this at import,
-                # so they log JSON from their first record instead of plain text until load_config
-                # reaches the json_logs key.
-                os.environ["JSON_LOGS"] = "true"
-
-                litellm.turn_on_json()
-            if (
-                litellm_settings is not None
-                and "suppress_startup_output" in litellm_settings
-                and litellm_settings["suppress_startup_output"] is True
-            ):
-                import litellm
-
-                litellm.suppress_startup_output = True
-                os.environ["LITELLM_SUPPRESS_STARTUP_OUTPUT"] = "true"
+            _apply_config_logging_settings(
+                _CONFIG_STARTUP_OUTPUT_SETTINGS.validate_python(_config).get("litellm_settings")
+            )
             if held_prisma_notice is not None:
                 held_prisma_notice()
             ### GENERAL SETTINGS ###
@@ -1402,6 +1406,16 @@ def run_server(
                 os.chdir(original_dir)
             if database_url is not None and isinstance(database_url, str):
                 os.environ["DATABASE_URL"] = database_url
+        elif env_config_file_path is not None:
+            import asyncio
+
+            _apply_config_logging_settings(
+                _CONFIG_STARTUP_OUTPUT_SETTINGS.validate_python(
+                    asyncio.run(ProxyConfig().get_config(config_file_path=env_config_file_path))
+                ).get("litellm_settings")
+            )
+            if held_prisma_notice is not None:
+                held_prisma_notice()
 
         # Handle database URL construction when no config file is used
         if config is None and os.getenv("DATABASE_URL") is None:
@@ -1539,7 +1553,7 @@ def run_server(
                         env_value=os.getenv("USE_V2_MIGRATION_RESOLVER"),
                     )
                     if deprecated_v2_flag_passed_on_cli() and use_v2_resolver:
-                        print_startup_message(
+                        print_startup_warning(
                             "\033[1;33mLiteLLM Proxy: --use_v2_migration_resolver is "
                             "deprecated and has no effect, because the v2 migration "
                             "resolver is now the default. You can safely remove it. To "
@@ -1547,7 +1561,7 @@ def run_server(
                             "--use_legacy_migration_resolver.\033[0m",
                         )
                     if not use_v2_resolver:
-                        print_startup_message(
+                        print_startup_warning(
                             "\033[1;33mLiteLLM Proxy: Using the legacy (v1) migration "
                             "resolver. It performs the diff-and-force recovery that can "
                             "cause schema thrashing during rolling deploys where two "
@@ -1661,7 +1675,7 @@ def run_server(
                 run_gunicorn=run_gunicorn is True,
             )
             if single_worker_warning is not None:
-                print_startup_message(f"\033[1;33m{single_worker_warning}\033[0m\n")
+                print_startup_warning(f"\033[1;33m{single_worker_warning}\033[0m\n")
         if run_gunicorn is False and run_hypercorn is False and run_granian is False:
             if limit_concurrency is not None:
                 uvicorn_args["limit_concurrency"] = limit_concurrency

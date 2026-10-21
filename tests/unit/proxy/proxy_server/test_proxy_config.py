@@ -2117,6 +2117,52 @@ async def test_ProxyConfig_lists_search_tools_once_at_startup_not_on_every_repar
     assert out.count("Proxy initialized with Search Tools:") == 1, out
     assert out.count("web-search (tavily)") == 1, out
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("already_on", "config_value"),
+    [
+        pytest.param(True, False, id="env-var-on-and-config-false"),
+        pytest.param(False, True, id="config-key-below-cache"),
+    ],
+)
+async def test_ProxyConfig_load_config_keeps_startup_output_off_once_either_setting_turns_it_on(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    already_on: bool,
+    config_value: bool,
+):
+    """Only `true` turns suppress_startup_output on, from the env var or the config key, and a config `false`
+    never turns the env var back off. The key applies before any other litellm_settings key, so a `cache: true`
+    above it prints nothing either."""
+    config_file: Final = tmp_path / "suppress.yaml"
+    config_file.write_text(
+        "model_list: []\n"
+        "litellm_settings:\n"
+        "  cache: true\n"
+        "  cache_params:\n"
+        "    type: local\n"
+        f"  suppress_startup_output: {str(config_value).lower()}\n"
+        "search_tools:\n"
+        "  - search_tool_name: web-search\n"
+        "    litellm_params:\n"
+        "      search_provider: tavily\n"
+    )
+    monkeypatch.setattr(litellm, "json_logs", False)
+    monkeypatch.setattr(litellm, "suppress_startup_output", already_on)
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    out: Final = capfd.readouterr().out
+    assert litellm.suppress_startup_output is True
+    assert "Setting Cache on Proxy" not in out, out
+    assert "Proxy initialized with Search Tools:" not in out, out
+
+
 
 def test_ProxyConfig_merge_config_and_db_search_tools_returns_superset():
     config_tools = [

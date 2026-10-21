@@ -1085,8 +1085,8 @@ class PrometheusLogger(CustomLogger):
         # Build label filters from valid configurations
         label_filters: Final = self._build_label_filters(parsed_configs)
 
-        # Pretty print the processed configuration
-        self._pretty_print_prometheus_config(label_filters)
+        if litellm.suppress_startup_output is not True:
+            self._pretty_print_prometheus_config(label_filters)
         return label_filters
 
     def _parse_exclude_config(self) -> tuple[frozenset[str], frozenset[str]]:
