@@ -17,7 +17,7 @@ unset DATABASE_URL DIRECT_URL DATABASE_HOST; while IFS= read -r line || [ -n "$l
 
 Ask everything in one message, with defaults the user can accept by saying "go":
 
-- Providers and models. Default is OpenAI with its newest flagship model
+- Providers and models. Default is OpenAI with its newest flagship model, using the `OPENAI_API_KEY` in your environment when `[ -n "$OPENAI_API_KEY" ] && echo set` says it is there. Run that check before asking, and name the variable but never its value, since a key in your environment can belong to another account
 - Whether they want virtual keys, teams, spend tracking, or the Admin UI. Those need Postgres, plain routing does not. Default is no
 - uv (default) or Docker. With Postgres, Docker runs the repo's quickstart, which brings its own database, and uv needs a Postgres server they already have, with a new, empty database for LiteLLM
 - Folder and port. Defaults are `./litellm-proxy` (`./litellm-gateway` for the quickstart) and 4000
@@ -29,12 +29,12 @@ In the same message, say that someone who picks uv and would rather answer promp
 ## 2. Check prerequisites
 
 ```bash
-uv --version; docker info --format '{{.ServerVersion}}'; docker compose version; curl --version | head -1; openssl version; command -v python3 lsof
+uv --version; docker info --format '{{.ServerVersion}}'; docker compose version; curl --version | head -1; openssl version; command -v python3
 ```
 
-Every path needs curl, openssl, python3, and lsof, so ask the user to install any that is missing. The uv path needs uv, which downloads a supported Python (LiteLLM supports 3.10 to 3.14) when the `--python` range in step 4 rules out the one on the machine. If uv is missing, offer to install it, and only after the user says yes run `curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh`, which leaves their shell profile alone (https://docs.astral.sh/uv/getting-started/installation/). It puts uv in `~/.local/bin`, so start every later command that runs `uv` or `litellm` with `export PATH="$HOME/.local/bin:$PATH";`. The Docker path needs a running Docker daemon, and the quickstart also needs Docker Compose v2. If `docker info` says `permission denied`, the user's account cannot use Docker without sudo. Offer the uv path, or ask them to add themselves to the `docker` group the way https://docs.docker.com/engine/install/linux-postinstall/ shows and start a new login session before you check again
+Every path needs curl, openssl, and python3, so ask the user to install any that is missing. The uv path needs uv, which downloads a supported Python (LiteLLM supports 3.10 to 3.14) when the `--python` range in step 4 rules out the one on the machine. If uv is missing, offer to install it, and only after the user says yes run `curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh`, which leaves their shell profile alone (https://docs.astral.sh/uv/getting-started/installation/). It puts uv in `~/.local/bin`, so start every later command that runs `uv` or `litellm` with `export PATH="$HOME/.local/bin:$PATH";`. The Docker path needs a running Docker daemon, and the quickstart also needs Docker Compose v2. If `docker info` says `permission denied`, the user's account cannot use Docker without sudo. Offer the uv path, or ask them to add themselves to the `docker` group the way https://docs.docker.com/engine/install/linux-postinstall/ shows and start a new login session before you check again
 
-Check the port is free with `lsof -nP -iTCP:4000 -sTCP:LISTEN`, which prints nothing when it is. If it is taken, pick another port and use it everywhere below, because a proxy asked for a busy 4000 silently moves to a random port
+Check the port is free with `curl -s -o /dev/null --max-time 2 http://127.0.0.1:4000; echo $?`, which prints `7` (could not connect) only when nothing listens there. Don't use `lsof` for this, since it misses ports that root or Docker hold. If it is taken, pick another port and use it everywhere below, because a proxy asked for a busy 4000 silently moves to a random port
 
 ## 3. Postgres with Docker: run the quickstart
 
@@ -46,7 +46,7 @@ LITELLM_DIR="$PWD/litellm-gateway" LITELLM_PORT=4000 sh quickstart.sh --yes
 cd litellm-gateway
 ```
 
-Models live in the database here, so add each one through the API instead of a `config.yaml`, naming it the way step 5 says. Pipe the request body in, so the provider key never shows up in output or on a command line. If the key is not in your environment, ask the user to add the line `OPENAI_API_KEY=<their key>` to this `.env` themselves, and run the loader line first:
+Models live in the database here, so add each one through the API instead of a `config.yaml`, naming it the way step 5 says. Pipe the request body in, so the provider key never shows up in output or on a command line. Unless the user agreed to the key in your environment, as step 5 says, ask them to add the line `OPENAI_API_KEY=<their key>` to this `.env` themselves. Run the loader line first:
 
 ```bash
 python3 -c 'import json, os, sys; json.dump({"model_name": "gpt-6.1-sol", "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": os.environ["OPENAI_API_KEY"]}}, sys.stdout)' \
@@ -83,16 +83,22 @@ touch .env && chmod 600 .env; grep -qx '.env' .gitignore 2>/dev/null || echo '.e
 grep -q '^LITELLM_MASTER_KEY=.' .env || printf 'LITELLM_MASTER_KEY=sk-%s\n' "$(openssl rand -hex 32)" >> .env
 ```
 
-For each provider key, if it is already in your environment (`[ -n "$OPENAI_API_KEY" ] && echo set`), copy it in without printing it, as in `printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY" >> .env`. Otherwise ask the user to add the line `OPENAI_API_KEY=<their key>` to `.env` themselves and tell you when it is there. If they paste a key into the chat anyway, write it to `.env` and never repeat it. Keep one `NAME=value` per line with no quotes, so `docker --env-file` and the loader line read the same value
+Copy a provider key that is already in your environment only after the user agreed to that variable, in their step 1 answer or when you ask now, and copy it without printing it, as in `printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY" >> .env`. Otherwise ask the user to add the line `OPENAI_API_KEY=<their key>` to `.env` themselves and tell you when it is there. If they paste a key into the chat anyway, write it to `.env` and never repeat it. Keep one `NAME=value` per line with no quotes, so `docker --env-file` and the loader line read the same value
 
-Confirm each model's current LiteLLM name in the cost map instead of trusting memory, since model names go stale fast. This lists the chat models of the provider named last (`openai`, `anthropic`, `gemini`, `azure`, `bedrock`, `vertex_ai`, and so on). It matches by prefix, so `bedrock` also lists the `bedrock_converse` rows, which hold the newer Bedrock models, and `vertex_ai` lists every Vertex family. For Ollama, use a model from `ollama list` instead:
+Confirm each model's current LiteLLM name in the cost map instead of trusting memory, since model names go stale fast. This prints the chat models of the provider named last (`openai`, `anthropic`, `gemini`, `azure`, `bedrock`, `vertex_ai`, and so on) the way `config.yaml` takes them, with the provider in front. It matches by prefix, so `bedrock` also lists the newer Bedrock models and `vertex_ai` lists every Vertex family. For Ollama, use a model from `ollama list` instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json \
-  | python3 -c 'import json,sys; [print(v["litellm_provider"], k) for k,v in json.load(sys.stdin).items() if isinstance(v,dict) and str(v.get("litellm_provider","")).startswith(sys.argv[1]) and v.get("mode")=="chat"]' openai
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json | python3 -c '
+import json, sys
+for name, row in json.load(sys.stdin).items():
+    provider = str(row.get("litellm_provider", "")) if isinstance(row, dict) else ""
+    if provider.startswith(sys.argv[1]) and row.get("mode") == "chat":
+        prefix = "bedrock" if provider == "bedrock_converse" else "vertex_ai" if provider.startswith("vertex_ai") else provider
+        print(name if name.startswith(prefix + "/") else prefix + "/" + name)
+' openai
 ```
 
-In `config.yaml`, `model` is the name with its provider in front, as in `openai/gpt-6.1-sol` or `bedrock/us.anthropic.<name>`. Names that already start with a provider and a slash (`gemini/...`, `vertex_ai/...`) are used as they are. `model_name` is what clients will send. This example uses the newest GPT model in the cost map when this skill was written, so replace it with what the user picked:
+In `config.yaml`, `model` is a name from that list, as in `openai/gpt-6.1-sol` or `bedrock/us.anthropic.<name>`, and `model_name` is what clients will send. This example uses the newest GPT model in the cost map when this skill was written, so replace it with what the user picked:
 
 ```yaml
 model_list:
@@ -180,6 +186,7 @@ Tell the user, without printing any secret:
 - `The Client hasn't been generated yet` or `Unable to find Prisma binaries` means the Prisma generate command in step 6 has not run
 - `Incorrect API key provided` or another provider `AuthenticationError` means a provider key is wrong. Fix it in `.env` and restart, since the proxy reads the environment only at startup. On uv, stop it and rerun step 7. On Docker, `docker rm -f litellm` and rerun step 7, since `docker restart` keeps the environment the container was created with. On the quickstart the key is saved with the model, so delete the model and add it again: `GET /model/info` lists each model's `model_info.id`, and `POST /model/delete` with `{"id": "<id>"}` deletes it
 - `Cannot automatically baseline this database` means `DATABASE_URL` points at a database that already holds tables LiteLLM did not create. Point it at a new, empty database
+- `LLM Provider NOT provided` means a `model` in `config.yaml` (or step 3) lacks its provider in front. Use the name as the step 5 lookup prints it
 - `Invalid model name passed in model=...` means the request's `model` is not a `model_name` in `config.yaml` or step 3. `GET /v1/models` lists the ones the key can use
 - `No connected db.` on a proxy without Postgres means the bearer token is not the master key
 - `Conflict. The container name "/litellm" is already in use` means an earlier run left a container. `docker start litellm` reuses it, or with the user's OK `docker rm -f litellm` and rerun step 7
