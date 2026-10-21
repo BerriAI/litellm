@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -88,14 +89,12 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         complete_url: str = api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
 
-        complete_url = complete_url.rstrip("/")
-
         # Gemini Flash Image Preview models use generateContent endpoint
         if is_gemini_image_model(model):
-            complete_url = f"{complete_url}/models/{model}:generateContent"
+            complete_url = join_api_base(complete_url, f"models/{model}:generateContent")
         else:
             # All other Imagen models use predict endpoint
-            complete_url = f"{complete_url}/models/{model}:predict"
+            complete_url = join_api_base(complete_url, f"models/{model}:predict")
 
         return complete_url
 

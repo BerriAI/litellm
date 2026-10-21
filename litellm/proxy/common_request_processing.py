@@ -67,6 +67,7 @@ from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -266,6 +267,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     sanitize_for_log,
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
+from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -552,22 +554,29 @@ def model_deployments_support_stream_options(
     return all(_litellm_model_supports_stream_options(m) for m in candidate_models)
 
 
+_STREAM_USAGE_FLAGS: Final = ("_litellm_strip_stream_usage", STREAM_USAGE_INJECTED_FIELD)
+
+
 def stream_usage_tracking_updates(
     data: Mapping[str, object],
     general_settings: Mapping[str, object],
     route_type: str,
     supports_stream_options: Callable[[], bool],
 ) -> Mapping[str, object]:
-    scrub: Final = {"_litellm_strip_stream_usage": False} if "_litellm_strip_stream_usage" in data else {}
+    scrub: Final = {flag: False for flag in _STREAM_USAGE_FLAGS if flag in data}
     if data.get("stream", False) is not True:
         return scrub
     always_include: Final = general_settings.get("always_include_stream_usage")
     stream_options: Final = data.get("stream_options")
     if always_include is True:
         if "stream_options" not in data:
-            return {**scrub, "stream_options": {"include_usage": True}}
+            return {**scrub, "stream_options": {"include_usage": True}, STREAM_USAGE_INJECTED_FIELD: True}
         if isinstance(stream_options, dict) and "include_usage" not in stream_options:
-            return {**scrub, "stream_options": {**stream_options, "include_usage": True}}
+            return {
+                **scrub,
+                "stream_options": {**stream_options, "include_usage": True},
+                STREAM_USAGE_INJECTED_FIELD: True,
+            }
         return scrub
     if always_include is False and route_type == "agenerate_content_stream" and "stream_options" not in data:
         return {**scrub, "stream_options": {"include_usage": False}}
@@ -581,6 +590,7 @@ def stream_usage_tracking_updates(
     return {
         "stream_options": {**merged_stream_options, "include_usage": True},
         "_litellm_strip_stream_usage": True,
+        STREAM_USAGE_INJECTED_FIELD: True,
     }
 
 
@@ -1976,6 +1986,7 @@ class ProxyBaseLLMRequestProcessing:
         self.data = data
         self.served_model = served_model
         self._tags_before_guardrails: frozenset[str] | None = None
+        self.route_type: str | None = None
 
     @property
     def litellm_call_id(self) -> str | None:
@@ -2425,6 +2436,7 @@ class ProxyBaseLLMRequestProcessing:
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
         ## IMPORTANT Note: - initialize this before running pre-call checks. Ensures we log rejected requests to langfuse.
+        self.route_type = route_type
         logging_obj, self.data = litellm.utils.function_setup(
             original_function=route_type,
             rules_obj=litellm.utils.Rules(),
@@ -2801,6 +2813,7 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
                 original_exception=exc,
                 request_data=self.data,
+                dispatched_call_type=self.route_type,
             )
 
         return await open_sse_before_first_byte(
@@ -2865,6 +2878,7 @@ class ProxyBaseLLMRequestProcessing:
                     "skip_pre_call_logic=True requires litellm_logging_obj to be set in data. "
                     "Ensure common_processing_pre_call_logic was called before using this parameter."
                 )
+            self.route_type = route_type
         else:
             self.data, logging_obj = await self._pre_call_with_fallbacks(
                 request=request,
@@ -3474,6 +3488,7 @@ class ProxyBaseLLMRequestProcessing:
                     user_api_key_dict=user_api_key_dict,
                     original_exception=exc,
                     request_data=request_data,
+                    dispatched_call_type=self.route_type,
                 )
             except HTTPException:
                 return
@@ -3998,6 +4013,8 @@ class ProxyBaseLLMRequestProcessing:
 
         async def _on_deferred_native_stream_complete(*args: object) -> None:
             match args:
+                case (BilledRoundsDispatch(dispatch=logging_coroutine),):
+                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
                 case (logging_coroutine,) if asyncio.iscoroutine(logging_coroutine):
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
                 case (assembled_response, cache_hit):
@@ -4141,6 +4158,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=self.data,
+            dispatched_call_type=self.route_type,
         )
         # Use transformed exception if callback returned one, otherwise use original
         if transformed_exception is not None:
