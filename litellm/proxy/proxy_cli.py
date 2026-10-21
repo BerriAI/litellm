@@ -20,7 +20,7 @@ from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm._logging import StartupOutputSettings, print_startup_message, print_startup_warning
+from litellm._logging import StartupOutputSettings, print_startup_message, print_startup_warning, terminal_text
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
 from litellm.proxy.db.pgbouncer import (
     PgBouncerError,
@@ -235,19 +235,23 @@ class _ConfigStartupOutputSettings(TypedDict, total=False):
 _CONFIG_STARTUP_OUTPUT_SETTINGS: Final = TypeAdapter(_ConfigStartupOutputSettings)
 
 
+def _apply_config_suppress_startup_output(litellm_settings: StartupOutputSettings | None) -> None:
+    if litellm_settings is None or litellm_settings.get("suppress_startup_output") is not True:
+        return
+    litellm.suppress_startup_output = True
+    os.environ["LITELLM_SUPPRESS_STARTUP_OUTPUT"] = "true"
+
+
 def _apply_config_logging_settings(litellm_settings: StartupOutputSettings | None) -> None:
     """Turn on the config's json_logs and suppress_startup_output before any worker starts. Workers that
     uvicorn or granian spawn import litellm afresh and read both from the env at import, so they log JSON
     and stay quiet from their first line instead of from when load_config reaches the key."""
-    if litellm_settings is None:
+    _apply_config_suppress_startup_output(litellm_settings)
+    if litellm_settings is None or litellm_settings.get("json_logs") is not True:
         return
-    if litellm_settings.get("json_logs") is True:
-        litellm.json_logs = True
-        os.environ["JSON_LOGS"] = "true"
-        litellm.turn_on_json()
-    if litellm_settings.get("suppress_startup_output") is True:
-        litellm.suppress_startup_output = True
-        os.environ["LITELLM_SUPPRESS_STARTUP_OUTPUT"] = "true"
+    litellm.json_logs = True
+    os.environ["JSON_LOGS"] = "true"
+    litellm.turn_on_json()
 
 
 class ProxyInitializationHelpers:
@@ -1224,14 +1228,9 @@ def run_server(
     if validate_config is True:
         ProxyInitializationHelpers.run_config_validation(config)
         return
-    env_config_file: Final = os.environ.get("CONFIG_FILE_PATH") if config is None else None
-    env_config_file_path: Final = (
-        env_config_file if env_config_file and ProxyConfig().is_yaml(config_file_path=env_config_file) else None
-    )
     held_prisma_notice: Final = (
         _print_or_hold_enforce_prisma_migration_check_notice(
-            reads_config_file=config is not None or env_config_file_path is not None,
-            returns_before_config=health is True or test is True,
+            reads_config_file=config is not None, returns_before_config=health is True or test is True
         )
         if enforce_prisma_migration_check
         else None
@@ -1326,6 +1325,19 @@ def run_server(
                 os.environ[k] = v
 
         litellm_settings = None
+        env_config_file: Final = os.environ.get("CONFIG_FILE_PATH")
+        if (
+            env_config_file
+            and os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is None
+            and ProxyConfig().is_yaml(config_file_path=env_config_file)
+        ):
+            import asyncio
+
+            _apply_config_suppress_startup_output(
+                _CONFIG_STARTUP_OUTPUT_SETTINGS.validate_python(
+                    asyncio.run(ProxyConfig().read_config_file(config_file_path=env_config_file))
+                ).get("litellm_settings")
+            )
         if config is not None:
             """
             Allow user to pass in db url via config
@@ -1409,16 +1421,6 @@ def run_server(
                 os.chdir(original_dir)
             if database_url is not None and isinstance(database_url, str):
                 os.environ["DATABASE_URL"] = database_url
-        elif env_config_file_path is not None:
-            import asyncio
-
-            _apply_config_logging_settings(
-                _CONFIG_STARTUP_OUTPUT_SETTINGS.validate_python(
-                    asyncio.run(ProxyConfig().get_config(config_file_path=env_config_file_path))
-                ).get("litellm_settings")
-            )
-            if held_prisma_notice is not None:
-                held_prisma_notice()
 
         # Handle database URL construction when no config file is used
         if config is None and os.getenv("DATABASE_URL") is None:
@@ -1453,7 +1455,9 @@ def run_server(
                 _bad_scheme = unsupported_db_scheme(_candidate_url)
                 if _bad_scheme is not None:
                     print(
-                        f"\033[1;31mLiteLLM Proxy: {unsupported_db_scheme_message(_db_env, _bad_scheme)}\033[0m",
+                        terminal_text(
+                            f"\033[1;31mLiteLLM Proxy: {unsupported_db_scheme_message(_db_env, _bad_scheme)}\033[0m"
+                        ),
                         file=sys.stderr,
                         flush=True,
                     )
@@ -1586,22 +1590,26 @@ def run_server(
                         # issues, and any `prisma db push` against a
                         # partitioned LiteLLM_SpendLogs.
                         print(
-                            f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {e}\033[0m",
+                            terminal_text(f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {e}\033[0m"),
                             file=sys.stderr,
                             flush=True,
                         )
                         sys.exit(2)
                     if not setup_ok:
                         print(
-                            "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
-                            "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
+                            terminal_text(
+                                "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
+                                "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
+                            )
                         )
                         sys.exit(1)
             else:
                 print(
-                    "\033[1;31mLiteLLM Proxy: a database URL is set but the prisma CLI is neither on PATH nor importable "
-                    "as a package, so the database cannot be set up. Install it with `pip install 'litellm[extra_proxy]'` "
-                    "or run a shipped LiteLLM image.\033[0m"
+                    terminal_text(
+                        "\033[1;31mLiteLLM Proxy: a database URL is set but the prisma CLI is neither on PATH nor importable "
+                        "as a package, so the database cannot be set up. Install it with `pip install 'litellm[extra_proxy]'` "
+                        "or run a shipped LiteLLM image.\033[0m"
+                    )
                 )
                 sys.exit(1)
         pgbouncer_settings: Final = PgBouncerSettings()
@@ -1612,8 +1620,10 @@ def run_server(
             )
             if isinstance(pooled_database_url, PgBouncerError):
                 print(
-                    f"\033[1;31mLiteLLM Proxy: LITELLM_PGBOUNCER_ENABLED is set but the in-container pgbouncer "
-                    f"could not start: {pooled_database_url.reason}\033[0m",
+                    terminal_text(
+                        f"\033[1;31mLiteLLM Proxy: LITELLM_PGBOUNCER_ENABLED is set but the in-container pgbouncer "
+                        f"could not start: {pooled_database_url.reason}\033[0m"
+                    ),
                     file=sys.stderr,
                     flush=True,
                 )

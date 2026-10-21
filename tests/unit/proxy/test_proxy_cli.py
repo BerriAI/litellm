@@ -2647,6 +2647,7 @@ class TestRunServerDbSetup:
             assert exit_info.value.code == 1
             assert "a database URL is set but the prisma CLI is neither on PATH nor importable" in out
             assert "pip install 'litellm[extra_proxy]'" in out
+            assert "\x1b[" not in out
         else:
             assert "prisma CLI" not in out
             assert "Setup complete" in out
@@ -2725,6 +2726,7 @@ class TestRunServerDbSetup:
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
+        capsys,
     ):
         """A sqlite DATABASE_URL must exit immediately, before any prisma call,
         instead of stalling on a migration against the postgresql-only schema."""
@@ -2763,6 +2765,9 @@ class TestRunServerDbSetup:
                 )
             assert exc_info.value.code == 1
             mock_setup_database.assert_not_called()
+        err: Final = capsys.readouterr().err
+        assert "sqlite" in err
+        assert "\x1b[" not in err
 
     @patch("subprocess.run")
     @patch("atexit.register")
@@ -3956,6 +3961,50 @@ class TestValidateConfigFlag:
         mock_popen.assert_not_called()
 
 
+COUNTING_SECRET_MANAGER_MODULE: Final = """
+import os
+
+from litellm.integrations.custom_secret_manager import CustomSecretManager
+
+
+class CountingSecretManager(CustomSecretManager):
+    def __init__(self):
+        super().__init__()
+        self._log("constructed")
+
+    @staticmethod
+    def _log(event):
+        with open(os.environ["SECRET_READ_LOG"], "a") as f:
+            f.write(event + "\\n")
+
+    def sync_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        self._log(secret_name)
+        return "from-secret-manager"
+
+    async def async_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        self._log(secret_name)
+        return "from-secret-manager"
+"""
+
+SECRET_MANAGER_BACKED_CONFIG: Final = """
+model_list:
+  - model_name: my-model
+    litellm_params:
+      model: openai/gpt-5.4-mini
+      api_key: os.environ/MY_PROVIDER_KEY
+
+litellm_settings:
+  suppress_startup_output: true
+
+general_settings:
+  key_management_system: custom
+  key_management_settings:
+    custom_secret_manager: counting_secret_manager.CountingSecretManager
+    hosted_keys:
+      - MY_PROVIDER_KEY
+"""
+
+
 class TestJsonLogsConfigReachesSpawnedWorkers:
     """`litellm_settings.json_logs: true` turns JSON on inside the CLI process, but the workers that
     uvicorn or granian spawn are fresh interpreters that pick plain or JSON from the JSON_LOGS
@@ -3964,35 +4013,50 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
     each worker prints before its load_config."""
 
     @staticmethod
+    def _write_config(path: Path, litellm_settings: dict[str, object]) -> Path:
+        path.write_text(yaml.dump({"model_list": [], "litellm_settings": litellm_settings}))
+        return path
+
+    @staticmethod
     def _env_after_boot(
-        config_path: Path,
-        litellm_settings: dict[str, object],
-        name: str = "JSON_LOGS",
+        name: str,
+        config: Path | None = None,
         config_file_path_env: Path | None = None,
+        extra_env: dict[str, str] | None = None,
+        proxy_config_class: object = None,
     ) -> str | None:
         from litellm.proxy.proxy_server import ProxyConfig
 
-        config_path.write_text(yaml.dump({"model_list": [], "litellm_settings": litellm_settings}))
+        def load(config_file_path: str) -> object:
+            return yaml.safe_load(Path(config_file_path).read_text())
+
         mock_proxy_config: Final = MagicMock()
         mock_proxy_config.return_value.is_yaml = ProxyConfig().is_yaml
-        mock_proxy_config.return_value.get_config = AsyncMock(
-            side_effect=lambda config_file_path: yaml.safe_load(Path(config_file_path).read_text())
-        )
+        mock_proxy_config.return_value.get_config = AsyncMock(side_effect=load)
+        mock_proxy_config.return_value.read_config_file = AsyncMock(side_effect=load)
         mock_proxy_module: Final = MagicMock(
             app=MagicMock(),
-            ProxyConfig=mock_proxy_config,
+            ProxyConfig=proxy_config_class or mock_proxy_config,
             KeyManagementSettings=MagicMock(),
             save_worker_config=MagicMock(),
         )
         clean_env: Final = {
             k: v
             for k, v in os.environ.items()
-            if k not in ("DATABASE_URL", "DIRECT_URL", "JSON_LOGS", "LITELLM_SUPPRESS_STARTUP_OUTPUT", "CONFIG_FILE_PATH")
+            if k
+            not in (
+                "DATABASE_URL",
+                "DIRECT_URL",
+                "JSON_LOGS",
+                "LITELLM_SUPPRESS_STARTUP_OUTPUT",
+                "CONFIG_FILE_PATH",
+                "LITELLM_CONFIG_BUCKET_NAME",
+            )
         }
         config_env: Final = {} if config_file_path_env is None else {"CONFIG_FILE_PATH": str(config_file_path_env)}
-        config_args: Final = ["--config", str(config_path)] if config_file_path_env is None else []
+        config_args: Final = [] if config is None else ["--config", str(config)]
         with (
-            patch.dict(os.environ, {**clean_env, **config_env}, clear=True),
+            patch.dict(os.environ, {**clean_env, **config_env, **(extra_env or {})}, clear=True),
             patch.dict(
                 "sys.modules",
                 {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
@@ -4005,39 +4069,111 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
 
     def test_json_logs_true_exports_json_logs_to_spawned_workers(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setattr(litellm, "json_logs", False)  # run_server flips it on; undone at teardown
-        assert self._env_after_boot(tmp_path / "config.yaml", {"json_logs": True}) == "true"
+        config: Final = self._write_config(tmp_path / "config.yaml", {"json_logs": True})
+        assert self._env_after_boot("JSON_LOGS", config=config) == "true"
 
     def test_plain_logs_config_leaves_json_logs_unset(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setattr(litellm, "json_logs", False)
-        assert self._env_after_boot(tmp_path / "config.yaml", {}) is None
+        assert self._env_after_boot("JSON_LOGS", config=self._write_config(tmp_path / "config.yaml", {})) is None
 
     @pytest.mark.parametrize(("setting", "exported"), [(True, "true"), ("true", None), (False, None)])
     def test_only_a_boolean_suppress_startup_output_reaches_spawned_workers(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: object, exported: str | None
     ) -> None:
         monkeypatch.setattr(litellm, "suppress_startup_output", False)
-        settings: Final = {"suppress_startup_output": setting}
-        assert self._env_after_boot(tmp_path / "config.yaml", settings, "LITELLM_SUPPRESS_STARTUP_OUTPUT") == exported
+        config: Final = self._write_config(tmp_path / "config.yaml", {"suppress_startup_output": setting})
+        assert self._env_after_boot("LITELLM_SUPPRESS_STARTUP_OUTPUT", config=config) == exported
 
-    @pytest.mark.parametrize("name", ["JSON_LOGS", "LITELLM_SUPPRESS_STARTUP_OUTPUT"])
-    def test_a_config_named_by_CONFIG_FILE_PATH_reaches_spawned_workers_too(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+    @pytest.mark.parametrize(("name", "exported"), [("LITELLM_SUPPRESS_STARTUP_OUTPUT", "true"), ("JSON_LOGS", None)])
+    def test_a_config_named_by_CONFIG_FILE_PATH_passes_only_suppress_startup_output_to_spawned_workers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, exported: str | None
     ) -> None:
+        """Its json_logs stays the workers' own to read, as before, so uvicorn's lines keep their plain format."""
         monkeypatch.setattr(litellm, "json_logs", False)
         monkeypatch.setattr(litellm, "suppress_startup_output", False)
         settings: Final[dict[str, object]] = {"json_logs": True, "suppress_startup_output": True}
-        config_path: Final = tmp_path / "config.yaml"
-        assert self._env_after_boot(config_path, settings, name, config_file_path_env=config_path) == "true"
+        config_file: Final = self._write_config(tmp_path / "config.yaml", settings)
+        assert self._env_after_boot(name, config_file_path_env=config_file) == exported
 
-    @pytest.mark.parametrize(("config_file", "env_file"), [("config.yaml", "missing.yaml"), ("config.json", "config.json")])
-    def test_a_CONFIG_FILE_PATH_workers_skip_is_skipped_by_the_cli_too(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config_file: str, env_file: str
+    def test_a_CONFIG_FILE_PATH_quiet_config_wins_over_a_cli_config_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Workers load CONFIG_FILE_PATH only when it names a YAML file, and a boot with any other value starts,
-        so the CLI reads nothing from it either instead of failing the boot."""
-        monkeypatch.setattr(litellm, "json_logs", False)
-        settings: Final[dict[str, object]] = {"json_logs": True}
-        assert self._env_after_boot(tmp_path / config_file, settings, config_file_path_env=tmp_path / env_file) is None
+        """Workers load CONFIG_FILE_PATH ahead of --config, so its key quiets the CLI when both are set."""
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        cli_config: Final = self._write_config(tmp_path / "cli.yaml", {})
+        env_config: Final = self._write_config(tmp_path / "env.yaml", {"suppress_startup_output": True})
+        exported: Final = self._env_after_boot(
+            "LITELLM_SUPPRESS_STARTUP_OUTPUT", config=cli_config, config_file_path_env=env_config
+        )
+        assert exported == "true"
+
+    @pytest.mark.parametrize(
+        ("config_file", "env_file", "extra_env"),
+        [
+            ("config.yaml", "missing.yaml", {}),
+            ("config.json", "config.json", {}),
+            ("config.yaml", "config.yaml", {"LITELLM_CONFIG_BUCKET_NAME": "litellm-configs"}),
+        ],
+        ids=["missing-file", "not-yaml", "bucket-config"],
+    )
+    def test_a_CONFIG_FILE_PATH_workers_skip_is_skipped_by_the_cli_too(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        config_file: str,
+        env_file: str,
+        extra_env: dict[str, str],
+    ) -> None:
+        """Workers load CONFIG_FILE_PATH only when it names a YAML file and no config bucket is set, and a boot
+        with any other value starts, so the CLI reads nothing from it either instead of failing the boot."""
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        self._write_config(tmp_path / config_file, {"suppress_startup_output": True})
+        exported: Final = self._env_after_boot(
+            "LITELLM_SUPPRESS_STARTUP_OUTPUT", config_file_path_env=tmp_path / env_file, extra_env=extra_env
+        )
+        assert exported is None
+
+    def test_a_CONFIG_FILE_PATH_boot_reads_no_secret_before_the_workers_do(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The CLI takes only the suppress key from CONFIG_FILE_PATH, so a config backed by a secret manager is
+        read from it once per worker, as before, not once more by the CLI."""
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        monkeypatch.setattr(litellm, "secret_manager_client", None)
+        monkeypatch.setattr(litellm, "_key_management_system", None)
+        monkeypatch.setattr(litellm, "_key_management_settings", litellm._key_management_settings)
+        reads: Final = tmp_path / "secret_reads.log"
+        (tmp_path / "counting_secret_manager.py").write_text(COUNTING_SECRET_MANAGER_MODULE)
+        config_file: Final = tmp_path / "config.yaml"
+        config_file.write_text(SECRET_MANAGER_BACKED_CONFIG)
+
+        exported: Final = self._env_after_boot(
+            "LITELLM_SUPPRESS_STARTUP_OUTPUT",
+            config_file_path_env=config_file,
+            extra_env={"SECRET_READ_LOG": str(reads)},
+            proxy_config_class=ProxyConfig,
+        )
+
+        assert exported == "true"
+        assert not reads.exists(), reads.read_text()
+
+    def test_a_CONFIG_FILE_PATH_key_set_in_an_included_file_reaches_spawned_workers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        self._write_config(tmp_path / "quiet.yaml", {"suppress_startup_output": True})
+        config_file: Final = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({"include": ["quiet.yaml"], "model_list": []}))
+
+        exported: Final = self._env_after_boot(
+            "LITELLM_SUPPRESS_STARTUP_OUTPUT", config_file_path_env=config_file, proxy_config_class=ProxyConfig
+        )
+
+        assert exported == "true"
 
 
 class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:

@@ -629,6 +629,11 @@ def _terminal_colors(stdout: TextIO | None, stderr: TextIO | None) -> bool:
     return _color_enabled(stdout) and _color_enabled(stderr)
 
 
+def terminal_text(message: str) -> str:
+    """The message with its ANSI colors kept only on a color terminal, by the rule the plain log format uses."""
+    return message if _terminal_colors(sys.stdout, sys.stderr) else _ANSI_ESCAPE.sub("", message)
+
+
 def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
     """The plain-text log format, colorized only when both streams are an interactive terminal."""
     return _COLOR_LOG_FORMAT if _terminal_colors(stdout, stderr) else _PLAIN_LOG_FORMAT
@@ -950,8 +955,7 @@ def print_startup_warning(message: str) -> None:
 
 def _write_startup_message(message: str, caller: FrameType | None) -> None:
     if not litellm.json_logs:
-        printed: Final = message if _terminal_colors(sys.stdout, sys.stderr) else _ANSI_ESCAPE.sub("", message)
-        print(printed, flush=True)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
+        print(terminal_text(message), flush=True)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
         return
     text: Final = _ANSI_ESCAPE.sub("", message).strip("\n")
     if not text:

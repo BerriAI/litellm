@@ -5755,6 +5755,12 @@ class ProxyConfig:
         # verbose_proxy_logger.debug(f"loaded config={json.dumps(config, indent=4)}")
         return config
 
+    async def read_config_file(self, config_file_path: str) -> Mapping[str, object]:
+        """The config file with its includes merged, without the bucket, database and secret steps of get_config."""
+        return await self._process_includes(
+            config=self._load_yaml_file(config_file_path), config_file_path=os.path.abspath(config_file_path)
+        )
+
     async def _process_includes(self, config: dict, config_file_path: str) -> dict:
         """
         Process includes by appending their contents to the main config
