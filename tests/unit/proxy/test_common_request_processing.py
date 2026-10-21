@@ -4088,22 +4088,13 @@ class TestHandleLLMApiExceptionPricesWhatTheServerDispatched:
         cursor_caller: Final = ProxyUserAPIKeyAuth(request_route="/cursor/chat/completions")
         mock_request: Final = MagicMock(spec=Request)
         mock_request.headers = {}
-
-        async def pass_through_pre_call_hook(
-            user_api_key_dict: ProxyUserAPIKeyAuth,
-            data: dict[str, object],
-            call_type: str,
-            skip_guardrails: bool = False,
-        ) -> dict[str, object]:
-            return data
-
-        pre_call_logging: Final = MagicMock(spec=ProxyLogging)
-        pre_call_logging.pre_call_hook = AsyncMock(side_effect=pass_through_pre_call_hook)
+        proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alert_types = []
         _, logging_obj = await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
             user_api_key_dict=cursor_caller,
-            proxy_logging_obj=pre_call_logging,
+            proxy_logging_obj=proxy_logging,
             proxy_config=MagicMock(spec=ProxyConfig),
             route_type=route_type,
         )
@@ -4112,16 +4103,11 @@ class TestHandleLLMApiExceptionPricesWhatTheServerDispatched:
             messages=request_input,
             call_type=logged_call_type,
         )
-        failure_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
-        failure_logging.alert_types = []
-        with (
-            patch.object(failure_logging, "update_request_status", new=AsyncMock()),
-            pytest.raises(ProxyException),
-        ):
+        with pytest.raises(ProxyException):
             await processing_obj.handle_llm_api_exception(
                 e=Exception("boom"),
                 user_api_key_dict=cursor_caller,
-                proxy_logging_obj=failure_logging,
+                proxy_logging_obj=proxy_logging,
             )
         return processing_obj.data["combined_usage_object"].prompt_tokens
 
