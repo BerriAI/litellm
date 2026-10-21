@@ -10880,11 +10880,15 @@ async def test_acompletion_retry_that_succeeds_leaves_the_budget_reservation_to_
 ) -> None:
     reservation: Final = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
     retry_upstream.post(_ANTHROPIC.url).mock(
-        side_effect=[_provider_error(429, {"retry-after": "0"}), httpx.Response(200, json=_ANTHROPIC.ok_body)]
+        side_effect=[_provider_error(500), httpx.Response(200, json=_ANTHROPIC.ok_body)]
     )
 
     await _completion_with_retries_kwargs(
-        False, _ANTHROPIC, num_retries=1, metadata={"user_api_key_budget_reservation": reservation}
+        False,
+        _ANTHROPIC,
+        num_retries=1,
+        retry_strategy="constant_retry",
+        metadata={"user_api_key_budget_reservation": reservation},
     )
 
     assert reservation["callback_bound"] is True
