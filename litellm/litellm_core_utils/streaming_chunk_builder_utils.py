@@ -412,7 +412,10 @@ class ChunkProcessor:
             choices = chunk.get("choices")
             if not choices:
                 continue
-            provider_specific_fields = getattr(choices[0], "provider_specific_fields", None)
+            choice = choices[0]
+            provider_specific_fields = getattr(choice, "provider_specific_fields", None)
+            if provider_specific_fields is None and isinstance(choice, Mapping):
+                provider_specific_fields = choice.get("provider_specific_fields")
             if provider_specific_fields and "native_finish_reason" in provider_specific_fields:
                 native_finish_reason = provider_specific_fields["native_finish_reason"]
                 if isinstance(native_finish_reason, str):
