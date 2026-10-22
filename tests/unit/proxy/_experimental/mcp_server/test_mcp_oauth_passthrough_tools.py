@@ -612,6 +612,28 @@ async def test_scope_middleware_releases_waiting_response_on_validation_or_cance
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("allowed_before_start", [False, True])
+async def test_scope_authorization_sends_stream_headers_before_the_first_body_chunk(allowed_before_start):
+    from litellm.proxy._experimental.mcp_server.scope_challenge import OAuthScopeResponse
+
+    send = AsyncMock()
+    gate = OAuthScopeResponse(send, "https://gateway.example", "/mcp/docs")
+    start = {"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]}
+    if allowed_before_start:
+        gate.allow()
+    await gate(start)
+    if not allowed_before_start:
+        send.assert_not_awaited()
+        gate.allow()
+        await asyncio.sleep(0)
+    # A long-running tool sends no body chunk for a while, so the headers must not wait for one.
+    send.assert_awaited_once_with(start)
+    await gate({"type": "http.response.body", "body": b"event: message\n", "more_body": True})
+    assert send.await_args_list[-1].args[0]["body"] == b"event: message\n"
+    assert send.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_scope_response_preserves_transport_validation_errors():
     from litellm.proxy._experimental.mcp_server.scope_challenge import OAuthScopeResponse
 
