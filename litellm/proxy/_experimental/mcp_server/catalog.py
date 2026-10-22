@@ -1123,7 +1123,12 @@ async def list_gateway_catalog(
     )
     from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
-    context = replace(context, _caller=await MCPRequestHandler.refresh_catalog_authority(context.user_api_key_auth))
+    refreshed_caller = await MCPRequestHandler.refresh_catalog_authority(context.user_api_key_auth)
+    if refreshed_caller is not None and getattr(refreshed_caller, "mcp_toolset_id", None) is not None:
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
+
+        refreshed_caller = await apply_toolset_scope(refreshed_caller, refreshed_caller.mcp_toolset_id)
+    context = replace(context, _caller=refreshed_caller)
     params: Final = request.params or PaginatedRequestParams()
     if isinstance(request, ListToolsRequest):
         return await list_gateway_tools(context, params, log_list_tools_to_spendlogs=log_list_tools_to_spendlogs)

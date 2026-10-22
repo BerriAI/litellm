@@ -270,6 +270,56 @@ class TestApplyToolsetScope:
         resolve.assert_not_awaited()
 
 
+    @pytest.mark.asyncio
+    async def test_list_gateway_catalog_preserves_toolset_scope_after_refresh(self):
+        """When list_gateway_catalog refreshes authority for tools/list, it reapplies toolset scope (#47856)."""
+        from mcp.types import ListToolsRequest
+        from litellm.proxy._experimental.mcp_server.catalog import list_gateway_catalog
+        from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+
+        scoped_auth = _make_auth(
+            mcp_servers=["server-a"],
+            mcp_tool_permissions={"server-a": ["tool1"]},
+            mcp_toolsets=["toolset-123"],
+        )
+        scoped_auth.mcp_toolset_id = "toolset-123"
+
+        unscoped_db_auth = _make_auth(
+            mcp_servers=["server-a", "server-b", "server-leak"],
+            mcp_tool_permissions={"server-a": ["tool1"], "server-b": ["tool2"], "server-leak": ["tool3"]},
+            mcp_toolsets=["toolset-123"],
+        )
+        unscoped_db_auth.mcp_toolset_id = "toolset-123"
+
+        toolset_perms = {"server-a": ["tool1"]}
+        context = OperationContext(_caller=scoped_auth)
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.refresh_catalog_authority",
+                new=AsyncMock(return_value=unscoped_db_auth),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
+                new=AsyncMock(return_value=toolset_perms),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.catalog.list_gateway_tools",
+                new=AsyncMock(return_value="mock_result"),
+            ) as mock_list_tools,
+        ):
+            res = await list_gateway_catalog(context, ListToolsRequest())
+
+        assert res == "mock_result"
+        mock_list_tools.assert_awaited_once()
+        refreshed_context = mock_list_tools.await_args.args[0]
+        caller = refreshed_context.user_api_key_auth
+        assert caller is not None
+        assert caller.mcp_toolset_id == "toolset-123"
+        assert set(caller.object_permission.mcp_servers) == {"server-a"}
+        assert caller.object_permission.mcp_tool_permissions == {"server-a": ["tool1"]}
+
+
 class TestFetchMCPToolsetsAccess:
     """Tests for GET /v1/mcp/toolset access control."""
 
