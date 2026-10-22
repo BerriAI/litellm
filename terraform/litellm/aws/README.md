@@ -8,7 +8,7 @@ Deploys the componentized LiteLLM proxy on AWS:
 - **S3 bucket** (private, versioned, SSE-S3) — exposed to gateway + backend as `S3_BUCKET_NAME` / `S3_REGION_NAME` for cache backend, request log archival, and `/v1/files` storage
 - **Secrets Manager** entries for `LITELLM_MASTER_KEY` (auto-generated, `sk-…`) and the Aurora master password (bootstrap-only)
 - **ECS Fargate cluster** running three services — `gateway`, `backend`, `ui`
-- **Application Load Balancer** (public, HTTP/80) with path-based routing:
+- **Application Load Balancer** (public by default, or internal: see "Keeping the ALB private") with path-based routing:
   - LLM data-plane prefixes (`/v1/chat/*`, `/v1/embeddings`, …) → `gateway`
   - UI assets (`/`, `/_next/*`, `/litellm-asset-prefix/*`, …) → `ui`
   - Everything else (management API: `/key/*`, `/user/*`, …) → `backend`
@@ -548,6 +548,30 @@ automatically upgraded.
 Set `allow_plaintext_alb = true` in tfvars. Without this flag, plan fails
 with a clear error pointing at the precondition. Intended for short-lived
 trial / dev stacks only.
+
+## Keeping the ALB private
+
+By default the ALB is internet-facing and open to `0.0.0.0/0`, and every
+route that isn't a model or UI route reaches the management API. For a
+gateway that only services inside a VPC should call:
+
+```hcl
+alb_internal            = true                  # private addresses only
+alb_ingress_cidrs       = ["10.0.0.0/16"]       # who can reach the ALB at all
+management_source_cidrs = ["10.0.5.10/32"]      # e.g. a VPN; at most one range
+gateway_path_prefixes   = ["/v1/chat/*", "/chat/*", "/v1/models*", "/models*"]
+```
+
+- `alb_internal` gives the ALB private addresses only. It still uses
+  `public_subnet_ids`, which then just need to span 2 AZs.
+- `alb_ingress_cidrs` replaces `0.0.0.0/0` on ports 80 and 443.
+- `management_source_cidrs` limits the backend (management API) and the UI
+  to one source range. Requests from anywhere else that match no gateway
+  route get 403 instead of reaching the backend. One range only, because an
+  ALB rule takes five condition values and the UI prefix rule already uses
+  four.
+- `gateway_path_prefixes` replaces the built-in list of gateway routes, for
+  example to expose only chat completions and the model list.
 
 ## Storage and database retention
 

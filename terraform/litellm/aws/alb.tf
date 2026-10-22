@@ -1,7 +1,7 @@
 resource "aws_lb" "this" {
   name               = local.name
   load_balancer_type = "application"
-  internal           = false
+  internal           = var.alb_internal
   security_groups    = [aws_security_group.alb.id]
   subnets            = local.public_subnet_ids
 
@@ -22,6 +22,10 @@ locals {
   # the path-routing rules and downgrade the 80 listener to a redirect.
   tls_enabled        = var.acm_certificate_arn != ""
   rules_listener_arn = local.tls_enabled ? aws_lb_listener.https[0].arn : aws_lb_listener.http.arn
+
+  # With management_source_cidrs set, the backend stops being the listener
+  # default: unmatched requests get 403 and the backend gets its own rule.
+  management_restricted = length(var.management_source_cidrs) > 0
 }
 
 # Target groups — one per component. IP target type because Fargate tasks
@@ -99,7 +103,7 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
-    type = local.tls_enabled ? "redirect" : "forward"
+    type = local.tls_enabled ? "redirect" : (local.management_restricted ? "fixed-response" : "forward")
 
     dynamic "redirect" {
       for_each = local.tls_enabled ? [1] : []
@@ -110,7 +114,16 @@ resource "aws_lb_listener" "http" {
       }
     }
 
-    target_group_arn = local.tls_enabled ? null : aws_lb_target_group.backend.arn
+    dynamic "fixed_response" {
+      for_each = !local.tls_enabled && local.management_restricted ? [1] : []
+      content {
+        content_type = "text/plain"
+        message_body = "Forbidden"
+        status_code  = "403"
+      }
+    }
+
+    target_group_arn = local.tls_enabled || local.management_restricted ? null : aws_lb_target_group.backend.arn
   }
 
   # Default-deny on the HTTP-only path: TLS is the supported posture.
@@ -136,8 +149,18 @@ resource "aws_lb_listener" "https" {
   certificate_arn   = var.acm_certificate_arn
 
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.backend.arn
+    type = local.management_restricted ? "fixed-response" : "forward"
+
+    dynamic "fixed_response" {
+      for_each = local.management_restricted ? [1] : []
+      content {
+        content_type = "text/plain"
+        message_body = "Forbidden"
+        status_code  = "403"
+      }
+    }
+
+    target_group_arn = local.management_restricted ? null : aws_lb_target_group.backend.arn
   }
 
   tags = local.tags
@@ -156,6 +179,15 @@ resource "aws_lb_listener_rule" "ui_exact" {
   condition {
     path_pattern {
       values = local.ui_exact_paths
+    }
+  }
+
+  dynamic "condition" {
+    for_each = local.management_restricted ? [1] : []
+    content {
+      source_ip {
+        values = var.management_source_cidrs
+      }
     }
   }
 
@@ -178,6 +210,15 @@ resource "aws_lb_listener_rule" "ui_prefix" {
     }
   }
 
+  dynamic "condition" {
+    for_each = local.management_restricted ? [1] : []
+    content {
+      source_ip {
+        values = var.management_source_cidrs
+      }
+    }
+  }
+
   tags = local.tags
 }
 
@@ -197,6 +238,28 @@ resource "aws_lb_listener_rule" "gateway" {
   condition {
     path_pattern {
       values = each.value
+    }
+  }
+
+  tags = local.tags
+}
+
+# Backend (management API) for management_source_cidrs only. After the
+# gateway rules, so gateway routes still win for every source.
+resource "aws_lb_listener_rule" "management" {
+  count = local.management_restricted ? 1 : 0
+
+  listener_arn = local.rules_listener_arn
+  priority     = 1000
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.backend.arn
+  }
+
+  condition {
+    source_ip {
+      values = var.management_source_cidrs
     }
   }
 

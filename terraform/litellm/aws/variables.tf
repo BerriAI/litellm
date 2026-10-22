@@ -543,6 +543,48 @@ variable "allow_plaintext_alb" {
   default     = false
 }
 
+# ---------- ALB access ----------
+#
+# Defaults keep today's posture: an internet-facing ALB open to 0.0.0.0/0
+# that forwards every route. These narrow it for a gateway that must only be
+# reachable inside a VPC, with the management API and UI limited further.
+
+variable "alb_internal" {
+  description = "Make the ALB internal: private addresses only, never reachable from the internet. It still lands in `public_subnet_ids`, which then only need to be subnets in at least 2 AZs."
+  type        = bool
+  default     = false
+}
+
+variable "alb_ingress_cidrs" {
+  description = "Source ranges allowed to the ALB on ports 80 and 443."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "management_source_cidrs" {
+  description = <<-EOT
+    When set, the backend (management API: /key/*, /spend/*, ...) and the UI
+    answer only requests from this range, and anything that matches no rule
+    gets 403. Gateway routes stay open to every source the ALB admits. Empty
+    ([]) keeps the backend as the listener's default for every source.
+    At most one CIDR: ALB rules allow 5 condition values and the UI prefix
+    rule already uses 4.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.management_source_cidrs) <= 1
+    error_message = "management_source_cidrs takes at most one CIDR: ALB rules allow 5 condition values and the UI prefix rule already uses 4."
+  }
+}
+
+variable "gateway_path_prefixes" {
+  description = "Replaces the built-in list of paths the ALB forwards to the gateway. Null keeps the built-in list. With `management_source_cidrs` set, any path left out answers 403 to other sources."
+  type        = list(string)
+  default     = null
+}
+
 # ---------- RDS ----------
 
 variable "skip_final_snapshot" {
