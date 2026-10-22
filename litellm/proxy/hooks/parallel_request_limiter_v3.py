@@ -10,6 +10,7 @@ import itertools
 import json
 import logging
 import os
+import re
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Set
 from contextlib import asynccontextmanager
@@ -508,8 +509,9 @@ GOOGLE_GENAI_NATIVE_CALL_TYPES: Final = (
 RESPONSES_API_MIN_OUTPUT_TOKENS: Final = 16
 _IMAGE_CONTENT_TYPES: Final = frozenset({"input_image", "image_url", "image"})
 _DATA_IMAGE_PREFIX: Final = "data:image/"
-_DEFAULT_IMAGE_CHARS: Final = DEFAULT_IMAGE_TOKEN_COUNT * DEFAULT_CHARS_PER_TOKEN
-_LOW_DETAIL_IMAGE_CHARS: Final = 85 * DEFAULT_CHARS_PER_TOKEN
+_DEFAULT_IMAGE_CHARS: Final[int] = int(DEFAULT_IMAGE_TOKEN_COUNT) * 4
+_LOW_DETAIL_IMAGE_CHARS: Final[int] = 85 * 4
+_BASE64_IMAGE_PATTERN: Final = re.compile(r"data:image/[^;'\"]+;base64,[A-Za-z0-9+/=]+")
 # litellm.token_counter has no per-type handling for "input_audio" content
 # blocks (unlike images, which use use_default_image_token_count) -- it
 # silently contributes 0 tokens for them. When the block carries a base64
@@ -1209,63 +1211,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return max(round(normalized), 1)
 
     @classmethod
-    def _count_message_image_chars(cls, messages: Sequence[object]) -> int:
-        """Count image content parts in chat completion messages using bounded char estimates."""
-        count: int = 0  # rebind-ok: accumulate image chars across messages
-        for m in messages:
-            if not isinstance(m, Mapping):
-                continue
-            content: Final = m.get("content")
-            if isinstance(content, list):
-                for part in content:
-                    if isinstance(part, Mapping) and part.get("type") in _IMAGE_CONTENT_TYPES:
-                        if part.get("detail") == "low":
-                            count += _LOW_DETAIL_IMAGE_CHARS
-                        else:
-                            count += _DEFAULT_IMAGE_CHARS
-        return count
-
-    @classmethod
-    def _estimate_structured_input_item_chars(cls, item: object, depth: int = 0) -> int:
+    def _estimate_item_chars(cls, item: object) -> int:
         """
-        Estimate character count for an input item in Responses API or other endpoints.
+        Estimate character count for an input item in Responses API or prompt endpoints.
 
-        Structured images (such as input_image or image_url blocks nested in
-        message.content or custom_tool_call_output.output) and raw base64 data URLs
-        are counted using a bounded multimodal estimate (DEFAULT_IMAGE_TOKEN_COUNT)
-        rather than serializing raw transport payloads (which can be megabytes of base64
-        characters) as text. Non-image text, tool definitions, tool arguments, and
-        call metadata remain fully preserved and counted.
+        Transport payloads containing multi-megabyte base64 images (such as in
+        custom_tool_call_output.output or input_image blocks) are counted using
+        bounded multimodal token estimates rather than measuring raw base64 text,
+        preventing single requests from exhausting entire TPM quotas (#47814).
         """
-        if item is None or depth > 10:
-            return 0
-        if isinstance(item, str):
-            if item.startswith(_DATA_IMAGE_PREFIX) or ";base64," in item[:100]:
-                return _DEFAULT_IMAGE_CHARS
-            return len(item)
-        if isinstance(item, (int, float, bool)):
-            return len(str(item))
-        if isinstance(item, (list, tuple, set)):
-            return sum(cls._estimate_structured_input_item_chars(x, depth + 1) for x in item)
-        if isinstance(item, Mapping):
-            item_type: Final = item.get("type")
-            if item_type in _IMAGE_CONTENT_TYPES or (
-                "image_url" in item and not isinstance(item.get("image_url"), list)
-            ):
-                if item.get("detail") == "low":
-                    return _LOW_DETAIL_IMAGE_CHARS
-                return _DEFAULT_IMAGE_CHARS
-            total: int = 0  # rebind-ok: accumulate structured chars across fields
-            for k, v in item.items():
-                total += len(str(k))
-                if isinstance(v, str) and (v.startswith(_DATA_IMAGE_PREFIX) or ";base64," in v[:100]):
-                    total += _DEFAULT_IMAGE_CHARS
-                else:
-                    total += cls._estimate_structured_input_item_chars(v, depth + 1)
-            return total
-        s: Final = str(item)
-        if s.startswith(_DATA_IMAGE_PREFIX) or ";base64," in s[:100]:
-            return _DEFAULT_IMAGE_CHARS
+        s: Final[str] = str(item)
+        if _DATA_IMAGE_PREFIX in s or ";base64," in s:
+            target_image_chars: Final[int] = int(
+                _LOW_DETAIL_IMAGE_CHARS
+                if ('"detail": "low"' in s or "'detail': 'low'" in s)
+                else _DEFAULT_IMAGE_CHARS
+            )
+            base64_chars: int = 0  # rebind-ok: accumulate image string reduction
+            for match in _BASE64_IMAGE_PATTERN.finditer(s):
+                m_len: int = len(match.group(0))
+                if m_len > target_image_chars:
+                    base64_chars += m_len - target_image_chars
+            return max(len(s) - base64_chars, target_image_chars)
         return len(s)
 
     def _estimate_input_and_output_tokens(
@@ -1322,15 +1289,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
         total_chars: Final = (
-            (len(get_str_from_messages(messages)) + self._count_message_image_chars(messages))
+            self._estimate_item_chars(get_str_from_messages(messages))
             if isinstance(messages, list) and messages
             else len(prompt)
             if isinstance(prompt, str)
-            else sum(self._estimate_structured_input_item_chars(item) for item in prompt)
+            else sum(len(str(item)) for item in prompt)
             if isinstance(prompt, list)
-            else self._estimate_structured_input_item_chars(input_text)
+            else self._estimate_item_chars(input_text)
             if isinstance(input_text, str)
-            else sum(self._estimate_structured_input_item_chars(item) for item in input_text)
+            else sum(self._estimate_item_chars(item) for item in input_text)
             if isinstance(input_text, list)
             else 0
         )

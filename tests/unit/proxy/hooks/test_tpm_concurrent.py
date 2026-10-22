@@ -3853,7 +3853,7 @@ def test_responses_api_message_image_detail_low_and_high(rate_limiter):
     }
     input_low, _ = handler._estimate_input_and_output_tokens(data=data_low, call_type="aresponses")
     # 85 tokens for low detail + text chars // 4
-    assert 85 <= input_low <= 120
+    assert 85 <= input_low <= 140
 
     data_high = {
         "model": "gpt-4o",
