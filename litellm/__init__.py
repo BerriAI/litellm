@@ -704,6 +704,7 @@ microsoft_365_copilot_models: Set[str] = set()
 chatgpt_models: Set = set()
 minimax_models: Set = set()
 aws_polly_models: Set = set()
+speechify_models: Set = set()  # mutable-ok: filled from the price map at import, like the sibling provider sets
 transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
@@ -1010,6 +1011,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             minimax_models.add(key)
         elif value.get("litellm_provider") == "aws_polly":
             aws_polly_models.add(key)
+        elif value.get("litellm_provider") == "speechify":
+            speechify_models.add(key)
         elif value.get("litellm_provider") == "transcribe":
             transcribe_models.add(key)
         elif value.get("litellm_provider") == "gigachat":
@@ -1273,6 +1276,7 @@ def _build_models_by_provider() -> dict:
         "chatgpt": chatgpt_models,
         "minimax": minimax_models,
         "aws_polly": aws_polly_models,
+        "speechify": speechify_models,
         "transcribe": transcribe_models,
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
