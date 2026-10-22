@@ -1,11 +1,14 @@
 import asyncio
+import json
 import re
 import threading
 import time
+from io import StringIO
 from typing import Final
 
 import pytest
 
+from litellm.proxy.guardrails.guardrail_hooks.custom_code._regex_worker import _main as regex_worker
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
     ExecutionTimeoutError,
     SandboxExit,
@@ -212,13 +215,10 @@ async def test_regex_near_match_does_not_hold_the_execution_timeout() -> None:
         execution_timeout=0.1,
     )
     started: Final = time.monotonic()
-    try:
-        result: Final = await guardrail.apply_guardrail(
+    with pytest.raises(CustomCodeExecutionError, match=r"exceeded its 0\.1s execution timeout"):
+        await guardrail.apply_guardrail(
             inputs={"texts": ["a" * 26 + "!"]}, request_data={"model": "m"}, input_type="request"
         )
-        assert result == {"texts": ["a" * 26 + "!"]}
-    except CustomCodeExecutionError as error:
-        assert "exceeded its 0.1s execution timeout" in str(error)
     await asyncio.to_thread(_join_worker_threads)
     assert time.monotonic() - started < 0.8
     assert _worker_threads() == []
@@ -263,6 +263,13 @@ async def test_regex_deadline_cannot_be_swallowed_as_a_failed_match(operation: s
     [
         ("café", r"\w+", re.ASCII),
         ("café", r"\w+", re.UNICODE),
+        ("123-45-6789\u200d", r"\b\d{3}-\d{2}-\d{4}\b", 0),
+        ("123-45-6789\u200c", r"\b\d{3}-\d{2}-\d{4}\b", 0),
+        ("a\u0301", r"\w+", 0),
+        ("²", r"\w+", 0),
+        ("\u001c", r"\s+", 0),
+        ("a\u200d", r"a\b\W", 0),
+        ("²", r"[^\W]+", 0),
         ("HELLO", "hello", re.IGNORECASE),
         ("first\nsecond", "^second$", re.MULTILINE),
         ("first\nsecond", ".+", re.DOTALL),
@@ -289,3 +296,32 @@ def test_regex_primitives_preserve_standard_matching_results(text: str, pattern:
         expected_replacement,
         expected_matches,
     )
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [("search", True), ("fullmatch", False), ("sub", "[REDACTED]\u200d"), ("findall", ["123-45-6789"])],
+)
+def test_regex_worker_protocol_preserves_unicode_and_separates_debug_output(operation: str, expected: object) -> None:
+    output: Final = StringIO()
+    errors: Final = StringIO()
+    request: Final = json.dumps((operation, "123-45-6789\u200d", r"\b\d{3}-\d{2}-\d{4}\b", int(re.DEBUG), "[REDACTED]"))
+
+    assert regex_worker(request, output, errors) == 0
+    assert json.loads(output.getvalue()) == expected
+    assert errors.getvalue()
+
+
+def test_regex_worker_reports_invalid_patterns_without_a_success_result() -> None:
+    output: Final = StringIO()
+    errors: Final = StringIO()
+
+    assert regex_worker(json.dumps(("search", "hello", "(", 0, "")), output, errors) == 65
+    assert output.getvalue() == ""
+    assert errors.getvalue()
+
+
+@pytest.mark.parametrize("payload", ["[]", '["unknown", "text", "pattern", 0, ""]'])
+def test_regex_worker_rejects_invalid_requests_instead_of_returning_false(payload: str) -> None:
+    with pytest.raises(ValueError, match=r"invalid regex request|unknown regex operation"):
+        regex_worker(payload, StringIO(), StringIO())

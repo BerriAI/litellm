@@ -8,13 +8,15 @@ and provide safe, sandboxed functionality for common guardrail operations.
 import asyncio
 import json
 import re
+import subprocess
+import sys
 from collections.abc import Mapping, Sequence
-from typing import Final, Literal
+from pathlib import Path
+from typing import Final, Literal, TypeVar
 from urllib.parse import urlparse
 
 import httpx
-import regex
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -113,24 +115,44 @@ def modify(
 # =============================================================================
 
 
-_REGEX_FLAGS: Final = (
-    (re.ASCII, regex.ASCII),
-    (re.IGNORECASE, regex.IGNORECASE),
-    (re.LOCALE, regex.LOCALE),
-    (re.UNICODE, regex.UNICODE),
-    (re.MULTILINE, regex.MULTILINE),
-    (re.DOTALL, regex.DOTALL),
-    (re.VERBOSE, regex.VERBOSE),
-    (re.TEMPLATE, regex.TEMPLATE),
-    (re.DEBUG, regex.DEBUG),
-)
+_RegexResult: Final = TypeVar("_RegexResult")
+_REGEX_MATCH: Final = TypeAdapter(bool)
+_REGEX_TEXT: Final = TypeAdapter(str)
+_REGEX_MATCHES: Final[TypeAdapter[Sequence[str | tuple[str, ...]]]] = TypeAdapter(Sequence[str | tuple[str, ...]])
+_REGEX_WORKER: Final = str(Path(__file__).with_name("_regex_worker.py"))
 
 
-def _regex_flags(pattern: str, flags: int) -> int:
-    validated: Final = re.compile(pattern, flags).flags
-    return regex.VERSION0 | sum(
-        int(safe_flag) for standard_flag, safe_flag in _REGEX_FLAGS if validated & standard_flag
-    )
+def _regex_result(
+    operation: Literal["search", "fullmatch", "sub", "findall"],
+    text: str,
+    pattern: str,
+    flags: int,
+    result_type: TypeAdapter[_RegexResult],
+    replacement: str = "",
+) -> _RegexResult:
+    remaining_execution_time()
+    with subprocess.Popen(
+        [sys.executable, "-I", "-S", _REGEX_WORKER],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        env={},
+    ) as worker:
+        try:
+            output, error = worker.communicate(
+                json.dumps((operation, text, pattern, flags, replacement)), timeout=remaining_execution_time()
+            )
+        except BaseException:  # noqa: BLE001  # sandbox interruption must also terminate and reap the child
+            worker.kill()
+            worker.communicate()
+            raise
+    if worker.returncode == 65:
+        raise re.error(error)
+    if worker.returncode:
+        raise RuntimeError(f"regex worker failed ({worker.returncode}): {error}")
+    return result_type.validate_json(output)
 
 
 def regex_match(text: str, pattern: str, flags: int = 0) -> bool:
@@ -146,14 +168,10 @@ def regex_match(text: str, pattern: str, flags: int = 0) -> bool:
         True if pattern matches, False otherwise
     """
     try:
-        return bool(
-            regex.search(
-                pattern, text, _regex_flags(pattern, flags), timeout=remaining_execution_time(), concurrent=True
-            )
-        )
-    except TimeoutError:
+        return _regex_result("search", text, pattern, flags, _REGEX_MATCH)
+    except subprocess.TimeoutExpired:
         raise ExecutionInterrupted from None
-    except (re.error, regex.error) as e:
+    except re.error as e:
         verbose_proxy_logger.warning("Starlark regex_match error: %s", e)
         return False
 
@@ -171,14 +189,10 @@ def regex_match_all(text: str, pattern: str, flags: int = 0) -> bool:
         True if pattern matches entire text, False otherwise
     """
     try:
-        return bool(
-            regex.fullmatch(
-                pattern, text, _regex_flags(pattern, flags), timeout=remaining_execution_time(), concurrent=True
-            )
-        )
-    except TimeoutError:
+        return _regex_result("fullmatch", text, pattern, flags, _REGEX_MATCH)
+    except subprocess.TimeoutExpired:
         raise ExecutionInterrupted from None
-    except (re.error, regex.error) as e:
+    except re.error as e:
         verbose_proxy_logger.warning("Starlark regex_match_all error: %s", e)
         return False
 
@@ -197,22 +211,15 @@ def regex_replace(text: str, pattern: str, replacement: str, flags: int = 0) -> 
         The text with replacements applied
     """
     try:
-        return regex.sub(
-            pattern,
-            replacement,
-            text,
-            flags=_regex_flags(pattern, flags),
-            timeout=remaining_execution_time(),
-            concurrent=True,
-        )
-    except TimeoutError:
+        return _regex_result("sub", text, pattern, flags, _REGEX_TEXT, replacement)
+    except subprocess.TimeoutExpired:
         raise ExecutionInterrupted from None
-    except (re.error, regex.error) as e:
+    except re.error as e:
         verbose_proxy_logger.warning("Starlark regex_replace error: %s", e)
         return text
 
 
-def regex_find_all(text: str, pattern: str, flags: int = 0) -> list[str]:
+def regex_find_all(text: str, pattern: str, flags: int = 0) -> Sequence[str | tuple[str, ...]]:
     """
     Find all occurrences of a pattern in text.
 
@@ -225,12 +232,10 @@ def regex_find_all(text: str, pattern: str, flags: int = 0) -> list[str]:
         List of all matches
     """
     try:
-        return regex.findall(
-            pattern, text, _regex_flags(pattern, flags), timeout=remaining_execution_time(), concurrent=True
-        )
-    except TimeoutError:
+        return _regex_result("findall", text, pattern, flags, _REGEX_MATCHES)
+    except subprocess.TimeoutExpired:
         raise ExecutionInterrupted from None
-    except (re.error, regex.error) as e:
+    except re.error as e:
         verbose_proxy_logger.warning("Starlark regex_find_all error: %s", e)
         return []
 
