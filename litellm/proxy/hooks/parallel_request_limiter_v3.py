@@ -42,7 +42,11 @@ from litellm.caching.redis_batch import (
     active_request_redis_batch,
 )
 from litellm.caching.redis_cache import log_redis_failure
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.constants import (
+    DEFAULT_IMAGE_TOKEN_COUNT,
+    DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+)
 from litellm.cost_calculator import get_usage_object
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -502,6 +506,10 @@ GOOGLE_GENAI_NATIVE_CALL_TYPES: Final = (
     CallTypes.agenerate_content_stream.value,
 )
 RESPONSES_API_MIN_OUTPUT_TOKENS: Final = 16
+_IMAGE_CONTENT_TYPES: Final = frozenset({"input_image", "image_url", "image"})
+_DATA_IMAGE_PREFIX: Final = "data:image/"
+_DEFAULT_IMAGE_CHARS: Final = DEFAULT_IMAGE_TOKEN_COUNT * DEFAULT_CHARS_PER_TOKEN
+_LOW_DETAIL_IMAGE_CHARS: Final = 85 * DEFAULT_CHARS_PER_TOKEN
 # litellm.token_counter has no per-type handling for "input_audio" content
 # blocks (unlike images, which use use_default_image_token_count) -- it
 # silently contributes 0 tokens for them. When the block carries a base64
@@ -1200,6 +1208,64 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         return max(round(normalized), 1)
 
+    @classmethod
+    def _count_message_image_chars(cls, messages: Sequence[object]) -> int:
+        """Count image content parts in chat completion messages using bounded char estimates."""
+        count = 0
+        for m in messages:
+            if not isinstance(m, Mapping):
+                continue
+            content = m.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, Mapping) and part.get("type") in _IMAGE_CONTENT_TYPES:
+                        if part.get("detail") == "low":
+                            count += _LOW_DETAIL_IMAGE_CHARS
+                        else:
+                            count += _DEFAULT_IMAGE_CHARS
+        return count
+
+    @classmethod
+    def _estimate_structured_input_item_chars(cls, item: object, depth: int = 0) -> int:
+        """
+        Estimate character count for an input item in Responses API or other endpoints.
+
+        Structured images (such as input_image or image_url blocks nested in
+        message.content or custom_tool_call_output.output) and raw base64 data URLs
+        are counted using a bounded multimodal estimate (DEFAULT_IMAGE_TOKEN_COUNT)
+        rather than serializing raw transport payloads (which can be megabytes of base64
+        characters) as text. Non-image text, tool definitions, tool arguments, and
+        call metadata remain fully preserved and counted.
+        """
+        if item is None or depth > 10:
+            return 0
+        if isinstance(item, str):
+            if item.startswith(_DATA_IMAGE_PREFIX) or ";base64," in item[:100]:
+                return _DEFAULT_IMAGE_CHARS
+            return len(item)
+        if isinstance(item, (int, float, bool)):
+            return len(str(item))
+        if isinstance(item, (list, tuple, set)):
+            return sum(cls._estimate_structured_input_item_chars(x, depth + 1) for x in item)
+        if isinstance(item, Mapping):
+            item_type = item.get("type")
+            if item_type in _IMAGE_CONTENT_TYPES or ("image_url" in item and not isinstance(item.get("image_url"), list)):
+                if item.get("detail") == "low":
+                    return _LOW_DETAIL_IMAGE_CHARS
+                return _DEFAULT_IMAGE_CHARS
+            total = 0
+            for k, v in item.items():
+                total += len(str(k))
+                if isinstance(v, str) and (v.startswith(_DATA_IMAGE_PREFIX) or ";base64," in v[:100]):
+                    total += _DEFAULT_IMAGE_CHARS
+                else:
+                    total += cls._estimate_structured_input_item_chars(v, depth + 1)
+            return total
+        s = str(item)
+        if s.startswith(_DATA_IMAGE_PREFIX) or ";base64," in s[:100]:
+            return _DEFAULT_IMAGE_CHARS
+        return len(s)
+
     def _estimate_input_and_output_tokens(
         self,
         data: object,
@@ -1254,15 +1320,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
         total_chars: Final = (
-            len(get_str_from_messages(messages))
+            (len(get_str_from_messages(messages)) + self._count_message_image_chars(messages))
             if isinstance(messages, list) and messages
             else len(prompt)
             if isinstance(prompt, str)
-            else sum(len(str(item)) for item in prompt)
+            else sum(self._estimate_structured_input_item_chars(item) for item in prompt)
             if isinstance(prompt, list)
-            else len(input_text)
+            else self._estimate_structured_input_item_chars(input_text)
             if isinstance(input_text, str)
-            else sum(len(str(item)) for item in input_text)
+            else sum(self._estimate_structured_input_item_chars(item) for item in input_text)
             if isinstance(input_text, list)
             else 0
         )
