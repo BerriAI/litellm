@@ -4142,6 +4142,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-layered"
+version = "0.1.0"
+dependencies = [
+ "litellm-core-utils",
+ "litellm-layered-derive",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-layered-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "litellm-llms"
 version = "0.1.0"
 dependencies = [
