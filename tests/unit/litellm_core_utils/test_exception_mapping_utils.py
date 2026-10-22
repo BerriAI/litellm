@@ -551,10 +551,10 @@ def test_get_error_message_appends_nested_error_request_id():
     assert get_error_message(error_obj=error_obj) == "Bad request (request_id: req_nested_456)"
 
 
-def test_get_error_message_appends_sdk_request_id_attribute():
-    error_obj = _FakeErrorObj(body={"error": {"message": "Unauthorized"}}, request_id="req_sdk_789")
+def test_get_error_message_with_non_dict_body_returns_none():
+    error_obj = _FakeErrorObj(body="not-a-dict")
 
-    assert get_error_message(error_obj=error_obj) == "Unauthorized (request_id: req_sdk_789)"
+    assert get_error_message(error_obj=error_obj) is None
 
 
 def test_get_error_message_without_request_id_is_unchanged():

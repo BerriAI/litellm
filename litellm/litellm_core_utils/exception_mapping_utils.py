@@ -163,24 +163,11 @@ def get_error_message(error_obj) -> str | None:
     }
     """
     try:
-        # First, try to access the message directly from the 'body' key
         if error_obj is None:
             return None
 
-        message: str | None = None
-        if hasattr(error_obj, "body"):
-            _error_obj_body: Final = getattr(error_obj, "body")
-            if isinstance(_error_obj_body, dict):
-                # OpenAI-style: {"message": "...", "type": "...", ...}
-                if _error_obj_body.get("message"):
-                    message = _error_obj_body.get("message")
-                else:
-                    # Azure-style: {"error": {"message": "...", ...}}
-                    nested_error: Final = _error_obj_body.get("error")
-                    if isinstance(nested_error, dict):
-                        message = nested_error.get("message")
-
-        if message is None:
+        extracted_message: Final = _extract_error_message(error_obj)
+        if extracted_message is None:
             return None
 
         # Some providers (e.g. DashScope/Bailian) return the request id as a
@@ -190,41 +177,12 @@ def get_error_message(error_obj) -> str | None:
         # (https://github.com/BerriAI/litellm/issues/47839). Append it to the
         # extracted message when it is available and not already present.
         request_id: Final = _get_error_request_id(error_obj)
-        if request_id is not None and isinstance(message, str) and request_id not in message:
-            message = f"{message} (request_id: {request_id})"
+        if request_id is not None and request_id not in extracted_message:
+            return f"{extracted_message} (request_id: {request_id})"
 
-        return message
+        return extracted_message
     except Exception:
         return None
-
-
-def _get_error_request_id(error_obj: object) -> str | None:
-    """
-    Return the provider request id carried by an error object, if any.
-
-    Checks, in order:
-    - `body["request_id"]` — top-level sibling of `error`
-      (e.g. `{"error": {...}, "request_id": "..."}` from DashScope)
-    - `body["error"]["request_id"]` — nested inside the error object
-    - the `request_id` attribute the OpenAI SDK sets on its exceptions
-    """
-    _error_obj_body: Final = getattr(error_obj, "body", None)
-    if isinstance(_error_obj_body, dict):
-        _body_request_id: Final = _error_obj_body.get("request_id")
-        if isinstance(_body_request_id, str) and _body_request_id:
-            return _body_request_id
-
-        nested_error: Final = _error_obj_body.get("error")
-        if isinstance(nested_error, dict):
-            _nested_request_id: Final = nested_error.get("request_id")
-            if isinstance(_nested_request_id, str) and _nested_request_id:
-                return _nested_request_id
-
-    _attr_request_id: Final = getattr(error_obj, "request_id", None)
-    if isinstance(_attr_request_id, str) and _attr_request_id:
-        return _attr_request_id
-
-    return None
 
 
 ####### EXCEPTION MAPPING ################
@@ -312,6 +270,63 @@ class _ProviderHTTPException(Protocol):
 
 
 _ERROR_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _validated_error_body(error_obj: _ProviderHTTPException) -> Mapping[str, object] | None:
+    """The exception's parsed error body as a dict, or None when it is not one."""
+    raw_body: Final = error_obj.body
+    if raw_body is None:
+        return None
+    try:
+        validated: Final = _ERROR_BODY_ADAPTER.validate_python(raw_body)
+    except ValidationError:
+        return None
+    return validated
+
+
+def _extract_error_message(error_obj: _ProviderHTTPException) -> str | None:
+    """Extract the message from an error object's `body`, if it carries one."""
+    body: Final = _validated_error_body(error_obj)
+    if body is None:
+        return None
+
+    # OpenAI-style: {"message": "...", "type": "...", ...}
+    flat_message: Final = body.get("message")
+    if flat_message:
+        return flat_message if isinstance(flat_message, str) else None
+
+    # Azure-style: {"error": {"message": "...", ...}}
+    nested_error: Final = body.get("error")
+    if isinstance(nested_error, dict):
+        nested_message: Final = nested_error.get("message")
+        return nested_message if isinstance(nested_message, str) else None
+
+    return None
+
+
+def _get_error_request_id(error_obj: _ProviderHTTPException) -> str | None:
+    """
+    Return the provider request id carried in an error object's body, if any.
+
+    Checks `body["request_id"]` (a top-level sibling of `error`, e.g.
+    `{"error": {...}, "request_id": "..."}` from DashScope/Bailian) and
+    `body["error"]["request_id"]`.
+    """
+    body: Final = _validated_error_body(error_obj)
+    if body is None:
+        return None
+
+    body_request_id: Final = body.get("request_id")
+    if isinstance(body_request_id, str) and body_request_id:
+        return body_request_id
+
+    nested_error: Final = body.get("error")
+    if isinstance(nested_error, dict):
+        nested_request_id: Final = nested_error.get("request_id")
+        if isinstance(nested_request_id, str) and nested_request_id:
+            return nested_request_id
+
+    return None
 
 
 def _openai_cyber_policy_body(original_exception: _ProviderHTTPException) -> Mapping[str, object] | None:
