@@ -28,11 +28,11 @@ from litellm.proxy._experimental.mcp_server.result_conversion import age_freshne
 if TYPE_CHECKING:
     from mcp.types import ListToolsResult, PaginatedRequestParams, PaginatedResult
 
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult, OperationContext
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing, ServerOutcome
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.mcp_server.tool_registry import MCPTool
 
