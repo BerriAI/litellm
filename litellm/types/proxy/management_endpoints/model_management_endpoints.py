@@ -1,6 +1,5 @@
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any
 
 from pydantic import ConfigDict, Field
 
@@ -22,7 +21,7 @@ class UpdateUsefulLinksRequest(LiteLLMBaseModel):
     # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
     # New format: { "displayName": { "url": "...", "index": 0 } }
     # Old format: { "displayName": "url" } (for backward compatibility)
-    useful_links: dict[str, str | dict[str, Any]]
+    useful_links: dict[str, str | dict[str, object]]
 
 
 class AutoRouterClassifierDefaultPromptResponse(LiteLLMBaseModel):
