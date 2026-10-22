@@ -6,6 +6,7 @@ xAI batches carry request counters, not a status, and no output file: results ar
 """
 
 import json
+import time
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -15,15 +16,16 @@ import httpx
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Errors as BatchErrors
 from openai.types.batch_error import BatchError
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import XAI_API_BASE
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import CreateBatchRequest
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.openai import CreateBatchRequest, OpenAIFileObject
 from litellm.types.utils import LiteLLMBatch
 
 OpenAIBatchStatus: TypeAlias = Literal[
@@ -74,14 +76,32 @@ def get_xai_auth_headers(
 
 
 def xai_batches_url(api_base: str | None, batch_id: str | None = None, suffix: str = "") -> str:
-    base: Final = f"{get_xai_api_base(api_base)}/v1/batches"
+    root: Final = get_xai_api_base(api_base)
     if batch_id is None:
-        return base
-    return f"{base}/{encode_url_path_segment(batch_id, field_name='batch_id')}{suffix}"
+        return join_api_base(root, "v1/batches")
+    encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
+    return join_api_base(root, f"v1/batches/{encoded_batch_id}{suffix}")
 
 
 def is_xai_batch_results_id(file_id: str) -> bool:
     return file_id.startswith(XAI_BATCH_ID_PREFIX)
+
+
+def xai_batch_results_file_object(batch: LiteLLMBatch) -> OpenAIFileObject:
+    """Describe a completed batch's results as a file without downloading them, so the size is a 0 placeholder."""
+    if batch.output_file_id is None:
+        raise xai_batches_error(
+            f"xAI batch {batch.id} has no results file until it completes (status={batch.status})", 404, _EMPTY_HEADERS
+        )
+    return OpenAIFileObject(
+        id=batch.output_file_id,
+        object="file",
+        purpose="batch_output",
+        filename=batch.output_file_id,
+        bytes=0,
+        created_at=int(time.time()),
+        status="processed",
+    )
 
 
 class XAICreateBatchRequest(TypedDict):
@@ -89,7 +109,7 @@ class XAICreateBatchRequest(TypedDict):
     input_file_id: NotRequired[ReadOnly[str]]
 
 
-class XAIBatchState(BaseModel):
+class XAIBatchState(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     num_requests: int = 0
@@ -99,7 +119,7 @@ class XAIBatchState(BaseModel):
     num_cancelled: int = 0
 
 
-class XAIBatch(BaseModel):
+class XAIBatch(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     batch_id: str
@@ -112,35 +132,35 @@ class XAIBatch(BaseModel):
     input_file_id: str | None = None
 
 
-class XAIBatchList(BaseModel):
+class XAIBatchList(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     batches: tuple[XAIBatch, ...] = ()
     pagination_token: str | None = None
 
 
-class XAIBatchResultError(BaseModel):
+class XAIBatchResultError(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     code: int | str | None = None
     message: str = ""
 
 
-class XAIBatchResultData(BaseModel):
+class XAIBatchResultData(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     response: Mapping[str, Mapping[str, object]] | None = None
     error: XAIBatchResultError | None = None
 
 
-class XAIBatchResult(BaseModel):
+class XAIBatchResult(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     batch_request_id: str
     batch_result: XAIBatchResultData = XAIBatchResultData()
 
 
-class XAIBatchResultsPage(BaseModel):
+class XAIBatchResultsPage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     results: tuple[XAIBatchResult, ...] = ()
@@ -202,7 +222,7 @@ def to_litellm_batch(batch: XAIBatch, endpoint: str = DEFAULT_BATCH_ENDPOINT) ->
     )
 
 
-class OpenAIBatchListResponse(BaseModel):
+class OpenAIBatchListResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     object: Literal["list"] = "list"

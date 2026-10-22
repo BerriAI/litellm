@@ -1,6 +1,8 @@
 import copy
 import json
 import os
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -178,6 +180,40 @@ def test_no_per_message_output_config_leaves_per_turn_control_beta_out():
     headers = _validate_vertex_headers({}, [{"role": "user", "content": "Hello"}])
 
     assert "per-turn-control-2026-07-01" not in headers.get("anthropic-beta", "")
+
+
+def test_inline_tools_beta_reaches_the_vertex_messages_request(local_beta_headers_config: None) -> None:
+    """Vertex rejects a `tool_addition` system message unless inline-tools-2026-09-15 is on the request, so the
+    /v1/messages beta filter must keep the header the client sent (source and date in
+    tests/unit/test_anthropic_beta_headers_filtering.py)."""
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+
+    messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "tool_addition",
+                    "tool": {
+                        "type": "tool_definition",
+                        "definition": {
+                            "name": "db_query",
+                            "description": "Run a read-only SQL query",
+                            "input_schema": {"type": "object", "properties": {"sql": {"type": "string"}}},
+                        },
+                    },
+                }
+            ],
+        },
+    ]
+
+    filtered: Final = update_headers_with_filtered_beta(
+        headers=_validate_vertex_headers({"anthropic-beta": "inline-tools-2026-09-15"}, messages),
+        provider="vertex_ai",
+    )
+
+    assert filtered["anthropic-beta"].split(",").count("inline-tools-2026-09-15") == 1
 
 
 def test_web_search_header_not_added_without_tool():
@@ -477,6 +513,67 @@ def test_messages_request_strips_effort_for_haiku_45():
         headers={},
     )
     assert opus_result["output_config"] == {"effort": "high"}
+
+
+def test_messages_request_moves_output_format_into_output_config():
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    output_format: Final = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"answer": {"type": "integer"}}, "required": ["answer"]},
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-opus-4-6",
+        messages=[{"role": "user", "content": "What is 6 times 7?"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "output_format": output_format,
+            "output_config": {"effort": "high"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "output_format" not in result
+    assert result["output_config"] == {"effort": "high", "format": output_format}
+
+
+_CALLER_OUTPUT_CONFIG: Final = {
+    "effort": "high",
+    "format": {"type": "json_schema", "schema": {"type": "object", "properties": {"answer": {"type": "integer"}}}},
+}
+
+
+def _messages_request_with_output_format(output_format: object, drop_params: bool) -> Mapping[str, object]:
+    return VertexAIPartnerModelsAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-6",
+        messages=[{"role": "user", "content": "What is 6 times 7?"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "output_format": output_format,
+            "output_config": copy.deepcopy(_CALLER_OUTPUT_CONFIG),
+        },
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("output_format", ["json", ["json_schema"], 42])
+def test_messages_request_drops_a_malformed_output_format_under_drop_params(output_format: object):
+    result = _messages_request_with_output_format(output_format, drop_params=True)
+
+    assert "output_format" not in result
+    assert result["output_config"] == _CALLER_OUTPUT_CONFIG
+
+
+@pytest.mark.parametrize("output_format", ["json", ["json_schema"], 42])
+def test_messages_request_rejects_a_malformed_output_format_without_drop_params(output_format: object):
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        _messages_request_with_output_format(output_format, drop_params=False)
+
+    assert error.value.status_code == 400
 
 
 def test_provider_config_manager_reuses_vertex_anthropic_messages_config_instance():

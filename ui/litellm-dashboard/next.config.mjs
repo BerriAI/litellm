@@ -8,6 +8,7 @@ const __dirname = path.dirname(__filename);
 const devProxyUrl = process.env.LENS_DEV_PROXY_URL;
 
 const nextConfig = {
+  transpilePackages: ["@litellm/lens-ui"],
   ...(devProxyUrl
     ? {
         async rewrites() {
