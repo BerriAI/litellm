@@ -1,16 +1,25 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Eye, EyeOff } from "lucide-react";
 import { toast } from "@/lib/toast";
-import { serviceHealthCheck, setCallbacksCall } from "./networking";
+import { isProxyAdminRole } from "@/utils/roles";
+import {
+  getSpendReportEmailStatus,
+  serviceHealthCheck,
+  setCallbacksCall,
+  type SpendReportEmailStatusResponse,
+} from "./networking";
 import { EmailEventSettings } from "./email_events";
+import SpendReportEmailSettings from "./SpendReportEmailSettings";
 
 interface EmailSettingsProps {
   accessToken: string | null;
   premiumUser: boolean;
   alerts: any[];
+  userRole?: string | null;
 }
 
 const REQUIRED_MARKER = <span className="text-destructive"> Required * </span>;
@@ -32,8 +41,25 @@ const PREMIUM_ONLY_FIELDS = ["EMAIL_LOGO_URL", "EMAIL_SUPPORT_CONTACT"];
 
 const SENSITIVE_FIELD_PATTERN = /(PASSWORD|SECRET|KEY|TOKEN)/i;
 
-const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser, alerts }) => {
+const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser, alerts, userRole }) => {
   const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
+  const [emailStatus, setEmailStatus] = useState<SpendReportEmailStatusResponse | null>(null);
+  const isProxyAdmin = isProxyAdminRole(userRole || "");
+
+  useEffect(() => {
+    if (!accessToken || !isProxyAdmin) return;
+    let active = true;
+    getSpendReportEmailStatus(accessToken)
+      .then((status) => {
+        if (active) setEmailStatus(status);
+      })
+      .catch(() => {
+        if (active) setEmailStatus(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [accessToken, isProxyAdmin]);
 
   const toggleFieldVisibility = (key: string) => {
     setVisibleFields((prev) => ({
@@ -47,7 +73,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
       return;
     }
 
-    let updatedVariables: Record<string, string> = {};
+    const updatedVariables: Record<string, string> = {};
 
     alerts
       .filter((alert) => alert.name === "email")
@@ -79,6 +105,11 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
     try {
       await setCallbacksCall(accessToken, payload);
       toast.success("Email settings updated successfully");
+      if (isProxyAdmin) {
+        getSpendReportEmailStatus(accessToken)
+          .then(setEmailStatus)
+          .catch(() => setEmailStatus(null));
+      }
     } catch (error) {
       toast.fromError(error);
     }
@@ -86,9 +117,16 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
 
   return (
     <>
-      <div className="mt-6 mb-6">
+      <div className="mb-6">
         <EmailEventSettings accessToken={accessToken} />
       </div>
+
+      {isProxyAdmin && (
+        <div className="mt-6 mb-6">
+          <SpendReportEmailSettings accessToken={accessToken} userRole={userRole} />
+        </div>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Email Server Settings</CardTitle>
@@ -120,9 +158,12 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                           href="https://forms.gle/W3U4PZpJGFHWtHyA9"
                           target="_blank"
                           rel="noreferrer"
-                          className="text-sm text-primary underline underline-offset-4"
+                          className="inline-flex items-center gap-1.5 text-sm text-primary underline underline-offset-4"
                         >
                           ✨ {key}
+                          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary no-underline">
+                            Enterprise Feature
+                          </span>
                         </a>
                       ) : (
                         <p className="text-sm">{key}</p>
@@ -155,20 +196,29 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
 
           <div className="mt-6 flex gap-2">
             <Button onClick={() => handleSaveEmailSettings()}>Save Changes</Button>
-            <Button
-              variant="secondary"
-              onClick={async () => {
-                if (!accessToken) return;
-                try {
-                  await serviceHealthCheck(accessToken, "email");
-                  toast.success("Email test triggered. Check your configured email inbox/logs.");
-                } catch (error) {
-                  toast.fromError(error);
-                }
-              }}
+            <SimpleTooltip
+              content={
+                emailStatus && !emailStatus.configured
+                  ? "Email delivery is not configured. Configure SMTP server settings below or set SENDGRID_API_KEY environment variable."
+                  : undefined
+              }
             >
-              Test Email Alerts
-            </Button>
+              <Button
+                variant="secondary"
+                disabled={emailStatus !== null && !emailStatus.configured}
+                onClick={async () => {
+                  if (!accessToken) return;
+                  try {
+                    await serviceHealthCheck(accessToken, "email");
+                    toast.success("Email test triggered. Check your configured email inbox/logs.");
+                  } catch (error) {
+                    toast.fromError(error);
+                  }
+                }}
+              >
+                Test Email Alerts
+              </Button>
+            </SimpleTooltip>
           </div>
         </CardContent>
       </Card>

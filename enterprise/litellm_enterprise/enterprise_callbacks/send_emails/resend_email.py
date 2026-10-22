@@ -48,9 +48,7 @@ class ResendEmailLogger(BaseEmailLogger):
         html_body: str,
     ):
         sender_email = self.resend_from_email or from_email
-        verbose_logger.debug(
-            f"Sending email from {sender_email} to {to_email} with subject {subject}"
-        )
+        verbose_logger.debug("Sending email via Resend")
         response = await self.async_httpx_client.post(
             url=RESEND_API_ENDPOINT,
             json={
@@ -62,6 +60,6 @@ class ResendEmailLogger(BaseEmailLogger):
             headers={"Authorization": f"Bearer {self.resend_api_key}"},
         )
         verbose_logger.debug(
-            f"Email sent with status code {response.status_code}. Got response: {response.json()}"
+            f"Email sent with status code {response.status_code}"
         )
         return

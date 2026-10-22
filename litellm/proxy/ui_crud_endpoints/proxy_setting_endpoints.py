@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from types import MappingProxyType
 from typing import (
     Annotated,
@@ -43,6 +43,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     is_ptu_cost_attribution_enabled,
 )
+from litellm.proxy.spend_tracking.spend_report_email import SpendReportEmailSettings
 from litellm.proxy.utils import CONFIG_PARAMS_TARGET, invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -232,6 +233,12 @@ class DefaultTeamSettingsResponse(SettingsResponse):
 
 class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
+
+
+class SpendReportEmailSettingsResponse(SettingsResponse):  # frozen-ok: inherits from SettingsResponse
+    """Response model for spend report email settings"""
+
+    server_timezone: str | None = None
 
 
 _TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS))
@@ -1046,6 +1053,7 @@ async def _update_litellm_setting(
         | MCPSemanticFilterSettings
         | MCPToolSearchSettings
         | WebSearchInterceptionSettings
+        | SpendReportEmailSettings
     ),
     settings_key: str,
     success_message: str,
@@ -1705,6 +1713,68 @@ async def update_mcp_tool_search_settings(
         success_message="MCP tool search settings updated successfully. Changes will be applied across all pods within 10 seconds.",
         user_api_key_dict=user_api_key_dict,
     )
+
+
+@router.get(
+    "/get/spend_report_email_settings",
+    tags=["Spend Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendReportEmailSettingsResponse,
+)
+async def get_spend_report_email_settings(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> SpendReportEmailSettingsResponse:
+    """
+    Get email spend report settings from litellm_settings.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can view spend report email settings.",
+        )
+
+    from litellm.proxy.proxy_server import proxy_config
+    from litellm.proxy.spend_tracking.spend_report_email import get_server_timezone
+
+    get_config_fn: Final[Callable[[], Awaitable[object]] | None] = getattr(proxy_config, "get_config", None)
+    raw_config: Final[object] = await get_config_fn() if get_config_fn is not None else {}
+    response: Final = SpendReportEmailSettingsResponse.model_validate(
+        await _get_settings_with_schema(
+            settings_key="spend_report_email_settings",
+            settings_class=SpendReportEmailSettings,
+            config=_UI_SETTINGS_OBJECT.validate_python(raw_config) if isinstance(raw_config, dict) else {},
+        )
+    )
+    return response.model_copy(update={"server_timezone": get_server_timezone()})
+
+
+@router.patch(
+    "/update/spend_report_email_settings",
+    tags=["Spend Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_spend_report_email_settings(
+    settings: SpendReportEmailSettings,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Mapping[str, JsonValue]:
+    """
+    Update email spend report settings in litellm_settings and reschedule jobs.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can update spend report email settings.",
+        )
+
+    update_fn: Final[Callable[..., Awaitable[object]]] = _update_litellm_setting
+    result: Final[object] = await update_fn(
+        settings=settings,
+        settings_key="spend_report_email_settings",
+        success_message="Spend report email settings updated successfully",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    return _UI_SETTINGS_OBJECT.validate_python(result)
 
 
 UI_SETTINGS_CACHE_KEY: Final = "ui_settings:settings_dict"

@@ -50,9 +50,7 @@ class SendGridEmailLogger(BaseEmailLogger):
             raise ValueError("SENDGRID_API_KEY is not set")
 
         sender_email = self.sendgrid_sender_email or from_email
-        verbose_logger.debug(
-            f"Sending email via SendGrid from {sender_email} to {to_email} with subject {subject}"
-        )
+        verbose_logger.debug("Sending email via SendGrid")
 
         payload = {
             "from": {"email": sender_email},
@@ -77,6 +75,6 @@ class SendGridEmailLogger(BaseEmailLogger):
         )
 
         verbose_logger.debug(
-            f"SendGrid response status={response.status_code}, body={response.text}"
+            f"SendGrid response status={response.status_code}"
         )
         return

@@ -68,6 +68,13 @@ vi.mock("@/components/networking", () => ({
   gatewayDailyActivityCall: vi.fn(),
   requestErrorActivityCall: vi.fn(),
   tagListCall: vi.fn(),
+  getSpendReportEmailStatus: vi.fn(),
+  formatDate: vi.fn((date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }),
 }));
 
 // Mock child components to simplify testing
@@ -265,6 +272,7 @@ describe("UsagePage", () => {
   const mockUserDailyActivityUserPageCall = vi.mocked(networking.userDailyActivityUserPageCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
+  const mockGetSpendReportEmailStatus = vi.mocked(networking.getSpendReportEmailStatus);
   const mockRequestErrorActivityCall = vi.mocked(networking.requestErrorActivityCall);
   const mockUseCustomers = vi.mocked(useCustomers);
   const mockUseAgents = vi.mocked(useAgents);
@@ -545,6 +553,7 @@ describe("UsagePage", () => {
     mockEntityUsageMounted.mockClear();
     mockTagListCall.mockClear();
     mockGatewayDailyActivityCall.mockClear();
+    mockGetSpendReportEmailStatus.mockResolvedValue({ configured: true, provider: "smtp" });
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
     mockGatewayDailyActivityCall.mockResolvedValue(mockGatewayActivity);
     mockRequestErrorActivityCall.mockClear();
@@ -1591,6 +1600,43 @@ describe("UsagePage", () => {
       expect(screen.getByText("Endpoint Activity")).toBeInTheDocument();
     });
   });
+  describe("email summary button", () => {
+    it("should be enabled when email delivery is configured", async () => {
+      mockGetSpendReportEmailStatus.mockResolvedValue({ configured: true, provider: "smtp" });
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      const emailButton = await screen.findByRole("button", { name: /email summary/i });
+      expect(emailButton).toBeEnabled();
+    });
+
+    it("should be disabled when email delivery is not configured", async () => {
+      mockGetSpendReportEmailStatus.mockResolvedValue({ configured: false, provider: null });
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /email summary/i })).toBeDisabled();
+      });
+    });
+
+    it("should not be visible for non-proxy-admin users", () => {
+      const nonAdminAuthState = {
+        isLoading: false,
+        isAuthorized: true,
+        token: "mock-token",
+        accessToken: "test-token",
+        userId: "user-123",
+        userEmail: "test@example.com",
+        userRole: "regular_user",
+        premiumUser: true,
+        disabledPersonalKeyCreation: false,
+        showSSOBanner: false,
+      };
+      mockUseAuthorized.mockReturnValue(nonAdminAuthState);
+      renderWithProviders(<UsagePage {...defaultProps} />);
+      expect(screen.queryByRole("button", { name: /email summary/i })).not.toBeInTheDocument();
+    });
+  });
+
   describe("URL state", () => {
     const renderAt = (searchParams: string) => {
       const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();

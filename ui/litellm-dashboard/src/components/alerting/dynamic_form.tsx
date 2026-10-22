@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { TableCell, TableRow } from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 interface AlertingSetting {
   field_name: string;
@@ -87,50 +87,62 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
 
   return (
     <form onSubmit={form.handleSubmit(onFinish)} noValidate>
-      {alertingSettings.map((value, index) => (
-        <TableRow key={index}>
-          <TableCell>
-            <p className="text-sm">{value.field_name}</p>
-            <p className="mt-1 text-[0.65rem] italic text-muted-foreground">{value.field_description}</p>
-          </TableCell>
-          {value.premium_field && !premiumUser ? (
-            <TableCell>
-              <Button className="flex items-center justify-center">
-                <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                  ✨ Enterprise Feature
-                </a>
-              </Button>
-            </TableCell>
-          ) : (
-            <TableCell>{renderControl(value)}</TableCell>
-          )}
-          <TableCell>
-            {value.stored_in_db == true ? (
-              <Badge variant="secondary">
-                <CircleCheck />
-                In DB
-              </Badge>
-            ) : value.stored_in_db == false ? (
-              <Badge variant="outline">In Config</Badge>
-            ) : (
-              <Badge variant="outline">Not Set</Badge>
-            )}
-          </TableCell>
-          <TableCell>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Reset ${value.field_name}`}
-              onClick={() => handleResetField(value.field_name, index)}
-              className="text-destructive"
-            >
-              <Trash2 className="size-5" />
-            </Button>
-          </TableCell>
-        </TableRow>
-      ))}
-      <div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Setting</TableHead>
+            <TableHead>Value</TableHead>
+            <TableHead>Source</TableHead>
+            <TableHead className="w-12">Action</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {alertingSettings.map((value, index) => (
+            <TableRow key={index}>
+              <TableCell>
+                <p className="text-sm font-medium">{value.field_name}</p>
+                <p className="mt-1 text-[0.65rem] italic text-muted-foreground">{value.field_description}</p>
+              </TableCell>
+              {value.premium_field && !premiumUser ? (
+                <TableCell>
+                  <Button className="flex items-center justify-center">
+                    <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank" rel="noopener noreferrer">
+                      Enterprise Feature
+                    </a>
+                  </Button>
+                </TableCell>
+              ) : (
+                <TableCell>{renderControl(value)}</TableCell>
+              )}
+              <TableCell>
+                {value.stored_in_db == true ? (
+                  <Badge variant="secondary">
+                    <CircleCheck />
+                    In DB
+                  </Badge>
+                ) : value.stored_in_db == false ? (
+                  <Badge variant="outline">In Config</Badge>
+                ) : (
+                  <Badge variant="outline">Not Set</Badge>
+                )}
+              </TableCell>
+              <TableCell>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Reset ${value.field_name}`}
+                  onClick={() => handleResetField(value.field_name, index)}
+                  className="text-destructive"
+                >
+                  <Trash2 className="size-5" />
+                </Button>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <div className="mt-4">
         <Button type="submit">Update Settings</Button>
       </div>
     </form>
