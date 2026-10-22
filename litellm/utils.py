@@ -9055,7 +9055,10 @@ def validate_chat_completion_tool_choice(
         # OpenAI also allows constraining which tools the model may call:
         # {"type": "allowed_tools", "allowed_tools": {"mode": ..., "tools": [...]}}.
         # Pass it through untouched so downstream providers see the full payload.
-        if tool_choice_type == "allowed_tools" and isinstance(tool_choice.get("allowed_tools"), dict):
+        if tool_choice_type == "allowed_tools" and isinstance(
+            tool_choice.get("allowed_tools"),  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+            dict,
+        ):
             return tool_choice
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
