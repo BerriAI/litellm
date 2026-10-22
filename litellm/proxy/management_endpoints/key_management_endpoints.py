@@ -3518,6 +3518,7 @@ async def _owner_may_change_key_budget(
             )
             return True
 
+
 def _refuse_get_spend_routes_unless_premium(
     permissions: object | None,
     premium_user: bool,
