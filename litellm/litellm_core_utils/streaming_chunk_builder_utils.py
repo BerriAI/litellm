@@ -3,6 +3,7 @@ import builtins
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import reduce
 from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeAlias, TypedDict, TypeVar, Union, cast
@@ -248,6 +249,22 @@ def apply_grounding_request_counts(
     return counted.model_copy(update=updates)
 
 
+_COMPLETE_VALUE_FIELDS: Final = frozenset({"id", "name"})
+
+
+def _skip_repeated_complete_fragment(accumulated: str, fragment: str) -> str:
+    if fragment == accumulated:
+        return accumulated
+    return f"{accumulated}{fragment}"
+
+
+def _joined_tool_call_field(field: str, records: Iterable[tuple[_ToolCallKey, str, str]]) -> str:
+    fragments: Final = tuple(fragment for _, _, fragment in records)
+    if field not in _COMPLETE_VALUE_FIELDS:
+        return "".join(fragments)
+    return reduce(_skip_repeated_complete_fragment, fragments, "")
+
+
 class ChunkProcessor:
     def __init__(self, chunks: list, messages: Sequence | None = None):
         self.chunks = self._sort_chunks(chunks)
@@ -489,20 +506,31 @@ class ChunkProcessor:
                         continue
                     if isinstance(tool_call, dict):
                         key = (choice_index, tool_call.get("index", 0))
+                        if fragment_id := tool_call.get("id"):
+                            yield key, "id", fragment_id
                         function = tool_call.get("function")
                         if isinstance(function, dict):
                             if fragment_arguments := function.get("arguments"):
                                 yield key, "arguments", fragment_arguments
-                        elif function_arguments := getattr(function, "arguments", None):
-                            yield key, "arguments", function_arguments
+                            if fragment_name := function.get("name"):
+                                yield key, "name", fragment_name
+                        else:
+                            if function_arguments := getattr(function, "arguments", None):
+                                yield key, "arguments", function_arguments
+                            if function_name := getattr(function, "name", None):
+                                yield key, "name", function_name
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict) and (custom_input := custom.get("input")):
                             yield key, "custom_input", custom_input
                     else:
                         key = (choice_index, getattr(tool_call, "index", 0))
+                        if object_id := getattr(tool_call, "id", None):
+                            yield key, "id", object_id
                         function = getattr(tool_call, "function", None)
                         if object_arguments := getattr(function, "arguments", None):
                             yield key, "arguments", object_arguments
+                        if object_name := getattr(function, "name", None):
+                            yield key, "name", object_name
                         custom = getattr(tool_call, "custom", None)
                         if object_custom_input := getattr(custom, "input", None):
                             yield key, "custom_input", object_custom_input
@@ -516,7 +544,7 @@ class ChunkProcessor:
 
         return MappingProxyType(
             {
-                key: "".join(fragment for _, _, fragment in group)
+                key: _joined_tool_call_field(key[1], group)
                 for key, group in groupby(sorted(fragment_records, key=group_key), key=group_key)
             }
         )
@@ -637,7 +665,7 @@ class ChunkProcessor:
             if tool_call_data.id and tool_call_data.custom_name:
                 tool_calls_list.append(
                     ChatCompletionMessageCustomToolCall(
-                        id=tool_call_data.id,
+                        id=joined_fragments.get((index, "id")) or tool_call_data.id,
                         custom=ChatCompletionCustomToolCallPayload(
                             name=tool_call_data.custom_name,
                             input=joined_fragments.get((index, "custom_input"), ""),
@@ -650,13 +678,13 @@ class ChunkProcessor:
                 # Build function - provider_specific_fields should be on tool_call level, not function level
                 function = Function(
                     arguments=combined_arguments,
-                    name=tool_call_data.name,
+                    name=joined_fragments.get((index, "name")) or tool_call_data.name,
                 )
 
                 # Prepare params for ChatCompletionMessageToolCall
                 # Add provider_specific_fields if present (for thought signatures in Gemini 3)
                 tool_call = ChatCompletionMessageToolCall(
-                    id=tool_call_data.id,
+                    id=joined_fragments.get((index, "id")) or tool_call_data.id,
                     function=function,
                     type=tool_call_data.type or "function",
                     **(
