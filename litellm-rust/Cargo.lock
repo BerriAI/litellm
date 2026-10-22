@@ -3664,6 +3664,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-config",
  "litellm-core-utils",
+ "litellm-http-types",
  "rstest",
  "serde_yaml_ng",
  "tempfile",
@@ -3851,6 +3852,7 @@ dependencies = [
  "http 1.4.2",
  "litellm-auth-types",
  "litellm-config",
+ "litellm-gateway-auth",
  "litellm-secrets",
  "moka",
  "rmcp",
@@ -3958,6 +3960,7 @@ dependencies = [
  "http 1.4.2",
  "hyper-util",
  "litellm-core-utils",
+ "litellm-http-types",
  "rcgen",
  "reqwest 0.12.28",
  "reqwest 0.13.5",
@@ -3975,6 +3978,15 @@ dependencies = [
  "tracing",
  "veil",
  "webpki-roots",
+]
+
+[[package]]
+name = "litellm-http-types"
+version = "0.1.0"
+dependencies = [
+ "litellm-core-utils",
+ "rstest",
+ "veil",
 ]
 
 [[package]]

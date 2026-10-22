@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use litellm_gateway_auth::Error as AuthError;
 use rmcp::{
     model::{ErrorCode, ErrorData},
     service::ServiceError,
@@ -23,6 +24,8 @@ pub enum Error {
     UnexpectedResult,
     #[error("MCP request cancelled")]
     Cancelled,
+    #[error(transparent)]
+    Auth(#[from] AuthError),
 }
 
 impl Error {
@@ -30,7 +33,10 @@ impl Error {
         match self {
             Self::Upstream(ServiceError::McpError(error)) => error,
             Self::InvalidRequest(message) => ErrorData::invalid_params(message, None),
-            Self::Forbidden => ErrorData::new(ErrorCode(-32003), self.to_string(), None),
+            Self::Forbidden
+            | Self::Auth(AuthError::Forbidden | AuthError::InvalidToken | AuthError::Expired) => {
+                ErrorData::new(ErrorCode(-32003), Self::Forbidden.to_string(), None)
+            }
             _ => ErrorData::internal_error(self.to_string(), None),
         }
     }
@@ -44,6 +50,7 @@ impl IntoResponse for Error {
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,
             Self::Cancelled => StatusCode::REQUEST_TIMEOUT,
             Self::Configuration(_) | Self::UnexpectedResult => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Auth(error) => error.status(),
         };
         (status, Json(json!({"detail": self.to_string()}))).into_response()
     }

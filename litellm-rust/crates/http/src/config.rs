@@ -4,10 +4,10 @@ use std::{
     time::Duration,
 };
 
+use litellm_http_types::{EnvironmentProxies, HttpSettings, SslVerify, TcpKeepalive};
+
 use crate::{
     error::Error,
-    proxy::EnvironmentProxies,
-    settings::{HttpSettings, SslVerify, TcpKeepalive},
     tls::{CipherSelection, KeyExchangeGroup, Tls12CipherSuite, Unsupported},
 };
 
@@ -122,9 +122,7 @@ impl TryFrom<&HttpClientConfig> for reqwest::ClientBuilder {
             Some(agent) => with_protocol.user_agent(agent),
             None => with_protocol,
         };
-        Ok(config
-            .proxies
-            .reqwest_proxies()
+        Ok(crate::proxy::reqwest_proxies(&config.proxies)
             .into_iter()
             .fold(with_agent.no_proxy(), reqwest::ClientBuilder::proxy))
     }

@@ -6,7 +6,9 @@ use std::{
 
 use reqwest::dns::Resolve;
 
-use crate::{client::Client, config::HttpClientConfig, error::Error, proxy::EnvironmentProxies};
+use litellm_http_types::EnvironmentProxies;
+
+use crate::{client::Client, config::HttpClientConfig, error::Error};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
@@ -128,7 +130,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::{ClientIdentity, HttpSettings, Resolution, Verify};
+    use litellm_http_types::HttpSettings;
+
+    use crate::{ClientIdentity, Resolution, Verify};
 
     struct FixedResolver(SocketAddr);
 

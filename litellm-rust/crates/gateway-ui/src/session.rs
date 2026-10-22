@@ -10,8 +10,9 @@ use tower_cookies::{Cookie, Cookies};
 use tower_sessions::{Expiry, Session, cookie::SameSite};
 
 use crate::Error;
+use litellm_auth_types::UiCredentials;
 use litellm_gateway_auth::{
-    AccessRequest, UI_CSRF_KEY, UiAction, UiAuthError, UiAuthSession, UiCredentials, UiSession,
+    AccessRequest, UI_CSRF_KEY, UiAction, UiAuthError, UiAuthSession, UiSession,
 };
 
 pub struct State {

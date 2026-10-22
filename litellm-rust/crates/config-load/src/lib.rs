@@ -1,16 +1,13 @@
 mod error;
+mod http;
 pub mod include;
-mod transport;
 
 use std::{collections::BTreeMap, ffi::OsString, path::Path};
 
 use litellm_config::Config;
 use litellm_core_utils::settings::Lookup;
 
-pub use self::{
-    error::Error,
-    transport::{SslVerify, Transport},
-};
+pub use self::{error::Error, http::http_settings};
 
 pub fn load(path: impl AsRef<Path>) -> Result<Config, Error> {
     let path = path.as_ref();

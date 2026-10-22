@@ -14,7 +14,6 @@ pub mod outbound;
 mod pool;
 mod proxy;
 pub mod request;
-mod settings;
 mod tls;
 pub mod transport;
 pub mod websocket;
@@ -22,7 +21,8 @@ pub mod websocket;
 pub use client::Client;
 pub use config::{ClientIdentity, HttpClientConfig, Resolution, Verify};
 pub use error::{Error, TlsSource};
+pub use litellm_http_types::{
+    EnvironmentProxies, HttpSettings, HttpSettingsLayer, SslVerify, TcpKeepalive,
+};
 pub use pool::{ClientVariant, HttpClientPool};
-pub use proxy::EnvironmentProxies;
-pub use settings::{HttpSettings, HttpSettingsLayer, SslVerify, TcpKeepalive};
 pub use tls::{KeyExchangeGroup, Tls12CipherSuite, Unsupported};

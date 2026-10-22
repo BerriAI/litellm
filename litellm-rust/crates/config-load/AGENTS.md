@@ -9,3 +9,4 @@
 ## Precedence
 
 - Each lowered value takes the env, the file and then the default in the order Python uses for that key today, until that order is normalized
+- HTTP client settings are lowered into `litellm-http-types` layers (`http_settings`), one layer per source, so this crate never defines its own transport types

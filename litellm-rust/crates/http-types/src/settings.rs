@@ -8,7 +8,7 @@ use litellm_core_utils::{
     settings::{Layer, Lookup, merge},
 };
 
-use crate::proxy::EnvironmentProxies;
+use crate::EnvironmentProxies;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SslVerify {

@@ -48,6 +48,7 @@ litellm-secrets-hashicorp = { path = "crates/secrets-hashicorp" }
 litellm-secrets-azure = { path = "crates/secrets-azure" }
 litellm-secrets-cyberark = { path = "crates/secrets-cyberark" }
 litellm-http = { path = "crates/http" }
+litellm-http-types = { path = "crates/http-types" }
 litellm-llms = { path = "crates/llms" }
 litellm-llms-types = { path = "crates/llms-types" }
 litellm-core-utils = { path = "crates/core-utils" }

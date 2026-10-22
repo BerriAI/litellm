@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 litellm-config.workspace = true
 litellm-core-utils.workspace = true
+litellm-http-types.workspace = true
 serde_yaml_ng = "0.10.0"
 thiserror.workspace = true
 
