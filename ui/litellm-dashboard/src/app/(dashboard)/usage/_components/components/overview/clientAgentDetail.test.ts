@@ -52,15 +52,13 @@ describe("clientAgentDetail", () => {
   it("should preserve the clicked summary before daily data arrives", () => {
     const expected = {
       summary: { spend: 3, tokens: 300, requests: 3 },
-      daily: [],
-      dailyAvailable: false,
       dailyMatchesSummary: false,
       tokenBreakdown: unknownTokenBreakdown,
     };
     expect(clientAgentDetail(agent, [])).toEqual(expected);
   });
 
-  it("should sum only exact contributing tags once and sort dates without global traffic", () => {
+  it("should reconcile exact contributing tags once without global traffic", () => {
     const secondTag = "User-Agent: claude-desktop/2.0";
     const result = clientAgentDetail({ ...agent, tags: [desktopTag, secondTag, desktopTag] }, [
       day("2026-10-22", { [desktopTag]: metrics(), [secondTag]: metrics(), [codeTag]: metrics({ spend: 50 }) }),
@@ -68,11 +66,6 @@ describe("clientAgentDetail", () => {
       day("2026-10-21", { [codeTag]: metrics() }),
     ]);
 
-    expect(result.daily).toEqual([
-      { date: "2026-10-20", spend: 1, tokens: 100, requests: 1 },
-      { date: "2026-10-21", spend: 0, tokens: 0, requests: 0 },
-      { date: "2026-10-22", spend: 2, tokens: 200, requests: 2 },
-    ]);
     expect(result.dailyMatchesSummary).toBe(true);
     const expectedTokens = {
       inputTokens: 240,
@@ -112,7 +105,6 @@ describe("clientAgentDetail", () => {
     const result = clientAgentDetail(agent, [day("2026-10-22", { [desktopTag]: metrics() })]);
 
     expect(result.summary).toEqual({ spend: 3, tokens: 300, requests: 3 });
-    expect(result.dailyAvailable).toBe(true);
     expect(result.dailyMatchesSummary).toBe(false);
     expect(result.tokenBreakdown).toEqual(unknownTokenBreakdown);
   });
@@ -121,9 +113,8 @@ describe("clientAgentDetail", () => {
     const unrelated = clientAgentDetail(agent, [day("2026-10-22", { [codeTag]: metrics() })]);
     const residual = clientAgentDetail({ ...agent, tags: [] }, [day("2026-10-22", { [desktopTag]: metrics() })]);
 
-    expect(unrelated.dailyAvailable).toBe(false);
-    expect(unrelated.daily).toEqual([]);
-    expect(residual.dailyAvailable).toBe(false);
+    expect(unrelated.tokenBreakdown).toEqual(unknownTokenBreakdown);
+    expect(residual.tokenBreakdown).toEqual(unknownTokenBreakdown);
     expect(residual.summary.spend).toBe(agent.spend);
   });
 
@@ -156,8 +147,7 @@ describe("clientAgentDetail", () => {
       day("2026-10-22", { [desktopTag]: metrics({ total_tokens: Number.NaN }) }),
     ]);
 
-    expect(result.dailyAvailable).toBe(false);
-    expect(result.daily).toEqual([]);
+    expect(result.dailyMatchesSummary).toBe(false);
     expect(result.summary.tokens).toBe(300);
     expect(result.tokenBreakdown.inputTokens).toBeNull();
   });

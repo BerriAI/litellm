@@ -1,11 +1,12 @@
 import moment from "moment";
-import { parseAsNativeArrayOf, parseAsString, parseAsStringLiteral, type inferParserType } from "nuqs";
+import { parseAsNativeArrayOf, parseAsString, parseAsStringEnum, type inferParserType } from "nuqs";
 
 import type { EntityType } from "@/components/EntityUsageExport/types";
 import { relativeTimeOptions } from "@/components/shared/advanced_date_picker";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { uiHref } from "@/utils/uiHref";
 import { USAGE_OPTIONS, type UsageOption } from "./components/UsageViewSelect/UsageViewSelect";
+import { UsageClient } from "./components/overview/agentCatalog";
 
 export const DEFAULT_USAGE_VIEW: UsageOption = "global";
 export const USAGE_TABS = ["cost", "models", "keys", "users", "mcp", "endpoints", "errors"] as const;
@@ -26,7 +27,7 @@ export const usageUrlParsers = {
   client_range: parseAsString,
   client_from: parseAsString,
   client_to: parseAsString,
-  client: parseAsStringLiteral(["claude-desktop", "claude-code"] as const),
+  client: parseAsStringEnum<UsageClient>(Object.values(UsageClient)),
   team: entityIds,
   org: entityIds,
   customer: entityIds,

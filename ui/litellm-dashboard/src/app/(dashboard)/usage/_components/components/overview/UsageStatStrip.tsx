@@ -15,8 +15,6 @@ interface UsageStatStripProps {
   loading: boolean;
   requestCountsPending: boolean;
   budget: number | null;
-  cacheAvailable?: boolean;
-  statusAvailable?: boolean;
 }
 
 /** Spend, requests, tokens and averages for a range, each with a daily sparkline. */
@@ -26,13 +24,8 @@ export default function UsageStatStrip({
   loading,
   requestCountsPending,
   budget,
-  cacheAvailable = true,
-  statusAvailable = true,
 }: UsageStatStripProps) {
   const daily = useMemo(() => dailyTotals(results), [results]);
-  const cacheHint = cacheAvailable
-    ? `${formatCompact(totals.cacheReadTokens)} cache read`
-    : "Cache breakdown unavailable";
   return (
     <div className="grid grid-cols-1 overflow-hidden rounded-xl border bg-card sm:grid-cols-2 lg:grid-cols-4 lg:divide-x">
       <StatCell trend={<Sparkline data={daily} dataKey="spend" color={BRAND} className="h-14" />}>
@@ -45,7 +38,7 @@ export default function UsageStatStrip({
       </StatCell>
       <StatCell trend={<Sparkline data={daily} dataKey="requests" color={BRAND} className="h-14" />}>
         <Stat label="Total Requests" value={totals.requests.toLocaleString()} pending={requestCountsPending} />
-        {!requestCountsPending && statusAvailable && (
+        {!requestCountsPending && (
           <div className="mt-0.5 flex gap-3 text-xs leading-4 text-muted-foreground">
             <span>
               <span className="text-success tabular-nums">{totals.successful.toLocaleString()}</span> ok
@@ -65,7 +58,7 @@ export default function UsageStatStrip({
           value={loading ? null : formatCompact(totals.tokens)}
           exact={`${totals.tokens.toLocaleString()} tokens`}
           pending={loading}
-          hint={loading ? undefined : cacheHint}
+          hint={loading ? undefined : `${formatCompact(totals.cacheReadTokens)} cache read`}
         />
         {!loading && (
           <Popover>
@@ -81,11 +74,11 @@ export default function UsageStatStrip({
                 </div>
                 <div className="flex justify-between gap-4 pl-3 text-xs text-muted-foreground">
                   <dt>Cache reads</dt>
-                  <dd>{cacheAvailable ? totals.cacheReadTokens.toLocaleString() : "Unavailable"}</dd>
+                  <dd>{totals.cacheReadTokens.toLocaleString()}</dd>
                 </div>
                 <div className="flex justify-between gap-4 pl-3 text-xs text-muted-foreground">
                   <dt>Cache writes</dt>
-                  <dd>{cacheAvailable ? totals.cacheWriteTokens.toLocaleString() : "Unavailable"}</dd>
+                  <dd>{totals.cacheWriteTokens.toLocaleString()}</dd>
                 </div>
                 <div className="flex justify-between gap-4">
                   <dt>Output tokens</dt>
@@ -115,11 +108,7 @@ export default function UsageStatStrip({
             label="Avg latency"
             value={totals.avgLatencyMs === null ? "—" : formatLatency(totals.avgLatencyMs)}
             pending={loading}
-            hint={
-              !statusAvailable || totals.successRate === null
-                ? undefined
-                : `${totals.successRate.toFixed(1)}% success rate`
-            }
+            hint={totals.successRate === null ? undefined : `${totals.successRate.toFixed(1)}% success rate`}
           />
         </div>
       </StatCell>

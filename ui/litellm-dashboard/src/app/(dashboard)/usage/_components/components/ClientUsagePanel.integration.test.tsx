@@ -12,7 +12,7 @@ import {
   within,
 } from "../../../../../../tests/test-utils";
 import ClientUsagePanel from "./ClientUsagePanel";
-import type { AgentRow } from "./overview/agentCatalog";
+import { UsageClient, type AgentRow } from "./overview/agentCatalog";
 
 vi.mock("@/components/networking", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/components/networking")>()),
@@ -60,7 +60,7 @@ const daily: DailyData[] = [
   },
 ];
 const defaultProps: ComponentProps<typeof ClientUsagePanel> = {
-  client: "claude-desktop",
+  client: UsageClient.ClaudeDesktop,
   userId: null,
   canChooseUser: true,
   onUserChange: vi.fn(),

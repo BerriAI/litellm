@@ -44,7 +44,6 @@ const scopeFor = (overrides: Partial<ClientUsageScopeInput> = {}) =>
 describe("resolveClientUsageScope", () => {
   it("should default a signed-in user to personal usage", () => {
     const result = scopeFor({ userId: "alice" });
-    expect(result.access).toBe("self");
     expect(result.scope).toEqual({ userId: "alice", teamId: null });
     expect(result.canChooseGlobalUser).toBe(false);
     expect(result.administeredTeams).toEqual([]);
@@ -57,7 +56,6 @@ describe("resolveClientUsageScope", () => {
     (userRole) => {
       const allUsers = scopeFor({ userRole });
       const selectedUser = scopeFor({ userRole, requestedUserId: "any-proxy-user" });
-      expect(allUsers.access).toBe("proxy-admin");
       expect(allUsers.scope).toEqual({ userId: null, teamId: null });
       expect(allUsers.canChooseGlobalUser).toBe(true);
       expect(allUsers.administeredTeams.map((team) => team.value)).toEqual(["engineering", "design", "external"]);
@@ -69,7 +67,6 @@ describe("resolveClientUsageScope", () => {
     "should not grant proxy-wide reads from the %s role name",
     (userRole) => {
       const result = scopeFor({ userRole, teams: [], requestedUserId: "outside-user" });
-      expect(result.access).toBe("self");
       expect(result.canChooseGlobalUser).toBe(false);
       expect(result.scope).toBeNull();
       expect(result.error).toBe("Choose an administered team before viewing another member's usage");
@@ -78,7 +75,6 @@ describe("resolveClientUsageScope", () => {
 
   it("should offer only administered teams and keep a team administrator in personal scope until a team is selected", () => {
     const result = scopeFor();
-    expect(result.access).toBe("team-admin");
     expect(result.scope).toEqual({ userId: "john", teamId: null });
     expect(result.administeredTeams).toEqual([
       { value: "engineering", label: "Engineering" },

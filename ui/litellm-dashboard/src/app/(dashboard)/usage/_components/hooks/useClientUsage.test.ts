@@ -1,13 +1,14 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { uiSpendLogsCall } from "@/components/networking";
+import { UsageClient } from "./clientUsageData";
 import { useClientUsage } from "./useClientUsage";
 
 vi.mock("@/components/networking", () => ({ uiSpendLogsCall: vi.fn() }));
 const options = {
   accessToken: "test-token",
   userId: "user-1",
-  client: "claude-desktop" as const,
+  client: UsageClient.ClaudeDesktop,
   startTime: new Date("2026-10-22T07:00:00.500Z"),
   endTime: new Date("2026-10-23T06:59:59.999Z"),
 };
@@ -36,9 +37,9 @@ describe("useClientUsage", () => {
 
   it("should require a selected user and avoid querying the all-clients view", () => {
     const { result, rerender } = renderHook(
-      ({ userId, client }: { userId: string | null; client: "claude-desktop" | null }) =>
+      ({ userId, client }: { userId: string | null; client: UsageClient | null }) =>
         useClientUsage({ ...options, userId, client }),
-      { initialProps: { userId: null, client: "claude-desktop" } },
+      { initialProps: { userId: null, client: UsageClient.ClaudeDesktop } },
     );
     expect(result.current.error).toBe("Select a user or team to view client usage");
     expect(result.current.loading).toBe(false);
@@ -83,8 +84,8 @@ describe("useClientUsage", () => {
   it("should clear loaded data immediately when client filtering is disabled", async () => {
     vi.mocked(uiSpendLogsCall).mockResolvedValue({ ...emptyPage, total: 1001, total_pages: 2 });
     const { result, rerender } = renderHook(
-      ({ client }: { client: "claude-desktop" | null }) => useClientUsage({ ...options, client }),
-      { initialProps: { client: "claude-desktop" } },
+      ({ client }: { client: UsageClient | null }) => useClientUsage({ ...options, client }),
+      { initialProps: { client: UsageClient.ClaudeDesktop } },
     );
     await waitFor(() => expect(result.current.error).toContain("Narrow the date range"));
     rerender({ client: null });

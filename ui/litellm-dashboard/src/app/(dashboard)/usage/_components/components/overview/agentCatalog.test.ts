@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { agentDailyData, isUserAgentTag, topAgents, userAgentProduct, type TagSummaryRow } from "./agentCatalog";
+import {
+  agentDailyData,
+  isUserAgentTag,
+  parseUsageClient,
+  topAgents,
+  usageClientFromUserAgent,
+  userAgentProduct,
+  UsageClient,
+  type TagSummaryRow,
+} from "./agentCatalog";
 import type { DailyData } from "@/components/UsagePage/types";
 
 const metric = (spend: number, tokens: number) => ({
@@ -31,6 +40,26 @@ const row = (
   successful_requests: requests,
   failed_requests: 0,
   unique_users: users,
+});
+
+describe("client identification", () => {
+  it("should accept only supported client IDs at a selection boundary", () => {
+    expect(parseUsageClient("claude-desktop")).toBe(UsageClient.ClaudeDesktop);
+    expect(parseUsageClient("claude-code")).toBe(UsageClient.ClaudeCode);
+    expect(parseUsageClient("claude-cli")).toBeNull();
+    expect(parseUsageClient(null)).toBeNull();
+  });
+
+  it.each<[string, UsageClient | null]>([
+    [" User Agent: claude-desktop/1.0 ", UsageClient.ClaudeDesktop],
+    ["claude-cli/1.0 (external, cli)", UsageClient.ClaudeCode],
+    ["claude-cli/1.0 (external, cli, claude-desktop-3p)", UsageClient.ClaudeDesktop],
+    ["python-httpx/1.0 (claude-desktop-3p)", null],
+    ["claude-cli/1.0 (integration=claude-desktop-3p)", null],
+    ["claude-cli", null],
+  ])("should classify the full user agent %s without matching incidental markers", (agent, expected) => {
+    expect(usageClientFromUserAgent(agent)).toBe(expected);
+  });
 });
 
 describe("userAgentProduct", () => {

@@ -5,28 +5,31 @@ import {
   type DailyActivityAggregatedResponse,
 } from "@/components/UsagePage/dailyActivityApi";
 import type { components } from "@/lib/http/schema";
+import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
+import { isUserAgentTag, usageClientFromUserAgent, UsageClient } from "../components/overview/agentCatalog";
 
 type DailyData = components["schemas"]["DailySpendData"];
 type MetricWithMetadata = components["schemas"]["MetricWithMetadata"];
 type SpendMetrics = components["schemas"]["SpendMetrics"];
 
-export type UsageClient = "claude-desktop" | "claude-code";
+export { UsageClient } from "../components/overview/agentCatalog";
 export const CLIENT_REQUEST_LIMIT = 1000;
 export const INCOMPLETE_CLIENT_USAGE =
   "Narrow the date range to fewer than 1,000 requests to see complete client usage";
 
 const count = z.number().int().nonnegative();
-const usageSchema = z.object({
+const cacheDetailsSchema = z.object({
+  cached_tokens: count.nullish(),
+  cache_creation_tokens: count.nullish(),
+  cache_write_tokens: count.nullish(),
+});
+const usageFields = {
   cache_read_input_tokens: count.nullish(),
   cache_creation_input_tokens: count.nullish(),
-  prompt_tokens_details: z
-    .object({
-      cached_tokens: count.nullish(),
-      cache_creation_tokens: count.nullish(),
-      cache_write_tokens: count.nullish(),
-    })
-    .nullish(),
-});
+  prompt_tokens_details: cacheDetailsSchema.nullish(),
+  input_tokens_details: cacheDetailsSchema.nullish(),
+};
+const usageSchema = z.object(usageFields);
 const metadataFields = {
   user_agent: z.string().nullish(),
   status: z.string().nullish(),
@@ -79,14 +82,12 @@ export interface ClientUsageResult {
   data: DailyActivityAggregatedResponse;
   error: string | null;
   cacheAvailable: boolean;
-  statusAvailable: boolean;
 }
 
 export const emptyClientUsage = (error: string | null = null): ClientUsageResult => ({
   data: EMPTY_DAILY_ACTIVITY_RESPONSE,
   error,
   cacheAvailable: false,
-  statusAvailable: false,
 });
 
 function userAgentTags(tags: unknown): string[] {
@@ -100,43 +101,31 @@ function userAgentTags(tags: unknown): string[] {
   }
   if (tags !== null && typeof tags === "object") {
     return Object.entries(tags).flatMap(([key, value]) => {
-      if (/^user-agent$/i.test(key) && typeof value === "string") return [`User-Agent: ${value}`];
-      return /^user-agent:/i.test(key) ? [key] : [];
+      if (isUserAgentTag(key)) return [key];
+      return isUserAgentTag(`${key.trim()}:`) && typeof value === "string" ? [`User-Agent: ${value}`] : [];
     });
   }
   return [];
 }
 
 export function identifyUsageClient(metadataAgent: string | null | undefined, tags: unknown): UsageClient | null {
-  const candidates = [
-    ...(metadataAgent ? [metadataAgent] : []),
-    ...userAgentTags(tags)
-      .filter((tag) => /^user-agent:/i.test(tag))
-      .map((tag) => tag.replace(/^user-agent:\s*/i, "")),
-  ];
-  if (candidates.some((value) => /^claude[-_ ]desktop\b/i.test(value) || /\bclaude-desktop-3p\b/i.test(value))) {
-    return "claude-desktop";
-  }
-  if (candidates.some((value) => /^(claude-code|claude_code|claude-user)\b/i.test(value))) return "claude-code";
-  if (candidates.some((value) => /^claude-cli\//i.test(value) && /(?:\(|,)\s*cli\s*(?:,|\))/i.test(value))) {
-    return "claude-code";
-  }
+  const candidates = [...(metadataAgent ? [metadataAgent] : []), ...userAgentTags(tags).filter(isUserAgentTag)].map(
+    usageClientFromUserAgent,
+  );
+  if (candidates.includes(UsageClient.ClaudeDesktop)) return UsageClient.ClaudeDesktop;
+  if (candidates.includes(UsageClient.ClaudeCode)) return UsageClient.ClaudeCode;
   return null;
 }
 
 const statusOf = (row: ClientLog) => row.status ?? row.metadata?.status;
-const recordedCacheTokens = (
-  usage: z.infer<typeof usageSchema> | null | undefined,
-  kind: "read" | "creation",
-): number | null => {
-  if (!usage) return null;
-  const details = usage.prompt_tokens_details;
-  if (kind === "read") return usage.cache_read_input_tokens ?? details?.cached_tokens ?? null;
-  return usage.cache_creation_input_tokens ?? details?.cache_creation_tokens ?? details?.cache_write_tokens ?? null;
+const cacheTokens = (row: ClientLog) => {
+  const additional = extractPromptCacheTokens(row.metadata?.additional_usage_values, true);
+  const usage = extractPromptCacheTokens(row.metadata?.usage_object, true);
+  return {
+    cacheReadTokens: additional.cacheReadTokens ?? usage.cacheReadTokens,
+    cacheCreationTokens: additional.cacheCreationTokens ?? usage.cacheCreationTokens,
+  };
 };
-const cacheTokens = (row: ClientLog, kind: "read" | "creation"): number | null =>
-  recordedCacheTokens(row.metadata?.additional_usage_values, kind) ??
-  recordedCacheTokens(row.metadata?.usage_object, kind);
 const sum = (rows: readonly ClientLog[], value: (row: ClientLog) => number) =>
   rows.reduce((total, row) => total + value(row), 0);
 const metricsFor = (rows: readonly ClientLog[]): SpendMetrics => ({
@@ -154,8 +143,8 @@ const metricsFor = (rows: readonly ClientLog[]): SpendMetrics => ({
   api_requests: rows.length,
   successful_requests: rows.filter((row) => statusOf(row) === "success").length,
   failed_requests: rows.filter((row) => statusOf(row) === "failure").length,
-  cache_read_input_tokens: sum(rows, (row) => cacheTokens(row, "read") ?? 0),
-  cache_creation_input_tokens: sum(rows, (row) => cacheTokens(row, "creation") ?? 0),
+  cache_read_input_tokens: sum(rows, (row) => cacheTokens(row).cacheReadTokens ?? 0),
+  cache_creation_input_tokens: sum(rows, (row) => cacheTokens(row).cacheCreationTokens ?? 0),
   total_response_time_ms: sum(rows, (row) => (statusOf(row) === "success" ? row.request_duration_ms ?? 0 : 0)),
   timed_requests: rows.filter((row) => statusOf(row) === "success" && row.request_duration_ms != null).length,
 });
@@ -237,7 +226,9 @@ export function clientUsageFromLogs(response: unknown, scope: ClientUsageScope):
       },
     },
     error: null,
-    cacheAvailable: rows.every((row) => cacheTokens(row, "read") !== null && cacheTokens(row, "creation") !== null),
-    statusAvailable: rows.every((row) => statusOf(row) === "success" || statusOf(row) === "failure"),
+    cacheAvailable: rows.every((row) => {
+      const cache = cacheTokens(row);
+      return cache.cacheReadTokens !== undefined && cache.cacheCreationTokens !== undefined;
+    }),
   };
 }

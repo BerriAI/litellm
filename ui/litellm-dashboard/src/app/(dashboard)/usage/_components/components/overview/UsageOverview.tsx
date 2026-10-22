@@ -20,8 +20,6 @@ interface UsageOverviewProps {
   loading: boolean;
   requestCountsPending: boolean;
   budget: number | null;
-  cacheAvailable?: boolean;
-  statusAvailable?: boolean;
   topKeys: ReactNode;
   topUsers: ReactNode;
   gatewayByEndpoint: ReactNode;
@@ -40,8 +38,6 @@ export default function UsageOverview({
   topAgents,
   providerBreakdown,
   budget,
-  cacheAvailable,
-  statusAvailable,
 }: UsageOverviewProps) {
   return (
     <div className="grid gap-3">
@@ -51,8 +47,6 @@ export default function UsageOverview({
         loading={loading}
         requestCountsPending={requestCountsPending}
         budget={budget}
-        cacheAvailable={cacheAvailable}
-        statusAvailable={statusAvailable}
       />
 
       <UsageBreakdownChart results={results} loading={loading} />
@@ -60,16 +54,12 @@ export default function UsageOverview({
       {topAgents}
       {providerBreakdown}
 
-      {topKeys && (
-        <Panel icon={KeyRound} title="Top Virtual Keys">
-          {topKeys}
-        </Panel>
-      )}
-      {topUsers && (
-        <Panel icon={Users} title="Top Users by Spend">
-          {topUsers}
-        </Panel>
-      )}
+      <Panel icon={KeyRound} title="Top Virtual Keys">
+        {topKeys}
+      </Panel>
+      <Panel icon={Users} title="Top Users by Spend">
+        {topUsers}
+      </Panel>
       {gatewayByEndpoint}
     </div>
   );

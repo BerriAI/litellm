@@ -1,9 +1,9 @@
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import type { UsageClient } from "../hooks/clientUsageData";
+import { parseUsageClient, UsageClient } from "./overview/agentCatalog";
 
 const CLIENT_OPTIONS = [
-  { value: "claude-desktop", label: "Claude Desktop" },
-  { value: "claude-code", label: "Claude Code" },
+  { value: UsageClient.ClaudeDesktop, label: "Claude Desktop" },
+  { value: UsageClient.ClaudeCode, label: "Claude Code" },
 ];
 
 export default function ClientUsageSelect({
@@ -19,7 +19,7 @@ export default function ClientUsageSelect({
       placeholder="View client usage"
       value={value}
       options={CLIENT_OPTIONS}
-      onValueChange={(client) => onChange(client === "claude-desktop" || client === "claude-code" ? client : null)}
+      onValueChange={(client) => onChange(parseUsageClient(client))}
     />
   );
 }

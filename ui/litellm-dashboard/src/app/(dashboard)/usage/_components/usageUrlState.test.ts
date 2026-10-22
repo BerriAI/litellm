@@ -2,6 +2,7 @@ import moment from "moment";
 import { createLoader, createSerializer } from "nuqs";
 import { describe, expect, it } from "vitest";
 
+import { UsageClient } from "./components/overview/agentCatalog";
 import type { UsageOption } from "./components/UsageViewSelect/UsageViewSelect";
 import { USAGE_OPTIONS } from "./components/UsageViewSelect/UsageViewSelect";
 import {
@@ -291,7 +292,7 @@ describe("client usage filters", () => {
   });
 
   it("should preserve the underlying tab and person when a client panel opens", () => {
-    const query = applyPatch("?user=u1&tab=keys&range=7d", { client: "claude-desktop", client_user: "u2" });
+    const query = applyPatch("?user=u1&tab=keys&range=7d", { client: UsageClient.ClaudeDesktop, client_user: "u2" });
     expect(usageTabFromParams(load(query))).toBe("keys");
     expect(clean(query)).toBeNull();
     expect(load(query).user).toBe("u1");
@@ -334,7 +335,7 @@ describe("client panel date range", () => {
   it("should clear only panel state on close or when opening a different client", () => {
     const query = "?client=claude-desktop&client_user=u2&client_range=7d&range=30d&user=u1&tab=keys";
     expect(applyPatch(query, clientPanelPatch(null))).toBe("?range=30d&user=u1&tab=keys");
-    const next = load(applyPatch(query, clientPanelPatch("claude-code")));
+    const next = load(applyPatch(query, clientPanelPatch(UsageClient.ClaudeCode)));
     expect(next.client).toBe("claude-code");
     expect(next.client_range).toBeNull();
     expect(next.range).toBe("30d");

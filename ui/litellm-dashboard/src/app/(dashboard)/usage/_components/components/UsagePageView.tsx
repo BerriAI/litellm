@@ -94,7 +94,7 @@ import {
 } from "../usageUrlState";
 import { overviewTotals, rollUpBreakdown } from "./overview/overviewData";
 import TopAgents from "./overview/TopAgents";
-import { topAgents, type AgentRow } from "./overview/agentCatalog";
+import { parseUsageClient, topAgents, type AgentRow } from "./overview/agentCatalog";
 import ClientUsagePanel from "./ClientUsagePanel";
 import { resolveClientUsageScope } from "../hooks/clientUsageScope";
 import { useUsagePanelContext } from "../hooks/useUsagePanelContext";
@@ -287,9 +287,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const tagDaily = useMemo(() => toDailyData(tagDailyRaw), [tagDailyRaw]);
   const openAgentActivity = useCallback(
     (agent: AgentRow) => {
-      if (agent.id === "claude-desktop" || agent.id === "claude-code") {
+      const client = parseUsageClient(agent.id);
+      if (client) {
         rememberUsageContext();
-        void setUrlParams(clientPanelPatch(agent.id), { scroll: false });
+        void setUrlParams(clientPanelPatch(client), { scroll: false });
         return;
       }
       void setUrlParams({

@@ -19,6 +19,17 @@ export type TagSummaryRow = components["schemas"]["TagSummaryMetrics"];
 
 export type AgentKind = "agent" | "sdk";
 
+export enum UsageClient {
+  ClaudeDesktop = "claude-desktop",
+  ClaudeCode = "claude-code",
+}
+
+export const parseUsageClient = (value: string | null): UsageClient | null => {
+  if (value === UsageClient.ClaudeDesktop) return UsageClient.ClaudeDesktop;
+  if (value === UsageClient.ClaudeCode) return UsageClient.ClaudeCode;
+  return null;
+};
+
 export interface AgentRow {
   id: string;
   label: string;
@@ -50,7 +61,7 @@ interface AgentFamily {
  */
 const FAMILIES: readonly AgentFamily[] = [
   {
-    id: "claude-desktop",
+    id: UsageClient.ClaudeDesktop,
     label: "Claude Desktop",
     description: "Anthropic's desktop assistant",
     kind: "agent",
@@ -58,7 +69,7 @@ const FAMILIES: readonly AgentFamily[] = [
     match: /^claude[-_ ]desktop\b|^claude-cli\/[^\s]+\s+\((?:[^)]*,\s*)?claude-desktop-3p\s*[,)]/i,
   },
   {
-    id: "claude-code",
+    id: UsageClient.ClaudeCode,
     label: "Claude Code",
     description: "Anthropic's coding agent",
     kind: "agent",
@@ -225,6 +236,9 @@ export const userAgentProduct = (tag: string): string => {
 
 const familyFor = (product: string): AgentFamily | null =>
   FAMILIES.find((family) => family.match.test(product)) ?? null;
+
+export const usageClientFromUserAgent = (userAgent: string): UsageClient | null =>
+  parseUsageClient(familyFor(userAgent.trim().replace(USER_AGENT_PREFIX, ""))?.id ?? null);
 
 const isBareTag = (row: TagSummaryRow, product: string) =>
   row.tag.trim().replace(USER_AGENT_PREFIX, "").trim() === product;

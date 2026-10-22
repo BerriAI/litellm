@@ -3,6 +3,7 @@ import {
   clientUsageFromLogs,
   identifyUsageClient,
   INCOMPLETE_CLIENT_USAGE,
+  UsageClient,
   type ClientUsageScope,
 } from "./clientUsageData";
 
@@ -37,7 +38,7 @@ const page = (rows: ReturnType<typeof log>[], overrides: Record<string, unknown>
 });
 const scope: ClientUsageScope = {
   userId: "user-1",
-  client: "claude-desktop",
+  client: UsageClient.ClaudeDesktop,
   startTime: new Date("2026-10-21T00:00:00Z"),
   endTime: new Date("2026-10-23T00:00:00Z"),
 };
@@ -76,7 +77,6 @@ describe("client usage from request logs", () => {
     };
     expect(result.data.metadata).toMatchObject(expectedTotals);
     expect(result.cacheAvailable).toBe(true);
-    expect(result.statusAvailable).toBe(true);
     const day = result.data.results?.[0];
     expect(day?.breakdown?.models?.["provider-model"].metrics?.api_requests).toBe(2);
     expect(day?.breakdown?.model_groups?.["deployment-alias"].metrics?.spend).toBe(0.026);
@@ -101,7 +101,7 @@ describe("client usage from request logs", () => {
       log({ request_id: "unknown", request_tags: ["User-Agent: claude-cli"], metadata: null }),
     ];
     const desktop = clientUsageFromLogs(page(rows), scope);
-    const code = clientUsageFromLogs(page(rows), { ...scope, client: "claude-code" });
+    const code = clientUsageFromLogs(page(rows), { ...scope, client: UsageClient.ClaudeCode });
     expect(desktop.data.metadata?.total_api_requests).toBe(1);
     expect(code.data.metadata?.total_api_requests).toBe(1);
     expect(identifyUsageClient("claude-code/3.0", [])).toBe("claude-code");
@@ -133,10 +133,9 @@ describe("client usage from request logs", () => {
     expect(result.data.results).toEqual([]);
   });
 
-  it("should keep unknown cache and status separate from recorded zero values", () => {
+  it("should keep unknown cache separate from recorded zero values", () => {
     const unknown = clientUsageFromLogs(page([log({ status: null, metadata: { user_agent: desktopAgent } })]), scope);
     expect(unknown.cacheAvailable).toBe(false);
-    expect(unknown.statusAvailable).toBe(false);
     expect(unknown.data.metadata?.total_tokens).toBe(1200);
     expect(unknown.data.metadata?.total_spend).toBe(0.013);
     const zero = clientUsageFromLogs(
@@ -169,7 +168,6 @@ describe("client usage from request logs", () => {
       scope,
     );
     expect(result.cacheAvailable).toBe(true);
-    expect(result.statusAvailable).toBe(true);
     expect(result.data.metadata?.total_cache_read_input_tokens).toBe(500);
     expect(result.data.metadata?.total_failed_requests).toBe(1);
     expect(result.data.metadata?.total_timed_requests).toBe(0);
@@ -244,5 +242,42 @@ describe("client usage from request logs", () => {
 
   it("should refuse unscoped request-log aggregation", () => {
     expect(clientUsageFromLogs(page([log()]), { ...scope, userId: null }).error).toContain("Select a user or team");
+  });
+
+  it("should exclude unrelated clients containing a Desktop marker from Desktop totals", () => {
+    const rows = [
+      log(),
+      log({
+        request_id: "unrelated-client",
+        request_tags: ["User-Agent: python-httpx/1.0 (claude-desktop-3p)"],
+        metadata: { user_agent: "python-httpx/1.0 (claude-desktop-3p)" },
+      }),
+      log({
+        request_id: "ambiguous-cli",
+        request_tags: ["User-Agent: claude-cli/1.0 (integration=claude-desktop-3p)"],
+        metadata: null,
+      }),
+    ];
+    const result = clientUsageFromLogs(page(rows), scope);
+    expect(result.error).toBeNull();
+    expect(result.data.metadata?.total_api_requests).toBe(1);
+    expect(result.data.metadata?.total_spend).toBe(0.013);
+  });
+
+  it.each([
+    { requestTags: [" User Agent: claude-desktop/1.0 "] },
+    { requestTags: { " User Agent ": "claude-desktop/1.0" } },
+    { requestTags: { " User-Agent: claude-desktop/1.0 ": true } },
+  ])("should recognize the catalog's normalized tag formats %j", ({ requestTags }) => {
+    const result = clientUsageFromLogs(page([log({ request_tags: requestTags, metadata: null })]), scope);
+    expect(result.data.metadata?.total_api_requests).toBe(1);
+  });
+
+  it("should retain recorded zero and positive cache counts from the Responses API usage shape", () => {
+    const responseUsage = { input_tokens_details: { cached_tokens: 0, cache_write_tokens: 100 } };
+    const result = clientUsageFromLogs(page([log({ metadata: { usage_object: responseUsage } })]), scope);
+    expect(result.cacheAvailable).toBe(true);
+    expect(result.data.metadata?.total_cache_read_input_tokens).toBe(0);
+    expect(result.data.metadata?.total_cache_creation_input_tokens).toBe(100);
   });
 });

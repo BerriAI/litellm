@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { OverviewTotals } from "./overviewData";
@@ -49,28 +49,12 @@ describe("UsageStatStrip token breakdown", () => {
     expect(breakdown).toHaveTextContent("Compare the same person, client and time range");
   });
 
-  it("should show unavailable cache telemetry without displaying cache counts as known", async () => {
-    const user = userEvent.setup();
-    render(<UsageStatStrip {...defaultProps} cacheAvailable={false} />);
+  it("should hide the token breakdown and request counts while usage is loading", () => {
+    render(<UsageStatStrip {...defaultProps} loading requestCountsPending />);
 
-    expect(screen.getByText("Cache breakdown unavailable")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "View token breakdown" }));
-    const breakdown = await screen.findByRole("dialog", { name: "What counts toward total tokens?" });
-    expect(within(breakdown).getAllByText("Unavailable")).toHaveLength(2);
-    expect(within(breakdown).queryByText("5,123,456")).not.toBeInTheDocument();
-    expect(within(breakdown).queryByText("2,000,000")).not.toBeInTheDocument();
-    expect(breakdown).toHaveTextContent(/Input tokens\s*8,123,456/);
-    expect(breakdown).toHaveTextContent(/Output tokens\s*1,000,000/);
-  });
-
-  it("should hide success and failure claims when request status is unavailable", () => {
-    render(<UsageStatStrip {...defaultProps} statusAvailable={false} />);
-
-    expect(screen.getByText("Total Requests")).toBeInTheDocument();
-    expect(screen.getByText("10")).toBeInTheDocument();
+    expect(screen.getByText("Total Tokens")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View token breakdown" })).not.toBeInTheDocument();
     expect(screen.queryByText("ok")).not.toBeInTheDocument();
     expect(screen.queryByText("failed")).not.toBeInTheDocument();
-    expect(screen.queryByText(/success rate/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "View token breakdown" })).toBeInTheDocument();
   });
 });

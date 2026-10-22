@@ -1,5 +1,5 @@
 import type { Member } from "@/components/networking";
-import { hasProxyWideSpendView } from "@/utils/roles";
+import { hasProxyWideSpendView, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 
 export interface ClientUsageTeam {
   readonly team_id: string;
@@ -27,7 +27,6 @@ export interface ClientUsageScope {
 }
 
 export interface ResolvedClientUsageScope {
-  access: "self" | "proxy-admin" | "team-admin";
   scope: ClientUsageScope | null;
   administeredTeams: readonly ClientUsageScopeOption[];
   members: readonly ClientUsageScopeOption[];
@@ -52,14 +51,6 @@ const memberOptions = (team: ClientUsageTeam): ClientUsageScopeOption[] => {
   return unique.map((member) => ({ value: member.user_id, label: memberLabel(member) }));
 };
 
-const scopeAccess = (
-  proxyAdmin: boolean,
-  availableTeams: readonly ClientUsageTeam[],
-): ResolvedClientUsageScope["access"] => {
-  if (proxyAdmin) return "proxy-admin";
-  return availableTeams.length > 0 ? "team-admin" : "self";
-};
-
 export const resolveClientUsageScope = ({
   userId,
   userRole,
@@ -71,17 +62,14 @@ export const resolveClientUsageScope = ({
   const proxyAdmin = Boolean(userId) && hasProxyWideSpendView(userRole);
   const availableTeams = userId
     ? (teams ?? []).filter(
-        (team) =>
-          proxyAdmin || team.members_with_roles?.some((member) => member.user_id === userId && member.role === "admin"),
+        (team) => proxyAdmin || isUserTeamAdminForSingleTeam(team.members_with_roles ?? null, userId),
       )
     : [];
   const administeredTeams = availableTeams.map((team) => ({
     value: team.team_id,
     label: team.team_alias || team.team_id,
   }));
-  const access = scopeAccess(proxyAdmin, availableTeams);
   const base: ResolvedClientUsageScope = {
-    access,
     scope: null,
     administeredTeams,
     members: [],
