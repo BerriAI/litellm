@@ -460,6 +460,8 @@ def validate_static_credential(
     headers: Mapping[str, str],
     upstream_token_header: str | None = None,
     static_header_names: Iterable[str] = (),
+    *,
+    allow_absent: bool = False,
 ) -> Result[None, CredError]:
     if auth_type not in _STATIC_MODES:
         return Ok(None)
@@ -475,17 +477,23 @@ def validate_static_credential(
         )
     )
     values: Final = tuple((name.lower(), value.strip()) for name, value in headers.items() if name.lower() in slots)
+    if allow_absent and not values:
+        return Ok(None)
     if any(_usable_credential_value(auth_type, name, value) for name, value in values):
         return Ok(None)
     return Error(CredError.of_misconfigured(f"{auth_type} requires a usable upstream credential"))
 
 
-async def prepare_mcp_client(server: MCPServer, client: MCPClient) -> MCPClient:
+async def prepare_mcp_client(server: MCPServer, client: MCPClient, *, for_tool_listing: bool = False) -> MCPClient:
     if server.auth_type not in _STATIC_MODES or client.transport_type == MCPTransport.stdio:
         return client
     request: Final = await client.prepare_request_auth()
     match validate_static_credential(
-        server.auth_type, request.headers, server.upstream_token_header, server.static_headers or ()
+        server.auth_type,
+        request.headers,
+        server.upstream_token_header,
+        server.static_headers or (),
+        allow_absent=for_tool_listing and server.auth_type == MCPAuth.authorization,
     ):
         case Error(error):
             raise_public(error)

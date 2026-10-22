@@ -471,7 +471,13 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
     )
     metadata: Final = data.metadata or MappingProxyType({})
     folded_metadata: Final = {**metadata, **metadata_fields}
-    columns: Final = handle_key_type(data, {**column_fields})
+    preset_columns: Final = handle_key_type(data, {**column_fields})
+    default_allowed_routes: Final = _default_allowed_routes_for(data, preset_columns.get("allowed_routes"))
+    columns: Final = (
+        preset_columns
+        if default_allowed_routes is None
+        else {**preset_columns, "allowed_routes": list(default_allowed_routes)}
+    )
     expires: Final = (
         now + timedelta(seconds=duration_in_seconds(duration=data.duration)) if data.duration is not None else None
     )
@@ -936,7 +942,19 @@ def common_key_access_checks(
 router: Final = APIRouter()
 
 
-def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
+_KEY_TYPE_PRESET_ROUTES: Final = MappingProxyType(
+    {
+        LiteLLMKeyType.LLM_API: ("llm_api_routes",),
+        LiteLLMKeyType.MANAGEMENT: ("management_routes",),
+        LiteLLMKeyType.READ_ONLY: ("info_routes",),
+    }
+)
+
+
+_KeyJsonT: Final = TypeVar("_KeyJsonT", bound=dict[str, object])
+
+
+def handle_key_type(data: GenerateKeyRequest, data_json: _KeyJsonT) -> _KeyJsonT:
     """
     Handle the key type.
     """
@@ -945,13 +963,42 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
         data_json.pop("key_type", None)
         return data_json
     data_json["key_type"] = key_type.value
-    if key_type == LiteLLMKeyType.LLM_API:
-        data_json["allowed_routes"] = ["llm_api_routes"]
-    elif key_type == LiteLLMKeyType.MANAGEMENT:
-        data_json["allowed_routes"] = ["management_routes"]
-    elif key_type == LiteLLMKeyType.READ_ONLY:
-        data_json["allowed_routes"] = ["info_routes"]
+    preset_routes: Final = _KEY_TYPE_PRESET_ROUTES.get(key_type)
+    if preset_routes is not None:
+        data_json["allowed_routes"] = list(preset_routes)
     return data_json
+
+
+def _creates_team_service_account(request: GenerateKeyRequest) -> bool:
+    return (
+        request.user_id is None
+        and request.team_id is not None
+        and request.metadata is not None
+        and request.metadata.get("service_account_id") is not None
+    )
+
+
+def _configured_default_allowed_routes() -> tuple[str, ...] | None:
+    default_routes: Final[object] = (litellm.default_key_generate_params or {}).get("allowed_routes")
+    if not isinstance(default_routes, list) or not default_routes:
+        return None
+    routes: Final[tuple[object, ...]] = tuple(default_routes)
+    string_routes: Final = tuple(route for route in routes if isinstance(route, str))
+    return string_routes if len(string_routes) == len(routes) else None
+
+
+def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object) -> tuple[str, ...] | None:
+    configured_routes: Final = _configured_default_allowed_routes()
+    if configured_routes is None or _creates_team_service_account(request):
+        return None
+    if "key_type" not in request.model_fields_set or request.key_type is None:
+        return None if key_routes else configured_routes
+    match request.key_type:
+        case LiteLLMKeyType.LLM_API:
+            llm_api_routes: Final = _KEY_TYPE_PRESET_ROUTES[LiteLLMKeyType.LLM_API]
+            return configured_routes if all(route in configured_routes for route in llm_api_routes) else None
+        case _:
+            return None
 
 
 _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS: Final = frozenset({"llm_api_routes", "info_routes"})
@@ -1068,11 +1115,24 @@ def _is_safe_preset_route_transition(
     return existing != _READ_ONLY_ALLOWED_ROUTES_PRESET or incoming == existing
 
 
+def _resends_stored_routes(
+    data: UpdateKeyRequest | RegenerateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+) -> bool:
+    return (
+        "allowed_routes" in data.model_fields_set
+        and data.allowed_routes is not None
+        and list(data.allowed_routes) == list(existing_key_row.allowed_routes or ())
+    )
+
+
 def _enforce_allowed_routes_update_permission(
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
+    if _resends_stored_routes(data, existing_key_row):
+        return
     if _is_safe_preset_route_transition(
         incoming_allowed_routes=data.allowed_routes,
         existing_allowed_routes=existing_key_row.allowed_routes,
@@ -1499,7 +1559,9 @@ async def _common_key_generation_helper(
         build_policy_request=lambda: CustomKeyPolicyRequest(
             operation="generate",
             existing_key=None,
-            effective_key=_effective_key_for_generate(data=data, now=datetime.now(timezone.utc)),
+            effective_key=_effective_key_for_generate(
+                data=_member_key_request(data, acting_as_team_admin), now=datetime.now(timezone.utc)
+            ),
             request=data,
         ),
     )
@@ -1549,7 +1611,8 @@ async def _common_key_generation_helper(
 
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)
 
-    data_json = handle_key_type(_member_key_request(data, acting_as_team_admin), data_json)
+    member_request: Final = _member_key_request(data, acting_as_team_admin)
+    data_json = handle_key_type(member_request, data_json)
 
     # Re-check allowed_routes after handle_key_type, since key_type can derive
     # an elevated bucket (e.g. ["management_routes"]) that wasn't present in
@@ -1561,6 +1624,9 @@ async def _common_key_generation_helper(
         user_api_key_dict=user_api_key_dict,
         allow_safe_presets=True,
     )
+    default_allowed_routes: Final = _default_allowed_routes_for(member_request, data_json.get("allowed_routes"))
+    if default_allowed_routes is not None:
+        data_json["allowed_routes"] = list(default_allowed_routes)
 
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
     if "max_budget" in data_json:
@@ -2268,7 +2334,7 @@ async def generate_key_fn(
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
     - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
-    - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
+    - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (Full Access in the Admin UI, skips `default_key_generate_params.allowed_routes`). When omitted, the key gets `default_key_generate_params.allowed_routes` if that is set and the request has no `allowed_routes`, else it works like "default".
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
@@ -2758,6 +2824,8 @@ async def prepare_key_update_data(
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     data_json.pop("grace_period", None)  # Request-only param, not a DB column
+    if _resends_stored_routes(data, existing_key_row):
+        data_json.pop("allowed_routes", None)
     if (
         data.metadata is not None
         and data.metadata.get("service_account_id") is not None

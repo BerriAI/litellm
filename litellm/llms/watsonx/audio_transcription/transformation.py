@@ -12,6 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
@@ -150,10 +151,9 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         """
         # Get base URL
         url = self._get_base_url(api_base=api_base)
-        url = url.rstrip("/")
 
         # Add the audio transcription endpoint
-        url = f"{url}/ml/v1/audio/transcriptions"
+        url = join_api_base(url, "ml/v1/audio/transcriptions")
 
         # Add version parameter (only version in query string, not project_id)
         api_version: Final = optional_params.get("api_version", None) or litellm.WATSONX_DEFAULT_API_VERSION
