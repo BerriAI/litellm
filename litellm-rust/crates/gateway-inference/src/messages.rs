@@ -21,12 +21,12 @@ use litellm_gateway_hooks::Route;
 use crate::{Deployment, Error, Gateway, JsonBody, RequestId, request};
 
 /// Client headers Python forwards to Anthropic-speaking providers on every call.
-const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
+pub(crate) const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
 const OPENROUTER_API_HEADERS: [&str; 2] = [
     "x-openrouter-metadata",
     "x-openrouter-experimental-metadata",
 ];
-const ANTHROPIC_API_HEADER_PROVIDERS: &str =
+pub(crate) const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
 
 pub async fn create(
