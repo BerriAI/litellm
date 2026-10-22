@@ -2,7 +2,7 @@ import builtins
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Generic, Literal, Optional, TypeAlias, Union
+from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
@@ -55,6 +55,7 @@ except (ImportError, AttributeError):
 
 from typing import Annotated
 
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
@@ -96,6 +97,9 @@ from litellm.types.responses.main import (
 
 from .base import CachedTokensDetails
 
+if TYPE_CHECKING:
+    from litellm.types.utils import Usage
+
 FileContent = IO[bytes] | bytes | PathLike
 
 FileTypes = (
@@ -119,6 +123,7 @@ class BinaryResponseSummary(TypedDict):
     object: ReadOnly[Literal["binary"]]
     content_type: ReadOnly[str | None]
     num_bytes: ReadOnly[int]
+    usage: NotRequired[ReadOnly[Mapping[str, builtins.object]]]
 
 
 _ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=httpx.Response)
@@ -126,6 +131,7 @@ _ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=h
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT]):
     _hidden_params: dict
+    usage: "Usage | None"
     response: _ResponseT  # pyright: ignore[reportIncompatibleVariableOverride]  # SDK accepts both backends at runtime
 
     @property
@@ -139,6 +145,7 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
     def __init__(self, response: _ResponseT) -> None:
         super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}
+        self.usage = None
 
     @property
     def content_type(self) -> str | None:
@@ -146,11 +153,12 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
         return headers.get("content-type")
 
     def logging_summary(self) -> BinaryResponseSummary:
-        return {
+        summary: Final[BinaryResponseSummary] = {
             "object": "binary",
             "content_type": self.content_type,
             "num_bytes": self._num_bytes(),
         }
+        return summary if self.usage is None else {**summary, "usage": self.usage.model_dump()}
 
     def _num_bytes(self) -> int:
         try:
@@ -1421,10 +1429,26 @@ class WebSearchToolUsage(LiteLLMBaseModel):
     num_requests: NonNegativeInt
 
 
+class ImageGenTokenDetails(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    image_tokens: NonNegativeInt = 0
+    text_tokens: NonNegativeInt = 0
+
+
+class ImageGenToolUsage(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    total_tokens: NonNegativeInt = 0
+    input_tokens_details: ImageGenTokenDetails | None = None
+    output_tokens_details: ImageGenTokenDetails | None = None
+
+
 class ResponsesToolUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     web_search: WebSearchToolUsage | None = None
+    image_gen: ImageGenToolUsage | None = None
 
 
 ResponsesAPIStatus = Literal["completed", "failed", "in_progress", "cancelled", "queued", "incomplete"]
@@ -1465,6 +1489,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | ResponseCompactionItem
         ]
     )
     parallel_tool_calls: bool | None = None
@@ -2271,6 +2296,16 @@ class OpenAIRealtimeContentPartDone(TypedDict):
     type: Literal["response.content_part.done"]
 
 
+class OpenAIRealtimeFunctionCallArgumentsDelta(TypedDict):
+    type: ReadOnly[Literal["response.function_call_arguments.delta"]]
+    event_id: ReadOnly[str]
+    response_id: ReadOnly[str]
+    item_id: ReadOnly[str]
+    output_index: ReadOnly[int]
+    call_id: ReadOnly[str]
+    delta: ReadOnly[str]
+
+
 class OpenAIRealtimeFunctionCallArgumentsDone(TypedDict):
     type: Literal["response.function_call_arguments.done"]
     event_id: str
@@ -2438,6 +2473,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeResponseAudioDone
     | OpenAIRealtimeContentPartDone
     | OpenAIRealtimeOutputItemDone
+    | OpenAIRealtimeFunctionCallArgumentsDelta
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
     | OpenAIRealtimeInputAudioBufferSpeechEvent

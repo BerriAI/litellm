@@ -481,6 +481,11 @@ class ContentThinkingSignatureBlockDelta(TypedDict):
     signature: str
 
 
+class ContentCompactionBlockDelta(TypedDict):
+    type: ReadOnly[Literal["compaction_delta"]]
+    content: ReadOnly[str | None]
+
+
 StreamingContentBlockDeltaType = Literal["text_delta", "input_json_delta", "thinking_delta", "signature_delta"]
 
 
@@ -493,6 +498,7 @@ class ContentBlockDelta(TypedDict):
         | ContentCitationsBlockDelta
         | ContentThinkingBlockDelta
         | ContentThinkingSignatureBlockDelta
+        | ContentCompactionBlockDelta
     )
 
 
@@ -536,7 +542,9 @@ class ContentBlockStartText(TypedDict):
     content_block: TextBlock
 
 
-ContentBlockContentBlockDict = ToolUseBlock | TextBlock | ChatCompletionThinkingBlock
+ContentBlockContentBlockDict = (
+    ToolUseBlock | TextBlock | ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock
+)
 
 ContentBlockStart = ContentBlockStartToolUse | ContentBlockStartText
 

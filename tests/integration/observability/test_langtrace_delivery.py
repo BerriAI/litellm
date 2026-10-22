@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import repeat
 from pathlib import Path
 from queue import SimpleQueue
@@ -659,7 +659,7 @@ def test_langtrace_survives_a_killed_worker(gateway: Gateway, tmp_path: Path) ->
                 limits=httpx.Limits(max_keepalive_connections=0),
             ) as fresh_connections,
         ):
-            proxy: Final = Gateway(fresh_connections, owned.gateway.key, owned.gateway.upstream_url)
+            proxy: Final = replace(owned.gateway, client=fresh_connections)
             with proxy.scenario() as scenario:
                 rig: Final = _Rig(proxy, scenario.model(api_base=provider.url + "/v1"), provider, _Sink(sink, key))
                 _assert_kill_and_recovery(owned, rig)

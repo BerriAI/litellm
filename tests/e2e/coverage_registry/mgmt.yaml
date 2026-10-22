@@ -78,6 +78,7 @@
 - {id: mgmt.compliance.gdpr.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "compliance_endpoints.py", rationale: "GDPR ops (smoke)"}
 - {id: mgmt.tool_management.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "tool_management_endpoints.py", rationale: "Tool inventory (smoke)"}
 - {id: mgmt.fallback_management.update.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "fallback_management_endpoints.py", rationale: "Fallback config (smoke)"}
+- {id: mgmt.fallback_management.update.config_owned_refused, module: mgmt, tier: P1, surface: api, assertions: [config_owned_refused], source: "fallback_management_endpoints.py", rationale: "A /fallback write to a fallbacks key the config file sets is refused and the config rule keeps routing"}
 - {id: mgmt.workflow.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "workflow_management_endpoints.py", rationale: "Workflow tracking (smoke)"}
 - {id: mgmt.credential_migration.check.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "key_management_endpoints.py:4252", rationale: "Encryption migration (smoke)"}
 - {id: mgmt.credential.new.serves_request, module: mgmt, tier: P1, surface: api, assertions: [serves_request], source: "credential_endpoints/endpoints.py:42", rationale: "Stored credential resolves into a deployment and serves a live /messages request"}

@@ -11,6 +11,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
@@ -24,6 +25,7 @@ __all__ = ["ExaAISearchConfig", "ExaAISearchRequest"]
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 _STRS: Final = TypeAdapter(Iterable[str], config=ConfigDict(hide_input_in_errors=True))
+_RESULT_EXTRAS: Final = (("highlights", "highlights"), ("highlightScores", "highlight_scores"), ("score", "score"))
 
 
 class ExaAISearchConfig(BaseSearchConfig):
@@ -64,11 +66,7 @@ class ExaAISearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        resolved_api_base: Final = api_base or get_secret_str("EXA_API_BASE") or self.EXA_AI_API_BASE
-        clean_api_base: Final = resolved_api_base.rstrip("/")
-        if clean_api_base.endswith("/search"):
-            return clean_api_base
-        return f"{clean_api_base}/search"
+        return ensure_api_route(api_base or get_secret_str("EXA_API_BASE") or self.EXA_AI_API_BASE, "search")
 
     def transform_search_request(
         self,
@@ -136,6 +134,9 @@ class ExaAISearchConfig(BaseSearchConfig):
         - results[].summary → SearchResult.snippet (fallback when "text" and "highlights" are absent)
         - results[].publishedDate → SearchResult.date
         - No last_updated field in Exa AI response (set to None)
+        - results[].highlights / highlightScores / score → SearchResult.highlights / highlight_scores / score,
+          each set only when Exa returned it
+        - every top-level key except results (requestId, costDollars, ...) → SearchResponse.provider_metadata
 
         Args:
             raw_response: Raw httpx response from Exa AI API
@@ -154,6 +155,7 @@ class ExaAISearchConfig(BaseSearchConfig):
                     for value in _JSON_VALUES.validate_python(response_json.get("results") or [])
                 ],
                 "object": "search",
+                "provider_metadata": {key: value for key, value in response_json.items() if key != "results"},
             }
         )
 
@@ -171,5 +173,6 @@ class ExaAISearchConfig(BaseSearchConfig):
                 or "",
                 "date": result.get("publishedDate"),
                 "last_updated": None,
+                **{field: result[key] for key, field in _RESULT_EXTRAS if key in result},
             }
         )

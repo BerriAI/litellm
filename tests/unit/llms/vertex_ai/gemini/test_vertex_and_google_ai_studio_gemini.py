@@ -1,6 +1,9 @@
 import asyncio, importlib, os, uuid
 import json
+import logging
 import re
+import threading
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from copy import deepcopy
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
@@ -12,19 +15,26 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
-from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
+    _log_gemini_sampling_params_deprecated,
+    normalize_gemini_speech_config,
+    reject_unknown_gemini_tts_voice_keys,
 )
-from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
+from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.gemini.transformation import (
     gemini_convert_messages_with_history,
 )
@@ -38,63 +48,299 @@ from litellm.llms.vertex_ai.context_caching.transformation import (
 import tempfile
 
 GEMINI_3_IMAGE_SIZE_MAPPINGS: Final[tuple[tuple[str, str, str], ...]] = (
-    ('512x512', '1:1', '512'),
-    ('1024x1024', '1:1', '1K'),
-    ('2048x2048', '1:1', '2K'),
-    ('4096x4096', '1:1', '4K'),
-    ('256x1024', '1:4', '512'),
-    ('512x2048', '1:4', '1K'),
-    ('1024x4096', '1:4', '2K'),
-    ('2048x8192', '1:4', '4K'),
-    ('192x1536', '1:8', '512'),
-    ('384x3072', '1:8', '1K'),
-    ('768x6144', '1:8', '2K'),
-    ('1536x12288', '1:8', '4K'),
-    ('424x632', '2:3', '512'),
-    ('848x1264', '2:3', '1K'),
-    ('1696x2528', '2:3', '2K'),
-    ('3392x5056', '2:3', '4K'),
-    ('632x424', '3:2', '512'),
-    ('1264x848', '3:2', '1K'),
-    ('2528x1696', '3:2', '2K'),
-    ('5056x3392', '3:2', '4K'),
-    ('448x600', '3:4', '512'),
-    ('896x1200', '3:4', '1K'),
-    ('1792x2400', '3:4', '2K'),
-    ('3584x4800', '3:4', '4K'),
-    ('1024x256', '4:1', '512'),
-    ('2048x512', '4:1', '1K'),
-    ('4096x1024', '4:1', '2K'),
-    ('8192x2048', '4:1', '4K'),
-    ('600x448', '4:3', '512'),
-    ('1200x896', '4:3', '1K'),
-    ('2400x1792', '4:3', '2K'),
-    ('4800x3584', '4:3', '4K'),
-    ('464x576', '4:5', '512'),
-    ('928x1152', '4:5', '1K'),
-    ('1856x2304', '4:5', '2K'),
-    ('3712x4608', '4:5', '4K'),
-    ('576x464', '5:4', '512'),
-    ('1152x928', '5:4', '1K'),
-    ('2304x1856', '5:4', '2K'),
-    ('4608x3712', '5:4', '4K'),
-    ('1536x192', '8:1', '512'),
-    ('3072x384', '8:1', '1K'),
-    ('6144x768', '8:1', '2K'),
-    ('12288x1536', '8:1', '4K'),
-    ('384x688', '9:16', '512'),
-    ('768x1376', '9:16', '1K'),
-    ('1536x2752', '9:16', '2K'),
-    ('3072x5504', '9:16', '4K'),
-    ('688x384', '16:9', '512'),
-    ('1376x768', '16:9', '1K'),
-    ('2752x1536', '16:9', '2K'),
-    ('5504x3072', '16:9', '4K'),
-    ('792x336', '21:9', '512'),
-    ('1584x672', '21:9', '1K'),
-    ('3168x1344', '21:9', '2K'),
-    ('6336x2688', '21:9', '4K'),
+    ("512x512", "1:1", "512"),
+    ("1024x1024", "1:1", "1K"),
+    ("2048x2048", "1:1", "2K"),
+    ("4096x4096", "1:1", "4K"),
+    ("256x1024", "1:4", "512"),
+    ("512x2048", "1:4", "1K"),
+    ("1024x4096", "1:4", "2K"),
+    ("2048x8192", "1:4", "4K"),
+    ("192x1536", "1:8", "512"),
+    ("384x3072", "1:8", "1K"),
+    ("768x6144", "1:8", "2K"),
+    ("1536x12288", "1:8", "4K"),
+    ("424x632", "2:3", "512"),
+    ("848x1264", "2:3", "1K"),
+    ("1696x2528", "2:3", "2K"),
+    ("3392x5056", "2:3", "4K"),
+    ("632x424", "3:2", "512"),
+    ("1264x848", "3:2", "1K"),
+    ("2528x1696", "3:2", "2K"),
+    ("5056x3392", "3:2", "4K"),
+    ("448x600", "3:4", "512"),
+    ("896x1200", "3:4", "1K"),
+    ("1792x2400", "3:4", "2K"),
+    ("3584x4800", "3:4", "4K"),
+    ("1024x256", "4:1", "512"),
+    ("2048x512", "4:1", "1K"),
+    ("4096x1024", "4:1", "2K"),
+    ("8192x2048", "4:1", "4K"),
+    ("600x448", "4:3", "512"),
+    ("1200x896", "4:3", "1K"),
+    ("2400x1792", "4:3", "2K"),
+    ("4800x3584", "4:3", "4K"),
+    ("464x576", "4:5", "512"),
+    ("928x1152", "4:5", "1K"),
+    ("1856x2304", "4:5", "2K"),
+    ("3712x4608", "4:5", "4K"),
+    ("576x464", "5:4", "512"),
+    ("1152x928", "5:4", "1K"),
+    ("2304x1856", "5:4", "2K"),
+    ("4608x3712", "5:4", "4K"),
+    ("1536x192", "8:1", "512"),
+    ("3072x384", "8:1", "1K"),
+    ("6144x768", "8:1", "2K"),
+    ("12288x1536", "8:1", "4K"),
+    ("384x688", "9:16", "512"),
+    ("768x1376", "9:16", "1K"),
+    ("1536x2752", "9:16", "2K"),
+    ("3072x5504", "9:16", "4K"),
+    ("688x384", "16:9", "512"),
+    ("1376x768", "16:9", "1K"),
+    ("2752x1536", "16:9", "2K"),
+    ("5504x3072", "16:9", "4K"),
+    ("792x336", "21:9", "512"),
+    ("1584x672", "21:9", "1K"),
+    ("3168x1344", "21:9", "2K"),
+    ("6336x2688", "21:9", "4K"),
 )
+
+
+@pytest.mark.parametrize(
+    "speech_config",
+    (
+        {"name": "aLlOy"},
+        {"speech_config": {"voice_name": "aLlOy"}},
+        {"voice_config": {"prebuilt_voice_config": {"voice_name": "aLlOy"}}},
+    ),
+)
+def test_gemini_structured_speech_config_maps_openai_voice_names(speech_config: Mapping[str, object]) -> None:
+    assert normalize_gemini_speech_config(speech_config) == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES["alloy"]}}
+    }
+
+
+@pytest.mark.parametrize(
+    "speaker",
+    (
+        {"speakerAlias": "Ryan", "speakerId": "alloy"},
+        {"speaker_alias": "Ryan", "speaker_id": "alloy"},
+    ),
+)
+def test_gemini_speech_config_accepts_cloud_tts_speaker_entries(speaker: Mapping[str, object]) -> None:
+    speech_config: Final = {
+        "multi_speaker_voice_config": {
+            "speaker_voice_configs": [speaker, {"speaker": "Katie", "voice_config": {"voice_name": "Leda"}}]
+        }
+    }
+
+    assert normalize_gemini_speech_config(speech_config) == {
+        "multiSpeakerVoiceConfig": {
+            "speakerVoiceConfigs": [
+                {
+                    "speaker": "Ryan",
+                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES["alloy"]}},
+                },
+                {"speaker": "Katie", "voiceConfig": {"voiceName": "Leda"}},
+            ]
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("voice", "expected"),
+    (
+        (
+            {
+                "languageCode": "en-US",
+                "modelName": "gemini-2.5-flash-tts",
+                "multiSpeakerVoiceConfig": {"speakerVoiceConfigs": [{"speakerAlias": "Ryan", "speakerId": "Umbriel"}]},
+            },
+            {
+                "languageCode": "en-US",
+                "multiSpeakerVoiceConfig": {
+                    "speakerVoiceConfigs": [
+                        {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Umbriel"}}}
+                    ]
+                },
+            },
+        ),
+        (
+            {"model_name": "gemini-2.5-flash-tts", "voice_config": {"prebuilt_voice_config": {"voice_name": "Leda"}}},
+            {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}}},
+        ),
+        ({"speech_config": {"modelName": "gemini-2.5-flash-tts", "language_code": "fr-FR"}}, {"languageCode": "fr-FR"}),
+    ),
+)
+def test_gemini_speech_config_drops_cloud_tts_model_name(
+    voice: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    assert normalize_gemini_speech_config(voice) == expected
+
+
+def test_gemini_speech_config_drops_non_string_keys_without_adding_voice():
+    speech_config: Final = {
+        "speech_config": {
+            "language_code": "fr-FR",
+            "voice_config": {"prebuilt_voice_config": {"voice_name": "Leda", 1: "discard"}},
+        },
+        "format": "pcm16",
+    }
+
+    assert normalize_gemini_speech_config(speech_config) == {
+        "languageCode": "fr-FR",
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}},
+    }
+
+
+def test_gemini_speech_config_keeps_only_speech_config_fields():
+    speech_config: Final = {
+        "voice": "Kore",
+        "metadata": {"source": "studio"},
+        "speech_config": {"language_code": "fr-FR", "style": "calm"},
+    }
+
+    assert normalize_gemini_speech_config(speech_config) == {
+        "languageCode": "fr-FR",
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}},
+    }
+
+
+@pytest.mark.parametrize(
+    "voice, unknown_keys",
+    [
+        ({"name": "Kore", "style": "calm"}, "style"),
+        ({"speech_config": {"voice": "Kore", "pitch": 2}}, "pitch"),
+        ({"speechConfig": {"voiceConfig": {}}, "tone": "x", "pitch": 2}, "pitch, tone"),
+        ({"speechConfig": {"voiceName": "Kore"}, "speech_config": {"style": "calm"}}, "speech_config"),
+    ],
+)
+def test_unknown_gemini_tts_voice_keys_are_rejected_without_drop_params(voice, unknown_keys):
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"voice keys {unknown_keys}\\."):
+        reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, False, "vertex_ai")
+
+    reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, True, "vertex_ai")
+
+
+def test_chat_audio_speech_config_unknown_keys_are_rejected_unless_dropped():
+    audio: Final = {"format": "pcm16", "speech_config": {"voice_name": "Kore", "style": "calm"}}
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="voice keys style\\."):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"audio": audio},
+            optional_params={},
+            model="gemini-2.5-flash-preview-tts",
+            drop_params=False,
+        )
+
+    dropped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": audio},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=True,
+    )
+    assert dropped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+    voice_only: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"voice": "Kore", "format": "pcm16", "style": "calm"}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=False,
+    )
+    assert voice_only["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+
+def test_chat_audio_speech_config_unknown_keys_follow_global_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    dropped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"format": "pcm16", "speech_config": {"voice_name": "Kore", "style": "calm"}}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=False,
+    )
+
+    assert dropped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+
+def _chat_speech_config(speech_config: Mapping[str, object], drop_params: bool) -> object:
+    return VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"format": "pcm16", "speech_config": speech_config}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=drop_params,
+    )["speechConfig"]
+
+
+def test_chat_audio_drop_params_strips_unknown_fields_inside_speaker_voices():
+    speech_config: Final = {
+        "multi_speaker_voice_config": {
+            "speaker_voice_configs": [
+                {"speaker": "Joe", "voice_config": {"prebuilt_voice_config": {"voice_name": "Puck", "pitch": 2}}},
+                {"speaker_alias": "Jane", "speaker_id": "Kore", "style": "calm"},
+            ],
+            "turn_order": "alternate",
+        }
+    }
+
+    assert _chat_speech_config(speech_config, drop_params=True) == {
+        "multiSpeakerVoiceConfig": {
+            "speakerVoiceConfigs": [
+                {"speaker": "Joe", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}},
+                {"speaker": "Jane", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+            ]
+        }
+    }
+
+
+GEMINI_VOICE_CONFIG: Final = {
+    "voice": "Kore",
+    "prebuiltVoiceConfig": {"voiceName": "Kore"},
+    "replicatedVoiceConfig": {"mimeType": "audio/wav", "voiceSampleAudio": "UklGRg=="},
+}
+
+
+@pytest.mark.parametrize(
+    "speech_config",
+    [
+        {"voiceConfig": GEMINI_VOICE_CONFIG, "languageCode": "fr-FR"},
+        {
+            "voice_config": {
+                "voice": "Kore",
+                "prebuilt_voice_config": {"voice_name": "Kore"},
+                "replicated_voice_config": {"mime_type": "audio/wav", "voice_sample_audio": "UklGRg=="},
+            },
+            "language_code": "fr-FR",
+        },
+    ],
+)
+def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(speech_config: dict[str, object]):
+    assert _chat_speech_config(speech_config, drop_params=True) == {
+        "voiceConfig": GEMINI_VOICE_CONFIG,
+        "languageCode": "fr-FR",
+    }
+
+
+def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
+    mapped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=False,
+    )
+
+    assert mapped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+
+def test_unknown_voice_key_error_stays_bounded_for_large_voice_objects():
+    voice: Final = {"name": "Kore", **{f"{index:04d}{'x' * 1000}": index for index in range(2000)}}
+
+    with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+        reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, False, "vertex_ai")
+
+    assert "and 1990 more" in excinfo.value.message
+    assert len(excinfo.value.message) < 1500
 
 
 def test_top_logprobs():
@@ -314,9 +560,7 @@ def test_vertex_ai_response_json_schema_preserves_refs_for_gemini_2():
     # $defs and $ref should be preserved (not unpacked)
     assert "response_json_schema" in transformed_request
     result_schema = transformed_request["response_json_schema"]
-    assert (
-        "$defs" in result_schema
-    ), "responseJsonSchema should preserve $defs for Gemini 2.0+"
+    assert "$defs" in result_schema, "responseJsonSchema should preserve $defs for Gemini 2.0+"
 
 
 def test_vertex_ai_get_json_schema_preserves_refs_for_nested_pydantic():
@@ -396,22 +640,14 @@ def test_vertex_ai_response_json_schema_for_gemini_2():
 
     # Types should be lowercase (standard JSON Schema format)
     assert transformed_request["response_json_schema"]["type"] == "object"
-    assert (
-        transformed_request["response_json_schema"]["properties"]["name"]["type"]
-        == "string"
-    )
-    assert (
-        transformed_request["response_json_schema"]["properties"]["age"]["type"]
-        == "integer"
-    )
+    assert transformed_request["response_json_schema"]["properties"]["name"]["type"] == "string"
+    assert transformed_request["response_json_schema"]["properties"]["age"]["type"] == "integer"
 
     # Should NOT have propertyOrdering (not needed for responseJsonSchema)
     assert "propertyOrdering" not in transformed_request["response_json_schema"]
 
     # additionalProperties should be preserved (supported by responseJsonSchema)
-    assert (
-        transformed_request["response_json_schema"].get("additionalProperties") == False
-    )
+    assert transformed_request["response_json_schema"].get("additionalProperties") == False
 
 
 def test_vertex_ai_response_schema_for_old_models():
@@ -648,7 +884,9 @@ def test_response_has_search_grounding_detection():
         is False
     )
     assert (
-        VertexGeminiConfig._response_has_search_grounding({"candidates": [{"groundingMetadata": {"webSearchQueries": []}}]})
+        VertexGeminiConfig._response_has_search_grounding(
+            {"candidates": [{"groundingMetadata": {"webSearchQueries": []}}]}
+        )
         is False
     )
     assert VertexGeminiConfig._response_has_search_grounding({"candidates": []}) is False
@@ -789,9 +1027,7 @@ def test_vertex_ai_url_context_tool_use_tokens_billed_as_input_tokens():
         "candidates": [
             {
                 "urlContextMetadata": {"urlMetadata": []},
-                "groundingMetadata": {
-                    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
-                },
+                "groundingMetadata": {"groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]},
             }
         ],
         "usageMetadata": UsageMetadata(
@@ -823,9 +1059,7 @@ def test_url_context_tool_use_tokens_are_priced_as_input():
         "candidates": [
             {
                 "urlContextMetadata": {"urlMetadata": []},
-                "groundingMetadata": {
-                    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
-                },
+                "groundingMetadata": {"groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]},
             }
         ],
         "usageMetadata": UsageMetadata(
@@ -886,9 +1120,7 @@ def test_missing_prompt_tokens_details_still_prices_the_full_prompt():
         "candidates": [
             {
                 "urlContextMetadata": {"urlMetadata": []},
-                "groundingMetadata": {
-                    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
-                },
+                "groundingMetadata": {"groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]},
             }
         ],
         "usageMetadata": UsageMetadata(
@@ -925,9 +1157,7 @@ def test_streaming_chunk_includes_reasoning_tokens():
             "thoughtsTokenCount": 3,
         },
     }
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=litellm_logging)
     streaming_chunk = iterator.chunk_parser(chunk)
     assert streaming_chunk.usage is not None
     assert streaming_chunk.usage.prompt_tokens == 5
@@ -963,17 +1193,12 @@ def test_streaming_chunk_includes_reasoning_content():
         "usageMetadata": {},
     }
 
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=litellm_logging)
     streaming_chunk = iterator.chunk_parser(chunk)
 
     # The text content should be empty and reasoning_content should be populated
     assert streaming_chunk.choices[0].delta.content is None
-    assert (
-        streaming_chunk.choices[0].delta.reasoning_content
-        == "I'm thinking through the problem..."
-    )
+    assert streaming_chunk.choices[0].delta.reasoning_content == "I'm thinking through the problem..."
 
 
 def test_streaming_chunk_with_tool_calls_and_thought_includes_reasoning_content():
@@ -1018,24 +1243,16 @@ def test_streaming_chunk_with_tool_calls_and_thought_includes_reasoning_content(
         },
     }
 
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=litellm_logging)
     streaming_chunk = iterator.chunk_parser(chunk)
 
     # Verify reasoning_content comes from the thought: true part
-    assert (
-        streaming_chunk.choices[0].delta.reasoning_content
-        == "Let me think about how to get the time..."
-    )
+    assert streaming_chunk.choices[0].delta.reasoning_content == "Let me think about how to get the time..."
 
     # Verify tool calls are also present
     assert streaming_chunk.choices[0].delta.tool_calls is not None
     assert len(streaming_chunk.choices[0].delta.tool_calls) == 1
-    assert (
-        streaming_chunk.choices[0].delta.tool_calls[0].function.name
-        == "get_current_time"
-    )
+    assert streaming_chunk.choices[0].delta.tool_calls[0].function.name == "get_current_time"
 
 
 def test_streaming_chunk_with_tool_calls_no_thought_no_reasoning_content():
@@ -1077,9 +1294,7 @@ def test_streaming_chunk_with_tool_calls_no_thought_no_reasoning_content():
         },
     }
 
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=litellm_logging)
     streaming_chunk = iterator.chunk_parser(chunk)
 
     # reasoning_content should be None - thoughtSignature alone does NOT mean reasoning
@@ -1286,11 +1501,7 @@ def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
 
     # Verify the math: prompt_tokens = text + image
     # 533 = 6 (text) + 527 (image)
-    assert (
-        result.prompt_tokens_details.text_tokens
-        + result.prompt_tokens_details.image_tokens
-        == result.prompt_tokens
-    )
+    assert result.prompt_tokens_details.text_tokens + result.prompt_tokens_details.image_tokens == result.prompt_tokens
 
 
 def test_map_response_modalities_video():
@@ -1480,9 +1691,7 @@ def test_vertex_ai_streaming_usage_calculation():
         }
 
         # Create iterator and parse chunk
-        iterator = ModelResponseIterator(
-            streaming_response=[], sync_stream=True, logging_obj=MagicMock()
-        )
+        iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
         iterator.chunk_parser(chunk)
 
         # Verify calculate_usage was called with correct parameters
@@ -1554,9 +1763,7 @@ def test_vertex_ai_streaming_usage_web_search_calculation():
     }
 
     # Create iterator and parse chunk
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
     completed_response = iterator.chunk_parser(chunk)
 
     usage: Usage = completed_response.usage
@@ -1775,7 +1982,9 @@ async def test_gemini_image_generation_async_stream(respx_mock: respx.MockRouter
                 "modelVersion": "gemini-2.5-flash-image",
             },
             {
-                "candidates": [{"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP", "index": 0}],
+                "candidates": [
+                    {"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP", "index": 0}
+                ],
                 "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": 1290, "totalTokenCount": 1303},
                 "modelVersion": "gemini-2.5-flash-image",
             },
@@ -1924,7 +2133,9 @@ def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
     assert [(call.function.name, json.loads(call.function.arguments)) for call in tool_calls] == [
         ("get_weather", {"location": "Lima, Peru"})
     ]
-    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["tool_calls"]
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices and chunk.choices[0].finish_reason] == [
+        "tool_calls"
+    ]
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -2029,9 +2240,14 @@ def test_gemini_openai_web_search_tool_to_google_search(respx_mock: respx.MockRo
 
 GEMINI_GROUNDING_METADATA: Final = {
     "webSearchQueries": ["capital of France"],
-    "searchEntryPoint": {"renderedContent": "<div class=\"container\"></div>"},
+    "searchEntryPoint": {"renderedContent": '<div class="container"></div>'},
     "groundingChunks": [
-        {"web": {"uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbF9w", "title": "wikipedia.org"}}
+        {
+            "web": {
+                "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbF9w",
+                "title": "wikipedia.org",
+            }
+        }
     ],
     "groundingSupports": [
         {
@@ -2150,6 +2366,207 @@ def test_gemini_reasoning_effort_and_function_tool_share_request() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_level"),
+    [
+        ("gemini-3.8-flash", {"type": "integer", "enum": ["1", "2", "5"]}),
+        ("gemini-2.5-flash", {"type": "integer"}),
+    ],
+)
+def test_gemini_tool_mapping_sends_integer_enums_to_gemini_3_and_keeps_caller_tools(
+    model: str, expected_level: dict[str, object]
+) -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "set_priority",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}},
+                    "required": ["level"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    caller_tools: Final = deepcopy(tools)
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": tools},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    sent_level: Final = request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["level"]
+    assert sent_level == expected_level
+    assert tools == caller_tools
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_level"),
+    [
+        ("gemini-flash-latest", {"type": "integer", "enum": ["1", "2", "5"]}),
+        ("gemini-1.5-pro", {"type": "integer"}),
+    ],
+)
+def test_gemini_response_schema_sends_integer_enums_to_gemini_3(model: str, expected_level: dict[str, object]) -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "task",
+            "schema": {
+                "type": "object",
+                "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}},
+                "required": ["level"],
+            },
+        },
+    }
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert request_params["response_schema"]["properties"]["level"] == expected_level
+
+
+def test_gemini_mapping_drops_integer_enums_when_the_caller_disallows_them() -> None:
+    level_schema: Final = {"type": "object", "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}}}
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [{"type": "function", "function": {"name": "set_priority", "parameters": level_schema}}],
+            "response_format": {"type": "json_schema", "json_schema": {"name": "task", "schema": level_schema}},
+        },
+        optional_params={},
+        model="gemini-flash-latest",
+        drop_params=False,
+        allow_integer_enums=False,
+    )
+
+    assert request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["level"] == {
+        "type": "integer"
+    }
+    assert request_params["response_schema"]["properties"]["level"] == {"type": "integer"}
+
+
+_TEN_DIGIT_VALUES_IN_BUDGET: Final = GEMINI_MAX_ENUM_CHARACTERS // 10
+
+
+def _ten_digit_integer_enum_tool(name: str, value_count: int) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "parameters": {
+                "type": "object",
+                "properties": {"level": {"type": "integer", "enum": [10**9 + n for n in range(value_count)]}},
+                "required": ["level"],
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("value_counts", "integer_enums_sent"),
+    [
+        ((_TEN_DIGIT_VALUES_IN_BUDGET,), True),
+        ((_TEN_DIGIT_VALUES_IN_BUDGET + 1,), False),
+        ((_TEN_DIGIT_VALUES_IN_BUDGET // 2, _TEN_DIGIT_VALUES_IN_BUDGET - _TEN_DIGIT_VALUES_IN_BUDGET // 2), True),
+        ((_TEN_DIGIT_VALUES_IN_BUDGET // 2, _TEN_DIGIT_VALUES_IN_BUDGET - _TEN_DIGIT_VALUES_IN_BUDGET // 2 + 1), False),
+    ],
+    ids=["one-tool-at-budget", "one-tool-over-budget", "two-tools-at-budget", "two-tools-over-budget"],
+)
+def test_gemini_tool_mapping_drops_every_integer_enum_when_the_request_exceeds_the_enum_budget(
+    value_counts: tuple[int, ...], integer_enums_sent: bool
+) -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [_ten_digit_integer_enum_tool(f"tool_{i}", count) for i, count in enumerate(value_counts)]
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    sent_levels: Final = [
+        declaration["parameters"]["properties"]["level"]
+        for declaration in request_params["tools"][0]["function_declarations"]
+    ]
+    assert sent_levels == [
+        (
+            {"type": "integer", "enum": [str(10**9 + n) for n in range(count)]}
+            if integer_enums_sent
+            else {"type": "integer"}
+        )
+        for count in value_counts
+    ]
+
+
+def test_gemini_tool_mapping_counts_string_enums_toward_the_enum_budget() -> None:
+    names: Final = [f"name{n:06d}" for n in range(GEMINI_MAX_ENUM_CHARACTERS // 10)]
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "set_priority",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "enum": names},
+                    "level": {"type": "integer", "enum": [1, 2, 5]},
+                },
+            },
+        },
+    }
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": [tool]}, optional_params={}, model="gemini-3.8-flash", drop_params=False
+    )
+
+    sent_properties: Final = request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]
+    assert sent_properties["level"] == {"type": "integer"}
+    assert sent_properties["name"]["enum"] == names
+
+
+@pytest.mark.parametrize(
+    ("value_count", "expected_level"),
+    [
+        (
+            _TEN_DIGIT_VALUES_IN_BUDGET,
+            {"type": "integer", "enum": [str(10**9 + n) for n in range(_TEN_DIGIT_VALUES_IN_BUDGET)]},
+        ),
+        (_TEN_DIGIT_VALUES_IN_BUDGET + 1, {"type": "integer"}),
+    ],
+)
+def test_gemini_response_schema_drops_integer_enums_past_the_enum_budget(
+    value_count: int, expected_level: dict[str, object]
+) -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "task",
+            "schema": {
+                "type": "object",
+                "properties": {"level": {"type": "integer", "enum": [10**9 + n for n in range(value_count)]}},
+            },
+        },
+    }
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model="gemini-flash-latest",
+        drop_params=False,
+    )
+
+    assert request_params["response_schema"]["properties"]["level"] == expected_level
+
+
 def test_vertex_ai_transform_parts():
     """
     Test the _transform_parts method for converting Vertex AI function calls
@@ -2188,9 +2605,7 @@ def test_vertex_ai_transform_parts():
 
     # Test case 2: Tool call mode (is_function_call=False) - Single message with multiple tool calls
     parts_with_multiple_functions = [
-        HttpxPartType(
-            functionCall={"name": "get_current_weather", "args": {"location": "Boston"}}
-        ),
+        HttpxPartType(functionCall={"name": "get_current_weather", "args": {"location": "Boston"}}),
         HttpxPartType(
             functionCall={
                 "name": "get_forecast",
@@ -2220,9 +2635,7 @@ def test_vertex_ai_transform_parts():
     # Test case 3: Simulating multiple messages - cumulative indexing across messages
     # First message with 2 tool calls (starting from index 0)
     first_message_parts = [
-        HttpxPartType(
-            functionCall={"name": "get_weather", "args": {"location": "Boston"}}
-        ),
+        HttpxPartType(functionCall={"name": "get_weather", "args": {"location": "Boston"}}),
         HttpxPartType(functionCall={"name": "get_time", "args": {"timezone": "EST"}}),
     ]
 
@@ -2239,9 +2652,7 @@ def test_vertex_ai_transform_parts():
 
     # Second message with 1 tool call (continuing from previous index)
     second_message_parts = [
-        HttpxPartType(
-            functionCall={"name": "send_email", "args": {"to": "user@example.com"}}
-        ),
+        HttpxPartType(functionCall={"name": "send_email", "args": {"to": "user@example.com"}}),
     ]
 
     function, tools, updated_idx = VertexGeminiConfig._transform_parts(
@@ -2259,9 +2670,7 @@ def test_vertex_ai_transform_parts():
 
     # Third message with 2 more tool calls (continuing from previous index)
     third_message_parts = [
-        HttpxPartType(
-            functionCall={"name": "create_calendar_event", "args": {"title": "Meeting"}}
-        ),
+        HttpxPartType(functionCall={"name": "create_calendar_event", "args": {"title": "Meeting"}}),
         HttpxPartType(functionCall={"name": "set_reminder", "args": {"time": "10:00"}}),
     ]
 
@@ -2308,9 +2717,7 @@ def test_vertex_ai_transform_parts():
     assert updated_idx == 10  # Index should remain unchanged
 
     # Test case 6: Function call with empty args
-    parts_with_empty_args = [
-        HttpxPartType(functionCall={"name": "simple_function", "args": {}})
-    ]
+    parts_with_empty_args = [HttpxPartType(functionCall={"name": "simple_function", "args": {}})]
 
     function, tools, updated_idx = VertexGeminiConfig._transform_parts(
         parts=parts_with_empty_args, cumulative_tool_call_idx=0, is_function_call=True
@@ -2326,13 +2733,9 @@ def test_vertex_ai_transform_parts():
     # Test case 7: Mixed content with function calls - ensuring tool call IDs are unique
     mixed_parts = [
         HttpxPartType(text="Before function call"),
-        HttpxPartType(
-            functionCall={"name": "function_a", "args": {"param": "value_a"}}
-        ),
+        HttpxPartType(functionCall={"name": "function_a", "args": {"param": "value_a"}}),
         HttpxPartType(text="Between function calls"),
-        HttpxPartType(
-            functionCall={"name": "function_b", "args": {"param": "value_b"}}
-        ),
+        HttpxPartType(functionCall={"name": "function_b", "args": {"param": "value_b"}}),
         HttpxPartType(text="After function calls"),
     ]
 
@@ -2524,25 +2927,17 @@ def test_vertex_ai_tool_call_id_format():
         tool_id = tool["id"]
 
         # Should start with 'call_'
-        assert tool_id.startswith(
-            "call_"
-        ), f"ID should start with 'call_', got: {tool_id}"
+        assert tool_id.startswith("call_"), f"ID should start with 'call_', got: {tool_id}"
 
         # Should have exactly 33 total characters (call_ + 28 hex chars)
-        assert (
-            len(tool_id) == 33
-        ), f"ID should be 33 characters long, got {len(tool_id)}: {tool_id}"
+        assert len(tool_id) == 33, f"ID should be 33 characters long, got {len(tool_id)}: {tool_id}"
 
         # The part after 'call_' should be 28 hex characters
         hex_part = tool_id[5:]  # Remove 'call_' prefix
-        assert (
-            len(hex_part) == 28
-        ), f"Hex part should be 28 characters, got {len(hex_part)}: {hex_part}"
+        assert len(hex_part) == 28, f"Hex part should be 28 characters, got {len(hex_part)}: {hex_part}"
 
         # Should only contain valid hex characters
-        assert re.match(
-            r"^[0-9a-f]{28}$", hex_part
-        ), f"Should contain only lowercase hex chars, got: {hex_part}"
+        assert re.match(r"^[0-9a-f]{28}$", hex_part), f"Should contain only lowercase hex chars, got: {hex_part}"
 
     # Verify IDs are unique
     assert tools[0]["id"] != tools[1]["id"], "Tool call IDs should be unique"
@@ -2559,9 +2954,7 @@ def test_vertex_ai_tool_call_id_format():
             ids_generated.add(test_tools[0]["id"])
 
     # All generated IDs should be unique
-    assert (
-        len(ids_generated) == 10
-    ), f"All 10 IDs should be unique, got {len(ids_generated)} unique IDs"
+    assert len(ids_generated) == 10, f"All 10 IDs should be unique, got {len(ids_generated)} unique IDs"
 
 
 def test_vertex_ai_map_google_maps_tool_simple():
@@ -2675,19 +3068,16 @@ def test_vertex_ai_penalty_parameters_validation():
 
     for model, should_support in test_cases:
         # Test _supports_penalty_parameters method
-        assert (
-            v._supports_penalty_parameters(model) == should_support
-        ), f"Model {model} penalty support should be {should_support}"
+        assert v._supports_penalty_parameters(model) == should_support, (
+            f"Model {model} penalty support should be {should_support}"
+        )
 
         # Test get_supported_openai_params method
         supported_params = v.get_supported_openai_params(model)
-        has_penalty_params = (
-            "frequency_penalty" in supported_params
-            and "presence_penalty" in supported_params
+        has_penalty_params = "frequency_penalty" in supported_params and "presence_penalty" in supported_params
+        assert has_penalty_params == should_support, (
+            f"Model {model} should {'include' if should_support else 'exclude'} penalty params in supported list"
         )
-        assert (
-            has_penalty_params == should_support
-        ), f"Model {model} should {'include' if should_support else 'exclude'} penalty params in supported list"
 
     # Test parameter mapping for unsupported model
     model = "gemini-2.5-pro-preview-06-05"
@@ -2707,12 +3097,8 @@ def test_vertex_ai_penalty_parameters_validation():
     )
 
     # Penalty parameters should be filtered out for unsupported models
-    assert (
-        "frequency_penalty" not in result
-    ), "frequency_penalty should be filtered out for unsupported model"
-    assert (
-        "presence_penalty" not in result
-    ), "presence_penalty should be filtered out for unsupported model"
+    assert "frequency_penalty" not in result, "frequency_penalty should be filtered out for unsupported model"
+    assert "presence_penalty" not in result, "presence_penalty should be filtered out for unsupported model"
 
     # Other parameters should still be included
     assert "temperature" in result, "temperature should still be included"
@@ -2741,18 +3127,18 @@ def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
 
     for model in gemini_3_models:
         # Test _supports_penalty_parameters method
-        assert (
-            v._supports_penalty_parameters(model) == False
-        ), f"Gemini 3 model {model} should not support penalty parameters"
+        assert v._supports_penalty_parameters(model) == False, (
+            f"Gemini 3 model {model} should not support penalty parameters"
+        )
 
         # Test get_supported_openai_params method
         supported_params = v.get_supported_openai_params(model)
-        assert (
-            "frequency_penalty" not in supported_params
-        ), f"frequency_penalty should not be in supported params for {model}"
-        assert (
-            "presence_penalty" not in supported_params
-        ), f"presence_penalty should not be in supported params for {model}"
+        assert "frequency_penalty" not in supported_params, (
+            f"frequency_penalty should not be in supported params for {model}"
+        )
+        assert "presence_penalty" not in supported_params, (
+            f"presence_penalty should not be in supported params for {model}"
+        )
 
         # Test parameter mapping - penalty params should be filtered out
         non_default_params = {
@@ -2771,36 +3157,28 @@ def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
         )
 
         # Penalty parameters should be filtered out for Gemini 3 models
-        assert (
-            "frequency_penalty" not in result
-        ), f"frequency_penalty should be filtered out for Gemini 3 model {model}"
-        assert (
-            "presence_penalty" not in result
-        ), f"presence_penalty should be filtered out for Gemini 3 model {model}"
+        assert "frequency_penalty" not in result, f"frequency_penalty should be filtered out for Gemini 3 model {model}"
+        assert "presence_penalty" not in result, f"presence_penalty should be filtered out for Gemini 3 model {model}"
 
         # Other parameters should still be included
-        assert (
-            "temperature" in result
-        ), f"temperature should still be included for Gemini 3 model {model}"
-        assert (
-            "max_output_tokens" in result
-        ), f"max_output_tokens should still be included for Gemini 3 model {model}"
+        assert "temperature" in result, f"temperature should still be included for Gemini 3 model {model}"
+        assert "max_output_tokens" in result, f"max_output_tokens should still be included for Gemini 3 model {model}"
         assert result["temperature"] == 0.7
         assert result["max_output_tokens"] == 100
 
     # Test that non-Gemini 3 models still support penalty parameters (if they're not in the unsupported list)
     non_gemini_3_model = "gemini-2.5-pro"
-    assert (
-        v._supports_penalty_parameters(non_gemini_3_model) == True
-    ), f"Non-Gemini 3 model {non_gemini_3_model} should support penalty parameters"
+    assert v._supports_penalty_parameters(non_gemini_3_model) == True, (
+        f"Non-Gemini 3 model {non_gemini_3_model} should support penalty parameters"
+    )
 
     supported_params = v.get_supported_openai_params(non_gemini_3_model)
-    assert (
-        "frequency_penalty" in supported_params
-    ), f"frequency_penalty should be in supported params for {non_gemini_3_model}"
-    assert (
-        "presence_penalty" in supported_params
-    ), f"presence_penalty should be in supported params for {non_gemini_3_model}"
+    assert "frequency_penalty" in supported_params, (
+        f"frequency_penalty should be in supported params for {non_gemini_3_model}"
+    )
+    assert "presence_penalty" in supported_params, (
+        f"presence_penalty should be in supported params for {non_gemini_3_model}"
+    )
 
 
 def test_vertex_ai_annotation_streaming_events():
@@ -2823,14 +3201,10 @@ def test_vertex_ai_annotation_streaming_events():
     chunk_with_annotations = {
         "candidates": [
             {
-                "content": {
-                    "parts": [{"text": "The weather in San Francisco today is clear."}]
-                },
+                "content": {"parts": [{"text": "The weather in San Francisco today is clear."}]},
                 "groundingMetadata": {
                     "webSearchQueries": ["weather San Francisco today"],
-                    "searchEntryPoint": {
-                        "renderedContent": "<div>Search results</div>"
-                    },
+                    "searchEntryPoint": {"renderedContent": "<div>Search results</div>"},
                     "groundingChunks": [
                         {
                             "web": {
@@ -2862,9 +3236,7 @@ def test_vertex_ai_annotation_streaming_events():
     }
 
     # Create iterator and parse chunk
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=litellm_logging)
     streaming_chunk = iterator.chunk_parser(chunk_with_annotations)
 
     # Verify the chunk was parsed correctly
@@ -2905,6 +3277,14 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
 
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
+
+        async def dispatch_attempt_failure_handlers(
+            self, exception: Exception, traceback_exception: str
+        ) -> None:
+            return None
+
+        def attempt_scoped_copy(self) -> "DummyLogging":
+            return self
 
     async def failing_make_call(client=None, **kwargs):
         raise VertexAIError(status_code=400, message="bad input", headers={})
@@ -2986,12 +3366,8 @@ def test_vertex_ai_annotation_conversion():
     }
 
     # Convert grounding metadata to annotations
-    content_text = (
-        "The weather in San Francisco is currently 72°F and the time is 2:30 PM"
-    )
-    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
-        [grounding_metadata], content_text
-    )
+    content_text = "The weather in San Francisco is currently 72°F and the time is 2:30 PM"
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations([grounding_metadata], content_text)
 
     # Verify annotations were created
     assert len(annotations) == 3  # One for each grounding support
@@ -3033,9 +3409,7 @@ def test_vertex_ai_annotation_empty_grounding_metadata():
 
     # Test with empty grounding metadata
     empty_metadata = {}
-    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
-        [empty_metadata], "test content"
-    )
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations([empty_metadata], "test content")
     assert len(annotations) == 0
 
     # Test with missing groundingSupports
@@ -3043,9 +3417,7 @@ def test_vertex_ai_annotation_empty_grounding_metadata():
         "webSearchQueries": ["test query"],
         "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Test"}}],
     }
-    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
-        [metadata_no_supports], "test content"
-    )
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata_no_supports], "test content")
     assert len(annotations) == 0
 
     # Test with empty groundingSupports
@@ -3408,9 +3780,7 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
 def test_gemini_37_38_flash_floor_minimal_thinking_level(
     local_model_cost_map, model, reasoning_effort, include_thoughts
 ):
-    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-        reasoning_effort, model
-    )
+    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(reasoning_effort, model)
 
     assert result["thinkingLevel"] == "low"
     assert result["includeThoughts"] is include_thoughts
@@ -3434,9 +3804,7 @@ def test_gemini_37_38_flash_floor_minimal_thinking_level(
 def test_gemini_flash_minimal_thinking_support(
     local_model_cost_map, model, reasoning_effort, expected_level, include_thoughts
 ):
-    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-        reasoning_effort, model
-    )
+    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(reasoning_effort, model)
 
     assert result["thinkingLevel"] == expected_level
     assert result["includeThoughts"] is include_thoughts
@@ -3446,12 +3814,8 @@ def test_gemini_38_flash_feature_flag_uses_low_thinking_level(local_model_cost_m
     monkeypatch.setattr(litellm, "enable_gemini_default_thinking_level_low", True)
     thinking_param = {"type": "enabled", "budget_tokens": 1024}
 
-    result_38 = VertexGeminiConfig._map_thinking_param(
-        thinking_param, model="gemini-3.8-flash"
-    )
-    result_36 = VertexGeminiConfig._map_thinking_param(
-        thinking_param, model="gemini-3.6-flash"
-    )
+    result_38 = VertexGeminiConfig._map_thinking_param(thinking_param, model="gemini-3.8-flash")
+    result_36 = VertexGeminiConfig._map_thinking_param(thinking_param, model="gemini-3.6-flash")
 
     assert result_38["thinkingLevel"] == "low"
     assert result_36["thinkingLevel"] == "minimal"
@@ -3622,6 +3986,169 @@ def test_get_optional_params_gemini_3_has_no_default_temperature(
 
     assert "temperature" not in optional_params
     assert optional_params["thinkingConfig"]["thinkingLevel"] == "medium"
+
+
+_SAMPLING_PARAMS: Final = {"temperature": 0.3, "top_p": 0.9, "top_k": 20}
+
+
+def _gemini_config(config_cls: Literal["vertex", "studio"]) -> VertexGeminiConfig:
+    return VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+
+
+def _gemini_request_body(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+    optional_params: dict[str, object],
+    litellm_params: dict[str, object],
+) -> RequestBody:
+    from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
+
+    return transform_request_body(
+        messages=[{"role": "user", "content": "hi"}],
+        model="gemini-zeta-9",
+        optional_params=optional_params,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        cached_content=None,
+    )
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("param", ["temperature", "top_p"])
+def test_get_optional_params_raises_a_400_naming_drop_params_for_a_flagged_gemini_model(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], param: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Google ignores sampling params on models flagged ``supports_sampling_params: false``, so without
+    drop_params the caller gets the 400 that names the escape hatch instead of a 200 that lied (#47015)"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params") as excinfo:
+        get_optional_params(
+            model="gemini-zeta-9", custom_llm_provider=custom_llm_provider, **{param: _SAMPLING_PARAMS[param]}
+        )
+
+    assert excinfo.value.status_code == 400
+    assert param in str(excinfo.value)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_allowed_openai_params_still_forwards_a_sampling_param_the_map_flags_off(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 400 tells the caller to send allowed_openai_params, so that escape hatch has to work"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    optional_params: Final = get_optional_params(
+        model="gemini-zeta-9",
+        custom_llm_provider=custom_llm_provider,
+        temperature=0.3,
+        allowed_openai_params=["temperature"],
+    )
+
+    assert optional_params["temperature"] == 0.3
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_top_k_is_stripped_from_the_request_body_of_a_flagged_gemini_model_under_drop_params(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """top_k is a provider-specific kwarg that skips the shared unsupported-param check, so it is gated
+    where the request body is built"""
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    body: Final = _gemini_request_body(
+        custom_llm_provider, {"top_k": 20, "max_output_tokens": 10}, {"drop_params": True}
+    )
+
+    assert body["generationConfig"] == {"max_output_tokens": 10}
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_top_k_raises_a_400_naming_drop_params_for_a_flagged_gemini_model(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params") as excinfo:
+        _gemini_request_body(custom_llm_provider, {"top_k": 20}, {})
+
+    assert excinfo.value.status_code == 400
+    assert "top_k" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("row", [{"supports_sampling_params": True}, {}], ids=["flag_true", "flag_absent"])
+def test_gemini_keeps_forwarding_sampling_params_unless_the_model_map_flags_them_off(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], row: dict[str, bool], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit true and a model the map says nothing about both keep today's pass-through, top_k included"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", row)
+
+    optional_params: Final = get_optional_params(
+        model="gemini-zeta-9", custom_llm_provider=custom_llm_provider, drop_params=True, **_SAMPLING_PARAMS
+    )
+    body: Final = _gemini_request_body(custom_llm_provider, dict(optional_params), {"drop_params": True})
+
+    assert body["generationConfig"] == _SAMPLING_PARAMS
+
+
+@pytest.mark.parametrize("model_key", ["gemini-zeta-9", "vertex_ai/gemini-zeta-9", "gemini/gemini-zeta-9"])
+def test_gemini_sampling_flag_is_read_from_whichever_provider_row_carries_it(
+    model_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, model_key, {"supports_sampling_params": False})
+
+    result: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"temperature": 0.3},
+        optional_params={},
+        model="gemini-zeta-9",
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+
+
+@pytest.mark.parametrize("config_cls", ["vertex", "studio"])
+def test_gemini_supported_openai_params_omit_sampling_params_when_flagged_off(
+    config_cls: Literal["vertex", "studio"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    supported: Final = set(_gemini_config(config_cls).get_supported_openai_params("gemini-zeta-9"))
+
+    assert not supported & set(_SAMPLING_PARAMS)
+    assert "max_tokens" in supported
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_get_optional_params_drops_sampling_params_for_a_flagged_gemini_model_under_drop_params(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The path every SDK and proxy call takes, on both the Vertex and the AI Studio route"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setitem(litellm.model_cost, "gemini-zeta-9", {"supports_sampling_params": False})
+
+    optional_params: Final = get_optional_params(
+        model="gemini-zeta-9",
+        custom_llm_provider=custom_llm_provider,
+        temperature=0.3,
+        top_p=0.9,
+        max_tokens=10,
+        drop_params=True,
+    )
+
+    assert "temperature" not in optional_params
+    assert "top_p" not in optional_params
+    assert optional_params["max_output_tokens"] == 10
 
 
 def test_media_resolution_from_detail_parameter():
@@ -3933,9 +4460,7 @@ def test_gemini_image_models_excluded_from_thinking():
         )
 
         # None of these should have thinkingConfig
-        assert (
-            "thinkingConfig" not in result
-        ), f"Model {model} should not have thinkingConfig"
+        assert "thinkingConfig" not in result, f"Model {model} should not have thinkingConfig"
 
 
 def test_partial_json_chunk_after_first_chunk():
@@ -3966,9 +4491,7 @@ def test_partial_json_chunk_after_first_chunk():
     first_chunk = '{"candidates": [{"content": {"parts": [{"text": "Hello"}]}}]}'
     result1 = iterator.handle_valid_json_chunk(first_chunk)
     assert result1 is not None, "First complete chunk should parse OK"
-    assert (
-        iterator.sent_first_chunk is True
-    ), "sent_first_chunk should be True after first chunk"
+    assert iterator.sent_first_chunk is True, "sent_first_chunk should be True after first chunk"
 
     # Later chunk arrives PARTIAL (simulating network fragmentation)
     partial_chunk = '{"candidates": [{"content":'
@@ -3976,9 +4499,7 @@ def test_partial_json_chunk_after_first_chunk():
 
     # Should switch to accumulation mode instead of crashing
     assert result2 is None, "Partial chunk should return None while accumulating"
-    assert (
-        iterator.chunk_type == "accumulated_json"
-    ), "Should switch to accumulated_json mode"
+    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
 
 
 def test_partial_json_chunk_on_first_chunk():
@@ -3998,9 +4519,7 @@ def test_partial_json_chunk_on_first_chunk():
     result = iterator.handle_valid_json_chunk(partial)
 
     assert result is None, "Partial first chunk should return None"
-    assert (
-        iterator.chunk_type == "accumulated_json"
-    ), "Should switch to accumulated_json mode"
+    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
 
 
 def test_accumulated_json_does_not_reparse_every_fragment():
@@ -4032,16 +4551,12 @@ def test_accumulated_json_does_not_reparse_every_fragment():
     iterator.chunk_type = "accumulated_json"
 
     text = "x" * 200_000  # no braces/brackets so only the final fragment closes
-    blob = json.dumps(
-        {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]}
-    )
+    blob = json.dumps({"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]})
     fragments = [blob[i : i + 4096] for i in range(0, len(blob), 4096)]
     assert len(fragments) > 10, "need a multi-fragment payload to exercise the bug"
 
     parsed = None
-    with patch.object(
-        json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode
-    ) as spy:
+    with patch.object(json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode) as spy:
         for fragment in fragments:
             out = iterator.handle_accumulated_json_chunk(chunk=fragment)
             if out is not None:
@@ -4073,9 +4588,7 @@ def test_accumulated_json_partial_fragment_returns_none_without_parsing():
     )
     iterator.chunk_type = "accumulated_json"
 
-    with patch.object(
-        json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode
-    ) as spy:
+    with patch.object(json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode) as spy:
         result = iterator.handle_accumulated_json_chunk(
             chunk='{"candidates": [{"content": {"parts": [{"text": "partial'
         )
@@ -4174,17 +4687,11 @@ def test_vertex_ai_multiple_tool_types_separate_objects():
     tool_types_in_first = [k for k in tools[0].keys()]
     tool_types_in_second = [k for k in tools[1].keys()]
 
-    assert (
-        len(tool_types_in_first) == 1
-    ), f"First Tool should have exactly 1 type, got {tool_types_in_first}"
-    assert (
-        len(tool_types_in_second) == 1
-    ), f"Second Tool should have exactly 1 type, got {tool_types_in_second}"
+    assert len(tool_types_in_first) == 1, f"First Tool should have exactly 1 type, got {tool_types_in_first}"
+    assert len(tool_types_in_second) == 1, f"Second Tool should have exactly 1 type, got {tool_types_in_second}"
 
     # Verify the correct tool types are present
-    assert (
-        "enterpriseWebSearch" in tools[0]
-    ), "First Tool should contain enterpriseWebSearch"
+    assert "enterpriseWebSearch" in tools[0], "First Tool should contain enterpriseWebSearch"
     assert "url_context" in tools[1], "Second Tool should contain url_context"
 
 
@@ -4646,9 +5153,7 @@ def test_vertex_ai_multiple_function_declarations_grouped():
     )
 
     # Should have only 1 Tool object (function declarations grouped)
-    assert (
-        len(tools) == 1
-    ), f"Expected 1 Tool object for grouped functions, got {len(tools)}"
+    assert len(tools) == 1, f"Expected 1 Tool object for grouped functions, got {len(tools)}"
 
     # Should contain function_declarations with 2 functions
     assert "function_declarations" in tools[0]
@@ -5070,9 +5575,7 @@ def test_chunk_parser_handles_prompt_feedback_block():
     logging_obj = Mock()
     logging_obj.optional_params = {}
 
-    streaming_obj = ModelResponseIterator(
-        streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj
-    )
+    streaming_obj = ModelResponseIterator(streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj)
 
     # Act
     result = streaming_obj.chunk_parser(blocked_chunk)
@@ -5080,9 +5583,9 @@ def test_chunk_parser_handles_prompt_feedback_block():
     # Assert
     assert result is not None, "Result should not be None"
     assert len(result.choices) == 1, "Should have exactly one choice"
-    assert (
-        result.choices[0].finish_reason == "content_filter"
-    ), f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
+    assert result.choices[0].finish_reason == "content_filter", (
+        f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
+    )
     assert result.choices[0].delta.content is None, "content should be None"
 
 
@@ -5106,9 +5609,7 @@ def test_chunk_parser_handles_prompt_feedback_safety_block():
     logging_obj = Mock()
     logging_obj.optional_params = {}
 
-    streaming_obj = ModelResponseIterator(
-        streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj
-    )
+    streaming_obj = ModelResponseIterator(streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj)
 
     # Act
     result = streaming_obj.chunk_parser(blocked_chunk)
@@ -5145,9 +5646,7 @@ def test_chunk_parser_handles_prompt_feedback_block_with_usage():
     logging_obj = Mock()
     logging_obj.optional_params = {}
 
-    streaming_obj = ModelResponseIterator(
-        streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj
-    )
+    streaming_obj = ModelResponseIterator(streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj)
 
     # Act
     result = streaming_obj.chunk_parser(blocked_chunk)
@@ -5155,23 +5654,17 @@ def test_chunk_parser_handles_prompt_feedback_block_with_usage():
     # Assert - 验证 content_filter 响应和 usage 都被正确处理
     assert result is not None, "Result should not be None"
     assert len(result.choices) == 1, "Should have exactly one choice"
-    assert (
-        result.choices[0].finish_reason == "content_filter"
-    ), f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
+    assert result.choices[0].finish_reason == "content_filter", (
+        f"finish_reason should be content_filter, got {result.choices[0].finish_reason}"
+    )
     assert result.choices[0].delta.content is None, "content should be None"
 
     # 验证 usage 信息被正确提取
     assert hasattr(result, "usage"), "result should have usage attribute"
     assert result.usage is not None, "usage should not be None"
-    assert (
-        result.usage.prompt_tokens == 8175
-    ), f"prompt_tokens should be 8175, got {result.usage.prompt_tokens}"
-    assert (
-        result.usage.completion_tokens == 0
-    ), f"completion_tokens should be 0, got {result.usage.completion_tokens}"
-    assert (
-        result.usage.total_tokens == 8175
-    ), f"total_tokens should be 8175, got {result.usage.total_tokens}"
+    assert result.usage.prompt_tokens == 8175, f"prompt_tokens should be 8175, got {result.usage.prompt_tokens}"
+    assert result.usage.completion_tokens == 0, f"completion_tokens should be 0, got {result.usage.completion_tokens}"
+    assert result.usage.total_tokens == 8175, f"total_tokens should be 8175, got {result.usage.total_tokens}"
 
 
 def test_vertex_ai_traffic_type_preserved_in_hidden_params_streaming():
@@ -5190,14 +5683,10 @@ def test_vertex_ai_traffic_type_preserved_in_hidden_params_streaming():
         },
     }
 
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
     result = iterator.chunk_parser(chunk)
 
-    assert (
-        result._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND"
-    )
+    assert result._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND"
 
 
 def test_vertex_ai_traffic_type_preserved_in_hidden_params_non_streaming():
@@ -5236,10 +5725,7 @@ def test_vertex_ai_traffic_type_preserved_in_hidden_params_non_streaming():
         encoding=None,
     )
 
-    assert (
-        result._hidden_params["provider_specific_fields"]["traffic_type"]
-        == "PROVISIONED_THROUGHPUT"
-    )
+    assert result._hidden_params["provider_specific_fields"]["traffic_type"] == "PROVISIONED_THROUGHPUT"
 
 
 def test_vertex_ai_service_tier_streaming():
@@ -5323,9 +5809,7 @@ def test_vertex_ai_traffic_type_surfaced_in_responses_api():
     from litellm.types.utils import Choices, Message
 
     model_response = ModelResponse()
-    model_response._hidden_params["provider_specific_fields"] = {
-        "traffic_type": "ON_DEMAND"
-    }
+    model_response._hidden_params["provider_specific_fields"] = {"traffic_type": "ON_DEMAND"}
     model_response.choices = [
         Choices(
             message=Message(content="Hello", role="assistant"),
@@ -5334,15 +5818,15 @@ def test_vertex_ai_traffic_type_surfaced_in_responses_api():
         )
     ]
 
-    responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-        request_input="test",
-        chat_completion_response=model_response,
-        responses_api_request={},
+    responses_api_response = (
+        LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="test",
+            chat_completion_response=model_response,
+            responses_api_request={},
+        )
     )
 
-    assert (
-        responses_api_response.provider_specific_fields["traffic_type"] == "ON_DEMAND"
-    )
+    assert responses_api_response.provider_specific_fields["traffic_type"] == "ON_DEMAND"
 
 
 def test_vertex_ai_web_search_options_parameter():
@@ -5416,12 +5900,8 @@ def test_vertex_ai_web_search_options_in_map_openai_params():
     assert "tools" in optional_params, "tools should be added to optional_params"
     assert len(optional_params["tools"]) == 1, "Should have exactly one tool"
     assert "googleSearch" in optional_params["tools"][0], "Tool should be googleSearch"
-    assert (
-        optional_params["tools"][0]["googleSearch"] == {}
-    ), "googleSearch should be empty config"
-    assert (
-        "web_search_options" not in optional_params
-    ), "web_search_options should be removed after transformation"
+    assert optional_params["tools"][0]["googleSearch"] == {}, "googleSearch should be empty config"
+    assert "web_search_options" not in optional_params, "web_search_options should be removed after transformation"
 
 
 def test_vertex_ai_service_tier_in_map_openai_params():
@@ -5509,24 +5989,16 @@ def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():
 
     # Verify prompt token details include video tokens
     assert result.prompt_tokens_details is not None
-    assert (
-        result.prompt_tokens_details.video_tokens == 10240
-    ), "Prompt video tokens should be 10240"
-    assert (
-        result.prompt_tokens_details.text_tokens == 9
-    ), "Prompt text tokens should be 9"
-    assert (
-        result.prompt_tokens_details.audio_tokens == 200
-    ), "Prompt audio tokens should be 200"
+    assert result.prompt_tokens_details.video_tokens == 10240, "Prompt video tokens should be 10240"
+    assert result.prompt_tokens_details.text_tokens == 9, "Prompt text tokens should be 9"
+    assert result.prompt_tokens_details.audio_tokens == 200, "Prompt audio tokens should be 200"
 
     # Verify completion token details
     assert result.completion_tokens_details is not None
-    assert (
-        result.completion_tokens_details.text_tokens == 79
-    ), "Completion text tokens should be 79"
-    assert (
-        result.completion_tokens_details.video_tokens is None
-    ), "Completion video tokens should be None (text-only response)"
+    assert result.completion_tokens_details.text_tokens == 79, "Completion text tokens should be 79"
+    assert result.completion_tokens_details.video_tokens is None, (
+        "Completion video tokens should be None (text-only response)"
+    )
 
 
 def test_vertex_ai_usage_metadata_with_video_tokens_in_candidates():
@@ -5667,9 +6139,9 @@ def test_vertex_ai_usage_metadata_with_document_tokens_in_prompt():
 
     # DOCUMENT tokens should be included in text_tokens: 8 (TEXT) + 774 (DOCUMENT) = 782
     assert result.prompt_tokens_details is not None
-    assert (
-        result.prompt_tokens_details.text_tokens == 782
-    ), "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
+    assert result.prompt_tokens_details.text_tokens == 782, (
+        "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
+    )
 
     # Verify completion token details
     assert result.completion_tokens_details is not None
@@ -6166,9 +6638,7 @@ def test_mid_stream_429_error_raises_during_iteration():
                 {
                     "content": {
                         "role": "model",
-                        "parts": [
-                            {"text": "Let me think about this...", "thought": True}
-                        ],
+                        "parts": [{"text": "Let me think about this...", "thought": True}],
                     },
                     "index": 0,
                 }
@@ -6188,9 +6658,7 @@ def test_mid_stream_429_error_raises_during_iteration():
                 {
                     "content": {
                         "role": "model",
-                        "parts": [
-                            {"text": "I'll generate the image now.", "thought": True}
-                        ],
+                        "parts": [{"text": "I'll generate the image now.", "thought": True}],
                     },
                     "index": 0,
                 }
@@ -6227,6 +6695,7 @@ def test_mid_stream_429_error_raises_during_iteration():
 
     # Iterate the stream: first chunks should succeed, then 429 error should be raised
     results = []
+
     def _drain():
         for chunk in streaming_obj:
             if chunk is not None:
@@ -6236,9 +6705,7 @@ def test_mid_stream_429_error_raises_during_iteration():
         _drain()
 
     # Verify: received normal chunks before the error
-    assert (
-        len(results) >= 1
-    ), "Should have received at least 1 normal chunk before the error"
+    assert len(results) >= 1, "Should have received at least 1 normal chunk before the error"
 
     # Verify: 429 error is properly raised
     assert exc_info.value.status_code == 429
@@ -6427,9 +6894,7 @@ def _accumulating_gemini_iterator():
         ModelResponseIterator,
     )
 
-    iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
-    )
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
     iterator.chunk_type = "accumulated_json"
     return iterator
 
@@ -6640,6 +7105,155 @@ def test_supported_reasoning_efforts_still_map(model):
             drop_params=False,
         )
         assert "thinkingConfig" in result
+
+
+@pytest.fixture
+def fresh_sampling_deprecation_cache() -> Iterator[None]:
+    _log_gemini_sampling_params_deprecated.cache_clear()
+    yield
+    _log_gemini_sampling_params_deprecated.cache_clear()
+
+
+def _mapped_gemini_3_models() -> tuple[str, ...]:
+    return tuple(sorted(name for name in GetModelCostMap.loaded_model_cost_map() if name.startswith("gemini-3")))
+
+
+def _deprecation_messages(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(r.getMessage() for r in caplog.records if "DeprecationWarning" in r.getMessage())
+
+
+@pytest.mark.parametrize(("param", "value"), (("temperature", 0.2), ("top_p", 0.9), ("top_k", 5)))
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_is_logged_once_per_model(
+    param: str, value: float, caplog: pytest.LogCaptureFixture
+) -> None:
+    first, second = _mapped_gemini_3_models()[:2]
+    config: Final = VertexGeminiConfig()
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        mapped: Final = tuple(
+            config.map_openai_params(
+                non_default_params={param: value}, optional_params={}, model=model, drop_params=True
+            )
+            for model in (first, first, first, second)
+        )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 2
+    assert f"({first})" in deprecations[0]
+    assert f"({second})" in deprecations[1]
+    assert all(m[param] == value for m in mapped)
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_is_logged_once_when_first_calls_race(caplog: pytest.LogCaptureFixture) -> None:
+    model: Final = _mapped_gemini_3_models()[0]
+
+    def map_sampling_params() -> None:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
+        )
+
+    racing_call: Final = threading.Thread(target=map_sampling_params)
+
+    def start_racing_call_while_first_warning_logs(record: logging.LogRecord) -> bool:
+        if "DeprecationWarning" in record.getMessage() and racing_call.ident is None:
+            racing_call.start()
+            racing_call.join(timeout=0.5)
+        return True
+
+    verbose_logger.addFilter(start_racing_call_while_first_warning_logs)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            map_sampling_params()
+            racing_call.join()
+    finally:
+        verbose_logger.removeFilter(start_racing_call_while_first_warning_logs)
+
+    assert len(_deprecation_messages(caplog)) == 1
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_for_unmapped_names_does_not_hide_mapped_models(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    unmapped: Final = tuple(f"gemini-3.9-flash-{uuid.uuid4().hex}" for _ in range(100))
+    mapped: Final = _mapped_gemini_3_models()[0]
+    config: Final = VertexGeminiConfig()
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        for model in (*unmapped, mapped) * 2:
+            config.map_openai_params(
+                non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
+            )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 2
+    assert all(name not in deprecations[0] for name in unmapped)
+    assert f"({mapped})" in deprecations[1]
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_names_models_cataloged_only_under_vertex_ai(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    vertex_only: Final = next(
+        name.removeprefix("vertex_ai/")
+        for name in catalog
+        if name.startswith("vertex_ai/gemini-3")
+        and name.removeprefix("vertex_ai/") not in catalog
+        and f"gemini/{name.removeprefix('vertex_ai/')}" not in catalog
+    )
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"temperature": 0.2}, optional_params={}, model=vertex_only, drop_params=True
+        )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 1
+    assert f"({vertex_only})" in deprecations[0]
+
+
+@pytest.mark.usefixtures("fresh_sampling_deprecation_cache")
+def test_gemini_3_sampling_deprecation_for_names_priced_at_runtime_shares_one_notice(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    priced: Final = tuple(f"gemini-3.9-flash-{uuid.uuid4().hex}" for _ in range(20))
+    for name in priced:
+        monkeypatch.setitem(
+            litellm.model_cost,  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+            f"gemini/{name}",
+            {"input_cost_per_token": 1e-7, "output_cost_per_token": 1e-7, "litellm_provider": "gemini"},
+        )
+    config: Final = VertexGeminiConfig()
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        for model in priced * 2:
+            config.map_openai_params(
+                non_default_params={"temperature": 0.2}, optional_params={}, model=model, drop_params=True
+            )
+
+    deprecations: Final = _deprecation_messages(caplog)
+    assert len(deprecations) == 1
+    assert all(name not in deprecations[0] for name in priced)
+
+
+@pytest.mark.parametrize(("param", "value"), (("temperature", 0.5), ("top_p", 0.9), ("top_k", 5)))
+def test_gemini_2_5_sampling_params_log_no_deprecation(
+    param: str, value: float, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        mapped: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model=f"gemini-2.5-flash-{uuid.uuid4().hex}",
+            drop_params=True,
+        )
+
+    assert mapped[param] == value
+    assert not any("DeprecationWarning" in r.getMessage() for r in caplog.records)
 
 
 def _generate_content_body() -> dict:
@@ -6978,6 +7592,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -7030,6 +7645,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -7049,6 +7665,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -7072,6 +7689,7 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_thought_true_creates_thinking_block():
     """
@@ -7086,6 +7704,7 @@ def test_thought_true_creates_thinking_block():
     assert block["thinking"] == "Some thinking"
     assert block["signature"] == "sig-1"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_thought_true_with_empty_text_creates_block():
     """
@@ -7096,6 +7715,7 @@ def test_thought_true_with_empty_text_creates_block():
     thinking_blocks = config._extract_thinking_blocks_from_parts(parts)
     assert len(thinking_blocks) == 1
     assert thinking_blocks[0]["thinking"] == ""
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_thought_signature_without_thought_does_not_create_block():
@@ -7108,6 +7728,7 @@ def test_thought_signature_without_thought_does_not_create_block():
     config = VertexGeminiConfig()
     thinking_blocks = config._extract_thinking_blocks_from_parts(parts)
     assert thinking_blocks == []
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_extract_thought_signatures_from_regular_parts():
@@ -7128,6 +7749,7 @@ def test_extract_thought_signatures_from_regular_parts():
     assert len(signatures) == 1
     assert signatures[0] == "sig-regular-123"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_extract_multiple_thought_signatures():
     """
@@ -7145,6 +7767,7 @@ def test_extract_multiple_thought_signatures():
     assert len(signatures) == 2
     assert signatures[0] == "sig-1"
     assert signatures[1] == "sig-2"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_round_trip_thought_signature_in_conversation():
@@ -7179,6 +7802,7 @@ def test_round_trip_thought_signature_in_conversation():
     assert text_part["text"] == "Hi there"
     assert "thoughtSignature" in text_part
     assert text_part["thoughtSignature"] == "sig-round-trip-abc"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_round_trip_without_thought_signature_still_works():
@@ -7418,18 +8042,10 @@ def test_gemini_flash_image_preview_models(model_name: str):
     mock_response = ImageResponse()
     mock_response.data = [ImageObject(b64_json="test_base64_data", url=None)]
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = {
-            "candidates": [
-                {
-                    "content": {
-                        "parts": [{"inlineData": {"data": "test_base64_image_data"}}]
-                    }
-                }
-            ]
+            "candidates": [{"content": {"parts": [{"inlineData": {"data": "test_base64_image_data"}}]}}]
         }
         mock_http_response.status_code = 200
         mock_post.return_value = mock_http_response
@@ -7447,9 +8063,7 @@ def test_gemini_flash_image_preview_models(model_name: str):
 
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        called_url = (
-            call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
-        )
+        called_url = call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
 
         assert ":generateContent" in called_url
         assert model_name.split("/", 1)[1] in called_url
@@ -7481,23 +8095,13 @@ def test_gemini_flash_image_preview_models(model_name: str):
         ),
     ],
 )
-def test_gemini_image_generation_forwards_image_config(
-    model: str, kwargs: dict, expected_image_config: dict
-):
+def test_gemini_image_generation_forwards_image_config(model: str, kwargs: dict, expected_image_config: dict):
     from unittest.mock import patch, MagicMock
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = {
-            "candidates": [
-                {
-                    "content": {
-                        "parts": [{"inlineData": {"data": "test_base64_image_data"}}]
-                    }
-                }
-            ]
+            "candidates": [{"content": {"parts": [{"inlineData": {"data": "test_base64_image_data"}}]}}]
         }
         mock_http_response.status_code = 200
         mock_post.return_value = mock_http_response
@@ -7558,9 +8162,7 @@ def test_gemini_image_generation_openai_size_maps_to_google_table(
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(
-        size, "gemini-3-pro-image-preview"
-    ) == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
@@ -7584,9 +8186,7 @@ def test_gemini_image_generation_openai_size_snaps_to_nearest_option(
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(
-        size, "gemini-3-pro-image-preview"
-    ) == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
@@ -7598,9 +8198,7 @@ def test_gemini_image_generation_openai_size_auto_uses_google_defaults(size: str
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(
-        size, "gemini-3-pro-image-preview"
-    ) is None
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") is None
 
 
 def test_gemini_imagen_models_use_predict_endpoint():
@@ -7610,13 +8208,9 @@ def test_gemini_imagen_models_use_predict_endpoint():
     from unittest.mock import patch, MagicMock
     from litellm.types.utils import ImageResponse, ImageObject
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
         mock_http_response = MagicMock()
-        mock_http_response.json.return_value = {
-            "predictions": [{"bytesBase64Encoded": "test_base64_image_data"}]
-        }
+        mock_http_response.json.return_value = {"predictions": [{"bytesBase64Encoded": "test_base64_image_data"}]}
         mock_http_response.status_code = 200
         mock_post.return_value = mock_http_response
 
@@ -7632,9 +8226,7 @@ def test_gemini_imagen_models_use_predict_endpoint():
 
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        called_url = (
-            call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
-        )
+        called_url = call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
 
         assert ":predict" in called_url
         assert "imagen-3.0-generate-001" in called_url
@@ -7797,11 +8389,7 @@ async def test_claude_tool_use_with_gemini():
 
                 if "data: " in chunk_str:
                     try:
-                        data_line = [
-                            line
-                            for line in chunk_str.split("\n")
-                            if line.startswith("data: ")
-                        ][0]
+                        data_line = [line for line in chunk_str.split("\n") if line.startswith("data: ")][0]
                         json_str = data_line[6:]
                         chunk_data = json.loads(json_str)
 
@@ -7814,24 +8402,15 @@ async def test_claude_tool_use_with_gemini():
 
                         if (
                             chunk_data.get("type") == "message_delta"
-                            and chunk_data.get("delta", {}).get("stop_reason")
-                            is not None
+                            and chunk_data.get("delta", {}).get("stop_reason") is not None
                             and "usage" in chunk_data
                         ):
                             has_usage_in_message_delta = True
                             usage = chunk_data["usage"]
-                            assert (
-                                "input_tokens" in usage
-                            ), "input_tokens should be present in usage"
-                            assert (
-                                "output_tokens" in usage
-                            ), "output_tokens should be present in usage"
-                            assert isinstance(
-                                usage["input_tokens"], int
-                            ), "input_tokens should be an integer"
-                            assert isinstance(
-                                usage["output_tokens"], int
-                            ), "output_tokens should be an integer"
+                            assert "input_tokens" in usage, "input_tokens should be present in usage"
+                            assert "output_tokens" in usage, "output_tokens should be present in usage"
+                            assert isinstance(usage["input_tokens"], int), "input_tokens should be an integer"
+                            assert isinstance(usage["output_tokens"], int), "output_tokens should be an integer"
                             print(f"Found usage in message_delta: {usage}")
 
                     except (json.JSONDecodeError, IndexError) as e:
@@ -7846,9 +8425,7 @@ async def test_claude_tool_use_with_gemini():
 
     assert is_content_block_tool_use, "content_block_tool_use should be present"
     assert is_partial_json, "partial_json should be present"
-    assert (
-        has_usage_in_message_delta
-    ), "Usage should be present in message_delta with stop_reason"
+    assert has_usage_in_message_delta, "Usage should be present in message_delta with stop_reason"
     assert is_content_block_stop, "is_content_block_stop should be present"
 
 
@@ -7877,28 +8454,22 @@ def test_gemini_reasoning_effort_minimal():
         )
 
         request_body = raw_request["raw_request_body"]
-        assert (
-            "generationConfig" in request_body
-        ), f"Model {model} should have generationConfig"
+        assert "generationConfig" in request_body, f"Model {model} should have generationConfig"
 
         generation_config = request_body["generationConfig"]
-        assert (
-            "thinkingConfig" in generation_config
-        ), f"Model {model} should have thinkingConfig"
+        assert "thinkingConfig" in generation_config, f"Model {model} should have thinkingConfig"
 
         thinking_config = generation_config["thinkingConfig"]
-        assert (
-            "thinkingBudget" in thinking_config
-        ), f"Model {model} should have thinkingBudget"
+        assert "thinkingBudget" in thinking_config, f"Model {model} should have thinkingBudget"
 
         actual_budget = thinking_config["thinkingBudget"]
-        assert (
-            actual_budget == expected_min_budget
-        ), f"Model {model} should map 'minimal' to {expected_min_budget} tokens, got {actual_budget}"
+        assert actual_budget == expected_min_budget, (
+            f"Model {model} should map 'minimal' to {expected_min_budget} tokens, got {actual_budget}"
+        )
 
-        assert thinking_config.get(
-            "includeThoughts", True
-        ), f"Model {model} should have includeThoughts=True for minimal reasoning effort"
+        assert thinking_config.get("includeThoughts", True), (
+            f"Model {model} should have includeThoughts=True for minimal reasoning effort"
+        )
 
     try:
         raw_request = return_raw_request(
@@ -7913,9 +8484,7 @@ def test_gemini_reasoning_effort_minimal():
         request_body = raw_request["raw_request_body"]
         generation_config = request_body["generationConfig"]
         thinking_config = generation_config["thinkingConfig"]
-        assert (
-            thinking_config["thinkingBudget"] == 128
-        ), "Unknown model should use generic fallback of 128 tokens"
+        assert thinking_config["thinkingBudget"] == 128, "Unknown model should use generic fallback of 128 tokens"
     except Exception as e:
         print(f"Note: Unknown model test skipped due to: {e}")
         pass
@@ -7938,9 +8507,7 @@ def test_gemini_exception_message_format():
     mock_response.text = "Invalid API key provided"
     mock_response.headers = {}
 
-    mock_exception = httpx.HTTPStatusError(
-        message="Bad Request", request=Mock(), response=mock_response
-    )
+    mock_exception = httpx.HTTPStatusError(message="Bad Request", request=Mock(), response=mock_response)
     mock_exception.response = mock_response
     mock_exception.status_code = 400
 
@@ -7960,9 +8527,9 @@ def test_gemini_exception_message_format():
         f"Expected 'GeminiException' in error message, got: {error_message}. "
         f"This test should fail before the fix is implemented."
     )
-    assert (
-        "VertexAIException" not in error_message
-    ), f"Should not contain 'VertexAIException' in error message, got: {error_message}"
+    assert "VertexAIException" not in error_message, (
+        f"Should not contain 'VertexAIException' in error message, got: {error_message}"
+    )
 
 
 def test_reasoning_effort_none_mapping():
@@ -8016,17 +8583,11 @@ def test_gemini_function_args_preserve_unicode():
     parsed_args = json.loads(arguments_str)
 
     assert parsed_args["message"] == "やあ", "Japanese characters should be preserved"
-    assert (
-        parsed_args["recipient"] == "たけし"
-    ), "Japanese characters should be preserved"
+    assert parsed_args["recipient"] == "たけし", "Japanese characters should be preserved"
 
     assert "\\u" not in arguments_str, "Should not contain Unicode escape sequences"
-    assert (
-        "やあ" in arguments_str
-    ), "Original Japanese characters should be in the string"
-    assert (
-        "たけし" in arguments_str
-    ), "Original Japanese characters should be in the string"
+    assert "やあ" in arguments_str, "Original Japanese characters should be in the string"
+    assert "たけし" in arguments_str, "Original Japanese characters should be in the string"
 
     parts_spanish = [
         {
@@ -8079,12 +8640,8 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
             model="gemini-3-flash",
         )
 
-        assert (
-            "thinkingLevel" not in result
-        ), "Should not force thinkingLevel for Gemini 3"
-        assert (
-            "thinkingBudget" not in result
-        ), "Should NOT have thinkingBudget for Gemini 3"
+        assert "thinkingLevel" not in result, "Should not force thinkingLevel for Gemini 3"
+        assert "thinkingBudget" not in result, "Should NOT have thinkingBudget for Gemini 3"
         assert result["includeThoughts"] is True
 
         thinking_param_disabled: AnthropicThinkingParam = {
@@ -8098,10 +8655,7 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         assert result_disabled.get("includeThoughts") is False
-        assert (
-            "thinkingLevel" not in result_disabled
-            or result_disabled.get("thinkingLevel") is None
-        )
+        assert "thinkingLevel" not in result_disabled or result_disabled.get("thinkingLevel") is None
 
         thinking_param_zero: AnthropicThinkingParam = {
             "type": "enabled",
@@ -8114,10 +8668,7 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         assert result_zero["includeThoughts"] is False
-        assert (
-            "thinkingLevel" not in result_zero
-            or result_zero.get("thinkingLevel") is None
-        )
+        assert "thinkingLevel" not in result_zero or result_zero.get("thinkingLevel") is None
 
         result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
             thinking_param=thinking_param,
@@ -8203,9 +8754,7 @@ def test_anthropic_thinking_param_to_gemini_2_thinkingBudget():
     )
 
     assert "thinkingBudget" in result_gemini2, "Should have thinkingBudget for Gemini 2"
-    assert (
-        "thinkingLevel" not in result_gemini2
-    ), "Should NOT have thinkingLevel for Gemini 2"
+    assert "thinkingLevel" not in result_gemini2, "Should NOT have thinkingLevel for Gemini 2"
     assert result_gemini2["includeThoughts"] is True
     assert result_gemini2["thinkingBudget"] == 10000
 
@@ -8241,12 +8790,8 @@ def test_anthropic_thinking_param_via_map_openai_params():
 
     assert "thinkingConfig" in result, "Should have thinkingConfig in optional_params"
     thinking_config = result["thinkingConfig"]
-    assert (
-        "thinkingLevel" not in thinking_config
-    ), "Should not force thinkingLevel for Gemini 3 by default"
-    assert (
-        "thinkingBudget" not in thinking_config
-    ), "Should NOT have thinkingBudget for Gemini 3"
+    assert "thinkingLevel" not in thinking_config, "Should not force thinkingLevel for Gemini 3 by default"
+    assert "thinkingBudget" not in thinking_config, "Should NOT have thinkingBudget for Gemini 3"
     assert thinking_config["includeThoughts"] is True
 
     optional_params_2 = {}
@@ -8259,12 +8804,8 @@ def test_anthropic_thinking_param_via_map_openai_params():
 
     assert "thinkingConfig" in result_2, "Should have thinkingConfig in optional_params"
     thinking_config_2 = result_2["thinkingConfig"]
-    assert (
-        "thinkingBudget" in thinking_config_2
-    ), "Should have thinkingBudget for Gemini 2"
-    assert (
-        "thinkingLevel" not in thinking_config_2
-    ), "Should NOT have thinkingLevel for Gemini 2"
+    assert "thinkingBudget" in thinking_config_2, "Should have thinkingBudget for Gemini 2"
+    assert "thinkingLevel" not in thinking_config_2, "Should NOT have thinkingLevel for Gemini 2"
     assert thinking_config_2["includeThoughts"] is True
     assert thinking_config_2["thinkingBudget"] == 10000
 
@@ -8284,9 +8825,9 @@ def test_gemini_31_flash_lite_reasoning_effort_minimal():
         reasoning_effort="minimal",
         model="gemini-3.1-flash-lite-preview",
     )
-    assert (
-        result["thinkingLevel"] == "minimal"
-    ), f"Expected thinkingLevel='minimal' for gemini-3.1-flash-lite-preview, got '{result['thinkingLevel']}'"
+    assert result["thinkingLevel"] == "minimal", (
+        f"Expected thinkingLevel='minimal' for gemini-3.1-flash-lite-preview, got '{result['thinkingLevel']}'"
+    )
     assert result["includeThoughts"] is True
 
     from litellm.utils import return_raw_request
@@ -8302,12 +8843,12 @@ def test_gemini_31_flash_lite_reasoning_effort_minimal():
     )
     generation_config = raw_request["raw_request_body"]["generationConfig"]
     thinking_config = generation_config["thinkingConfig"]
-    assert (
-        thinking_config.get("thinkingLevel") == "minimal"
-    ), f"Expected thinkingLevel='minimal' via full flow, got {thinking_config}"
-    assert (
-        "thinkingBudget" not in thinking_config
-    ), "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
+    assert thinking_config.get("thinkingLevel") == "minimal", (
+        f"Expected thinkingLevel='minimal' via full flow, got {thinking_config}"
+    )
+    assert "thinkingBudget" not in thinking_config, (
+        "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
+    )
 
 
 @pytest.mark.usefixtures("fake_provider_credentials")
@@ -8855,10 +9396,7 @@ async def test_gemini_context_caching_disabled_flag(sync_mode):
                 "content": [
                     {
                         "type": "text",
-                        "text": "Here is the full text of a complex legal agreement {}".format(
-                            uuid.uuid4()
-                        )
-                        * 4000,
+                        "text": "Here is the full text of a complex legal agreement {}".format(uuid.uuid4()) * 4000,
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
@@ -8894,9 +9432,7 @@ async def test_gemini_context_caching_disabled_flag(sync_mode):
         else:
             client = AsyncHTTPHandler(concurrent_limit=1)
 
-        with patch.object(
-            client, "post", side_effect=mock_gemini_request
-        ) as mock_client:
+        with patch.object(client, "post", side_effect=mock_gemini_request) as mock_client:
             try:
                 if sync_mode:
                     response = litellm.completion(
@@ -8919,26 +9455,22 @@ async def test_gemini_context_caching_disabled_flag(sync_mode):
                 print(e)
 
             # When caching is disabled, should only make 1 call (no separate cache creation call)
-            assert (
-                mock_client.call_count == 1
-            ), f"Expected 1 call when caching is disabled, got {mock_client.call_count}"
+            assert mock_client.call_count == 1, (
+                f"Expected 1 call when caching is disabled, got {mock_client.call_count}"
+            )
 
             first_call_args = mock_client.call_args_list[0].kwargs
             first_call_positional_args = mock_client.call_args_list[0].args
 
             print(f"first_call_args with caching disabled: {first_call_args}")
-            print(
-                f"first_call_positional_args with caching disabled: {first_call_positional_args}"
-            )
+            print(f"first_call_positional_args with caching disabled: {first_call_positional_args}")
 
             # Assert that cachedContents is NOT in the URL when caching is disabled
             url = first_call_args.get(
                 "url",
                 first_call_positional_args[0] if first_call_positional_args else "",
             )
-            assert (
-                "cachedContents" not in url
-            ), "cachedContents should not be in URL when caching is disabled"
+            assert "cachedContents" not in url, "cachedContents should not be in URL when caching is disabled"
 
     finally:
         # Restore original flag value
@@ -9031,9 +9563,7 @@ def test_gemini_function_call_parameter_in_messages():
                 "contents": [
                     {
                         "role": "user",
-                        "parts": [
-                            {"text": "search for weather in boston (use `search`)"}
-                        ],
+                        "parts": [{"text": "search for weather in boston (use `search`)"}],
                     },
                     {
                         "role": "model",
@@ -9052,17 +9582,13 @@ def test_gemini_function_call_parameter_in_messages():
                             {
                                 "function_response": {
                                     "name": "search",
-                                    "response": {
-                                        "content": "The current weather in Boston is 22°F."
-                                    },
+                                    "response": {"content": "The current weather in Boston is 22°F."},
                                 }
                             }
                         ],
                     },
                 ],
-                "system_instruction": {
-                    "parts": [{"text": "Use search for most queries."}]
-                },
+                "system_instruction": {"parts": [{"text": "Use search for most queries."}]},
                 "tools": [
                     {
                         "function_declarations": [
@@ -9137,9 +9663,7 @@ def test_gemini_function_call_parameter_in_messages_2():
                 {
                     "function_response": {
                         "name": "search",
-                        "response": {
-                            "content": "The weather in Boston is 100 degrees."
-                        },
+                        "response": {"content": "The weather in Boston is 100 degrees."},
                     }
                 }
             ],
@@ -9517,9 +10041,7 @@ def test_vertex_ai_cache_creation_kwarg_cannot_change_usage_or_cost() -> None:
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}
     mock_response.json.return_value = {
-        "candidates": [
-            {"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP", "index": 0}
-        ],
+        "candidates": [{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP", "index": 0}],
         "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
     }
     client = HTTPHandler()
@@ -9585,14 +10107,51 @@ def load_vertex_ai_credentials():
 # Gemini prebuilt TTS voices per https://ai.google.dev/gemini-api/docs/speech-generation (page dated 2026-10-01, read 2026-10-07)
 GEMINI_TTS_PREBUILT_VOICES: Final[frozenset[str]] = frozenset(
     {
-        "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", "Callirrhoe", "Autonoe",
-        "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi",
-        "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
-        "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
+        "Zephyr",
+        "Puck",
+        "Charon",
+        "Kore",
+        "Fenrir",
+        "Leda",
+        "Orus",
+        "Aoede",
+        "Callirrhoe",
+        "Autonoe",
+        "Enceladus",
+        "Iapetus",
+        "Umbriel",
+        "Algieba",
+        "Despina",
+        "Erinome",
+        "Algenib",
+        "Rasalgethi",
+        "Laomedeia",
+        "Achernar",
+        "Alnilam",
+        "Schedar",
+        "Gacrux",
+        "Pulcherrima",
+        "Achird",
+        "Zubenelgenubi",
+        "Vindemiatrix",
+        "Sadachbia",
+        "Sadaltager",
+        "Sulafat",
     }
 )
 OPENAI_TTS_VOICES: Final[tuple[str, ...]] = (
-    "alloy", "ash", "ballad", "cedar", "coral", "echo", "fable", "marin", "onyx", "sage", "shimmer", "verse",
+    "alloy",
+    "ash",
+    "ballad",
+    "cedar",
+    "coral",
+    "echo",
+    "fable",
+    "marin",
+    "onyx",
+    "sage",
+    "shimmer",
+    "verse",
 )
 
 
@@ -9678,3 +10237,289 @@ def test_streaming_usage_reads_cache_creation_tokens_recorded_on_logging_obj():
 
     assert chunk.usage.prompt_tokens == 1536 + 1280
     assert chunk.usage.cache_creation_input_tokens == 1280
+
+
+THOUGHT_SUMMARY_REQUESTS: Final = (
+    pytest.param("gemini-2.5-flash", {"reasoning_effort": "minimal"}, id="budget-minimal"),
+    pytest.param("gemini-2.5-flash", {"reasoning_effort": "low"}, id="budget-low"),
+    pytest.param("gemini-2.5-flash", {"reasoning_effort": "medium"}, id="budget-medium"),
+    pytest.param("gemini-2.5-flash", {"reasoning_effort": "high"}, id="budget-high"),
+    pytest.param("gemini-3.6-flash", {"reasoning_effort": "minimal"}, id="level-minimal"),
+    pytest.param("gemini-3.8-flash", {"reasoning_effort": "minimal"}, id="level-minimal-mapped-to-low"),
+    pytest.param("gemini-3.8-flash", {"reasoning_effort": "low"}, id="level-low"),
+    pytest.param("gemini-3.8-flash", {"reasoning_effort": "medium"}, id="level-medium"),
+    pytest.param("gemini-3.8-flash", {"reasoning_effort": "high"}, id="level-high"),
+    pytest.param("gemini-2.5-flash", {"thinking": {"type": "enabled", "budget_tokens": 2048}}, id="budget-thinking"),
+    pytest.param("gemini-3.8-flash", {"thinking": {"type": "enabled", "budget_tokens": 2048}}, id="level-thinking"),
+)
+
+
+async def _sent_thinking_config(model: str, thinking_params: dict[str, object]) -> dict[str, object]:
+    captured: Final[dict[str, dict]] = {}
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+            request=request,
+        )
+
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    await litellm.acompletion(
+        model=f"gemini/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fake-gemini-key",
+        client=client,
+        **thinking_params,
+    )
+    return captured["body"]["generationConfig"]["thinkingConfig"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "thinking_params"), THOUGHT_SUMMARY_REQUESTS)
+async def test_gemini_thought_summaries_off_keeps_thinking_config_otherwise_unchanged(
+    model: str,
+    thinking_params: dict[str, object],
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summaries_on: Final = await _sent_thinking_config(model, thinking_params)
+    monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
+    summaries_off: Final = await _sent_thinking_config(model, thinking_params)
+
+    assert summaries_on["includeThoughts"] is True
+    assert summaries_off == {**summaries_on, "includeThoughts": False}
+
+
+PER_REQUEST_THOUGHT_SUMMARY_ASKS: Final = (
+    pytest.param(
+        "gemini-3.8-flash",
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "summarized"}},
+        False,
+        True,
+        id="level-display-summarized-beats-off",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "omitted"}},
+        True,
+        True,
+        id="level-display-omitted-leaves-the-default-on",
+    ),
+    pytest.param(
+        "gemini-2.5-flash",
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "summarized"}},
+        False,
+        True,
+        id="budget-display-summarized-beats-off",
+    ),
+    pytest.param(
+        "gemini-2.5-flash",
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "omitted"}},
+        True,
+        True,
+        id="budget-display-omitted-leaves-the-default-on",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "updates"}},
+        False,
+        True,
+        id="level-display-updates-beats-off",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"reasoning_effort": {"effort": "medium", "summary": "auto"}},
+        False,
+        True,
+        id="level-effort-summary-beats-off",
+    ),
+    pytest.param(
+        "gemini-2.5-flash",
+        {"reasoning_effort": {"effort": "medium", "summary": "detailed"}},
+        False,
+        True,
+        id="budget-effort-summary-beats-off",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "summary": "auto"}},
+        False,
+        True,
+        id="level-thinking-summary-beats-off",
+    ),
+    pytest.param(
+        "gemini-2.5-flash",
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "summary": "detailed"}},
+        False,
+        True,
+        id="budget-thinking-summary-beats-off",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"reasoning_effort": "medium", "reasoning_summary": "auto"},
+        False,
+        True,
+        id="level-reasoning-summary-alias-beats-off",
+    ),
+    pytest.param(
+        "gemini-2.5-flash",
+        {"reasoning_effort": "medium", "reasoningSummary": "detailed"},
+        False,
+        True,
+        id="budget-reasoning-summary-camel-alias-beats-off",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"reasoning_effort": "none", "reasoning_summary": "auto"},
+        True,
+        False,
+        id="effort-none-ignores-summary-alias",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"reasoning_effort": {"effort": "medium"}},
+        False,
+        False,
+        id="effort-without-summary-keeps-off",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"reasoning_effort": {"effort": "medium"}, "reasoning_summary": "auto"},
+        False,
+        True,
+        id="effort-dict-takes-the-summary-alias",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"reasoning_effort": {"effort": "none", "summary": "auto"}},
+        True,
+        False,
+        id="effort-none-ignores-summary",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "thinking_params", "gateway_default", "expected"), PER_REQUEST_THOUGHT_SUMMARY_ASKS)
+async def test_gemini_per_request_thought_summary_ask_beats_gateway_default(
+    model: str,
+    thinking_params: dict[str, object],
+    gateway_default: bool,
+    expected: bool,
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_include_thoughts_default", gateway_default)
+
+    sent: Final = await _sent_thinking_config(model, thinking_params)
+
+    assert sent["includeThoughts"] is expected
+
+
+def _includes_thoughts_client(sent: list[bool]) -> AsyncHTTPHandler:
+    def upstream(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content)["generationConfig"]["thinkingConfig"]["includeThoughts"])
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+            request=request,
+        )
+
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    return client
+
+
+async def _chat_summary_ask(client: AsyncHTTPHandler, asks: bool) -> None:
+    await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fake-gemini-key",
+        client=client,
+        reasoning_effort="medium",
+        **({"reasoning_summary": "auto"} if asks else {}),
+    )
+
+
+async def _messages_summary_ask(client: AsyncHTTPHandler, asks: bool) -> None:
+    await litellm.anthropic.messages.acreate(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=64,
+        api_key="fake-gemini-key",
+        client=client,
+        thinking={"type": "enabled", "budget_tokens": 2048, **({"display": "summarized"} if asks else {})},
+    )
+
+
+async def _responses_summary_ask(client: AsyncHTTPHandler, asks: bool) -> None:
+    await litellm.aresponses(
+        model="gemini/gemini-3.8-flash",
+        input="hi",
+        api_key="fake-gemini-key",
+        client=client,
+        reasoning={"effort": "medium", **({"summary": "auto"} if asks else {})},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "send",
+    (_chat_summary_ask, _messages_summary_ask, _responses_summary_ask),
+    ids=("chat-reasoning-summary-alias", "messages-display-summarized", "responses-reasoning-summary"),
+)
+async def test_gemini_summary_ask_turns_thoughts_on_and_logs_the_same_reasoning_effort(
+    send: Callable[[AsyncHTTPHandler, bool], Awaitable[None]],
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logged: Final[list[object]] = []
+
+    class ReasoningEffortLogger(CustomLogger):
+        async def async_log_success_event(
+            self,
+            kwargs: Mapping[str, Mapping[str, Mapping[str, object]]],
+            response_obj: object,
+            start_time: object,
+            end_time: object,
+        ) -> None:
+            logged.append(kwargs["standard_logging_object"]["model_parameters"].get("reasoning_effort"))
+
+    monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
+    monkeypatch.setattr(litellm, "callbacks", [ReasoningEffortLogger()])
+    sent: Final[list[bool]] = []
+    client: Final = _includes_thoughts_client(sent)
+
+    await send(client, False)
+    await send(client, True)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert sent == [False, True]
+    assert len(logged) == 2
+    assert isinstance(logged[0], str)
+    assert logged[1] == logged[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gateway_default", "expected"),
+    (("false", False), (" Off ", False), ("0", False), ("true", True), (None, True), ("not-a-flag", True)),
+)
+async def test_gemini_sends_a_boolean_for_a_gateway_default_written_as_text_or_null(
+    gateway_default: object, expected: bool, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_include_thoughts_default", gateway_default)
+
+    sent: Final = await _sent_thinking_config("gemini-3.8-flash", {"reasoning_effort": "high"})
+
+    assert sent["includeThoughts"] is expected
