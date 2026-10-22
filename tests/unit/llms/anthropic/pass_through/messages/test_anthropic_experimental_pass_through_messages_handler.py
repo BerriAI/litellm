@@ -1702,7 +1702,8 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
     )
 
     assert captured["body"]["safeguards"] == safeguards
-    assert captured["body"]["anthropic_beta"] == ["dangerous-tool-use-2026-09-03"]
+    client_betas = set(filter(None, client_headers.get("anthropic-beta", "").split(",")))
+    assert sorted(captured["body"]["anthropic_beta"]) == sorted(client_betas | {"dangerous-tool-use-2026-09-03"})
     assert response["safeguard_results"] == safeguard_results
 
 
