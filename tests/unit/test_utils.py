@@ -10,7 +10,7 @@ import logging
 import os
 import queue
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePath
@@ -2561,6 +2561,45 @@ def test_reasoning_content_preserved_in_text_completion_wrapper():
     choice = transformed["choices"][0]
     assert choice["text"] == "Some answer text"
     assert choice["reasoning_content"] == "Here's my chain of thought..."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_stream", (False, True))
+@pytest.mark.parametrize("stream_options", (None, {}, {"include_usage": False}, {"include_usage": True}))
+@pytest.mark.parametrize("usage", (None, Usage(prompt_tokens=7, completion_tokens=2, total_tokens=9), Usage()))
+async def test_text_completion_stream_usage_is_opt_in(
+    async_stream: bool, stream_options: dict[str, bool] | None, usage: Usage | None
+) -> None:
+    chunk: Final = ModelResponseStream(
+        id="test-id",
+        created=1234567890,
+        model="test-model",
+        choices=[StreamingChoices(index=0, delta=Delta(content="Hello"))],
+        usage=usage,
+    )
+
+    async def chunks() -> AsyncIterator[ModelResponseStream]:
+        yield chunk
+
+    wrapper: Final = TextCompletionStreamWrapper(
+        completion_stream=chunks() if async_stream else iter((chunk,)),
+        model="test-model",
+        stream_options=stream_options,
+    )
+    response: Final = await anext(wrapper) if async_stream else next(wrapper)
+    expected_usage: Final = (
+        {"usage": usage.model_dump(exclude_none=True)}
+        if stream_options and stream_options.get("include_usage") is True and usage is not None
+        else {}
+    )
+    assert response.model_dump(exclude_none=True) == {
+        "id": "test-id",
+        "object": "text_completion",
+        "created": 1234567890,
+        "model": "test-model",
+        "choices": [{"index": 0, "text": "Hello"}],
+        **expected_usage,
+    }
 
 
 def test_anthropic_claude_4_invoke_chat_provider_config():
