@@ -1211,11 +1211,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     @classmethod
     def _count_message_image_chars(cls, messages: Sequence[object]) -> int:
         """Count image content parts in chat completion messages using bounded char estimates."""
-        count = 0
+        count: int = 0  # rebind-ok: accumulate image chars across messages
         for m in messages:
             if not isinstance(m, Mapping):
                 continue
-            content = m.get("content")
+            content: Final = m.get("content")
             if isinstance(content, list):
                 for part in content:
                     if isinstance(part, Mapping) and part.get("type") in _IMAGE_CONTENT_TYPES:
@@ -1248,14 +1248,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if isinstance(item, (list, tuple, set)):
             return sum(cls._estimate_structured_input_item_chars(x, depth + 1) for x in item)
         if isinstance(item, Mapping):
-            item_type = item.get("type")
+            item_type: Final = item.get("type")
             if item_type in _IMAGE_CONTENT_TYPES or (
                 "image_url" in item and not isinstance(item.get("image_url"), list)
             ):
                 if item.get("detail") == "low":
                     return _LOW_DETAIL_IMAGE_CHARS
                 return _DEFAULT_IMAGE_CHARS
-            total = 0
+            total: int = 0  # rebind-ok: accumulate structured chars across fields
             for k, v in item.items():
                 total += len(str(k))
                 if isinstance(v, str) and (v.startswith(_DATA_IMAGE_PREFIX) or ";base64," in v[:100]):
@@ -1263,7 +1263,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else:
                     total += cls._estimate_structured_input_item_chars(v, depth + 1)
             return total
-        s = str(item)
+        s: Final = str(item)
         if s.startswith(_DATA_IMAGE_PREFIX) or ";base64," in s[:100]:
             return _DEFAULT_IMAGE_CHARS
         return len(s)
