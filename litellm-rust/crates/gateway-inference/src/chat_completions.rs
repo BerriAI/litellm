@@ -21,7 +21,7 @@ use serde_json::{Map, Value};
 use litellm_gateway_hooks::Route;
 
 use crate::{
-    Deployment, Error, Gateway, JsonBody,
+    Deployment, Error, Gateway, JsonBody, cache_control_injection,
     messages::{ANTHROPIC_API_HEADER_PROVIDERS, ANTHROPIC_API_HEADERS},
     request,
 };
@@ -136,11 +136,15 @@ async fn handle(
                     let mut body = body?;
                     crate::deployment_params::apply(deployment, &mut body);
                     let extra_headers = client_headers.for_deployment(deployment, &mut body);
+                    let injection_points = body.remove(cache_control_injection::INJECTION_POINTS);
                     if ChatCompletionsRoute::serves_openai(
                         &deployment.model,
                         deployment.custom_llm_provider.as_deref(),
                     ) {
                         return openai(gateway, deployment, body, extra_headers).await;
+                    }
+                    if let Some(points) = &injection_points {
+                        cache_control_injection::apply(points, &mut body);
                     }
                     let (messages, mut optional_params) = split(body);
                     let stream = ChatCompletionsRoute::is_stream(&optional_params);

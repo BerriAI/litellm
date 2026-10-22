@@ -376,17 +376,11 @@ const PYTHON_ONLY_PARAMS: &[&str] = &[
     "weight",
 ];
 
-/// Python consumes this one in a pre-call hook that has no counterpart here yet, so sending it
-/// on would put a key the provider rejects in the request.
-const UNAPPLIED_PARAMS: &[&str] = &["cache_control_injection_points"];
-
 /// Fills each key `body` leaves out from the deployment's own `litellm_params`; a key the request
 /// sets wins, as Python's router merges them.
 pub(crate) fn apply(deployment: &Deployment, body: &mut Map<String, Value>) {
     for (name, value) in deployment.litellm_params.extra.iter() {
-        if PYTHON_ONLY_PARAMS.binary_search(&name.as_str()).is_ok()
-            || UNAPPLIED_PARAMS.contains(&name.as_str())
-        {
+        if PYTHON_ONLY_PARAMS.binary_search(&name.as_str()).is_ok() {
             continue;
         }
         body.entry(name.clone()).or_insert_with(|| value.clone());

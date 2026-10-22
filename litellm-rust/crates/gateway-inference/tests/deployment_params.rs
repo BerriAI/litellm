@@ -76,3 +76,54 @@ async fn chat_fills_what_the_request_leaves_out_from_the_deployment_litellm_para
         assert!(body.get(internal).is_none(), "{body}");
     }
 }
+
+#[tokio::test]
+async fn chat_marks_the_messages_a_deployment_injection_point_names() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(MESSAGE, "application/json"))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let model = "anthropic/test-model";
+    let deployment = Deployment {
+        model: model.into(),
+        api_base: Some(upstream.uri()),
+        api_key: Some("test-key".into()),
+        timeout: Some(Duration::from_secs(5)),
+        litellm_params: serde_json::from_value(json!({
+            "model": model,
+            "cache_control_injection_points": [{"location": "message", "role": "system"}],
+        }))
+        .unwrap(),
+        ..Default::default()
+    };
+    let request = Request::post("/v1/chat/completions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": "public/model", "max_tokens": 16, "messages": [
+                {"role": "system", "content": "rules"},
+                {"role": "user", "content": "hi"},
+            ]})
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = support::app_with_deployment(deployment)
+        .oneshot(request)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let sent = &upstream.received_requests().await.unwrap()[0];
+    let body: Value = serde_json::from_slice(&sent.body).unwrap();
+    assert_eq!(
+        body["system"],
+        json!([{"type": "text", "text": "rules", "cache_control": {"type": "ephemeral"}}]),
+        "{body}"
+    );
+    assert!(
+        body.get("cache_control_injection_points").is_none(),
+        "{body}"
+    );
+}

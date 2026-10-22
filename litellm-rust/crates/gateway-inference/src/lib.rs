@@ -3,6 +3,7 @@
 //! Authentication, rate limiting and logging are the mounting server's layers; this crate
 //! maps a public model name to its deployment and runs the core route.
 
+mod cache_control_injection;
 mod caching;
 mod chat_completions;
 mod client_side;
