@@ -1235,9 +1235,7 @@ class CustomStreamWrapper:
                 model_response.choices[0].delta = Delta(content=None)  # ensure empty delta chunk returned
                 # get any function call arguments
                 native_finish_reason: Final = self.received_finish_reason
-                mapped_finish_reason: Final = map_finish_reason(
-                    finish_reason=self.received_finish_reason
-                )
+                mapped_finish_reason: Final = map_finish_reason(finish_reason=self.received_finish_reason)
                 model_response.choices[0].finish_reason = mapped_finish_reason  # ensure consistent output to openai
                 if native_finish_reason is not None and native_finish_reason != mapped_finish_reason:
                     model_response.choices[0].provider_specific_fields = {
