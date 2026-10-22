@@ -108,6 +108,25 @@ fn configured_app(
     ))
 }
 
+/// An app whose `public/model` group is the one deployment given.
+pub fn app_with_deployment(deployment: Deployment) -> Router {
+    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
+    let http = Resolution::from(&HttpSettings::default()).config;
+    let gateway = Gateway::new(
+        CoreResources::new(pool),
+        http,
+        Arc::new(NoSecrets),
+        [("public/model".to_owned(), deployment)]
+            .into_iter()
+            .collect(),
+    )
+    .unwrap();
+    router(Arc::new(gateway)).layer(axum::middleware::from_fn_with_state(
+        (litellm_gateway_auth::Permissions::All, None),
+        test_identity,
+    ))
+}
+
 /// An app whose `public/model` group holds one deployment of `model` per api base.
 pub fn app_with_group(model: &str, api_bases: &[&str]) -> Router {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
