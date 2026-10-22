@@ -249,5 +249,19 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "inferall": {
+    "base_url": "https://api.inferall.ai/v1",
+    "api_key_env": "INFERALL_API_KEY",
+    "api_base_env": "INFERALL_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses",
+      "/v1/messages"
+    ],
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    }
   }
 }
