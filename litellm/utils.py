@@ -2584,7 +2584,6 @@ def _is_streaming_request(
     if call_type in (CallTypes.search.value, CallTypes.asearch.value) and kwargs.get("search_provider") == "exa_ai":
         return kwargs.get("stream") is True and kwargs.get("outputSchema") is not None
 
-
     if call_type in _NEVER_STREAMING_CALL_TYPES:
         return False
     if "stream" in kwargs and kwargs["stream"] is True:
