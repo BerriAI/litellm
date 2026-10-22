@@ -3,6 +3,7 @@
 import React, { useMemo } from "react";
 import type { DailyData } from "@/components/UsagePage/types";
 import { cn } from "@/lib/cva.config";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { dailyTotals, formatCompact, formatLatency, formatUsd, type OverviewTotals } from "./overviewData";
 import { PANEL_INSET_X, Sparkline, Stat } from "./Primitives";
 
@@ -14,6 +15,8 @@ interface UsageStatStripProps {
   loading: boolean;
   requestCountsPending: boolean;
   budget: number | null;
+  cacheAvailable?: boolean;
+  statusAvailable?: boolean;
 }
 
 /** Spend, requests, tokens and averages for a range, each with a daily sparkline. */
@@ -23,8 +26,13 @@ export default function UsageStatStrip({
   loading,
   requestCountsPending,
   budget,
+  cacheAvailable = true,
+  statusAvailable = true,
 }: UsageStatStripProps) {
   const daily = useMemo(() => dailyTotals(results), [results]);
+  const cacheHint = cacheAvailable
+    ? `${formatCompact(totals.cacheReadTokens)} cache read`
+    : "Cache breakdown unavailable";
   return (
     <div className="grid grid-cols-1 overflow-hidden rounded-xl border bg-card sm:grid-cols-2 lg:grid-cols-4 lg:divide-x">
       <StatCell trend={<Sparkline data={daily} dataKey="spend" color={BRAND} className="h-14" />}>
@@ -37,7 +45,7 @@ export default function UsageStatStrip({
       </StatCell>
       <StatCell trend={<Sparkline data={daily} dataKey="requests" color={BRAND} className="h-14" />}>
         <Stat label="Total Requests" value={totals.requests.toLocaleString()} pending={requestCountsPending} />
-        {!requestCountsPending && (
+        {!requestCountsPending && statusAvailable && (
           <div className="mt-0.5 flex gap-3 text-xs leading-4 text-muted-foreground">
             <span>
               <span className="text-success tabular-nums">{totals.successful.toLocaleString()}</span> ok
@@ -57,8 +65,48 @@ export default function UsageStatStrip({
           value={loading ? null : formatCompact(totals.tokens)}
           exact={`${totals.tokens.toLocaleString()} tokens`}
           pending={loading}
-          hint={loading ? undefined : `${formatCompact(totals.cacheReadTokens)} cache read`}
+          hint={loading ? undefined : cacheHint}
         />
+        {!loading && (
+          <Popover>
+            <PopoverTrigger className="mt-1 text-xs font-medium text-primary underline-offset-4 hover:underline">
+              View token breakdown
+            </PopoverTrigger>
+            <PopoverContent side="right" align="start" className="w-80 gap-3">
+              <PopoverTitle>What counts toward total tokens?</PopoverTitle>
+              <dl className="space-y-2 text-sm tabular-nums">
+                <div className="flex justify-between gap-4">
+                  <dt>Input tokens</dt>
+                  <dd>{totals.inputTokens.toLocaleString()}</dd>
+                </div>
+                <div className="flex justify-between gap-4 pl-3 text-xs text-muted-foreground">
+                  <dt>Cache reads</dt>
+                  <dd>{cacheAvailable ? totals.cacheReadTokens.toLocaleString() : "Unavailable"}</dd>
+                </div>
+                <div className="flex justify-between gap-4 pl-3 text-xs text-muted-foreground">
+                  <dt>Cache writes</dt>
+                  <dd>{cacheAvailable ? totals.cacheWriteTokens.toLocaleString() : "Unavailable"}</dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt>Output tokens</dt>
+                  <dd>{totals.outputTokens.toLocaleString()}</dd>
+                </div>
+                <div className="flex justify-between gap-4 border-t pt-2 font-medium">
+                  <dt>Total tokens</dt>
+                  <dd>{totals.tokens.toLocaleString()}</dd>
+                </div>
+              </dl>
+              <p className="text-xs leading-5 text-muted-foreground">
+                Input includes cache reads and writes. Cached input has separate pricing, so total tokens alone cannot
+                explain the cost.
+              </p>
+              <p className="text-xs leading-5 text-muted-foreground">
+                A client may show a different subset of tokens. Compare the same person, client and time range before
+                comparing counts.
+              </p>
+            </PopoverContent>
+          </Popover>
+        )}
       </StatCell>
       <StatCell>
         <div className="grid gap-3">
@@ -67,7 +115,11 @@ export default function UsageStatStrip({
             label="Avg latency"
             value={totals.avgLatencyMs === null ? "—" : formatLatency(totals.avgLatencyMs)}
             pending={loading}
-            hint={totals.successRate === null ? undefined : `${totals.successRate.toFixed(1)}% success rate`}
+            hint={
+              !statusAvailable || totals.successRate === null
+                ? undefined
+                : `${totals.successRate.toFixed(1)}% success rate`
+            }
           />
         </div>
       </StatCell>

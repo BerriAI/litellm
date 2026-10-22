@@ -1,5 +1,5 @@
 import moment from "moment";
-import { parseAsNativeArrayOf, parseAsString, type inferParserType } from "nuqs";
+import { parseAsNativeArrayOf, parseAsString, parseAsStringLiteral, type inferParserType } from "nuqs";
 
 import type { EntityType } from "@/components/EntityUsageExport/types";
 import { relativeTimeOptions } from "@/components/shared/advanced_date_picker";
@@ -21,6 +21,12 @@ export const usageUrlParsers = {
   from: parseAsString,
   to: parseAsString,
   user: parseAsString,
+  client_user: parseAsString,
+  client_team: parseAsString,
+  client_range: parseAsString,
+  client_from: parseAsString,
+  client_to: parseAsString,
+  client: parseAsStringLiteral(["claude-desktop", "claude-code"] as const),
   team: entityIds,
   org: entityIds,
   customer: entityIds,
@@ -54,12 +60,20 @@ const VIEW_ENTITY_KEYS: Readonly<Record<UsageOption, readonly EntityKey[]>> = {
   "user-agent-activity": ["tag"],
 };
 
+export const CLIENT_USAGE_VIEWS: readonly UsageOption[] = ["global", "my-usage", "team"];
+
 const TABBED_VIEWS: readonly UsageOption[] = ["global", "my-usage"];
 
 const RESET_TO_DEFAULT_VIEW: UsageUrlPatch = {
   view: null,
   tab: null,
   user: null,
+  client: null,
+  client_user: null,
+  client_team: null,
+  client_range: null,
+  client_from: null,
+  client_to: null,
   team: null,
   org: null,
   customer: null,
@@ -77,8 +91,9 @@ const hasEntityValue = (params: UsageUrlParams, key: EntityKey): boolean =>
 export const usageViewFromParams = (params: UsageUrlParams): UsageOption =>
   isUsageOption(params.view) ? params.view : DEFAULT_USAGE_VIEW;
 
-export const usageTabFromParams = (params: UsageUrlParams, isAdmin = true): UsageTab =>
-  isUsageTab(params.tab) && (params.tab !== "errors" || isAdmin) ? params.tab : DEFAULT_USAGE_TAB;
+export const usageTabFromParams = (params: UsageUrlParams, isAdmin = true): UsageTab => {
+  return isUsageTab(params.tab) && (params.tab !== "errors" || isAdmin) ? params.tab : DEFAULT_USAGE_TAB;
+};
 
 export const usageViewPatch = (view: UsageOption): UsageUrlPatch => ({
   ...RESET_TO_DEFAULT_VIEW,
@@ -128,6 +143,35 @@ export const dateRangePatch = (value: DateRangePickerValue, presetShortLabel: st
   };
 };
 
+type ClientDateParams = Pick<UsageUrlParams, "client_range" | "client_from" | "client_to">;
+
+const clientDateParams = (params: ClientDateParams): DateParams => ({
+  range: params.client_range,
+  from: params.client_from,
+  to: params.client_to,
+});
+
+export const clientDateRangeFromParams = (params: ClientDateParams): DateRangePickerValue | undefined =>
+  dateRangeFromParams(clientDateParams(params));
+
+const asClientDatePatch = (patch: UsageUrlPatch): UsageUrlPatch => ({
+  ...("range" in patch ? { client_range: patch.range } : {}),
+  ...("from" in patch ? { client_from: patch.from } : {}),
+  ...("to" in patch ? { client_to: patch.to } : {}),
+});
+
+export const clientDateRangePatch = (value: DateRangePickerValue, presetShortLabel: string | null): UsageUrlPatch =>
+  asClientDatePatch(dateRangePatch(value, presetShortLabel));
+
+export const clientPanelPatch = (client: UsageUrlParams["client"]): UsageUrlPatch => ({
+  client,
+  client_user: null,
+  client_team: null,
+  client_range: null,
+  client_from: null,
+  client_to: null,
+});
+
 const invalidDatePatch = (params: DateParams): UsageUrlPatch => {
   const hasCustomRange = params.from !== null || params.to !== null;
   if (params.range !== null) {
@@ -144,6 +188,7 @@ const invalidDatePatch = (params: DateParams): UsageUrlPatch => {
 export interface UsageUrlAccess {
   readonly allowedViews: readonly UsageOption[];
   readonly isAdmin: boolean;
+  readonly canViewTeamClients?: boolean;
 }
 
 export interface UsageUrlCleanup {
@@ -166,9 +211,29 @@ export const cleanUsageUrl = (params: UsageUrlParams, access: UsageUrlAccess): U
   const invalidTab =
     params.tab !== null &&
     (!TABBED_VIEWS.includes(view) || !isUsageTab(params.tab) || (!access.isAdmin && params.tab === "errors"));
+  const panelDates = clientDateParams(params);
+  const panelDateCleanup =
+    CLIENT_USAGE_VIEWS.includes(view) && params.client !== null
+      ? invalidDatePatch(panelDates)
+      : Object.fromEntries(
+          Object.entries(panelDates)
+            .filter(([, value]) => value !== null)
+            .map(([key]) => [key, null]),
+        );
   const patch: UsageUrlPatch = {
+    ...asClientDatePatch(panelDateCleanup),
     ...(params.view !== null && !isUsageOption(params.view) ? { view: null } : {}),
     ...(invalidTab ? { tab: null } : {}),
+    ...(!CLIENT_USAGE_VIEWS.includes(view) && params.client !== null ? { client: null } : {}),
+    ...((!CLIENT_USAGE_VIEWS.includes(view) ||
+      params.client === null ||
+      (!access.isAdmin && !(access.canViewTeamClients && params.client_team))) &&
+    params.client_user !== null
+      ? { client_user: null }
+      : {}),
+    ...((!CLIENT_USAGE_VIEWS.includes(view) || params.client === null) && params.client_team !== null
+      ? { client_team: null }
+      : {}),
     ...Object.fromEntries(strayEntityKeys.map((key) => [key, null])),
     ...invalidDatePatch(params),
   };
