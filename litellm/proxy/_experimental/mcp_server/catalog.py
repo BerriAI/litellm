@@ -28,6 +28,7 @@ from litellm.proxy._experimental.mcp_server.result_conversion import age_freshne
 if TYPE_CHECKING:
     from mcp.types import ListToolsResult, PaginatedRequestParams, PaginatedResult
 
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult, OperationContext
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing, ServerOutcome
@@ -1128,7 +1129,6 @@ async def list_gateway_catalog(
         PaginatedRequestParams,
     )
 
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
     from litellm.proxy._experimental.mcp_server.operations import (
         _get_allowed_mcp_servers,
         global_mcp_server_manager,
