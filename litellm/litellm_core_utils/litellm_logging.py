@@ -7088,15 +7088,6 @@ class StandardLoggingPayloadSetup:
         return header_tags if header_tags else None
 
     @staticmethod
-    def _coerce_tags_to_list(tags: object) -> list[str]:
-        """Return a copy of caller-provided tags as a list; a bare string becomes a one-item list."""
-        if isinstance(tags, str):
-            return [tags]
-        if isinstance(tags, (list, tuple, set)):
-            return cast(list[str], list(tags))  # cast-ok: tags are caller-provided
-        return []
-
-    @staticmethod
     def get_request_tags(
         litellm_params: dict[str, object],
         proxy_server_request: Mapping[str, object],
@@ -7107,12 +7098,11 @@ class StandardLoggingPayloadSetup:
         litellm_metadata: Final = cast(  # cast-ok: request metadata is caller-provided
             Mapping[str, object], litellm_params.get("litellm_metadata") or {}
         )
-        metadata_tags: Final = metadata.get("tags", [])
-        litellm_metadata_tags: Final = litellm_metadata.get("tags", [])
-        if metadata_tags:
-            request_tags = StandardLoggingPayloadSetup._coerce_tags_to_list(metadata_tags)
-        elif litellm_metadata_tags:
-            request_tags = StandardLoggingPayloadSetup._coerce_tags_to_list(litellm_metadata_tags)
+        raw_tags: Final = metadata.get("tags", []) or litellm_metadata.get("tags", [])
+        if isinstance(raw_tags, str):
+            request_tags = [raw_tags]
+        elif raw_tags:
+            request_tags = cast(list[str], raw_tags).copy()  # cast-ok: tags are caller-provided
         else:
             request_tags = []
         user_agent_tags: Final = StandardLoggingPayloadSetup._get_user_agent_tags(proxy_server_request)
