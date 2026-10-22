@@ -109,6 +109,7 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream, StreamEnd
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     declares_ptu,
@@ -623,26 +624,26 @@ def _extend_trailing_text_block(blocks: Sequence[Mapping[str, object]], text: st
 
 
 async def _hold_slot_until_closed(response: object, slot: contextlib.AsyncExitStack) -> None:
-    """Keep a deployment slot held until a streamed binary response is closed.
+    """Keep a deployment slot held until a streamed binary response ends.
 
     A buffered response already has its body in hand, so its slot is released right
-    away. A streamed one is still pulling audio from the provider, so the slot has to
-    survive until whoever consumes it closes the response.
+    away. A streamed one is still pulling audio from the provider, so the slot is held
+    until the audio is read to the end, the read fails, or the response is closed.
     """
     raw: Final = getattr(response, "response", None)
-    if not isinstance(raw, httpx.Response) or raw.is_stream_consumed:
+    if (
+        not isinstance(raw, httpx.Response)
+        or raw.is_stream_consumed
+        or not isinstance(raw.stream, httpx.AsyncByteStream)
+    ):
         await slot.aclose()
         return
 
-    close: Final = raw.aclose
-
-    async def _aclose_and_release() -> None:
-        try:
-            await close()
-        finally:
+    async def _release(_: StreamEnd) -> None:
+        with contextlib.suppress(Exception):  # a release error must not mask the stream's own error
             await slot.aclose()
 
-    raw.aclose = _aclose_and_release  # pyright: ignore[reportAttributeAccessIssue]  # wrapping the bound method keeps every caller's close path releasing the slot
+    raw.stream = OnEndAsyncByteStream(raw.stream, map_error=lambda error: error, on_end=_release)
 
 
 def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:

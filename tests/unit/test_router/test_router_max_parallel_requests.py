@@ -205,6 +205,37 @@ async def test_aspeech_holds_its_deployment_slot_until_the_audio_is_released(
     assert (while_audio_open, await _second_caller()) == ("refused" if stream else "admitted", "admitted")
 
 
+class _AudioCutOffMidClip(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b"audio"
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_aspeech_releases_its_deployment_slot_when_the_audio_read_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider cutting a streamed clip off mid-read frees the slot even when the caller never closes the response."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _speech_router()
+
+    def _client() -> litellm.AsyncHTTPHandler:
+        return litellm.AsyncHTTPHandler(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, headers={"content-type": "audio/mpeg"}, stream=_AudioCutOffMidClip())
+            )
+        )
+
+    response: Final = await router.aspeech(model="tts", input="hello", voice="voice-id", client=_client(), stream=True)
+    with pytest.raises(litellm.APIConnectionError):
+        await response.aread()
+
+    await router.aspeech(model="tts", input="hello", voice="voice-id", client=_client(), stream=True)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("response", "releases_immediately"),

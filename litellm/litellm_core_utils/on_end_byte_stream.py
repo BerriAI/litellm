@@ -1,3 +1,4 @@
+import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from typing import Final, TypeAlias
@@ -41,12 +42,17 @@ class OnEndAsyncByteStream(httpx.AsyncByteStream):
                 yield chunk
         except httpx.TransportError as error:
             mapped: Final = self._map_error(error)
-            await self._end(StreamFailed(mapped))
+            await self._fail(mapped)
             raise mapped from error
         except Exception as error:
-            await self._end(StreamFailed(error))
+            await self._fail(error)
             raise
         await self._end(StreamCompleted())
+
+    async def _fail(self, error: Exception) -> None:
+        with contextlib.suppress(Exception):
+            await self._stream.aclose()
+        await self._end(StreamFailed(error))
 
     async def aclose(self) -> None:
         try:
@@ -78,12 +84,17 @@ class OnEndSyncByteStream(httpx.SyncByteStream):
             yield from self._stream
         except httpx.TransportError as error:
             mapped: Final = self._map_error(error)
-            self._end(StreamFailed(mapped))
+            self._fail(mapped)
             raise mapped from error
         except Exception as error:
-            self._end(StreamFailed(error))
+            self._fail(error)
             raise
         self._end(StreamCompleted())
+
+    def _fail(self, error: Exception) -> None:
+        with contextlib.suppress(Exception):
+            self._stream.close()
+        self._end(StreamFailed(error))
 
     def close(self) -> None:
         try:
