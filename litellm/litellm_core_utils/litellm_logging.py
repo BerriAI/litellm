@@ -117,6 +117,7 @@ from litellm.litellm_core_utils.logging_worker import optional_callback_budget
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
+    perform_redaction,  # pyright: ignore[reportUnknownVariableType]  # legacy sanitizer has untyped response variants
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redacted_model_call_details_for_custom_logger,
@@ -3756,11 +3757,10 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
             self.shadow_eval_request_snapshot = None
-            body_free_logger: Final = CustomLogger(message_logging=False)
             self.model_call_details = redacted_model_call_details_for_custom_logger(
-                self.model_call_details, body_free_logger
+                self.model_call_details, CustomLogger(message_logging=False)
             )
-            redact_message_input_output_from_custom_logger(self, None, body_free_logger)
+            perform_redaction(self.model_call_details, None)
             assembled_stream: Final = "async_complete_streaming_response" in self.model_call_details
             accounting_response: Final[object] = (
                 self.model_call_details["async_complete_streaming_response"] if assembled_stream else result
