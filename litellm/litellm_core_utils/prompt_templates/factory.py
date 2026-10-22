@@ -1650,9 +1650,16 @@ def convert_to_gemini_tool_call_result(
 
     _part: Final[VertexPartType] = {"function_response": _function_response}
 
-    # For multimodal function responses, Gemini expects media parts nested
-    # inside functionResponse.parts instead of sibling content parts.
+    # Multimodal tool results: only Gemini 3+ accepts media nested inside
+
+    # functionResponse.parts. Earlier models reject that shape with
+    # "Multimodal function responses are not supported for this model" and
+    # expect sibling inline_data parts instead (the pre-v1.89 shape, which
+    # Gemini 2.x accepts and reads). forward_function_call_id marks the same
     if inline_data_list:
+        if not forward_function_call_id:
+            # Pre-Gemini 3: emit media as sibling inline_data parts.
+            return [_part, *({"inline_data": inline_data} for inline_data in inline_data_list)]
         _function_response["parts"] = [{"inline_data": inline_data} for inline_data in inline_data_list]
         return [_part]
 
@@ -1661,7 +1668,6 @@ def convert_to_gemini_tool_call_result(
 
 _TOOL_USE_ID_FALLBACK: Final = "tool_use_id"
 _ANTHROPIC_TOOL_USE_ID_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
-_BEDROCK_TOOL_USE_ID_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_.:-]")
 _BEDROCK_TOOL_USE_ID_MAX_LEN: Final = 64
 _BEDROCK_TOOL_USE_ID_HASH_LEN: Final = 8
 
