@@ -9,6 +9,8 @@ from collections.abc import Callable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.prisma_client import PrismaWrapper
 
@@ -34,6 +36,8 @@ _MODEL_READ_METHODS: Final = frozenset(
 # Top-level Prisma client methods that read from the database.
 _TOP_LEVEL_READ_METHODS: Final = frozenset({"query_first", "query_raw"})
 
+_DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
+
 
 class _RoutedActions:
     """Per-model accessor that sends reads to the reader and writes to the writer.
@@ -57,8 +61,8 @@ class _RoutedActions:
 
     def __getattr__(self, name: str) -> object:
         if name in _MODEL_READ_METHODS and self._should_use_reader():
-            return getattr(self._reader_actions, name)
-        return getattr(self._writer_actions, name)
+            return _DELEGATED_ATTRIBUTE.validate_python(getattr(self._reader_actions, name))
+        return _DELEGATED_ATTRIBUTE.validate_python(getattr(self._writer_actions, name))
 
 
 class WriterPinnedClient:
@@ -295,13 +299,13 @@ class RoutingPrismaWrapper:
     def __getattr__(self, name: str) -> Any:
         if name in _TOP_LEVEL_READ_METHODS:
             return getattr(self.read_target, name)
-        writer_attr: Final[object] = getattr(self._writer, name)
+        writer_attr: Final = _DELEGATED_ATTRIBUTE.validate_python(getattr(self._writer, name))
         # Per-model action accessors are non-callable instances that expose
         # both `find_many` and `create`. Methods like execute_raw / batch_ /
         # tx are callables and stay on the writer untouched.
         if not callable(writer_attr) and hasattr(writer_attr, "find_many") and hasattr(writer_attr, "create"):
             try:
-                reader_attr: Final[object] = getattr(self._reader, name)
+                reader_attr: Final = _DELEGATED_ATTRIBUTE.validate_python(getattr(self._reader, name))
             except AttributeError:
                 return writer_attr
             return _RoutedActions(writer_attr, reader_attr, self._should_use_reader)

@@ -2,6 +2,7 @@
 
 import json
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -192,6 +193,10 @@ def _encode_realtime_token_payload(
         "session_type": session_type,
     }
     return json.dumps(payload, separators=(",", ":"))
+
+
+def _header_value(headers: Mapping[str, str], name: str, default: str) -> str:
+    return headers.get(name, default)
 
 
 def _decode_realtime_token_payload(
@@ -517,7 +522,7 @@ async def proxy_realtime_calls(
     return Response(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,
-        media_type=upstream_resp.headers.get("content-type", "application/sdp"),
+        media_type=_header_value(upstream_resp.headers, "content-type", "application/sdp"),
     )
 
 
