@@ -142,8 +142,9 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
     assert result.status_code == 200, result.text
     assert message in result.text
     if path == "/v1/responses":
-        assert frames[-1] == "data: [DONE]", result.text
-        assert frames[-2].startswith("event: response.failed\n"), result.text
+        assert all("data: [DONE]" not in frame for frame in frames), result.text
+        assert frames[-1].startswith("event: response.failed\n"), result.text
+        assert [frame.splitlines()[0] for frame in frames] == [f"event: {event['type']}" for event in events]
         if partial:
             assert [event["type"] for event in events] == [
                 "response.created",
@@ -4862,9 +4863,11 @@ class TestGuardrailBlockedResponsesShape:
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("text/event-stream")
         frames = _sse_data_frames(response.text)
-        assert frames[-1] == "[DONE]"
-        events = [json.loads(frame) for frame in frames[:-1]]
+        assert "[DONE]" not in frames
+        events = [json.loads(frame) for frame in frames]
         types = [event["type"] for event in events]
+        assert types[-1] == "response.completed"
+        assert [line[7:] for line in response.text.splitlines() if line.startswith("event: ")] == types
         assert "response.created" in types
         completed = [event for event in events if event["type"] == "response.completed"]
         assert len(completed) == 1
@@ -4891,7 +4894,8 @@ class TestGuardrailBlockedResponsesShape:
 
         assert response.status_code == 200, response.text
         frames = _sse_data_frames(response.text)
-        completed = [json.loads(frame) for frame in frames[:-1] if json.loads(frame)["type"] == "response.completed"]
+        assert "[DONE]" not in frames
+        completed = [json.loads(frame) for frame in frames if json.loads(frame)["type"] == "response.completed"]
         usage = completed[0]["response"]["usage"]
         assert usage["input_tokens"] == 14
         assert usage["output_tokens"] == 20

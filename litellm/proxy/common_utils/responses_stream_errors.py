@@ -131,7 +131,10 @@ class ResponsesStreamErrorState:
                 self.created_at = event.response.created_at
         if event.type in ("response.completed", "response.failed", "response.incomplete"):
             self.terminal_emitted = True
-        return frame
+        if not event.type or "\n" in event.type or "\r" in event.type:
+            return frame
+        prefix: Final = f"event: {event.type}\n"
+        return prefix.encode("utf-8") + frame if isinstance(frame, bytes) else prefix + frame
 
     def format_failure(self, exception: Exception) -> str | None:
         if self.terminal_emitted:

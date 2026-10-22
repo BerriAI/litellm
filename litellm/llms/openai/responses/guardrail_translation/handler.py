@@ -1789,7 +1789,6 @@ class OpenAIResponsesHandler(BaseTranslation):
           new output item under the same response id, and close with a
           ``response.completed`` carrying only the replacement item.
 
-        The proxy's data generator appends ``data: [DONE]`` itself.
         """
         events: Final = (
             self._block_continuation_events(exc, responses_so_far or ())
@@ -1797,6 +1796,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             else self._standalone_block_events(exc)
         )
         return tuple(
+            f"event: {event.type.value if isinstance(event.type, ResponsesAPIStreamEvents) else event.type}\n"
             f"data: {event.model_dump_json(exclude_none=True, exclude_unset=True, serialize_as_any=True)}\n\n".encode()
             for event in events
         )

@@ -50,9 +50,12 @@ from litellm.proxy.proxy_server import (
     select_data_generator,
 )
 from litellm.types.llms.openai import (
+    ErrorEvent,
+    OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponseFailedEvent,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
 )
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
@@ -91,6 +94,56 @@ async def _async_iter_raises(exc: Exception):
     yield _simple_chunk(content="partial")
     raise exc
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_type", ["response.completed", "response.failed", "response.incomplete", "error"])
+async def test_responses_stream_dispatches_named_events_without_a_chat_done_sentinel(terminal_type: str) -> None:
+    response: Final = ResponsesAPIResponse(id="resp_framing", created_at=1, model="local-model", output=[])
+    created: Final = ResponseCreatedEvent.model_validate(
+        {"type": "response.created", "sequence_number": 0, "response": response}
+    )
+    delta: Final = OutputTextDeltaEvent.model_validate(
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 1,
+            "item_id": "msg_framing",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "hello",
+        }
+    )
+    terminal_models: Final = {
+        "response.completed": ResponseCompletedEvent,
+        "response.failed": ResponseFailedEvent,
+        "response.incomplete": ResponseIncompleteEvent,
+        "error": ErrorEvent,
+    }
+    terminal: Final = terminal_models[terminal_type].model_validate(
+        {"type": terminal_type, "sequence_number": 2, "response": response}
+    )
+
+    async def upstream() -> AsyncIterator[BaseModel]:
+        for event in (created, delta, terminal):
+            yield event
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in select_data_generator(
+                response=upstream(), user_api_key_dict=_user_auth(), request_data={}, responses_stream_errors=True
+            )
+        ]
+    )
+    assert len(frames) == 3
+    for frame, event_type in zip(
+        frames, ("response.created", "response.output_text.delta", terminal_type), strict=True
+    ):
+        assert frame.startswith(f"event: {event_type}\n")
+        payload: Final = json.loads(
+            next(line.removeprefix("data: ") for line in frame.splitlines() if line.startswith("data: "))
+        )
+        assert payload["type"] == event_type
+    assert json.loads(frames[1].split("data: ", 1)[1])["delta"] == "hello"
 
 class _FakeStream:
     def __init__(self, chunks, hidden_params=None):
@@ -1132,14 +1185,15 @@ async def test_responses_stream_failure_sends_the_failure_hook_replacement(monke
         ]
     )
     failure: Final = ResponseFailedEvent.model_validate_json(
-        next(line.removeprefix("data: ") for line in frames[-2].splitlines() if line.startswith("data: "))
+        next(line.removeprefix("data: ") for line in frames[-1].splitlines() if line.startswith("data: "))
     )
 
     assert _BLOCK_MESSAGE not in "".join(frames)
     assert failure.response.error is not None
     assert failure.response.error["code"] == "permission_error"
     assert "Request blocked by policy" in failure.response.error["message"]
-    assert frames[-1] == "data: [DONE]\n\n"
+    assert frames[-1].startswith("event: response.failed\n")
+    assert "data: [DONE]\n\n" not in frames
 
 
 @pytest.mark.asyncio
@@ -1335,8 +1389,8 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
         for frame in event_frames
     )
 
-    assert decoded[-1] == "data: [DONE]\n\n"
-    assert len(decoded) == len(event_frames) + 1
+    assert len(decoded) == len(event_frames)
+    assert "data: [DONE]\n\n" not in decoded
     assert payloads[0]["response"]["id"] == "resp_visible"
     assert payloads[1] == tool_delta.model_dump()
     assert len(payloads) == 3

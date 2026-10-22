@@ -493,7 +493,6 @@ async def responses_api(
             async def _blocked_stream() -> AsyncGenerator[str, None]:
                 for chunk in block_chunks:
                     yield chunk.decode()
-                yield "data: [DONE]\n\n"
 
             return await create_response(generator=_blocked_stream(), media_type="text/event-stream", headers={})
         return build_blocked_response(e)
