@@ -1,5 +1,7 @@
 import asyncio
+import gzip
 import json
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from queue import SimpleQueue
@@ -19,6 +21,11 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import UserAPIKeyAuth
 from tests._master_key import MASTER_KEY
+
+if sys.version_info >= (3, 14):
+    from compression import zstd
+else:
+    from backports import zstd
 
 pytestmark: Final = pytest.mark.usefixtures("httpx_transport")
 
@@ -184,7 +191,7 @@ async def test_invalid_json_object_never_contacts_provider(codex_gateway: httpx.
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("encodings", [("zstd",), ("gzip",), ("br",), ("",), ("identity", "zstd")])
+@pytest.mark.parametrize("encodings", [("br",), ("",), ("identity", "zstd")])
 @pytest.mark.parametrize("authenticated", [False, True])
 async def test_encoded_requests_are_rejected_before_reading_or_authentication(
     codex_gateway: httpx.AsyncClient, encodings: tuple[str, ...], authenticated: bool
@@ -201,9 +208,30 @@ async def test_encoded_requests_are_rejected_before_reading_or_authentication(
             ),
         )
     assert response.status_code == 415, response.text
-    assert "enable_request_compression = false" in response.json()["detail"]
+    assert "Unsupported request content encoding" in response.json()["detail"]
     assert not body.started.is_set()
     assert not provider.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", ["gzip", "zstd"])
+async def test_compressed_json_is_decoded_before_forwarding(
+    codex_gateway: httpx.AsyncClient, encoding: str
+) -> None:
+    payload: Final = {"model": "synthetic-native", "input": "hello"}
+    raw: Final = json.dumps(payload).encode()
+    encoded: Final = gzip.compress(raw, mtime=0) if encoding == "gzip" else zstd.compress(raw)
+    with respx.mock() as upstream:
+        observed: Final = upstream.post(f"{_BASE}/responses").respond(429, json={"error": "synthetic"})
+        response: Final = await codex_gateway.post(
+            "/backend-api/codex/responses",
+            content=encoded,
+            headers={**_CREDENTIALS, "content-type": "application/json", "content-encoding": encoding},
+        )
+    assert response.status_code == 429, response.text
+    assert json.loads(observed.calls.last.request.content) == payload
+    assert "content-encoding" not in observed.calls.last.request.headers
+    assert MASTER_KEY not in str(observed.calls.last.request.headers)
 
 
 @pytest.mark.asyncio
@@ -268,9 +296,12 @@ async def test_stream_keeps_native_events_ids_usage_and_quota_headers(codex_gate
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["catalog", "stream", "failure"])
+@pytest.mark.parametrize(
+    ("mode", "encoding"),
+    [("catalog", "identity"), ("catalog", "gzip"), ("stream", "identity"), ("failure", "identity"), ("failure", "gzip")],
+)
 async def test_custom_auth_and_callback_copies_cannot_expose_credentials(
-    codex_gateway: httpx.AsyncClient, tmp_path: Path, mode: str
+    codex_gateway: httpx.AsyncClient, tmp_path: Path, mode: str, encoding: str
 ) -> None:
     from litellm.proxy.proxy_server import initialize
 
@@ -285,11 +316,15 @@ async def test_custom_auth_and_callback_copies_cannot_expose_credentials(
     )
     await initialize(config=str(config))
     credentials: Final = {"authorization": _CREDENTIALS["authorization"], "x-gateway-key": f"Bearer {MASTER_KEY}"}
+    raw: Final = b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n' if mode == "stream" else b"{}"
     with respx.mock() as upstream:
         provider: Final = upstream.route(host="chatgpt.com").respond(
             status_code=429 if mode == "failure" else 200,
-            content=b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n' if mode == "stream" else b"{}",
-            headers={"content-type": "text/event-stream" if mode == "stream" else "application/json"},
+            content=gzip.compress(raw, mtime=0) if encoding == "gzip" else raw,
+            headers={
+                "content-type": "text/event-stream" if mode == "stream" else "application/json",
+                "content-encoding": encoding,
+            },
         )
         response: Final = await codex_gateway.request(
             "GET" if mode == "catalog" else "POST",
@@ -303,6 +338,7 @@ async def test_custom_auth_and_callback_copies_cannot_expose_credentials(
         headers_observer.observed.get_nowait() for _ in range(headers_observer.observed.qsize())
     )
     assert response.status_code == (429 if mode == "failure" else 200), response.text
+    assert response.content == raw
     assert response.headers["x-test-headers-observed"] == "1"
     assert {stage for stage, _ in observations} == {"pre", "headers", "attached-request"}
     assert "synthetic-subscription" not in repr(observations)

@@ -25,7 +25,11 @@ def _loaded_httpx_content(message: httpx.Request | httpx.Response) -> bytes:
 def passthrough_logging_response(response: httpx.Response) -> httpx.Response:
     return httpx.Response(
         status_code=response.status_code,
-        headers=response.headers,
+        headers={
+            name: value
+            for name, value in response.headers.items()
+            if name.lower() not in {"content-encoding", "content-length", "transfer-encoding"}
+        },
         content=_loaded_httpx_content(response),
         request=httpx.Request(
             response.request.method,

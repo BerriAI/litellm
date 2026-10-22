@@ -4203,10 +4203,10 @@ class ProxyLogging:
 
         from litellm.proxy.pass_through_endpoints.common_utils import passthrough_logging_response
 
-        callback_response: Final = (
-            passthrough_logging_response(response) if isinstance(response, HTTPXResponse) else response
-        )
         try:
+            callback_response: Final = (
+                passthrough_logging_response(response) if isinstance(response, HTTPXResponse) else response
+            )
             # Build litellm_call_info — normalized routing metadata for callbacks
             litellm_call_info: Final = self._build_litellm_call_info(data=data, response=response)
 

@@ -1,4 +1,6 @@
+import gzip
 import json
+import sys
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -18,6 +20,11 @@ from integration._support.forward_proxy import ForwardProxy, tunnelling_forward_
 from integration._support.process import owned_proxy_process
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import Reply, Request, Wire, wire_server
+
+if sys.version_info >= (3, 14):
+    from compression import zstd
+else:
+    from backports import zstd
 
 _MODEL: Final = "litellm-test-native-unpriced"
 _FALLBACK_MODEL: Final = "litellm-test-native-fallback"
@@ -72,6 +79,8 @@ def _reply(request: Request, cancellation: Event) -> Reply:
         content_type="text/event-stream",
         chunks=(first, last),
         gate_after_first=cancellation if marker.startswith("cancel-") else None,
+        heartbeat=b": keepalive\n\n" if marker.startswith("cancel-") else None,
+        pause_between_chunks=0.05 if marker.startswith("cancel-") else 0,
         headers={"x-request-id": marker, "x-codex-primary-used-percent": "7"},
     )
 
@@ -161,18 +170,23 @@ def test_form_media_type_cannot_authorize_a_different_json_model(codex_rig: Code
 
 
 @pytest.mark.parametrize("encoding", ["zstd", "gzip"])
-def test_encoded_requests_are_rejected_without_upstream_traffic(codex_rig: CodexRig, encoding: str) -> None:
+def test_compressed_denied_models_never_reach_provider(codex_rig: CodexRig, encoding: str) -> None:
     candidate: Final = codex_rig.gateway
     marker: Final = uuid4().hex
     with candidate.scenario() as scenario:
         key: Final = scenario.key(models=[_MODEL])
+        raw: Final = json.dumps({"model": "synthetic-denied-model", "input": marker}).encode()
+        encoded: Final = gzip.compress(raw, mtime=0) if encoding == "gzip" else zstd.compress(raw)
         response: Final = candidate.client.post(
             "/backend-api/codex/responses",
-            json={"model": _MODEL, "input": marker},
-            headers={**_headers(key, f"synthetic-{marker}"), "content-encoding": encoding},
+            content=encoded,
+            headers={
+                **_headers(key, f"synthetic-{marker}"),
+                "content-type": "application/json",
+                "content-encoding": encoding,
+            },
         )
-        assert response.status_code == 415, response.text
-        assert "enable_request_compression = false" in response.json()["detail"]
+        assert response.status_code in (401, 403), response.text
         assert not tuple(
             request for request in codex_rig.provider.drain() if marker in request.headers.get("authorization", "")
         )
@@ -240,8 +254,9 @@ def test_concurrent_callers_rotate_tokens_without_crossing_accounts(codex_rig: C
 
 
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("encoding", ["identity", "gzip", "zstd"])
 def test_native_usage_is_attributed_and_secrets_are_absent_from_logs_and_rows(
-    codex_rig: CodexRig, stream: bool
+    codex_rig: CodexRig, stream: bool, encoding: str
 ) -> None:
     candidate: Final = codex_rig.gateway
     marker: Final = uuid4().hex
@@ -256,12 +271,17 @@ def test_native_usage_is_attributed_and_secrets_are_absent_from_logs_and_rows(
             "stream": stream,
             "custom_body": {"target": "https://untrusted.example/collect"},
         }
+        raw: Final = json.dumps(payload).encode()
+        encoded: Final = (
+            gzip.compress(raw, mtime=0) if encoding == "gzip" else zstd.compress(raw) if encoding == "zstd" else raw
+        )
         response: Final = candidate.client.post(
             "/backend-api/codex/responses",
-            json=payload,
+            content=encoded,
             headers={
                 **_headers(key, subscription),
                 "content-type": "application/json",
+                "content-encoding": encoding,
                 "x-alias": f"Bearer {key}",
                 "x-pass-authorization": f"Bearer {key}",
             },
@@ -371,16 +391,16 @@ def test_client_cancellation_releases_the_keys_parallel_request_reservation(code
             ) as response:
                 assert response.status_code == 200
                 assert marker.encode() in next(response.iter_bytes())
+            followup: Final = eventually(
+                lambda: candidate.client.post(
+                    "/backend-api/codex/responses",
+                    json={"model": _MODEL, "input": marker, "stream": True},
+                    headers=_headers(key, f"synthetic-{marker}"),
+                ),
+                lambda response: response.status_code != 429,
+            )
+            assert followup.status_code == 200, followup.text
+            assert f"resp_{marker}" in followup.text
+            assert eventually(codex_rig.provider.open_connections, lambda count: count == 0) == 0
         finally:
             codex_rig.cancellation.set()
-        followup: Final = eventually(
-            lambda: candidate.client.post(
-                "/backend-api/codex/responses",
-                json={"model": _MODEL, "input": marker, "stream": True},
-                headers=_headers(key, f"synthetic-{marker}"),
-            ),
-            lambda response: response.status_code != 429,
-        )
-        assert followup.status_code == 200, followup.text
-        assert f"resp_{marker}" in followup.text
-        assert eventually(codex_rig.provider.open_connections, lambda count: count == 0) == 0

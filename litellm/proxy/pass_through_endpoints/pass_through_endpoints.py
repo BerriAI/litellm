@@ -1129,7 +1129,6 @@ async def pass_through_request(
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     follow_redirects: bool | None = None,
-    use_custom_headers_only: bool = False,
     response_owner: AsyncExitStack | None = None,
 ) -> Response:
     """
@@ -1179,14 +1178,10 @@ async def pass_through_request(
     #########################################################
     try:
         url = httpx.URL(target)
-        forwarded_headers: Final = (
-            custom_headers
-            if use_custom_headers_only
-            else HttpPassThroughEndpointHelpers.forward_headers_from_request(
-                request_headers=safe_get_request_headers(request).copy(),
-                headers=custom_headers,
-                forward_headers=forward_headers,
-            )
+        forwarded_headers: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
+            request_headers=safe_get_request_headers(request).copy(),
+            headers=custom_headers,
+            forward_headers=forward_headers,
         )
         upstream_headers: Final = _with_trace_context(
             upstream_headers_filter(forwarded_headers),

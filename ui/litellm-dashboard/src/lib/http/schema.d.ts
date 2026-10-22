@@ -1823,7 +1823,7 @@ export interface paths {
         put?: never;
         /**
          * Codex Responses
-         * @description Relay uncompressed ChatGPT subscription Responses over HTTP/SSE. Set features.enable_request_compression = false in Codex. The client owns login and token refresh.
+         * @description Relay ChatGPT subscription Responses over HTTP/SSE using the proxy's shared request decompression. The client owns login and token refresh.
          */
         post: operations["codex_responses_backend_api_codex_responses_post"];
         delete?: never;

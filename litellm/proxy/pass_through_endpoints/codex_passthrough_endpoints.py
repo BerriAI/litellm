@@ -25,7 +25,7 @@ async def validate_codex_request(request: Request) -> None:
     if any(encoding.strip().lower() != "identity" for encoding in request.headers.getlist("content-encoding")):
         raise HTTPException(
             status_code=415,
-            detail="Compressed Codex requests are unsupported. Set features.enable_request_compression = false in Codex.",
+            detail="Unsupported request content encoding. Send identity, gzip, or zstd with proxy decoding enabled.",
         )
     custom_header: Final = general_settings_view().get("litellm_key_header_name")
     gateway_key: Final = request.headers.get("x-litellm-api-key") or (
@@ -73,7 +73,7 @@ async def _relay_codex(
         stream=body.get("stream") is True,
         custom_llm_provider="openai",
         follow_redirects=False,
-        use_custom_headers_only=True,
+        upstream_headers_filter=lambda _: headers,
         response_owner=owner,
     )
 
@@ -95,8 +95,8 @@ async def codex_models(
     "/backend-api/codex/responses",
     tags=["ChatGPT subscription Pass-through", "pass-through"],
     description=(
-        "Relay uncompressed ChatGPT subscription Responses over HTTP/SSE. "
-        "Set features.enable_request_compression = false in Codex. The client owns login and token refresh."
+        "Relay ChatGPT subscription Responses over HTTP/SSE using the proxy's shared request decompression. "
+        "The client owns login and token refresh."
     ),
     openapi_extra={
         "requestBody": {
