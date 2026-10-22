@@ -10,6 +10,7 @@ worker thread, off any event loop — and caches it for the process lifetime.
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import Final
 
 import httpx
@@ -80,6 +81,16 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
         OTLPSpanExporter,
     )
+    from requests.auth import AuthBase
+
+    @dataclass(frozen=True, slots=True)
+    class _AgentOpsBearerAuth(AuthBase):
+        token: str = field(repr=False)
+
+        def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
+            authenticated: Final = request.copy()
+            authenticated.headers["Authorization"] = f"Bearer {self.token}"
+            return authenticated
 
     class _LazyAuthAgentOpsExporter(OTLPSpanExporter):
         """OTLP/HTTP exporter that mints the AgentOps JWT on its first export.
@@ -103,8 +114,8 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
                 return
             try:
                 token: Final = _fetch_agentops_jwt(self._agentops_api_key).get("token")
-                if token:
-                    self._agentops_session.headers["Authorization"] = f"Bearer {token}"
+                if isinstance(token, str) and token:
+                    self._agentops_session.auth = _AgentOpsBearerAuth(token)
             except Exception as e:
                 verbose_logger.debug("AgentOps JWT fetch failed: %s", e)
 

@@ -80,7 +80,17 @@ def test_dynamic_cred_presets_tag_exporter_with_matching_owner(monkeypatch):
         )
 
 
-def test_agentops_exporter_mints_jwt_lazily(requests_mock: Mocker, respx_mock: respx.MockRouter) -> None:
+@pytest.mark.parametrize("global_headers", (None, "Authorization=Basic%20shared"))
+def test_agentops_exporter_mints_jwt_lazily(
+    requests_mock: Mocker,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    global_headers: str | None,
+) -> None:
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_HEADERS", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", raising=False)
+    if global_headers is not None:
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", global_headers)
     auth: Final = respx_mock.post(agentops_mod._AGENTOPS_AUTH_ENDPOINT).respond(200, json={"token": "jwt-xyz"})
     collector: Final = requests_mock.post(_AGENTOPS_ENDPOINT, status_code=200)
     exporter: Final = _build_agentops_exporter(
@@ -99,8 +109,17 @@ def test_agentops_exporter_mints_jwt_lazily(requests_mock: Mocker, respx_mock: r
         exporter.shutdown()
 
 
-def test_agentops_exporter_tolerates_fetch_failure(requests_mock: Mocker, respx_mock: respx.MockRouter) -> None:
-    auth: Final = respx_mock.post(agentops_mod._AGENTOPS_AUTH_ENDPOINT).respond(500)
+@pytest.mark.parametrize(("status", "payload"), ((500, {}), (200, {}), (200, {"token": 123})))
+def test_agentops_exporter_tolerates_fetch_failure(
+    requests_mock: Mocker,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    payload: dict[str, object],
+) -> None:
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_HEADERS", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", raising=False)
+    auth: Final = respx_mock.post(agentops_mod._AGENTOPS_AUTH_ENDPOINT).respond(status, json=payload)
     collector: Final = requests_mock.post(_AGENTOPS_ENDPOINT, status_code=200)
     exporter: Final = _build_agentops_exporter(
         ExporterSpec(kind=_AGENTOPS_EXPORTER_KIND, endpoint=_AGENTOPS_ENDPOINT, options={"api_key": "ak"})
