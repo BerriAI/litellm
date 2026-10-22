@@ -7704,7 +7704,7 @@ def gemini_mock_post_streaming(url, **kwargs):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "text/event-stream"}
-    mock_response.iter_lines = MagicMock(return_value=stream_response())
+    mock_response.iter_text = MagicMock(return_value=stream_response())
 
     return mock_response
 
