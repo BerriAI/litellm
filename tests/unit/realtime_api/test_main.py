@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import TracebackType
-from typing import ClassVar, Final
+from typing import ClassVar, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -37,6 +37,9 @@ from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import with_resolved_session_model
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.realtime import RealtimeQueryParams
+from litellm.proxy.litellm_pre_call_utils import _apply_resolved_guardrails_to_metadata
+from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyMatchContext
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 
 
 @pytest.fixture
@@ -600,7 +603,11 @@ async def test_bearer_health_check_sends_the_secret_behind_an_oidc_credential(
     monkeypatch.setattr(
         litellm,
         "credential_list",
-        [CredentialItem(credential_name="voice-sa", credential_values={"api_key": f"oidc/file/{token}"}, credential_info={})],
+        [
+            CredentialItem(
+                credential_name="voice-sa", credential_values={"api_key": f"oidc/file/{token}"}, credential_info={}
+            )
+        ],
     )
     connect: Final = _CapturingConnect()
     with patch("websockets.connect", connect):
@@ -1597,10 +1604,13 @@ async def test_openai_realtime_http_routes_send_the_federated_bearer_for_a_keyle
 @pytest.mark.asyncio
 @pytest.mark.parametrize("flow", ("client_secret", "calls"))
 async def test_translation_http_routes_preserve_explicit_azure_provider(flow: str) -> None:
-    expected_path: Final = "/openai/v1/realtime/translations/" + {
-        "client_secret": "client_secrets",
-        "calls": "calls",
-    }[flow]
+    expected_path: Final = (
+        "/openai/v1/realtime/translations/"
+        + {
+            "client_secret": "client_secrets",
+            "calls": "calls",
+        }[flow]
+    )
 
     def send_response(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "azure-deployment.example"
@@ -1923,24 +1933,25 @@ class _RecordingClientWebSocket:
         self.close_code = code
 
 
-def _block_every_request_with_a_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
+def _block_every_request_with_a_guardrail(
+    monkeypatch: pytest.MonkeyPatch, event_hook: GuardrailEventHooks = GuardrailEventHooks.pre_call
+) -> None:
     monkeypatch.setattr(
         litellm,
         "callbacks",
-        [
-            CustomGuardrail(
-                guardrail_name="translation-blocker", event_hook=GuardrailEventHooks.pre_call, default_on=True
-            )
-        ],
+        [CustomGuardrail(guardrail_name="translation-blocker", event_hook=event_hook, default_on=True)],
     )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ("translation_client_secrets", "translation_calls"))
+@pytest.mark.parametrize("event_hook", (GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call))
 async def test_translation_http_routes_refuse_a_guarded_request_before_any_upstream_call(
-    route: str, monkeypatch: pytest.MonkeyPatch
+    route: str,
+    monkeypatch: pytest.MonkeyPatch,
+    event_hook: GuardrailEventHooks,
 ) -> None:
-    _block_every_request_with_a_guardrail(monkeypatch)
+    _block_every_request_with_a_guardrail(monkeypatch, event_hook)
     upstream: Final = _UpstreamThatMustNotBeCalled()
 
     with pytest.raises(litellm.BadRequestError, match=TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE) as raised:
@@ -1970,10 +1981,15 @@ _DEFAULT_ON_GUARDRAIL_OPT_OUTS: Final = (
     (("translation_client_secrets", "client_secrets"), ("translation_calls", "calls")),
 )
 @pytest.mark.parametrize("key_metadata", _DEFAULT_ON_GUARDRAIL_OPT_OUTS)
+@pytest.mark.parametrize("event_hook", (GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call))
 async def test_translation_http_routes_serve_a_key_opted_out_of_the_default_on_guardrail(
-    route: str, path: str, key_metadata: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+    route: str,
+    path: str,
+    key_metadata: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    event_hook: GuardrailEventHooks,
 ) -> None:
-    _block_every_request_with_a_guardrail(monkeypatch)
+    _block_every_request_with_a_guardrail(monkeypatch, event_hook)
     gateway: Final = _GatewayThatRecordsTheUrl()
 
     await _realtime_http_route_call(
@@ -2009,10 +2025,12 @@ async def test_translation_http_routes_refuse_a_provider_other_than_openai_and_a
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("event_hook", (GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call))
 async def test_translation_websocket_closes_1008_for_a_guarded_request_before_the_upstream_connect(
     monkeypatch: pytest.MonkeyPatch,
+    event_hook: GuardrailEventHooks,
 ) -> None:
-    _block_every_request_with_a_guardrail(monkeypatch)
+    _block_every_request_with_a_guardrail(monkeypatch, event_hook)
     websocket: Final = _RecordingClientWebSocket()
     connect: Final = _CapturingConnect()
 
@@ -2034,10 +2052,13 @@ async def test_translation_websocket_closes_1008_for_a_guarded_request_before_th
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("key_metadata", _DEFAULT_ON_GUARDRAIL_OPT_OUTS)
+@pytest.mark.parametrize("event_hook", (GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call))
 async def test_translation_websocket_opens_for_a_key_opted_out_of_the_default_on_guardrail(
-    key_metadata: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+    key_metadata: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    event_hook: GuardrailEventHooks,
 ) -> None:
-    _block_every_request_with_a_guardrail(monkeypatch)
+    _block_every_request_with_a_guardrail(monkeypatch, event_hook)
     websocket: Final = _RecordingClientWebSocket()
     connect: Final = _CapturingConnect()
 
@@ -2093,17 +2114,17 @@ class _NativeLifecycleGuardrail(CustomGuardrail):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("guardrail_class", "event_hook"),
-    ((_NativeLifecycleGuardrail, GuardrailEventHooks.pre_call), (CustomGuardrail, GuardrailEventHooks.post_call)),
-)
-async def test_translation_websocket_opens_under_a_default_on_guardrail_the_realtime_runner_skips(
-    guardrail_class: type[CustomGuardrail], event_hook: GuardrailEventHooks, monkeypatch: pytest.MonkeyPatch
+async def test_translation_websocket_opens_under_a_native_pre_call_guardrail(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         litellm,
         "callbacks",
-        [guardrail_class(guardrail_name="runner-skipped", event_hook=event_hook, default_on=True)],
+        [
+            _NativeLifecycleGuardrail(
+                guardrail_name="runner-skipped", event_hook=GuardrailEventHooks.pre_call, default_on=True
+            )
+        ],
     )
     websocket: Final = _RecordingClientWebSocket()
     connect: Final = _CapturingConnect()
@@ -2140,3 +2161,71 @@ async def test_translation_websocket_closes_1008_for_a_provider_other_than_opena
     assert [json.loads(event)["error"]["message"] for event in websocket.sent] == [
         "Realtime translation supports only the azure, azure_ai, openai providers, got xai"
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("translation_client_secrets", "translation_calls", "websocket"))
+@pytest.mark.parametrize("mode", ("pre_call", "post_call"))
+@pytest.mark.parametrize("metadata_bucket", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("selected,condition_matches", ((True, True), (True, False), (False, True)))
+async def test_translation_rejects_only_applicable_policy_pipelines(
+    route: str,
+    mode: Literal["pre_call", "post_call"],
+    metadata_bucket: str,
+    selected: bool,
+    condition_matches: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    request_data: Final[dict[str, object]] = {"metadata": {}, "litellm_metadata": {}}
+    _apply_resolved_guardrails_to_metadata(
+        data=request_data,
+        metadata_variable_name=metadata_bucket,
+        context=PolicyMatchContext(model="translation-deployment"),
+        policy_names=["translation-policy"] if selected else [],
+        policies={
+            "translation-policy": Policy(
+                condition=PolicyCondition(model="translation-deployment" if condition_matches else "unrelated-model"),
+                pipeline=GuardrailPipeline(mode=mode, steps=[PipelineStep(guardrail="speech-policy", on_fail="block")]),
+            )
+        },
+    )
+    metadata: Final = realtime_main._build_litellm_metadata(request_data)
+    blocked: Final = selected and condition_matches
+    if route == "websocket":
+        websocket: Final = _RecordingClientWebSocket()
+        connect: Final = _CapturingConnect()
+        with patch("websockets.connect", connect):
+            await realtime_main._arealtime.__wrapped__(
+                model="openai/gpt-realtime-translate",
+                websocket=websocket,
+                api_key="fake-key",
+                realtime_mode="translation",
+                litellm_logging_obj=_realtime_websocket_logging(),
+                litellm_metadata=metadata,
+            )
+        if blocked:
+            assert connect.url is None
+            assert websocket.close_code == 1008
+            assert TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE in websocket.sent[0]
+        else:
+            assert connect.url == "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
+        return
+    upstream: Final = _UpstreamThatMustNotBeCalled()
+    call: Final = _realtime_http_route_call(
+        route,
+        _realtime_http_logging(route),
+        custom_llm_provider="openai",
+        api_base="https://upstream.example",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
+        metadata=metadata,
+    )
+    if blocked:
+        with pytest.raises(litellm.BadRequestError, match=TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE) as raised:
+            await call
+        assert raised.value.status_code == 400
+        assert upstream.called is False
+    else:
+        response: Final = await call
+        assert response.status_code == 200
+        assert upstream.called is True

@@ -3397,7 +3397,7 @@ async def test_translation_rejects_applicable_guardrails_before_forwarding_audio
     await streaming.bidirectional_forward()
 
     messages: Final = tuple(json.loads(call.args[0]) for call in client.send_text.await_args_list)
-    if (default_on or requested) and event_hook is not GuardrailEventHooks.post_call:
+    if default_on or requested:
         assert messages[0]["error"]["type"] == "guardrail_error"
         client.close.assert_awaited_once_with(
             code=1008, reason="Translation sessions cannot enforce configured realtime guardrails"

@@ -48,7 +48,7 @@ from ..litellm_core_utils.realtime_errors import realtime_error_event, websocket
 from ..litellm_core_utils.realtime_streaming import (
     TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE,
     client_websocket_scope,
-    realtime_guardrails_apply,
+    translation_guardrails_apply,
 )
 from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
@@ -164,7 +164,7 @@ def _translation_rejection(
 ) -> _TranslationRejection | None:
     if custom_llm_provider not in supported_providers:
         return _TranslationProviderUnsupported(provider=custom_llm_provider, supported_providers=supported_providers)
-    if realtime_guardrails_apply({"litellm_metadata": dict(litellm_metadata)}):
+    if translation_guardrails_apply({"litellm_metadata": dict(litellm_metadata)}):
         return _TranslationGuardrailsUnsupported()
     return None
 

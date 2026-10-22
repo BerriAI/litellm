@@ -327,6 +327,24 @@ def _realtime_runner_guardrail(
     return callback if runs else None
 
 
+def translation_guardrails_apply(request_data: Mapping[str, object]) -> bool:
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    if _guardrails_run_for_event_hooks(request_data, (GuardrailEventHooks.post_call,)):
+        return True
+    if any(
+        isinstance(bucket, Mapping) and "_guardrail_pipelines" in bucket
+        for bucket in (request_data.get("metadata"), request_data.get("litellm_metadata"))
+    ):
+        from litellm.proxy.utils import pipeline_managed_guardrail_names
+
+        if pipeline_managed_guardrail_names(request_data, "pre_call") or pipeline_managed_guardrail_names(
+            request_data, "post_call"
+        ):
+            return True
+    return realtime_guardrails_apply(request_data)
+
+
 def realtime_guardrails_apply(request_data: Mapping[str, object]) -> bool:
     from litellm.types.guardrails import GuardrailEventHooks
 
@@ -2039,7 +2057,7 @@ class RealTimeStreaming:
             return ClientLoopExit.CLIENT_DISCONNECTED
 
     async def bidirectional_forward(self) -> None:
-        if self._is_translation_session and self._has_realtime_guardrails():
+        if self._is_translation_session and translation_guardrails_apply(self.request_data):
             await self.websocket.send_text(
                 realtime_error_event(TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE, error_type="guardrail_error")
             )
