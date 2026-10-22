@@ -50,6 +50,16 @@ describe("isUserAgentTag", () => {
 });
 
 describe("topAgents", () => {
+  it("recognises Moyai as an agent and keeps it in the agent group", () => {
+    const agents = topAgents([row("User-Agent: Moyai", 5, 900), row("User-Agent: python", 10, 1000)]);
+    const agentGroup = agents.filter((agent) => agent.kind === "agent");
+    const sdkGroup = agents.filter((agent) => agent.kind === "sdk");
+    const moyai = { id: "moyai", label: "Moyai", kind: "agent", tokens: 900 };
+    expect(agentGroup[0]).toMatchObject(moyai);
+    expect(agentGroup[0].logo).toBeTruthy();
+    expect(sdkGroup[0]).toMatchObject({ id: "python", kind: "sdk" });
+  });
+
   it("counts a product from its bare rollup row, not again from its versioned children", () => {
     const agents = topAgents([
       row("User-Agent: python", 100, 1000),
