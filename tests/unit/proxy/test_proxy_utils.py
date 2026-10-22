@@ -9,6 +9,11 @@ from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.caching.caching import Cache, DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.types.caching import DEFAULT_CACHING_SUPPORTED_CALL_TYPES, CacheScope, CachingSupportedCallTypes
+from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -28,6 +33,126 @@ from litellm.router import Router
 from pydantic import ValidationError
 
 pytestmark = pytest.mark.xdist_group("proxy_heavy")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "supported_call_types"),
+    [
+        ("acompletion", None),
+        ("aembedding", None),
+        ("aresponses", None),
+        ("anthropic_messages", None),
+        ("aresponses", ("responses",)),
+    ],
+)
+async def test_pre_call_hook_scopes_cache_without_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+    call_type: CallTypesLiteral,
+    supported_call_types: tuple[CachingSupportedCallTypes, ...] | None,
+) -> None:
+    from litellm.proxy.utils import ProxyLogging
+
+    cache: Final = Cache(
+        type="local",
+        supported_call_types=list(supported_call_types or DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
+    )
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    logger: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    request: Final = {"model": "test-model", "input": "cached input"}
+    first: Final = await logger.pre_call_hook(
+        UserAPIKeyAuth(api_key="first-key", team_id="first-team"),
+        dict(request),
+        call_type,
+    )
+    same_team: Final = await logger.pre_call_hook(
+        UserAPIKeyAuth(api_key="second-key", team_id="first-team"),
+        dict(request),
+        call_type,
+    )
+    other_team: Final = await logger.pre_call_hook(
+        UserAPIKeyAuth(api_key="third-key", team_id="second-team"),
+        dict(request),
+        call_type,
+    )
+    await cache.async_add_cache({"output": "first team's response"}, **first)
+
+    assert await cache.async_get_cache(**same_team) == {"output": "first team's response"}
+    assert await cache.async_get_cache(**other_team) is None
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_enforces_scope_after_allowed_cache_control_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
+    from litellm.proxy.utils import ProxyLogging
+
+    cache: Final = Cache(type="local", cache_scope=CacheScope.KEY)
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(litellm, "callbacks", [PROXY_CacheControlCheck()])
+    logger: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    auth: Final = UserAPIKeyAuth(api_key="first-key", allowed_cache_controls=["ttl"])
+    request: Final = {
+        "model": "test-model",
+        "input": "cached input",
+        "cache": {"ttl": 60},
+    }
+    first: Final = await logger.pre_call_hook(auth, dict(request), "acompletion")
+    other_key: Final = await logger.pre_call_hook(
+        UserAPIKeyAuth(api_key="second-key", allowed_cache_controls=["ttl"]),
+        dict(request),
+        "acompletion",
+    )
+    await cache.async_add_cache({"output": "first key's response"}, **first)
+
+    assert await cache.async_get_cache(**first) == {"output": "first key's response"}
+    assert await cache.async_get_cache(**other_key) is None
+    with pytest.raises(HTTPException, match="Not allowed to set no-cache"):
+        await logger.pre_call_hook(auth, {**request, "cache": {"no-cache": True}}, "acompletion")
+
+
+class _ReplaceRequestCache(CustomLogger):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
+        return {
+            **data,
+            "cache": {"namespace": "shared-by-hook"},
+            "cache_key": "shared-by-hook",
+        }
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_scopes_cache_after_a_callback_replaces_cache_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.utils import ProxyLogging
+
+    cache: Final = Cache(type="local", cache_scope=CacheScope.TEAM)
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(litellm, "callbacks", [_ReplaceRequestCache()])
+    logger: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    request: Final = {"model": "test-model", "input": "cached input"}
+    first: Final = await logger.pre_call_hook(
+        UserAPIKeyAuth(api_key="first-key", team_id="first-team"),
+        dict(request),
+        "acompletion",
+    )
+    other_team: Final = await logger.pre_call_hook(
+        UserAPIKeyAuth(api_key="second-key", team_id="second-team"),
+        dict(request),
+        "acompletion",
+    )
+    await cache.async_add_cache({"output": "first team's response"}, **first)
+
+    assert await cache.async_get_cache(**first) == {"output": "first team's response"}
+    assert await cache.async_get_cache(**other_team) is None
 
 
 @pytest.fixture

@@ -188,7 +188,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.routing_groups import parse_routing_groups
-from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.caching import CacheScope, RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     CountContextManagement,
@@ -6217,7 +6217,12 @@ class ProxyConfig:
         if "default_redis_ttl" in cache_params:
             litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
-        litellm.cache = Cache(**cache_params)
+        cache_config: Final = TypeAdapter(Mapping[str, object]).validate_python(cache_params)
+        scope: Final = CacheScope(cache_config.get("cache_scope", CacheScope.TEAM))
+        litellm.cache = Cache(
+            cache_scope=scope,
+            **{key: cache_params[key] for key in cache_config if key != "cache_scope"},
+        )
 
         resolved_usage_cache = redis_usage_cache
         cache_backend: Final = litellm.cache.cache if litellm.cache is not None else None

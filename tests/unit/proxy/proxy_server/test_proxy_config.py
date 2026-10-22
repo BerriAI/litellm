@@ -28,9 +28,9 @@ from prisma.errors import DataError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
+from litellm.caching.cache_scope import apply_cache_scope
+from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings, UserAPIKeyAuth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -45,6 +45,7 @@ from litellm.proxy.proxy_server import (
 )
 from litellm.proxy.utils import evict_config_param
 from litellm.tracing.config import is_lens_tracing_enabled
+from litellm.types.router import Deployment, LiteLLM_Params
 
 from .conftest import normalize
 
@@ -1654,10 +1655,41 @@ def test_ProxyConfig__init_cache_sets_litellm_cache(monkeypatch):
     }
 
 
-def test_ProxyConfig__init_cache_invalid_params_raises():
-    pc = ProxyConfig()
-    with pytest.raises(AttributeError):
-        pc._init_cache(cache_params={"type": "this-cache-type-does-not-exist"})
+@pytest.mark.parametrize(
+    ("scope", "same_team_hits", "other_team_hits"),
+    [("global", True, True), ("team", True, False), ("key", False, False)],
+)
+def test_proxy_config_serialized_cache_scope_controls_sharing(
+    monkeypatch: pytest.MonkeyPatch, scope: str, same_team_hits: bool, other_team_hits: bool
+) -> None:
+    monkeypatch.setattr(litellm, "cache", None)
+    ProxyConfig().init_cache(cache_params={"type": "local", "cache_scope": scope})
+    cache: Final = litellm.cache
+    assert cache is not None
+    request: Final = {"model": "cache-test-model", "messages": [{"role": "user", "content": "cached prompt"}]}
+    response: Final = {"answer": "cached response"}
+    first: Final = apply_cache_scope(request, UserAPIKeyAuth(api_key="key-a", team_id="team-a"), cache)
+    same_team: Final = apply_cache_scope(request, UserAPIKeyAuth(api_key="key-b", team_id="team-a"), cache)
+    other_team: Final = apply_cache_scope(request, UserAPIKeyAuth(api_key="key-c", team_id="team-b"), cache)
+
+    cache.add_cache(response, **first)
+
+    assert cache.get_cache(**first) == response
+    assert cache.get_cache(**same_team) == (response if same_team_hits else None)
+    assert cache.get_cache(**other_team) == (response if other_team_hits else None)
+
+
+@pytest.mark.parametrize(
+    ("cache_params", "error_type"),
+    [
+        ({"type": "this-cache-type-does-not-exist"}, AttributeError),
+        ({"type": "local", "cache_scope": "unsupported-scope"}, ValueError),
+    ],
+)
+def test_ProxyConfig__init_cache_invalid_params_raises(cache_params: dict[str, str], error_type: type[Exception]) -> None:
+    pc: Final = ProxyConfig()
+    with pytest.raises(error_type):
+        pc._init_cache(cache_params=cache_params)
 
 
 # ---------------------------------------------------------------------------

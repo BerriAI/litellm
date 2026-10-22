@@ -4,10 +4,18 @@ import asyncio
 from collections.abc import Sequence
 from typing import Final
 
+import httpx
 import pytest
+import respx
 
 import litellm
-from litellm.proxy.common_utils.semantic_text_index import EmbeddingFailed, SemanticTextIndex, Vector
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.semantic_text_index import EmbeddingFailed, SemanticTextIndex, Vector, router_embedder
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.caching import LiteLLMCacheType
 
 QUERY: Final = "weather query"
 TEXTS: Final = (
@@ -19,6 +27,68 @@ TEXTS: Final = (
     "valid four",
     "valid five",
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_auth", "second_auth", "shares_hit"),
+    [
+        (UserAPIKeyAuth(api_key="key-a", team_id="team-a"), UserAPIKeyAuth(api_key="key-b", team_id="team-a"), True),
+        (UserAPIKeyAuth(api_key="key-a", team_id="team-a"), UserAPIKeyAuth(api_key="key-b", team_id="team-b"), False),
+        (UserAPIKeyAuth(), UserAPIKeyAuth(), False),
+    ],
+)
+async def test_router_embedder_enforces_cache_scope_and_missing_identity_controls(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    first_auth: UserAPIKeyAuth,
+    second_auth: UserAPIKeyAuth,
+    shares_hit: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://embedding.test/v1/embeddings").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [{"object": "embedding", "embedding": vector, "index": 0}],
+                    "model": "text-embedding-3-small",
+                    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+                },
+            )
+            for vector in ([1.0, 0.0], [0.0, 1.0], [-1.0, 0.0])
+        ]
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "search-embedding",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_base": "https://embedding.test/v1",
+                    "api_key": "test-provider-key",
+                },
+            }
+        ],
+        cache_responses=True,
+        num_retries=0,
+    )
+    logger: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    legacy: Final = await router.aembedding(model="search-embedding", input=[QUERY])
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+
+    first: Final = await router_embedder(router, "search-embedding", first_auth, logger)((QUERY,))
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    second: Final = await router_embedder(router, "search-embedding", second_auth, logger)((QUERY,))
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    legacy_again: Final = await router.aembedding(model="search-embedding", input=[QUERY])
+
+    assert first == ((0.0, 1.0),)
+    assert second == (first if shares_hit else ((-1.0, 0.0),))
+    assert legacy_again.model_dump()["data"] == legacy.model_dump()["data"]
 
 
 class ContextWindowEmbedder:

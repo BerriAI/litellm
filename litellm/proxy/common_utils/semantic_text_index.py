@@ -70,6 +70,7 @@ class _EmbeddingRequest(LiteLLMBaseModel):
     model: str
     input: tuple[str, ...]
     metadata: dict[str, object]  # mutable-ok: the router mutates the metadata dict it is handed
+    cache: Mapping[str, object] | None = None
 
 
 def cosine_similarity(left: Vector, right: Vector) -> float:
@@ -107,6 +108,7 @@ def router_embedder(
             model=processed.model,
             input=list(processed.input),
             metadata=processed.metadata,
+            cache=dict(processed.cache or {}),
         )
         return tuple(item.embedding for item in _EmbeddingData.model_validate(response.model_dump()).data)
 
