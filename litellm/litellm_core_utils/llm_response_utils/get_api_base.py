@@ -18,8 +18,22 @@ def _api_base_without_login(provider: str) -> str | None:
     return None
 
 
-def _provider_default_api_base(model: str, custom_llm_provider: str | None, stream: bool) -> str | None:
+def _provider_default_api_base(
+    model: str,
+    custom_llm_provider: str | None,
+    stream: bool,
+    extra_params: object = None,
+) -> str | None:
     if custom_llm_provider == "gemini":
+        from litellm.responses.bridge_check import should_route_to_interactions_api
+
+        if should_route_to_interactions_api(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            optional_params=extra_params,
+        ):
+            suffix: Final = "?alt=sse" if stream else ""
+            return f"https://generativelanguage.googleapis.com/v1beta/interactions{suffix}"
         action: Final = "streamGenerateContent" if stream else "generateContent"
         return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{action}"
     if custom_llm_provider == "openai":
@@ -104,10 +118,22 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
                 partner=VertexPartnerProvider.claude,
             )
         else:
+            from litellm.responses.bridge_check import should_route_to_interactions_api
+
+            if should_route_to_interactions_api(
+                model=model,
+                custom_llm_provider=custom_llm_provider or "vertex_ai",
+                optional_params=extra_params,
+            ):
+                sse_suffix: Final = "?alt=sse" if stream else ""
+                return (
+                    f"https://aiplatform.googleapis.com/v1beta1/projects/{_optional_params.vertex_project}"
+                    f"/locations/{_optional_params.vertex_location}/interactions{sse_suffix}"
+                )
             if stream:
                 _api_base = f"{_optional_params.vertex_location}-aiplatform.googleapis.com/v1/projects/{_optional_params.vertex_project}/locations/{_optional_params.vertex_location}/publishers/google/models/{model}:streamGenerateContent"
             else:
                 _api_base = f"{_optional_params.vertex_location}-aiplatform.googleapis.com/v1/projects/{_optional_params.vertex_project}/locations/{_optional_params.vertex_location}/publishers/google/models/{model}:generateContent"
         return _api_base
 
-    return _provider_default_api_base(model, custom_llm_provider, stream)
+    return _provider_default_api_base(model, custom_llm_provider, stream, extra_params)

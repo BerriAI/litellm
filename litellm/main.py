@@ -124,7 +124,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.reasoning_effort_capability import (
     model_group_from_metadata,
-    reasoning_effort_needs_allowing,
     resolve_chat_reasoning,
 )
 from litellm.litellm_core_utils.request_timeout_resolver import (
@@ -1330,6 +1329,9 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
+    dispatch_interactions_bridge,
+    resolve_bridge_allowed_openai_params,
+    should_route_to_interactions_api,
     str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -5602,6 +5604,9 @@ def completion(
     # model whose model_cost mode is "responses" but whose provider has no
     # Responses API config (get_provider_responses_api_config -> None).
     skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
+    skip_interactions_api_bridge: Final = kwargs.pop(  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # untyped kwargs dict
+        "_skip_interactions_api_bridge", False
+    )
 
     control_options: Final = _resolve_control_options(kwargs, model)
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
@@ -5969,16 +5974,22 @@ def completion(
         bridges_to_responses_api: Final = (
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
-        allowed_openai_params: Final[list[str] | None] = (
-            [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
-            if bridges_to_responses_api
-            or reasoning_effort_needs_allowing(
-                chat_reasoning.effort,
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                base_model=base_model if isinstance(base_model, str) else None,
-            )
-            else kwargs.get("allowed_openai_params")
+        bridges_to_interactions_api: Final = should_route_to_interactions_api(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            optional_params=provider_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped provider_params
+            litellm_params=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs
+            deployment_model_info=model_info,  # pyright: ignore[reportUnknownArgumentType]  # untyped model_info
+            skip_bridge=skip_interactions_api_bridge,  # pyright: ignore[reportUnknownArgumentType]  # untyped skip flag
+        )
+        allowed_openai_params: Final = resolve_bridge_allowed_openai_params(
+            raw_allowed=kwargs.get("allowed_openai_params"),  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # untyped kwargs
+            bridges_to_responses_api=bool(bridges_to_responses_api),  # pyright: ignore[reportUnknownArgumentType]  # untyped responses_api_model_info
+            bridges_to_interactions_api=bridges_to_interactions_api,
+            effort=chat_reasoning.effort,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            base_model=base_model,  # pyright: ignore[reportUnknownArgumentType]  # untyped base_model
         )
         optional_param_args: Final = {
             "functions": functions,
@@ -6337,6 +6348,24 @@ def completion(
             and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(_azure_detection_model)
         ):
             optional_params, _ = strip_reasoning_summary_aliases_from_optional_params(optional_params)
+        elif bridges_to_interactions_api:
+            return dispatch_interactions_bridge(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
+                model=model,
+                messages=messages,  # pyright: ignore[reportUnknownArgumentType]  # untyped messages local
+                headers=headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped headers local
+                model_response=model_response,
+                api_key=api_key,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_key local
+                api_base=api_base,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_base local
+                acompletion=acompletion,  # pyright: ignore[reportUnknownArgumentType]  # untyped acompletion local
+                logging_obj=logging,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging local
+                processed_params=processed_non_default_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped params local
+                stream_options=stream_options,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream_options local
+                litellm_params=litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped litellm_params local
+                timeout=timeout,
+                client=client,  # pyright: ignore[reportUnknownArgumentType]  # untyped client local
+                custom_llm_provider=custom_llm_provider,
+                stream=stream,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream local
+            )
 
         _dispatch_ctx: Final = CompletionDispatchContext(
             _azure_detection_model=_azure_detection_model,
