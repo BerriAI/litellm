@@ -10,6 +10,7 @@ publish = false
 litellm-auth.workspace = true
 futures-util.workspace = true
 litellm-http.workspace = true
+litellm-layered.workspace = true
 litellm-inference.workspace = true
 litellm-secrets.workspace = true
 tokio.workspace = true

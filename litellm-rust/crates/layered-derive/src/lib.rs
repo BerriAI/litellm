@@ -94,7 +94,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
             .read
             .clone()
             .map_or_else(|| quote!(#layered::read::parsed), |read| quote!(#read));
-        quote!(#ident: #private::from_env(env, &[#(#names),*], #blank_is_unset, #read)?)
+        quote!(#ident: #layered::read_env(env, &[#(#names),*], #blank_is_unset, #read)?)
     });
     let param_fields = fields.iter().map(|field| {
         let LayeredField { ident, ty, .. } = field;

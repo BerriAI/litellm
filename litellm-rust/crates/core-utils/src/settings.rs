@@ -53,17 +53,6 @@ pub fn resolve_non_empty(
         })
 }
 
-pub trait Layer: Default {
-    fn or(self, lower: Self) -> Self;
-}
-
-pub fn merge<L: Layer>(highest_precedence_first: impl IntoIterator<Item = L>) -> L {
-    highest_precedence_first
-        .into_iter()
-        .reduce(L::or)
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,50 +102,5 @@ mod tests {
         assert_eq!(env.parsed::<u32>("WORD"), None);
         assert_eq!(env.parsed::<f64>("FRACTION"), Some(0.5));
         assert_eq!(env.parsed::<u32>("ABSENT"), None);
-    }
-
-    #[derive(Debug, Default, PartialEq)]
-    struct Pair {
-        first: Option<u8>,
-        second: Option<u8>,
-    }
-
-    impl Layer for Pair {
-        fn or(self, lower: Self) -> Self {
-            Self {
-                first: self.first.or(lower.first),
-                second: self.second.or(lower.second),
-            }
-        }
-    }
-
-    #[test]
-    fn merge_takes_each_field_from_the_highest_layer_that_sets_it() {
-        let merged = merge([
-            Pair {
-                first: Some(1),
-                second: None,
-            },
-            Pair {
-                first: Some(2),
-                second: Some(2),
-            },
-            Pair {
-                first: Some(3),
-                second: Some(3),
-            },
-        ]);
-        assert_eq!(
-            merged,
-            Pair {
-                first: Some(1),
-                second: Some(2),
-            }
-        );
-    }
-
-    #[test]
-    fn merging_no_layers_yields_the_empty_layer() {
-        assert_eq!(merge(Vec::<Pair>::new()), Pair::default());
     }
 }

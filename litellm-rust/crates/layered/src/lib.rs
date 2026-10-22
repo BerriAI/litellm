@@ -22,6 +22,26 @@ pub fn merge<P: Partial>(highest_precedence_first: impl IntoIterator<Item = P>) 
         .unwrap_or_default()
 }
 
+pub fn read_env<T>(
+    env: &(impl Lookup + ?Sized),
+    names: &'static [&'static str],
+    blank_is_unset: bool,
+    read: impl Fn(&str) -> Result<Option<T>, Invalid>,
+) -> Result<Option<T>, Error> {
+    for name in names {
+        let Some(value) = env.get(name) else {
+            continue;
+        };
+        if blank_is_unset && value.trim().is_empty() {
+            continue;
+        }
+        if let Some(value) = read(&value).map_err(|invalid| Error { name, invalid })? {
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
 #[doc(hidden)]
 pub mod __private {
     use std::fmt;
@@ -30,28 +50,6 @@ pub mod __private {
 
     pub use serde;
     pub use serde_json;
-
-    use crate::{Error, Invalid, Lookup};
-
-    pub fn from_env<T>(
-        env: &(impl Lookup + ?Sized),
-        names: &'static [&'static str],
-        blank_is_unset: bool,
-        read: impl Fn(&str) -> Result<Option<T>, Invalid>,
-    ) -> Result<Option<T>, Error> {
-        for name in names {
-            let Some(value) = env.get(name) else {
-                continue;
-            };
-            if blank_is_unset && value.trim().is_empty() {
-                continue;
-            }
-            if let Some(value) = read(&value).map_err(|invalid| Error { name, invalid })? {
-                return Ok(Some(value));
-            }
-        }
-        Ok(None)
-    }
 
     pub fn from_litellm_params<T>(
         params: &Map<String, Value>,
@@ -111,8 +109,8 @@ mod tests {
     }
 
     fn window_from_env(env: &(impl Lookup + ?Sized)) -> Result<Option<(u32, u32)>, Error> {
-        let start = __private::from_env(env, &["WINDOW_START"], false, read::required::<u32>)?;
-        let end = __private::from_env(env, &["WINDOW_END"], false, read::required::<u32>)?;
+        let start = read_env(env, &["WINDOW_START"], false, read::required::<u32>)?;
+        let end = read_env(env, &["WINDOW_END"], false, read::required::<u32>)?;
         Ok(start.zip(end))
     }
 
