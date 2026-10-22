@@ -406,6 +406,19 @@ class ChunkProcessor:
             None,
         )
 
+    @staticmethod
+    def _get_native_finish_reason_from_chunks(chunks: Sequence["_BaseChunk"]) -> str | None:
+        for chunk in reversed(chunks):
+            choices = chunk.get("choices")
+            if not choices:
+                continue
+            provider_specific_fields = getattr(choices[0], "provider_specific_fields", None)
+            if provider_specific_fields and "native_finish_reason" in provider_specific_fields:
+                native_finish_reason = provider_specific_fields["native_finish_reason"]
+                if isinstance(native_finish_reason, str):
+                    return native_finish_reason
+        return None
+
     def build_base_response(self, chunks: Sequence["_BaseChunk"]) -> ModelResponse:
         chunk = self.first_chunk
         id: Final = ChunkProcessor._get_chunk_id(chunks)
@@ -428,6 +441,8 @@ class ChunkProcessor:
                     chunk_finish_reason = chunk["choices"][0]["finish_reason"]
                 if chunk_finish_reason is not None:
                     finish_reason = chunk_finish_reason
+
+        native_finish_reason: Final = ChunkProcessor._get_native_finish_reason_from_chunks(chunks)
 
         # Initialize the response dictionary
         response = ModelResponse(
@@ -452,6 +467,11 @@ class ChunkProcessor:
                         "index": 0,
                         "message": {"role": role, "content": ""},
                         "finish_reason": finish_reason,
+                        **(
+                            {"provider_specific_fields": {"native_finish_reason": native_finish_reason}}
+                            if native_finish_reason is not None
+                            else {}
+                        ),
                     }
                 ],
                 "usage": {

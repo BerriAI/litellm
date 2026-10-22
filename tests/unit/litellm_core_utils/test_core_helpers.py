@@ -32,7 +32,15 @@ from litellm.litellm_core_utils.core_helpers import (
     unbind_budget_reservation_from_callbacks,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import Delta, ImageResponse, ModelResponseStream, StreamingChoices, TranscriptionResponse
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    ImageResponse,
+    Message,
+    ModelResponseStream,
+    StreamingChoices,
+    TranscriptionResponse,
+)
 
 
 def test_parent_otel_span_reads_dict_like_metadata_by_index():
@@ -369,6 +377,63 @@ class TestFinishReasonMapOutputsAreValid:
                 f"Mapped value '{openai_reason}' (from '{provider_reason}') "
                 f"is not a valid OpenAI finish reason"
             )
+
+
+class TestStreamingChoicesNativeFinishReason:
+    """StreamingChoices must preserve the provider-native finish reason the same
+    way Choices does, so streaming consumers can read the original provider value
+    when map_finish_reason translates or defaults it."""
+
+    def test_unknown_provider_reason_is_preserved(self):
+        choice: Final = StreamingChoices(finish_reason="network_error")
+
+        assert choice.finish_reason == "stop"
+        assert choice.provider_specific_fields == {"native_finish_reason": "network_error"}
+
+    def test_translated_dialect_reason_is_preserved(self):
+        choice: Final = StreamingChoices(finish_reason="end_turn")
+
+        assert choice.finish_reason == "stop"
+        assert choice.provider_specific_fields == {"native_finish_reason": "end_turn"}
+
+    def test_openai_reason_is_not_stashed(self):
+        choice: Final = StreamingChoices(finish_reason="stop")
+
+        assert choice.finish_reason == "stop"
+        assert choice.provider_specific_fields is None
+
+    def test_none_finish_reason_keeps_provider_specific_fields_absent(self):
+        choice: Final = StreamingChoices(finish_reason=None)
+
+        assert choice.finish_reason is None
+        assert choice.provider_specific_fields is None
+
+    def test_matches_choices_behavior(self):
+        streaming: Final = StreamingChoices(finish_reason="network_error")
+        non_streaming: Final = Choices(
+            finish_reason="network_error", index=0, message=Message(role="assistant", content="")
+        )
+
+        assert streaming.finish_reason == non_streaming.finish_reason == "stop"
+        assert streaming.provider_specific_fields == non_streaming.provider_specific_fields
+
+    def test_survives_proxy_chunk_serialization(self):
+        """The proxy serialises chunks with exclude_none and exclude_unset, the
+        preserved value has to survive that round trip to reach the client."""
+        chunk: Final = ModelResponseStream(
+            id="chatcmpl-native-finish-reason",
+            model="gpt-4o",
+            choices=[
+                StreamingChoices(index=0, delta=Delta(content=""), finish_reason="network_error")
+            ],
+        )
+
+        payload: Final = json.loads(chunk.model_dump_json(exclude_none=True, exclude_unset=True))
+
+        assert payload["choices"][0]["finish_reason"] == "stop"
+        assert payload["choices"][0]["provider_specific_fields"] == {
+            "native_finish_reason": "network_error"
+        }
 
 
 class TestRedactNestedMatchAndRegexKeys:
