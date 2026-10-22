@@ -23307,3 +23307,24 @@ def test_key_info_database_not_connected_sanitized_500(
 
 
 
+
+
+@pytest.mark.asyncio
+async def test_update_key_reports_a_bad_budget_duration_as_a_request_error_not_an_auth_error(monkeypatch):
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    monkeypatch.setattr(  # test-quality-ok: the endpoint reads proxy_server.prisma_client itself, no parameter to inject
+        "litellm.proxy.proxy_server.prisma_client", MagicMock()
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=MagicMock(spec=Request),
+            data=UpdateKeyRequest(key="sk-whatever", budget_duration="not-a-duration"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
