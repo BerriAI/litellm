@@ -60,6 +60,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     prepare_object_permission_upsert,
     reject_ambiguous_mcp_tool_permission_keys,
 )
+from litellm.proxy.management_helpers.ptu_share_guard import raise_if_teams_hold_ptu_shares
 from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
     management_endpoint_wrapper,
@@ -1025,7 +1026,7 @@ async def delete_organization(
 
     - organization_ids: List[str] - The organization ids to delete.
     """
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(
@@ -1038,6 +1039,11 @@ async def delete_organization(
             status_code=401,
             detail={"error": "Only proxy admins can delete organizations"},
         )
+
+    teams_in_deleted_orgs: Final = await find_many_in(
+        _table(TeamRepository(prisma_client)), "organization_id", data.organization_ids
+    )
+    raise_if_teams_hold_ptu_shares(tuple(team.team_id for team in teams_in_deleted_orgs), llm_router)
 
     deleted_orgs: Final = []
     for organization_id in data.organization_ids:

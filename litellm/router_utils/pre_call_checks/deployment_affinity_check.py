@@ -14,7 +14,7 @@ where routing to a consistent deployment is still beneficial.
 
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -482,7 +482,9 @@ class DeploymentAffinityCheck(CustomLogger):
         )
         return [deployment]
 
-    async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict | None:
         """
         Persist/update the API-key -> deployment mapping for this request.
 

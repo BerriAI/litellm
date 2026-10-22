@@ -738,6 +738,13 @@ describe("UserEditView", () => {
       expect(form).not.toHaveAttribute("novalidate");
     });
 
+    it("asks for the MCP servers scoped to the edited user", async () => {
+      renderWithProviders(<UserEditView {...defaultProps} />);
+      await waitFor(() => {
+        expect(networking.fetchMCPServers).toHaveBeenCalledWith(expect.anything(), undefined, undefined, "user-123");
+      });
+    });
+
     it("shows the tool matrix for servers the user reaches only through an access group or toolset", async () => {
       vi.mocked(networking.fetchMCPServers).mockResolvedValue([
         { server_id: "srv-group", server_name: "Group Server", alias: "Group Server", mcp_access_groups: ["group-a"] },

@@ -410,7 +410,7 @@ def test_init_litellm_callbacks_replaces_string_with_instance(proxy_logging, mon
     monkeypatch.setattr(litellm, "callbacks", ["some-string-logger"])
     monkeypatch.setattr(
         litellm.litellm_core_utils.litellm_logging,
-        "_init_custom_logger_compatible_class",
+        "build_custom_logger_compatible_class",
         lambda *a, **kw: sentinel_instance,
     )
 
@@ -434,7 +434,7 @@ def test_init_litellm_callbacks_string_resolution_failure_keeps_string(proxy_log
     monkeypatch.setattr(litellm, "callbacks", ["unknown-logger"])
     monkeypatch.setattr(
         litellm.litellm_core_utils.litellm_logging,
-        "_init_custom_logger_compatible_class",
+        "build_custom_logger_compatible_class",
         lambda *a, **kw: None,
     )
     monkeypatch.setattr(utils_mod, "PROXY_HOOKS", [])
@@ -443,18 +443,38 @@ def test_init_litellm_callbacks_string_resolution_failure_keeps_string(proxy_log
     assert litellm.callbacks[0] == "unknown-logger"
 
 
-def test_init_litellm_callbacks_propagates_resolver_error_raises(proxy_logging, monkeypatch):
+@pytest.mark.parametrize("callback_list", ["callbacks", "success_callback", "failure_callback"])
+def test_init_litellm_callbacks_fails_startup_on_a_configured_callback_with_an_unsupported_sdk(
+    proxy_logging, monkeypatch, callback_list
+):
+    from litellm.integrations.langfuse import langfuse_prompt_management
+    from litellm.integrations.langfuse.langfuse import UNSUPPORTED_LANGFUSE_VERSION
     from litellm.proxy import utils as utils_mod
 
-    monkeypatch.setattr(litellm, "callbacks", ["raises-on-init"])
+    monkeypatch.setattr(litellm.litellm_core_utils.litellm_logging, "_in_memory_loggers", [])
     monkeypatch.setattr(
-        litellm.litellm_core_utils.litellm_logging,
-        "_init_custom_logger_compatible_class",
-        MagicMock(side_effect=RuntimeError("bad init")),
+        langfuse_prompt_management, "installed_langfuse_version", lambda: f"{UNSUPPORTED_LANGFUSE_VERSION}.0.0"
     )
+    monkeypatch.setattr(litellm, callback_list, ["langfuse"])
     monkeypatch.setattr(utils_mod, "PROXY_HOOKS", [])
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ImportError, match="'langfuse' callback configured in litellm_settings"):
         proxy_logging._init_litellm_callbacks(llm_router=None)
+
+
+def test_init_litellm_callbacks_keeps_starting_when_a_configured_callback_fails_for_another_reason(
+    proxy_logging, monkeypatch
+):
+    from litellm.integrations.langfuse import langfuse_prompt_management
+    from litellm.integrations.langfuse.langfuse import MINIMUM_LANGFUSE_VERSION, PROMPT_CACHE_TTL_ENV
+    from litellm.proxy import utils as utils_mod
+
+    monkeypatch.setattr(litellm.litellm_core_utils.litellm_logging, "_in_memory_loggers", [])
+    monkeypatch.setattr(langfuse_prompt_management, "installed_langfuse_version", lambda: MINIMUM_LANGFUSE_VERSION)
+    monkeypatch.setenv(PROMPT_CACHE_TTL_ENV, "not-a-number")
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    monkeypatch.setattr(utils_mod, "PROXY_HOOKS", [])
+    proxy_logging._init_litellm_callbacks(llm_router=None)
+    assert "langfuse" in litellm.success_callback
 
 
 # ---------------------------------------------------------------------------
