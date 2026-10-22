@@ -15627,6 +15627,9 @@ export interface paths {
          *     Available at both `/spend/logs/v2` (public API) and `/spend/logs/ui` (internal UI).
          *
          *     Returns paginated response with data, total, page, page_size, and total_pages.
+         *     On v2 ungrouped logs, repeated `project_ids` intersect the authorized scope with exact
+         *     string metadata.user_api_key_project_id values before counting and pagination. Filtered
+         *     responses add `project_filter: {version: 1, project_ids: [...]}`; omitted parameters keep the legacy response.
          *
          *     Example:
          *     ```
@@ -15678,6 +15681,9 @@ export interface paths {
          *     Available at both `/spend/logs/v2` (public API) and `/spend/logs/ui` (internal UI).
          *
          *     Returns paginated response with data, total, page, page_size, and total_pages.
+         *     On v2 ungrouped logs, repeated `project_ids` intersect the authorized scope with exact
+         *     string metadata.user_api_key_project_id values before counting and pagination. Filtered
+         *     responses add `project_filter: {version: 1, project_ids: [...]}`; omitted parameters keep the legacy response.
          *
          *     Example:
          *     ```
@@ -71893,6 +71899,8 @@ export interface operations {
                 session_cursor?: string | null;
                 /** @description Match a log whose request_id, litellm_call_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
                 search?: string | null;
+                /** @description Exact Project IDs, repeated per value. Only supported by v2 ungrouped logs. */
+                project_ids?: string[] | null;
             };
             header?: never;
             path?: never;
@@ -72015,6 +72023,8 @@ export interface operations {
                 session_cursor?: string | null;
                 /** @description Match a log whose request_id, litellm_call_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
                 search?: string | null;
+                /** @description Exact Project IDs, repeated per value. Only supported by v2 ungrouped logs. */
+                project_ids?: string[] | null;
             };
             header?: never;
             path?: never;
