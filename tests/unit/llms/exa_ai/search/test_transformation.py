@@ -135,6 +135,56 @@ def test_transform_search_response_maps_every_exa_result_in_provider_order():
     ]
 
 
+@pytest.mark.parametrize(
+    ("exa_fields", "expected_extras"),
+    [
+        ({"text": "full text"}, {}),
+        ({"score": 0.3}, {"score": 0.3}),
+        ({"highlights": ["a highlight"]}, {"highlights": ["a highlight"]}),
+        ({"highlightScores": [0.1]}, {"highlight_scores": [0.1]}),
+        ({"score": None}, {"score": None}),
+        ({"highlights": [], "highlightScores": [], "score": 0}, {"highlights": [], "highlight_scores": [], "score": 0}),
+        ({"id": "https://example.com", "author": "Ada", "image": None, "summary": "a summary"}, {}),
+    ],
+)
+def test_transform_search_response_attaches_only_the_exa_result_fields_it_returned(
+    exa_fields: dict[str, object], expected_extras: dict[str, object]
+):
+    response: Final = _transform(
+        {
+            "results": [
+                {"title": "Plain", "url": "https://example.com/plain", "text": "plain"},
+                {"title": "Title", "url": "https://example.com", **exa_fields},
+            ]
+        }
+    )
+
+    assert {key: response.results[1].model_extra[key] for key in expected_extras} == expected_extras
+    assert {key: response.results[1].model_extra[key] for key in exa_fields} == exa_fields
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_metadata"),
+    [
+        ({}, {}),
+        ({"results": []}, {}),
+        ({"requestId": "abc"}, {"requestId": "abc"}),
+        ({"context": "joined result text", "results": []}, {"context": "joined result text"}),
+        (
+            {"requestId": "abc", "searchTime": 412.5, "costDollars": {"total": 0.007}, "results": [{"text": "t"}]},
+            {"requestId": "abc", "searchTime": 412.5, "costDollars": {"total": 0.007}},
+        ),
+    ],
+)
+def test_transform_search_response_keeps_the_exa_envelope_as_provider_metadata(
+    payload: dict[str, object], expected_metadata: dict[str, object]
+):
+    response: Final = _transform(payload)
+
+    assert response.model_extra["provider_metadata"] == expected_metadata
+    assert response.model_dump(mode="json")["provider_metadata"] == expected_metadata
+
+
 def test_transform_search_response_result_without_optional_fields_gets_empty_defaults():
     assert _transform({"results": [{}]}).results == [SearchResult(title="", url="", snippet="")]
 
@@ -344,7 +394,7 @@ def test_output_preserves_present_empty_and_null_values(output: object):
 
 
 def test_absent_output_stays_absent():
-    assert _transform({"results": []}).model_dump() == {"results": [], "object": "search"}
+    assert _transform({"results": []}).model_dump() == {"results": [], "object": "search", "provider_metadata": {}}
 
 
 @pytest.fixture(autouse=True)
@@ -507,52 +557,3 @@ def test_exa_estimate_ignores_invalid_result_counts(count: object) -> None:
     assert search_provider_cost_per_query(
         "exa_ai/search", "exa_ai", optional_params={"numResults": count}
     ) == search_provider_cost_per_query("exa_ai/search", "exa_ai")
-
-
-@pytest.mark.parametrize(
-    ("exa_fields", "expected_extras"),
-    [
-        ({"text": "full text"}, {}),
-        ({"score": 0.3}, {"score": 0.3}),
-        ({"highlights": ["a highlight"]}, {"highlights": ["a highlight"]}),
-        ({"highlightScores": [0.1]}, {"highlight_scores": [0.1]}),
-        ({"score": None}, {"score": None}),
-        ({"highlights": [], "highlightScores": [], "score": 0}, {"highlights": [], "highlight_scores": [], "score": 0}),
-        ({"id": "https://example.com", "author": "Ada", "image": None, "summary": "a summary"}, {}),
-    ],
-)
-def test_transform_search_response_attaches_only_the_exa_result_fields_it_returned(
-    exa_fields: dict[str, object], expected_extras: dict[str, object]
-):
-    response: Final = _transform(
-        {
-            "results": [
-                {"title": "Plain", "url": "https://example.com/plain", "text": "plain"},
-                {"title": "Title", "url": "https://example.com", **exa_fields},
-            ]
-        }
-    )
-
-    assert {key: response.results[1].model_extra[key] for key in expected_extras} == expected_extras
-    assert {key: response.results[1].model_extra[key] for key in exa_fields} == exa_fields
-
-@pytest.mark.parametrize(
-    ("payload", "expected_metadata"),
-    [
-        ({}, {}),
-        ({"results": []}, {}),
-        ({"requestId": "abc"}, {"requestId": "abc"}),
-        ({"context": "joined result text", "results": []}, {"context": "joined result text"}),
-        (
-            {"requestId": "abc", "searchTime": 412.5, "costDollars": {"total": 0.007}, "results": [{"text": "t"}]},
-            {"requestId": "abc", "searchTime": 412.5, "costDollars": {"total": 0.007}},
-        ),
-    ],
-)
-def test_transform_search_response_keeps_the_exa_envelope_as_provider_metadata(
-    payload: dict[str, object], expected_metadata: dict[str, object]
-):
-    response: Final = _transform(payload)
-
-    assert response.model_extra["provider_metadata"] == expected_metadata
-    assert response.model_dump(mode="json")["provider_metadata"] == expected_metadata

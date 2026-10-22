@@ -92,7 +92,6 @@ class ExaAISearchRequest(TypedDict, total=False):
     systemPrompt: ReadOnly[str | None]
     userIdentifier: ReadOnly[str | None]
     compliance: ReadOnly[Literal["hipaa"] | None]
-    stream: ReadOnly[bool | None]
     startCrawlDate: ReadOnly[str | None]
     endCrawlDate: ReadOnly[str | None]
     includeText: ReadOnly[Sequence[str] | None]

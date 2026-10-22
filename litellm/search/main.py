@@ -16,7 +16,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.search.streaming_iterator import SearchStreamWrapper
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.utils import SearchProviders
@@ -81,7 +80,7 @@ async def asearch(
     timeout: float | httpx.Timeout | None = None,
     extra_headers: dict[str, object] | None = None,
     **kwargs,
-) -> SearchResponse | SearchStreamWrapper:
+) -> SearchResponse:
     """
     Async Search function.
 
@@ -99,8 +98,7 @@ async def asearch(
         **kwargs: Additional parameters
 
     Returns:
-        SearchResponse with results following Perplexity format, or a SearchStreamWrapper
-        when the provider returns SSE for a streaming request.
+        SearchResponse with results list following Perplexity format
 
     Example:
         ```python
@@ -185,7 +183,7 @@ def search(
     timeout: float | httpx.Timeout | None = None,
     extra_headers: dict[str, object] | None = None,
     **kwargs,
-) -> SearchResponse | SearchStreamWrapper | Coroutine[object, object, SearchResponse | SearchStreamWrapper]:
+) -> SearchResponse | Coroutine[object, object, SearchResponse]:
     """
     Synchronous Search function.
 
@@ -203,8 +201,7 @@ def search(
         **kwargs: Additional parameters
 
     Returns:
-        SearchResponse with results following Perplexity format, or a SearchStreamWrapper
-        when the provider returns SSE for a streaming request.
+        SearchResponse with results list following Perplexity format
 
     Example:
         ```python

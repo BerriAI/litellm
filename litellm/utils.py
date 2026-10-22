@@ -298,7 +298,7 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
@@ -998,10 +998,9 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
 
 def _is_converted_stream_result(result: object) -> bool:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-    from litellm.llms.base_llm.search.streaming_iterator import SearchStreamWrapper
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 
-    return isinstance(result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator, SearchStreamWrapper))
+    return isinstance(result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator))
 
 
 async def _run_success_deployment_hook_on_converted_chat_stream(
@@ -1878,9 +1877,8 @@ def client(original_function):
             if _is_streaming_request(
                 kwargs=kwargs,
                 call_type=call_type,
-                result=result,
             ):
-                if kwargs.get("complete_response") is True and not isinstance(result, Coroutine):
+                if "complete_response" in kwargs and kwargs["complete_response"] is True:
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
@@ -2012,13 +2010,8 @@ def client(original_function):
             if _is_streaming_request(
                 kwargs=kwargs,
                 call_type=call_type,
-                result=result,
             ):
-                if kwargs.get("complete_response") is True and not isinstance(result, Coroutine):
-                    from litellm.llms.base_llm.search.streaming_iterator import SearchStreamWrapper
-
-                    if isinstance(result, SearchStreamWrapper):
-                        return result.get_final_response()
+                if "complete_response" in kwargs and kwargs["complete_response"] is True:
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
@@ -2311,7 +2304,7 @@ def client(original_function):
                 raise
             end_time = datetime.datetime.now()
 
-            streaming_requested: Final = _is_streaming_request(kwargs=kwargs, call_type=call_type, result=result)
+            streaming_requested: Final = _is_streaming_request(kwargs=kwargs, call_type=call_type)
             if streaming_requested or _is_converted_stream_result(result):
                 logging_obj.stream = True
                 logging_obj.model_call_details["stream"] = True
@@ -2320,10 +2313,6 @@ def client(original_function):
                         result=result, request_data=kwargs, call_type=call_type
                     )
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
-                    from litellm.llms.base_llm.search.streaming_iterator import SearchStreamWrapper
-
-                    if isinstance(result, SearchStreamWrapper):
-                        return await result.aget_final_response()
                     chunks: Final = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
@@ -2568,7 +2557,6 @@ _NEVER_STREAMING_CALL_TYPES: Final = frozenset(
 def _is_streaming_request(
     kwargs: dict[str, object],
     call_type: CallTypes | str,
-    result: object = None,
 ) -> bool:
     """
     Returns True if the call type is a streaming request.
@@ -2576,15 +2564,6 @@ def _is_streaming_request(
         - if "stream=True" in kwargs  (litellm chat completion, litellm text completion, litellm messages)
         - if call_type is generate_content_stream or agenerate_content_stream (litellm google genai)
     """
-    if call_type in (CallTypes.search.value, CallTypes.asearch.value):
-        from litellm.llms.base_llm.search.transformation import SearchResponse
-
-        if isinstance(result, SearchResponse):
-            return False
-    if call_type in (CallTypes.search.value, CallTypes.asearch.value) and kwargs.get("search_provider") == "exa_ai":
-        return kwargs.get("stream") is True and kwargs.get("outputSchema") is not None
-
-
     if call_type in _NEVER_STREAMING_CALL_TYPES:
         return False
     if "stream" in kwargs and kwargs["stream"] is True:

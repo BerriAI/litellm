@@ -2411,14 +2411,6 @@ def test_fast_serialize_simple_model_response_stream_keeps_served_service_tier()
     assert json.loads(result)["service_tier"] == "priority"
 
 
-def test_search_stream_serialization_preserves_explicit_null_and_empty_values():
-    from litellm.llms.base_llm.search.streaming_iterator import SearchDoneEvent
-
-    payload: Final = {"type": "done", "output": None, "searchTime": 1, "metadata": {}, "requestId": None}
-    event: Final = SearchDoneEvent.model_validate(payload)
-    assert json.loads(_serialize_streaming_chunk(event)) == payload
-
-
 @pytest.mark.asyncio
 async def test_async_data_generator_lets_other_tasks_run_during_a_stream_that_never_waits(monkeypatch):
     """A stream whose chunks are already buffered never suspends on its own, so

@@ -37,7 +37,6 @@ from litellm.integrations.websearch_interception.transformation import (
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
-from litellm.llms.base_llm.search.streaming_iterator import SearchStreamWrapper
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
@@ -1622,13 +1621,13 @@ class WebSearchInterceptionLogger(CustomLogger):
                 )
             )
 
-            completed: Final = await result.aget_final_response() if isinstance(result, SearchStreamWrapper) else result
-            search_result_text: Final = WebSearchTransformation.format_search_response(completed)
+            # Format using transformation function
+            search_result_text: Final = WebSearchTransformation.format_search_response(result)
 
             verbose_logger.debug(
                 "WebSearchInterception: Search completed for '%s', got %s chars", query, len(search_result_text)
             )
-            return search_result_text, completed
+            return search_result_text, result
         except Exception as e:
             verbose_logger.error("WebSearchInterception: Search failed for '%s': %s", query, e)
             raise
