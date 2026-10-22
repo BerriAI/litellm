@@ -3845,29 +3845,30 @@ class _SyncSpeechLogger(CustomLogger):
         self.logged_payloads.put(kwargs["standard_logging_object"])
 
 
-class _PausedAsyncAudio(httpx.AsyncByteStream):
-    def __init__(self, first: bytes, rest: bytes | Exception, pause_seconds: float) -> None:
+class _GatedAsyncAudio(httpx.AsyncByteStream):
+    def __init__(self, first: bytes, rest: bytes | Exception, gate: asyncio.Event | None = None) -> None:
         self._first: Final = first
         self._rest: Final = rest
-        self._pause_seconds: Final = pause_seconds
+        self._gate: Final = gate
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield self._first
-        await asyncio.sleep(self._pause_seconds)
+        if self._gate is not None:
+            await self._gate.wait()
         if isinstance(self._rest, Exception):
             raise self._rest
         yield self._rest
 
 
-class _PausedSyncAudio(httpx.SyncByteStream):
-    def __init__(self, first: bytes, rest: bytes, pause_seconds: float) -> None:
+class _SyncAudio(httpx.SyncByteStream):
+    def __init__(self, first: bytes, rest: bytes) -> None:
         self._first: Final = first
         self._rest: Final = rest
-        self._pause_seconds: Final = pause_seconds
+        self.rest_sent_at: float | None = None
 
     def __iter__(self) -> Iterator[bytes]:
         yield self._first
-        time.sleep(self._pause_seconds)
+        self.rest_sent_at = time.time()
         yield self._rest
 
 
@@ -3897,10 +3898,10 @@ def _audio_summary(num_bytes: int) -> dict[str, object]:
     return {"object": "binary", "content_type": "audio/mpeg", "num_bytes": num_bytes}
 
 
-def _logged_seconds(payload: dict[str, object]) -> float:
-    start_time, end_time = payload["startTime"], payload["endTime"]
-    assert isinstance(start_time, float) and isinstance(end_time, float)
-    return end_time - start_time
+def _logged_end(payload: dict[str, object]) -> float:
+    end_time: Final = payload["endTime"]
+    assert isinstance(end_time, float)
+    return end_time
 
 
 @pytest.fixture
@@ -3936,14 +3937,19 @@ async def test_aspeech_logs_streamed_audio_like_buffered_audio(
 async def test_aspeech_stream_is_logged_when_the_audio_ends(
     respx_mock: respx.MockRouter, speech_logger: _SpeechLogger
 ) -> None:
-    _mock_elevenlabs_audio(respx_mock, _PausedAsyncAudio(b"first", b"rest", pause_seconds=0.3))
+    rest_released: Final = asyncio.Event()
+    _mock_elevenlabs_audio(respx_mock, _GatedAsyncAudio(b"first", b"rest", rest_released))
 
     response: Final = await _aspeech(stream=True)
-    assert await response.aread() == b"firstrest"
+    audio: Final = await response.aiter_bytes()
+    assert await anext(audio) == b"first"
+    audio_still_arriving_at: Final = time.time()
+    rest_released.set()
+    assert b"".join([chunk async for chunk in audio]) == b"rest"
     logged: Final = await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
 
     assert logged["response"] == _audio_summary(len(b"firstrest"))
-    assert _logged_seconds(logged) >= 0.3
+    assert _logged_end(logged) >= audio_still_arriving_at
     assert logged["error_information"] != {
         "error_code": "499",
         "error_message": "Client disconnected the request",
@@ -3970,7 +3976,7 @@ async def test_aspeech_stream_broken_mid_clip_is_billed_as_a_failure(
             httpx.Response(
                 status_code=200,
                 headers={"content-type": "audio/mpeg"},
-                stream=_PausedAsyncAudio(b"first", rest, pause_seconds=0),
+                stream=_GatedAsyncAudio(b"first", rest),
             )
             for rest in (b"rest", upstream_error)
         ]
@@ -3988,15 +3994,16 @@ async def test_aspeech_stream_broken_mid_clip_is_billed_as_a_failure(
     assert failed["status"] == "failure"
     assert isinstance(logged["response_cost"], float) and logged["response_cost"] > 0
     assert failed["response_cost"] == logged["response_cost"]
-    with pytest.raises(TimeoutError):
-        await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=0.5)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    assert speech_logger.logged_payloads.empty()
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
 async def test_aspeech_stream_closed_mid_clip_is_logged_with_the_audio_sent(
     respx_mock: respx.MockRouter, speech_logger: _SpeechLogger
 ) -> None:
-    _mock_elevenlabs_audio(respx_mock, _PausedAsyncAudio(b"first", b"never sent", pause_seconds=60))
+    _mock_elevenlabs_audio(respx_mock, _GatedAsyncAudio(b"first", b"never sent", asyncio.Event()))
 
     response: Final = await _aspeech(stream=True)
     audio: Final = await response.aiter_bytes()
@@ -4029,7 +4036,7 @@ async def test_aspeech_stream_closed_mid_clip_marks_the_spend_row_as_a_client_di
     spend_rows: Final = _SpendRowLogger()
     monkeypatch.setattr(litellm, "callbacks", [spend_rows])
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    _mock_elevenlabs_audio(respx_mock, _PausedAsyncAudio(b"first", b"never sent", pause_seconds=60))
+    _mock_elevenlabs_audio(respx_mock, _GatedAsyncAudio(b"first", b"never sent", asyncio.Event()))
 
     response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=True, metadata={"user_api_key": "hashed-key"})
     audio: Final = await response.aiter_bytes()
@@ -4052,7 +4059,7 @@ async def test_aspeech_stream_closed_mid_clip_leaves_the_callers_metadata_untouc
     spend_rows: Final = _SpendRowLogger()
     monkeypatch.setattr(litellm, "callbacks", [spend_rows])
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    _mock_elevenlabs_audio(respx_mock, _PausedAsyncAudio(b"first", b"never sent", pause_seconds=60))
+    _mock_elevenlabs_audio(respx_mock, _GatedAsyncAudio(b"first", b"never sent", asyncio.Event()))
     caller_metadata: Final = {"user_api_key": "hashed-key"}
 
     response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=True, metadata=caller_metadata)
@@ -4069,7 +4076,7 @@ async def test_aspeech_stream_closed_mid_clip_leaves_the_callers_metadata_untouc
 async def test_aspeech_stream_other_than_true_buffers_the_audio(
     respx_mock: respx.MockRouter, speech_logger: _SpeechLogger, stream: object
 ) -> None:
-    _mock_elevenlabs_audio(respx_mock, _PausedAsyncAudio(b"first", b"rest", pause_seconds=0))
+    _mock_elevenlabs_audio(respx_mock, _GatedAsyncAudio(b"first", b"rest"))
 
     response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=stream)
     logged: Final = await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
@@ -4082,7 +4089,8 @@ async def test_aspeech_stream_other_than_true_buffers_the_audio(
 def test_speech_stream_is_logged_when_the_audio_ends(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _mock_elevenlabs_audio(respx_mock, _PausedSyncAudio(b"first", b"rest", pause_seconds=0.3))
+    audio: Final = _SyncAudio(b"first", b"rest")
+    _mock_elevenlabs_audio(respx_mock, audio)
     speech_logger: Final = _SyncSpeechLogger()
     monkeypatch.setattr(litellm, "callbacks", [speech_logger])
 
@@ -4091,7 +4099,7 @@ def test_speech_stream_is_logged_when_the_audio_ends(
     logged: Final = speech_logger.logged_payloads.get(timeout=5)
 
     assert logged["response"] == _audio_summary(len(b"firstrest"))
-    assert _logged_seconds(logged) >= 0.3
+    assert audio.rest_sent_at is not None and _logged_end(logged) >= audio.rest_sent_at
 
 
 class TestCallbackAsyncSyncSeparation:
