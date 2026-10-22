@@ -542,7 +542,8 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params.pop("output_config", None)
             else:
                 optional_params["thinking"] = mapped_thinking
-                if AnthropicConfig.is_adaptive_thinking_model(model, "bedrock"):
+                # "none" disables thinking outright; there is no matching output_config effort.
+                if reasoning_effort != "none" and AnthropicConfig.is_adaptive_thinking_model(model, "bedrock"):
                     mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
                     if mapped_effort is None:
                         AnthropicConfig.raise_invalid_reasoning_effort(
