@@ -5551,3 +5551,28 @@ def test_inline_tool_changes_keep_definitions_and_historical_calls(already_decla
     assert len(translated["messages"]) == 3
     assert mapping == ({short_name: tool_name} if reactivate else {})
     assert request == original
+
+
+def test_unrecognized_tool_removal_keeps_the_existing_definition() -> None:
+    tool: Final = {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}
+    request: Final = {
+        "model": "hosted_vllm/test-model",
+        "max_tokens": 128,
+        "tools": [tool],
+        "messages": [
+            {"role": "user", "content": "Check the weather"},
+            {
+                "role": "system",
+                "content": [{"type": "tool_removal", "tool": {"type": "unknown", "name": "get_weather"}}],
+            },
+        ],
+    }
+    original: Final = copy.deepcopy(request)
+
+    translated, mapping = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+    assert translated["tools"] == [
+        {"type": "function", "function": {"name": "get_weather", "parameters": tool["input_schema"]}}
+    ]
+    assert mapping == {}
+    assert request == original
