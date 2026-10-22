@@ -1683,7 +1683,7 @@ def test_gemini_history_nests_multimodal_tool_response_parts():
         },
     ]
 
-    contents = gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages, model="gemini-3.8-flash")
 
     tool_response_parts = contents[-1]["parts"]
     assert len(tool_response_parts) == 1
@@ -1697,6 +1697,52 @@ def test_gemini_history_nests_multimodal_tool_response_parts():
             }
         }
     ]
+
+
+def test_gemini_history_sibling_multimodal_tool_response_parts_for_gemini_2_5():
+    """Gemini 2.5 rejects nested multimodal function response parts with 400 INVALID_ARGUMENT.
+
+    Verify that sibling inline_data parts are emitted for pre-Gemini 3 models.
+    Fixes: https://github.com/BerriAI/litellm/issues/47895
+    """
+    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    messages = [
+        {"role": "user", "content": "Get me an image"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_get_image",
+                    "type": "function",
+                    "function": {"name": "get_image", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_get_image",
+            "content": [
+                {"type": "text", "text": '{"image_ref": "inline"}'},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": test_image_base64,
+                    },
+                },
+            ],
+        },
+    ]
+
+    contents = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash-lite")
+
+    tool_response_parts = contents[-1]["parts"]
+    assert len(tool_response_parts) == 2, f"Expected 2 parts (sibling shape for Gemini 2.5), got {len(tool_response_parts)}"
+    assert "function_response" in tool_response_parts[0]
+    assert "inline_data" in tool_response_parts[1]
+    assert tool_response_parts[1]["inline_data"]["data"] == test_image_base64
 
 
 def test_convert_tool_response_text_only():
