@@ -55,3 +55,19 @@ def test_speech_keeps_an_internal_prefixed_kwarg_out_of_the_elevenlabs_request(r
     sent: Final = json.loads(respx_mock.calls[0].request.content)
     assert "_litellm_undeclared_sentinel" not in sent, sent
     assert sent["text"] == "hi"
+
+
+def test_map_openai_params_maps_wav_response_format() -> None:
+    config: Final = ElevenLabsTextToSpeechConfig()
+    kwargs: Final[dict[str, object]] = {}
+
+    mapped_voice, _ = config.map_openai_params(
+        model="eleven_multilingual_v2",
+        optional_params={"response_format": "wav"},
+        voice="alloy",
+        kwargs=kwargs,
+    )
+
+    assert mapped_voice == config.VOICE_MAPPINGS["alloy"]
+    assert kwargs[config.ELEVENLABS_QUERY_PARAMS_KEY] == {"output_format": "wav_44100"}
+
