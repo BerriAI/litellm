@@ -88,7 +88,12 @@ from litellm.types.proxy.carried_budget_state import (
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
-from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
+from litellm.types.router import (
+    AllowedModelRegion,
+    ConfigurableClientsideParamsCustomAuth,
+    RouterErrors,
+    UpdateRouterConfig,
+)
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
@@ -2493,6 +2498,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_google_kms: bool | None = Field(None, description="decrypt keys with google kms")
     use_azure_key_vault: bool | None = Field(None, description="load keys from azure key vault")
     master_key: str | None = Field(None, description="require a key for all calls to proxy")
+    configurable_clientside_auth_params: Sequence[str | ConfigurableClientsideParamsCustomAuth] | None = Field(
+        None,
+        description="Allow only these client-supplied credential or callback parameters for every model. Names allow any value. api_base mappings restrict values using the same matching rules as per-deployment configuration.",
+    )
     dangerously_permit_weak_or_unset_master_key: bool | None = Field(
         None,
         description="local development only: start even when master_key is unset, empty, or a publicly known default",

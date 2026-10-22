@@ -504,6 +504,12 @@ def _check_banned_params(
             # Proxy-wide opt-in: every banned param is permitted, exit
             # entirely so the rest of the loop doesn't waste work.
             return
+        if _is_param_allowed(
+            param=param,
+            request_body_value=body[param],
+            configurable_clientside_auth_params=general_settings.get("configurable_clientside_auth_params"),
+        ):
+            continue
         if (
             _allow_model_level_clientside_configurable_parameters(
                 model=model,
