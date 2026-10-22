@@ -1,0 +1,10 @@
+{
+  "src/app/(dashboard)/usage/_components/components/overview/UsageOverview.tsx": {
+    "Linear": "线性",
+    "Log": "对数"
+  },
+  "src/app/(dashboard)/usage/_components/components/EntityUsage/EntityUsage.tsx": {
+    "Linear": "线性",
+    "Log": "对数"
+  }
+}

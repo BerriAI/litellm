@@ -1,0 +1,13 @@
+model_list: []
+
+litellm_settings:
+  callbacks:
+    - prometheus
+  num_retries: 0
+  request_timeout: 60
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  background_health_checks: true
+  health_check_interval: 300
+  trusted_proxy_ranges: []

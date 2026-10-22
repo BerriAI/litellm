@@ -1,0 +1,4 @@
+ARG LITELLM_BASE_IMAGE
+FROM ${LITELLM_BASE_IMAGE}
+COPY ui/ /opt/litellm-ui-zh-cn/
+ENV LITELLM_UI_PATH=/opt/litellm-ui-zh-cn

@@ -1,0 +1,13 @@
+[
+  {"source":"\\btokens?\\b", "preferred":"Token", "translations":["令牌","代币","词元","标记符"]},
+  {"source":"\\bprompts?\\b", "preferred":"Prompt", "translations":["提示词","提示语","提示符"]},
+  {"source":"\\bembeddings?\\b", "preferred":"Embedding", "translations":["嵌入向量","嵌入"]},
+  {"source":"\\bcompletions?\\b", "preferred":"Completion", "translations":["补全","完成"]},
+  {"source":"\\breasoning\\b", "preferred":"Reasoning", "translations":["推理"]},
+  {"source":"\\bagents?\\b|\\bagentic\\b", "preferred":"Agent", "translations":["智能体"]},
+  {"source":"\\bguardrails?\\b", "preferred":"Guardrail", "translations":["防护规则","护栏","防护栏"]},
+  {"source":"\\brerank(?:er|ing)?\\b", "preferred":"Rerank", "translations":["重排键","重排序","重排"]},
+  {"source":"\\bcontext windows?\\b", "preferred":"Context Window", "translations":["上下文窗口"]},
+  {"source":"\\bchain.of.thought\\b", "preferred":"Chain-of-thought", "translations":["思维链"]},
+  {"source":"\\btemperature\\b", "preferred":"Temperature", "translations":["采样温度","温度"]}
+]
