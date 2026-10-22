@@ -51,6 +51,7 @@ def _install_litellm_config(mock_prisma: MagicMock) -> MagicMock:
     table.upsert = AsyncMock(return_value=None)
     table.delete = AsyncMock()
     mock_prisma.db.litellm_config = table
+    mock_prisma.writer_db.litellm_config = table
     return table
 
 

@@ -6,16 +6,21 @@ regression they guard is the one a caller sees: a tier the proxy advertises has 
 leaves the adapter, in the shape the target expects.
 """
 
+import functools
+import json
 from collections.abc import Mapping
 from typing import Final
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.anthropic.pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from litellm.router import Router
 from litellm.utils import reasoning_effort_with_summary_alias
 
 MESSAGES = [{"role": "user", "content": "hello"}]
@@ -49,9 +54,12 @@ def _completion_kwargs_for_thinking(
     *,
     tools: list[dict[str, object]] | None = None,
     api_base: str | None = None,
+    model_info: dict[str, str] | None = None,
 ) -> Mapping[str, object]:
     extra_kwargs: Final = {
-        key: value for key, value in (("custom_llm_provider", provider), ("api_base", api_base)) if value is not None
+        key: value
+        for key, value in (("custom_llm_provider", provider), ("api_base", api_base), ("model_info", model_info))
+        if value is not None
     }
     completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
         max_tokens=1024,
@@ -80,10 +88,11 @@ def _reasoning_effort_sent_for_thinking(
     *,
     tools: list[dict[str, object]] | None = None,
     api_base: str | None = None,
+    model_info: dict[str, str] | None = None,
 ) -> object:
-    return _completion_kwargs_for_thinking(model, provider, thinking, tools=tools, api_base=api_base).get(
-        "reasoning_effort"
-    )
+    return _completion_kwargs_for_thinking(
+        model, provider, thinking, tools=tools, api_base=api_base, model_info=model_info
+    ).get("reasoning_effort")
 
 
 SUMMARIZED_THINKING = {"type": "enabled", "budget_tokens": 4096, "summary": "auto"}
@@ -183,6 +192,22 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
 
         assert sent == "high"
 
+    def test_a_chat_pinned_deployment_gets_the_plain_tier_on_a_responses_row(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``mode: chat`` pin sends that deployment to chat completions even though its shared row
+        says ``responses``, so the adapter has to read the pin too or chat gets the Responses-only dict."""
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+        model: Final = "bedrock_mantle/openai.gpt-5.4"
+
+        unpinned = _reasoning_effort_sent_for_thinking(model, "bedrock_mantle", PLAIN_THINKING)
+        pinned = _reasoning_effort_sent_for_thinking(
+            model, "bedrock_mantle", PLAIN_THINKING, model_info={"id": "pinned-id", "mode": "chat"}
+        )
+
+        assert isinstance(unpinned, dict)
+        assert pinned == "high"
+
     @pytest.mark.parametrize(
         "model, provider",
         [
@@ -204,6 +229,23 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
         sent: Final = _reasoning_effort_sent_for_thinking("azure/responses/gpt-5-mini", "azure", PLAIN_THINKING)
 
         assert sent == {"effort": "high", "summary": "detailed"}
+
+    @pytest.mark.parametrize(
+        "model, provider, summary",
+        [
+            ("bedrock_mantle/openai.gpt-5.4", "bedrock_mantle", "auto"),
+            ("azure/responses/gpt-5-mini", "azure", "detailed"),
+        ],
+    )
+    def test_auto_summary_asks_each_bridged_target_for_a_level_it_accepts(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, model: str, provider: str, summary: str
+    ) -> None:
+        """Mantle's OpenAI path accepts only ``auto``, so the opt-in summary must not send it ``detailed``."""
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+
+        sent = _reasoning_effort_sent_for_thinking(model, provider, PLAIN_THINKING)
+
+        assert sent == {"effort": "high", "summary": summary}
 
     @pytest.mark.parametrize(
         "api_base, expected",
@@ -287,18 +329,248 @@ class TestTheNormalizedTierIsTheTierSent:
     @pytest.mark.parametrize(
         "model, provider",
         [
+            ("gpt-5.5", "azure_ai"),
+            ("azure_ai/gpt-5.5", "azure_ai"),
+            ("gpt-5.6", "azure"),
+            ("us/gpt-5.6", "azure"),
+        ],
+    )
+    def test_an_azure_hosted_deployment_without_the_flag_drops_to_the_tier_it_accepts(
+        self, local_model_cost_map, model, provider
+    ):
+        """Chat Completions answers ``max`` on gpt-5.6 with a 400 naming ``none`` through ``xhigh``
+        (OpenAI, 2026-10-01) and none of these Azure rows declares the level, so the adapter sends
+        the tier below instead of the rejected one."""
+        assert _reasoning_effort_sent(model, provider, "max") == "xhigh"
+
+    @pytest.mark.parametrize(
+        "model, provider",
+        [
             ("gpt-6-astra", "azure_ai"),
             ("azure_ai/gpt-6-astra", "azure_ai"),
             ("gpt-6-astra", "azure"),
             ("us/gpt-6-astra", "azure"),
+            ("eu/gpt-6-astra", "azure"),
         ],
     )
-    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_it_accepts(
+    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_its_chat_route_accepts(
         self, local_model_cost_map: None, model: str, provider: str
     ) -> None:
-        """The deployment answers ``max`` with a 400 naming ``none`` through ``xhigh``, so the rows
-        say so and the adapter sends the tier below instead of the rejected one."""
+        """A Foundry gpt-6-astra answers a Chat Completions ``max`` with a 400 naming low through
+        xhigh while honoring the same level on the Responses route (2026-10-01). The row's flag is
+        route-blind, so it keeps max off and the adapter, which cannot know which route the call
+        takes, sends the tier below instead of the level chat rejects."""
         assert _reasoning_effort_sent(model, provider, "max") == "xhigh"
 
     def test_the_openai_hosted_twin_still_sends_max(self, local_model_cost_map):
         assert _reasoning_effort_sent("gpt-6-astra", "openai", "max") == "max"
+
+
+_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "my-kimi",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+_RESPONSE: Final = {
+    "id": "resp_1",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.5-pro",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+_KIMI_LEVELS: Final = {"reasoning_effort_levels": ["low", "high", "max", "none"]}
+_SELF_HOSTED: Final = {
+    "model": "hosted_vllm/my-kimi",
+    "api_base": "https://vllm.example.test/v1",
+    "api_key": "fake-key",
+}
+_VLLM_CHAT_URL: Final = r"https://vllm\.example\.test/v1/chat/completions"
+_MALFORMED_BUDGET_TARGETS: Final = [
+    pytest.param(_SELF_HOSTED, _KIMI_LEVELS, _VLLM_CHAT_URL, _CHAT_COMPLETION, id="declaring-hosted_vllm"),
+    pytest.param(_SELF_HOSTED, {}, _VLLM_CHAT_URL, _CHAT_COMPLETION, id="hosted_vllm"),
+    pytest.param(
+        {"model": "fireworks_ai/accounts/fireworks/models/kimi-k3", "api_key": "fake-key"},
+        {},
+        r"https://api\.fireworks\.ai/inference/v1/chat/completions",
+        _CHAT_COMPLETION,
+        id="fireworks_ai",
+    ),
+    pytest.param(
+        {"model": "openai/gpt-5.5-pro", "api_key": "fake-key"},
+        {},
+        r"https://api\.openai\.com/v1/responses",
+        _RESPONSE,
+        id="openai-responses-bridge",
+    ),
+]
+
+
+async def _body_sent_upstream(
+    respx_mock: respx.MockRouter,
+    litellm_params: Mapping[str, object],
+    model_info: Mapping[str, object],
+    upstream_url: str,
+    upstream_body: Mapping[str, object],
+    **messages_params: object,
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(url__regex=upstream_url).mock(return_value=httpx.Response(200, json=upstream_body))
+    router: Final = Router(
+        model_list=[{"model_name": "group", "litellm_params": {**litellm_params}, "model_info": {**model_info}}]
+    )
+    await router.aanthropic_messages(model="group", messages=MESSAGES, max_tokens=4096, **messages_params)
+    return json.loads(route.calls.last.request.read())
+
+
+class TestADeclaredDeploymentRoundsTheMessagesTierOntoItsLevels:
+    @pytest.fixture(autouse=True)
+    def _httpx_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "messages_params, expected",
+        [
+            ({"thinking": {"type": "enabled", "budget_tokens": 2048}}, "high"),
+            ({"thinking": {"type": "adaptive"}, "output_config": {"effort": "xhigh"}}, "max"),
+        ],
+    )
+    async def test_a_self_hosted_deployment_receives_its_declared_level(
+        self, respx_mock: respx.MockRouter, messages_params: Mapping[str, object], expected: str
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {"model": "hosted_vllm/my-kimi", "api_base": "https://vllm.example.test/v1", "api_key": "fake-key"},
+            _KIMI_LEVELS,
+            r"https://vllm\.example\.test/v1/chat/completions",
+            _CHAT_COMPLETION,
+            **messages_params,
+        )
+
+        assert sent["reasoning_effort"] == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model_info", [_KIMI_LEVELS, {}])
+    async def test_a_claude_named_self_hosted_deployment_maps_a_budget_like_any_other_model_name(
+        self, respx_mock: respx.MockRouter, model_info: Mapping[str, object]
+    ) -> None:
+        thinking: Final = {"type": "enabled", "budget_tokens": 9000}
+
+        claude_named: Final = await _body_sent_upstream(
+            respx_mock,
+            {**_SELF_HOSTED, "model": "hosted_vllm/claude-opus-5-5"},
+            model_info,
+            _VLLM_CHAT_URL,
+            _CHAT_COMPLETION,
+            thinking=thinking,
+        )
+        kimi_named: Final = await _body_sent_upstream(
+            respx_mock, _SELF_HOSTED, model_info, _VLLM_CHAT_URL, _CHAT_COMPLETION, thinking=thinking
+        )
+
+        assert claude_named["reasoning_effort"] == kimi_named["reasoning_effort"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("budget", ["2048", True])
+    @pytest.mark.parametrize("litellm_params, model_info, upstream_url, upstream_body", _MALFORMED_BUDGET_TARGETS)
+    async def test_a_non_numeric_budget_is_rejected_with_a_400(
+        self,
+        local_model_cost_map: None,
+        respx_mock: respx.MockRouter,
+        litellm_params: Mapping[str, object],
+        model_info: Mapping[str, object],
+        upstream_url: str,
+        upstream_body: Mapping[str, object],
+        budget: object,
+    ) -> None:
+        with pytest.raises(litellm.BadRequestError, match=r"thinking\.budget_tokens must be a number") as rejected:
+            await _body_sent_upstream(
+                respx_mock,
+                litellm_params,
+                model_info,
+                upstream_url,
+                upstream_body,
+                thinking={"type": "enabled", "budget_tokens": budget},
+            )
+
+        assert rejected.value.status_code == 400
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("budget", ["2048", True])
+    @pytest.mark.parametrize("litellm_params, model_info, upstream_url, upstream_body", _MALFORMED_BUDGET_TARGETS)
+    async def test_drop_params_drops_a_non_numeric_budget(
+        self,
+        local_model_cost_map: None,
+        respx_mock: respx.MockRouter,
+        litellm_params: Mapping[str, object],
+        model_info: Mapping[str, object],
+        upstream_url: str,
+        upstream_body: Mapping[str, object],
+        budget: object,
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {**litellm_params, "drop_params": True},
+            model_info,
+            upstream_url,
+            upstream_body,
+            thinking={"type": "enabled", "budget_tokens": budget},
+        )
+
+        assert not {"reasoning_effort", "reasoning", "thinking"} & sent.keys()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model, api_base, upstream_url, upstream_body, effort_path",
+        [
+            ("openai/gpt-5.5-pro", None, r"https://api\.openai\.com/v1/responses", _RESPONSE, ("reasoning", "effort")),
+            (
+                "hosted_vllm/my-kimi",
+                "https://vllm.example.test/v1",
+                r"https://vllm\.example\.test/v1/chat/completions",
+                _CHAT_COMPLETION,
+                ("reasoning_effort",),
+            ),
+        ],
+    )
+    async def test_the_deployment_declaration_beats_the_flag_based_chain(
+        self,
+        local_model_cost_map: None,
+        respx_mock: respx.MockRouter,
+        model: str,
+        api_base: str | None,
+        upstream_url: str,
+        upstream_body: Mapping[str, object],
+        effort_path: tuple[str, ...],
+    ) -> None:
+        """The map says gpt-5.5-pro refuses minimal and knows nothing of my-kimi, so the chain alone
+        would send medium and low."""
+        route: Final = respx_mock.post(url__regex=upstream_url).mock(
+            return_value=httpx.Response(200, json=upstream_body)
+        )
+
+        await litellm.anthropic.messages.acreate(
+            model=model,
+            api_base=api_base,
+            api_key="fake-key",
+            messages=MESSAGES,
+            max_tokens=4096,
+            thinking={"type": "adaptive"},
+            output_config={"effort": "minimal"},
+            model_info={"reasoning_effort_levels": ["minimal", "medium", "high"]},
+        )
+
+        sent: Final = json.loads(route.calls.last.request.read())
+        assert functools.reduce(lambda body, key: body[key], effort_path, sent) == "minimal"

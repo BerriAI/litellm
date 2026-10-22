@@ -80,43 +80,17 @@ const COST_SOURCES: Record<TouchedPricingField, string> = {
   cache_write_cost_1h: "cache_creation_input_token_cost_above_1hr",
 };
 
-export interface ModelEditFormValues {
-  model_name?: string;
-  litellm_model_name?: string;
-  api_base?: string;
-  custom_llm_provider?: string;
-  organization?: string;
-  tpm?: string | number | null;
-  rpm?: string | number | null;
-  max_retries?: string | number | null;
-  timeout?: string | number | null;
-  stream_timeout?: string | number | null;
-  input_cost?: string | number | null;
-  output_cost?: string | number | null;
-  cache_read_cost?: string | number | null;
-  cache_write_cost?: string | number | null;
-  cache_write_cost_1h?: string | number | null;
-  ptu_count?: string | number | null;
-  cost_per_ptu_per_hour?: string | number | null;
-  ptu_effective_from?: Dayjs | null;
-  ptu_effective_to?: Dayjs | null;
-  cache_control?: boolean;
-  cache_control_injection_points?: CacheControlInjectionPoint[];
-  model_access_group?: string[];
-  guardrails?: string[];
-  vector_store_ids?: string[];
-  tags?: string[];
-  health_check_model?: string | null;
-  litellm_credential_name?: string | null;
-  litellm_extra_params?: string;
-  model_info?: string;
-  team_id?: string;
-}
-
-type ModelEditFieldName = keyof ModelEditFormValues;
-
 const scalar = z.union([z.string(), z.number(), z.null()]).optional();
 const textish = z.string().optional();
+
+const isBlank = (value: string | number | null | undefined): boolean => value == null || String(value).trim() === "";
+
+export const perMillionToPerToken = scalar
+  .refine(
+    (perMillion) => isBlank(perMillion) || (Number.isFinite(Number(perMillion)) && Number(perMillion) >= 0),
+    "Enter a price of 0 or more",
+  )
+  .transform((perMillion) => (isBlank(perMillion) ? null : Number(perMillion) / 1_000_000));
 
 const modelEditShape = {
   model_name: textish,
@@ -129,11 +103,11 @@ const modelEditShape = {
   max_retries: scalar,
   timeout: scalar,
   stream_timeout: scalar,
-  input_cost: scalar,
-  output_cost: scalar,
-  cache_read_cost: scalar,
-  cache_write_cost: scalar,
-  cache_write_cost_1h: scalar,
+  input_cost: perMillionToPerToken,
+  output_cost: perMillionToPerToken,
+  cache_read_cost: perMillionToPerToken,
+  cache_write_cost: perMillionToPerToken,
+  cache_write_cost_1h: perMillionToPerToken,
   ptu_count: scalar,
   cost_per_ptu_per_hour: scalar,
   ptu_effective_from: z.custom<Dayjs | null>().nullish(),
@@ -150,6 +124,8 @@ const modelEditShape = {
   model_info: textish,
   team_id: textish,
 };
+
+type ModelEditFieldName = keyof typeof modelEditShape;
 
 const isJson = (value: string): boolean => {
   try {
@@ -209,6 +185,10 @@ const buildSchema = (ptuEnabled: boolean, isFieldTouched: (field: TouchedPricing
       }
     }
   });
+
+type ModelEditSchema = ReturnType<typeof buildSchema>;
+export type ModelEditFormValues = z.input<ModelEditSchema>;
+export type ModelEditSubmitValues = z.output<ModelEditSchema>;
 
 const perMillionTokens = (...rates: (number | null | undefined)[]): number | null => {
   const rate = rates.find((candidate) => candidate != null);
@@ -295,7 +275,7 @@ interface ModelInfoEditFormProps {
   showCacheControl: boolean;
   setShowCacheControl: (checked: boolean) => void;
   onCancel: () => void;
-  onSubmit: (values: ModelEditFormValues, isFieldTouched: (field: TouchedPricingField) => boolean) => Promise<void>;
+  onSubmit: (values: ModelEditSubmitValues, isFieldTouched: (field: TouchedPricingField) => boolean) => Promise<void>;
   modelAccessGroups: string[] | null;
   guardrailsList: string[];
   tagsList: Record<string, Tag>;
@@ -383,10 +363,10 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
   };
 
   // react-hook-form refreshes control._options every render, so this rebuild is what the next submit runs.
-  const resolver: Resolver<ModelEditFormValues> = (values, context, options) =>
+  const resolver: Resolver<ModelEditFormValues, unknown, ModelEditSubmitValues> = (values, context, options) =>
     zodResolver(buildSchema(ptuCostAttributionEnabled, isFieldTouched))(values, context, options);
 
-  const form = useForm<ModelEditFormValues>({
+  const form = useForm<ModelEditFormValues, unknown, ModelEditSubmitValues>({
     resolver,
     defaultValues: toModelEditFormValues(localModelData, isWildcardModel),
   });

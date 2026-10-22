@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";
+vi.mock("./model_info/KubernetesPodsCard", () => ({
+  default: ({ modelId }: { modelId: string }) => <div data-testid="kubernetes-pods-card">{modelId}</div>,
+}));
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../tests/mocks/complexityScorerDefaults"),
@@ -194,6 +197,91 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText("Model Settings")).toBeInTheDocument();
     });
+  });
+
+  it("shows Kubernetes pods for discovery-enabled models", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: { ...defaultModelData.litellm_params, kubernetes_pod_discovery: true },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByTestId("kubernetes-pods-card")).toHaveTextContent("123");
+  });
+
+  it("shows Kubernetes pods for admin viewers", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: { ...defaultModelData.litellm_params, kubernetes_pod_discovery: true },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole="Admin Viewer" isViewOnly={true} />, { wrapper });
+
+    expect(await screen.findByTestId("kubernetes-pods-card")).toHaveTextContent("123");
+  });
+
+  it("hides Kubernetes pods for non-admin users", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: { ...defaultModelData.litellm_params, kubernetes_pod_discovery: true },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole="Internal User" />, { wrapper });
+
+    expect(await screen.findByText("Model Settings")).toBeInTheDocument();
+    expect(screen.queryByTestId("kubernetes-pods-card")).not.toBeInTheDocument();
+  });
+
+  it("hides Kubernetes pods when discovery is disabled", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: { ...defaultModelData.litellm_params, kubernetes_pod_discovery: false },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByText("Model Settings")).toBeInTheDocument();
+    expect(screen.queryByTestId("kubernetes-pods-card")).not.toBeInTheDocument();
+  });
+
+  it("hides Kubernetes pods when discovery is not configured", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByText("Model Settings")).toBeInTheDocument();
+    expect(screen.queryByTestId("kubernetes-pods-card")).not.toBeInTheDocument();
   });
 
   it("should display loading state when model data is loading", () => {
@@ -2146,6 +2234,72 @@ describe("ModelInfoView", () => {
 
       expect(mockModelPatchUpdateCall.mock.calls[0][2]).toBe("123");
       expect(payload.litellm_params.input_cost_per_token).toBe(5 / 1_000_000);
+    });
+
+    const pricingInputs = () => [
+      screen.getByPlaceholderText("Enter input cost"),
+      screen.getByPlaceholderText("Enter output cost"),
+      ...screen.getAllByPlaceholderText("Defaults to Input Cost if blank"),
+      screen.getByPlaceholderText("Defaults to the cost map 1 hour rate, else Cache Write Cost"),
+    ];
+
+    it("refuses a negative price on every pricing field and never calls the API", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      for (const input of pricingInputs()) {
+        fireEvent.change(input, { target: { value: "-5" } });
+      }
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(await screen.findAllByText("Enter a price of 0 or more")).toHaveLength(5);
+      expect(mockModelPatchUpdateCall).not.toHaveBeenCalled();
+    });
+
+    it("sends a zero price as 0 and lets the cache read cost follow a zero input cost", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      setInputCost("0");
+      fireEvent.change(screen.getByPlaceholderText("Enter output cost"), { target: { value: "0" } });
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params).toMatchObject({
+        input_cost_per_token: 0,
+        output_cost_per_token: 0,
+        cache_read_input_token_cost: 0,
+      });
+    });
+
+    it("sends an explicit null for a cleared cache read cost instead of falling back to the input cost", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      setInputCost("2");
+      const [cacheRead] = screen.getAllByPlaceholderText("Defaults to Input Cost if blank");
+      fireEvent.change(cacheRead, { target: { value: "1" } });
+      fireEvent.change(cacheRead, { target: { value: "" } });
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.input_cost_per_token).toBe(0.000002);
+      expect(payload.litellm_params.cache_read_input_token_cost).toBeNull();
+    });
+
+    it("keeps a stored cache read cost when only the input cost changes", async () => {
+      const withCacheRead = {
+        ...defaultModelData,
+        litellm_params: { ...defaultModelData.litellm_params, cache_read_input_token_cost: 0.000001 },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [withCacheRead] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [withCacheRead] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      setInputCost("2");
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.input_cost_per_token).toBe(0.000002);
+      expect(payload.litellm_params.cache_read_input_token_cost).toBe(0.000001);
     });
 
     it.fails(
