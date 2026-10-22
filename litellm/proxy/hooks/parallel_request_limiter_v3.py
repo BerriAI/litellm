@@ -1249,7 +1249,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return sum(cls._estimate_structured_input_item_chars(x, depth + 1) for x in item)
         if isinstance(item, Mapping):
             item_type = item.get("type")
-            if item_type in _IMAGE_CONTENT_TYPES or ("image_url" in item and not isinstance(item.get("image_url"), list)):
+            if item_type in _IMAGE_CONTENT_TYPES or (
+                "image_url" in item and not isinstance(item.get("image_url"), list)
+            ):
                 if item.get("detail") == "low":
                     return _LOW_DETAIL_IMAGE_CHARS
                 return _DEFAULT_IMAGE_CHARS
