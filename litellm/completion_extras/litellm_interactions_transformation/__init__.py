@@ -8,8 +8,10 @@ from .response_transformation import (
     transform_interactions_response_to_chat_response,
     transform_interactions_usage,
 )
+from .streaming_iterator import InteractionsChatStreamingIterator
 
 __all__ = [
+    "InteractionsChatStreamingIterator",
     "InteractionsPreparedRequest",
     "MediaFetcher",
     "map_interactions_status_to_finish_reason",
