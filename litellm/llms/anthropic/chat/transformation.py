@@ -376,6 +376,8 @@ def _build_anthropic_tool_name_maps(
     return forward, reverse
 
 
+_CLAUDE_MAJOR_VERSION: Final = re.compile(r"claude-[a-z]+-(\d+)")
+
 REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT: Final[dict[str, str]] = {
     "low": "low",
     "minimal": "low",
@@ -1564,7 +1566,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         llm_provider: str = "anthropic",
     ) -> AnthropicThinkingParam | None:
         """Capability probes read the cost map under ``custom_llm_provider``; ``llm_provider`` only tags raised exceptions."""
-        if reasoning_effort is None or reasoning_effort == "none":
+        if reasoning_effort is None:
+            return None
+        if reasoning_effort == "none":
+            # An explicit "none" asks for thinking off. On Claude 5-generation
+            # models that default thinking on (Opus 5, Sonnet 5, Haiku 5.5),
+            # omission leaves the model's default in effect, so translate
+            # "none" to thinking.type="disabled", which those models accept.
+            # Models that default thinking off keep omission, which already
+            # honors "none"; always-on-thinking models reject "disabled" and
+            # are handled downstream by maybe_drop_disabled_thinking.
+            major: Final = _CLAUDE_MAJOR_VERSION.search(model)
+            if (
+                major is not None
+                and int(major.group(1)) >= 5
+                and AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider)
+            ):
+                return AnthropicThinkingParam(type="disabled")
             return None
         if AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider):
             # without display, Anthropic defaults adaptive thinking to
@@ -1961,7 +1979,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     optional_params.pop("output_config", None)
                 else:
                     optional_params["thinking"] = mapped_thinking
-                    if AnthropicConfig._is_adaptive_thinking_model(model, self._resolved_provider):
+                    # "none" disables thinking outright; there is no matching output_config effort.
+                    if effort_value != "none" and AnthropicConfig._is_adaptive_thinking_model(
+                        model, self._resolved_provider
+                    ):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(effort_value)
                         if mapped_effort is None:
                             AnthropicConfig._raise_invalid_reasoning_effort(
