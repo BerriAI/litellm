@@ -10390,7 +10390,9 @@ async def async_data_generator(
     stream_completed = False
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
-    ends_with_openai_done: Final = not responses_stream_errors and not request_data.get("_litellm_skip_openai_stream_done")
+    ends_with_openai_done: Final = not responses_stream_errors and not request_data.get(
+        "_litellm_skip_openai_stream_done"
+    )
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
     stream_iterator: Final = _object_stream(
         proxy_logging_obj.async_post_call_streaming_iterator_hook(
