@@ -9571,3 +9571,33 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+def test_signature_only_thinking_blocks_chunk_survives_stream_wrapper() -> None:
+    sig_chunk: Final = ModelResponseStream(
+        id="chatcmpl-sig-test",
+        model="gemini-3-flash-preview",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(thinking_blocks=[{"type": "thinking", "thinking": "", "signature": "sig_only_xyz"}]),
+            )
+        ],
+    )
+    end_chunk: Final = ModelResponseStream(
+        id="chatcmpl-sig-test",
+        model="gemini-3-flash-preview",
+        choices=[StreamingChoices(index=0, delta=Delta(content="42"), finish_reason="stop")],
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter([sig_chunk, end_chunk]),
+        model="gemini-3-flash-preview",
+        logging_obj=MagicMock(),
+        custom_llm_provider="gemini",
+    )
+    emitted: Final = list(wrapper)
+    rebuilt: Final = litellm.stream_chunk_builder(emitted)
+    assert rebuilt is not None
+    assert rebuilt.choices[0].message.thinking_blocks == [  # pyright: ignore[reportAttributeAccessIssue]  # Choices vs StreamingChoices union
+        {"type": "thinking", "thinking": "", "signature": "sig_only_xyz"}
+    ]
