@@ -252,6 +252,9 @@ def _allow_model_level_clientside_configurable_parameters(
 reject_server_owned_wif_params = _reject_server_owned_wif_params
 
 _CREDENTIAL_VALUES: Final = TypeAdapter(dict[str, object])
+_CLIENTSIDE_AUTH_PARAMS: Final[TypeAdapter[CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS]] = TypeAdapter(
+    CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
+)
 _DECODED_JSON: Final = TypeAdapter(object)
 _LIST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 
@@ -507,7 +510,9 @@ def _check_banned_params(
         if _is_param_allowed(
             param=param,
             request_body_value=body[param],
-            configurable_clientside_auth_params=general_settings.get("configurable_clientside_auth_params"),
+            configurable_clientside_auth_params=_CLIENTSIDE_AUTH_PARAMS.validate_python(
+                _CREDENTIAL_VALUES.validate_python(general_settings).get("configurable_clientside_auth_params")
+            ),
         ):
             continue
         if (
