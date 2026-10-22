@@ -15,6 +15,10 @@ from google.protobuf.json_format import MessageToDict
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export import SpanExportResult
+from opentelemetry.semconv.attributes.http_attributes import HTTP_RESPONSE_STATUS_CODE
+
+from litellm._logging import verbose_logger
 
 JSON_CONTENT_TYPE: Final = "application/json"
 _HEX_ID_KEYS: Final = frozenset({"traceId", "spanId", "parentSpanId"})
@@ -66,12 +70,38 @@ class OTLPJsonSpanExporter(OTLPSpanExporter):
     def __init__(
         self,
         endpoint: str | None,
-        headers: dict[str, str],  # mutable-ok: SDK __init__ takes Dict
+        headers: Mapping[str, str],
         certificate_file: str | None = None,
         session: "requests.Session | None" = None,
+        max_request_size: int | None = None,
     ) -> None:
-        super().__init__(endpoint=endpoint, headers=headers, certificate_file=certificate_file, session=session)
-        self._session.headers["Content-Type"] = JSON_CONTENT_TYPE
+        super().__init__(
+            endpoint=endpoint,
+            headers={**headers, "Content-Type": JSON_CONTENT_TYPE},
+            certificate_file=certificate_file,
+            session=session,
+            max_request_size=max_request_size,
+        )
 
-    def _serialize_spans(self, spans: Sequence[ReadableSpan]) -> bytes:
-        return encode_spans_json(spans)
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        if self._shutdown:
+            return SpanExportResult.FAILURE
+        with self._metrics.export_operation(len(spans)) as operation:
+            try:
+                serialized: Final = encode_spans_json(spans)
+            except Exception as error:  # noqa: BLE001  # malformed telemetry must remain a non-blocking export failure
+                operation.error = error
+                verbose_logger.error("Could not encode OTLP/JSON span batch")
+                return SpanExportResult.FAILURE
+            if 0 < self._max_request_size < len(serialized):
+                operation.error = ValueError("OTLP/JSON span batch exceeds the exporter request limit")
+                verbose_logger.error("OTLP/JSON span batch exceeds the exporter request limit")
+                return SpanExportResult.FAILURE
+            exported: Final = self._client.export(serialized)
+            if not exported.success:
+                operation.error = exported.error
+                operation.error_attrs = (
+                    {HTTP_RESPONSE_STATUS_CODE: exported.status_code} if exported.status_code is not None else None
+                )
+                return SpanExportResult.FAILURE
+        return SpanExportResult.SUCCESS

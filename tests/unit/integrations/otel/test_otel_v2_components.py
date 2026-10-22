@@ -3,6 +3,7 @@ baggage helpers, metrics, the typed coercion helpers, mapper branches, span-name
 builders, and the registry validator's failure paths. Needs the OTel SDK."""
 
 from typing import Final
+from requests_mock import Mocker
 import contextlib
 import json
 import threading
@@ -22,22 +23,25 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: 
 )
 from opentelemetry import baggage  # noqa: E402
 from opentelemetry.context import attach, detach  # noqa: E402
+from opentelemetry._logs import LogRecord  # noqa: E402
 from opentelemetry._logs.severity import SeverityNumber  # noqa: E402
-from opentelemetry.sdk._logs import LogData, LogRecord  # noqa: E402
-from opentelemetry.sdk._logs.export import LogExportResult  # noqa: E402
+from opentelemetry.sdk._logs import ReadableLogRecord  # noqa: E402
+from opentelemetry.sdk._logs.export import LogRecordExportResult  # noqa: E402
 from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
-from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.resources import Resource  # noqa: E402
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider  # noqa: E402
 from opentelemetry.sdk.trace.export import (  # noqa: E402
     BatchSpanProcessor,
     ConsoleSpanExporter,
     SimpleSpanProcessor,
+    SpanExportResult,
 )
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
 )
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope  # noqa: E402
-from opentelemetry.trace import SpanKind, TraceFlags, get_current_span  # noqa: E402
+from opentelemetry.trace import SpanContext, SpanKind, TraceFlags, get_current_span  # noqa: E402
 from opentelemetry.trace.propagation.tracecontext import (  # noqa: E402
     TraceContextTextMapPropagator,
 )
@@ -733,7 +737,7 @@ def _export_one_trace_to_local_collector(exporter_kind: str) -> tuple[list[dict]
     class Collector(BaseHTTPRequestHandler):
         def do_POST(self):
             body = self.rfile.read(int(self.headers["Content-Length"]))
-            received.append({"path": self.path, "headers": dict(self.headers), "body": body})
+            received.append({"path": self.path, "headers": requests.structures.CaseInsensitiveDict(self.headers), "body": body})
             self.send_response(200)
             self.end_headers()
 
@@ -791,6 +795,30 @@ def test_http_json_exporter_posts_otlp_json_to_traces_endpoint():
     assert child["traceId"] == format(trace_id, "032x")
     assert child["spanId"] == format(child_id, "016x")
     assert child["parentSpanId"] == format(parent_id, "016x")
+
+
+@pytest.mark.parametrize("failure_mode", ("http", "shutdown", "size", "encoding"))
+def test_json_export_failures_do_not_deliver_a_success(failure_mode: str, requests_mock: Mocker) -> None:
+    from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter
+
+    endpoint: Final = "http://collector.test/v1/traces"
+    collector: Final = requests_mock.post(endpoint, status_code=400 if failure_mode == "http" else 200)
+    exporter: Final = OTLPJsonSpanExporter(
+        endpoint=endpoint, headers={}, max_request_size=1 if failure_mode == "size" else None
+    )
+    span: Final = (
+        ReadableSpan("malformed")
+        if failure_mode == "encoding"
+        else ReadableSpan("json-export", context=SpanContext(1, 2, False), resource=Resource({}), start_time=1, end_time=2)
+    )
+    try:
+        if failure_mode == "shutdown":
+            exporter.shutdown()
+        assert exporter.export([span]) is SpanExportResult.FAILURE
+        assert collector.call_count == int(failure_mode == "http")
+    finally:
+        if failure_mode != "shutdown":
+            exporter.shutdown()
 
 
 def test_http_protobuf_exporter_still_posts_protobuf():
@@ -1630,9 +1658,11 @@ def test_v2_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.Monkey
             severity_number=SeverityNumber.INFO,
             body="v2-tls-test",
         )
-        log_data = LogData(log_record=record, instrumentation_scope=InstrumentationScope("v2-tls-test"))
+        log_data: Final = ReadableLogRecord(
+            log_record=record, resource=Resource({}), instrumentation_scope=InstrumentationScope("v2-tls-test")
+        )
         result = exporter.export([log_data])
-        assert result is LogExportResult.SUCCESS, f"log export failed: {result}"
+        assert result is LogRecordExportResult.SUCCESS, f"log export failed: {result}"
         assert tls_sink.received.get(timeout=5) == "/v1/logs"
     finally:
         exporter.shutdown()

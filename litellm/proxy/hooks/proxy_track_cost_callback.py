@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Protocol, TypeAlias, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -331,6 +331,8 @@ def _attempt_spend_row_kwargs(
 
 
 class _ProxyDBLogger(CustomLogger):
+    is_internal_accounting_callback: ClassVar[bool] = True
+
     def __init__(
         self,
         spend_event_producer: SpendEventProducer | None = None,
