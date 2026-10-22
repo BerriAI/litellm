@@ -9059,7 +9059,7 @@ def validate_chat_completion_tool_choice(
             tool_choice.get("allowed_tools"),  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # raw dict payload
             dict,
         ):
-            return tool_choice
+            return tool_choice  # pyright: ignore[reportUnknownVariableType]  # narrowed raw dict payload
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
