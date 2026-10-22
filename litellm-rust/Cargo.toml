@@ -52,7 +52,7 @@ base64 = "0.22"
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"
-webpki-roots = "1"
+webpki-roots = "1.0.10"
 time = { version = "0.3.53", features = ["parsing"] }
 criterion = "0.8.2"
 fancy-regex = "0.19.2"
