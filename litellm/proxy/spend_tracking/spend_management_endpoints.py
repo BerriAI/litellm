@@ -1,4 +1,5 @@
 #### SPEND MANAGEMENT #####
+import asyncio
 import collections
 import json
 import os
@@ -297,29 +298,26 @@ def _verification_token_table(prisma_client: PrismaClient) -> _VerificationToken
     return VerificationTokenRepository(prisma_client).table
 
 
-async def _reset_spend_counters(prisma_client: PrismaClient) -> None:
-    """Zero every live spend counter a budget check reads.
+_SPEND_COUNTER_RESET_BATCH_SIZE: Final = 100
 
-    Budget enforcement reads the Redis spend counters first, so zeroing only
-    the DB rows leaves an exhausted key refused with the stale pre-reset
-    counter. Mirrors /key/{key}/reset_spend, setting each counter to 0 (with
-    floor marker and broadcast) rather than deleting it.
-    """
+
+async def _reset_spend_counters(prisma_client: PrismaClient) -> None:
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         set_spend_counter_with_floor_and_broadcast,
     )
 
-    key_rows: Final = await _verification_token_table(prisma_client).find_many(where={})
-    for row in key_rows:
-        token = row.model_dump().get("token", "")
-        if isinstance(token, str) and token:
-            await set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:key:{token}", value=0.0)
-
-    team_rows: Final = await _team_table(prisma_client).find_many(where={})
-    for row in team_rows:
-        team_id = row.model_dump().get("team_id", "")
-        if isinstance(team_id, str) and team_id:
-            await set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:team:{team_id}", value=0.0)
+    for rows, identifier_field, prefix in (
+        (await _verification_token_table(prisma_client).find_many(where={}), "token", "spend:key:"),
+        (await _team_table(prisma_client).find_many(where={}), "team_id", "spend:team:"),
+    ):
+        for start in range(0, len(rows), _SPEND_COUNTER_RESET_BATCH_SIZE):
+            await asyncio.gather(
+                *(
+                    set_spend_counter_with_floor_and_broadcast(counter_key=f"{prefix}{identifier}", value=0.0)
+                    for row in rows[start : start + _SPEND_COUNTER_RESET_BATCH_SIZE]
+                    if isinstance(identifier := row.model_dump().get(identifier_field), str) and identifier
+                )
+            )
 
 
 def _spend_logs_daily_summary_sql(

@@ -8182,7 +8182,8 @@ async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader
     ]
 
 
-def test_global_spend_reset_zeroes_live_spend_counters(monkeypatch):
+@pytest.mark.parametrize("key_count", [0, 2, 201])
+def test_global_spend_reset_zeroes_live_spend_counters(monkeypatch, key_count: int):
     """Regression test for https://github.com/BerriAI/litellm/issues/46363
 
     Budget enforcement reads the Redis spend counters before the DB rows, so
@@ -8212,7 +8213,9 @@ def test_global_spend_reset_zeroes_live_spend_counters(monkeypatch):
 
     class MockDB:
         def __init__(self):
-            self.litellm_verificationtoken = MockTable([Row({"token": "key-1"}), Row({"token": "key-2"})])
+            self.litellm_verificationtoken = MockTable(
+                [Row({"token": f"key-{index}"}) for index in range(1, key_count + 1)]
+            )
             self.litellm_teamtable = MockTable([Row({"team_id": "team-1"})])
 
     class MockPrismaClient:
@@ -8230,22 +8233,13 @@ def test_global_spend_reset_zeroes_live_spend_counters(monkeypatch):
         mock_set_counter,
     )
 
-    async def run_reset():
-        import litellm.proxy.proxy_server as ps
-
-        ps.prisma_client = MockPrismaClient()
-        try:
-            return await global_spend_reset()
-        finally:
-            ps.prisma_client = None
-
-    response: Final = asyncio.run(run_reset())
+    monkeypatch.setattr(ps, "prisma_client", MockPrismaClient())
+    response: Final = asyncio.run(global_spend_reset())
     assert response == {
         "message": "Spend for all API Keys and Teams reset successfully",
         "status": "success",
     }
-    assert sorted(reset_calls) == [
-        ("spend:key:key-1", 0.0),
-        ("spend:key:key-2", 0.0),
-        ("spend:team:team-1", 0.0),
-    ], reset_calls
+    assert sorted(reset_calls) == sorted(
+        [(f"spend:key:key-{index}", 0.0) for index in range(1, key_count + 1)]
+        + [("spend:team:team-1", 0.0)]
+    ), reset_calls
