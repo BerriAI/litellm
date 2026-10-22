@@ -9056,7 +9056,7 @@ def validate_chat_completion_tool_choice(
         # {"type": "allowed_tools", "allowed_tools": {"mode": ..., "tools": [...]}}.
         # Pass it through untouched so downstream providers see the full payload.
         if tool_choice_type == "allowed_tools" and isinstance(
-            tool_choice.get("allowed_tools"),  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+            tool_choice.get("allowed_tools"),  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # raw dict payload
             dict,
         ):
             return tool_choice
