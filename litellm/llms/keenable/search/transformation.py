@@ -114,11 +114,16 @@ class KeenableSearchConfig(BaseSearchConfig):
         a second time after ``litellm/search/main.py`` already did, so it has to be idempotent.
         """
         resolved_api_key: Final = self._resolve_api_key(api_key, api_base)
+        auth: Final[Mapping[str, str]] = (
+            MappingProxyType({"Authorization": f"Bearer {resolved_api_key}"})
+            if resolved_api_key
+            else MappingProxyType({})
+        )
         return {
             **headers,
             "Content-Type": "application/json",
             "X-Keenable-Title": _APP_TITLE,
-            **_optional("Authorization", f"Bearer {resolved_api_key}" if resolved_api_key else None),
+            **auth,
         }
 
     def get_complete_url(
@@ -212,7 +217,7 @@ class KeenableSearchConfig(BaseSearchConfig):
             )
 
         logging_obj.optional_params = {  # rebind-ok: hands the keyless flag to the search cost calculator
-            **logging_obj.optional_params,
+            **logging_obj.optional_params,  # pyright: ignore[reportUnknownMemberType]  # Logging.optional_params is a legacy untyped dict
             KEENABLE_KEYLESS_PARAM: _answered_keyless(raw_response),
         }
 
