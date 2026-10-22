@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -1193,13 +1194,18 @@ _FORGED_CACHE_KEY_FIELDS: Final = {
 }
 
 
-async def _add_data_with_forged_cache_key(monkeypatch: pytest.MonkeyPatch, cache_scope: str) -> dict:
+_FORGED_TOP_LEVEL_CACHE_KEY_ONLY: Final = {"cache_key": "ns:victim-hash", "preset_cache_key": "ns:victim-hash"}
+
+
+async def _add_data_with_forged_cache_key(
+    monkeypatch: pytest.MonkeyPatch, cache_scope: str, forged: Mapping[str, object] = _FORGED_CACHE_KEY_FIELDS
+) -> dict:
     monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, cache_scope=cache_scope))
     return await add_litellm_data_to_request(
         data={
             "model": "gpt-4o",
             "messages": [{"role": "user", "content": "hi"}],
-            **copy.deepcopy(_FORGED_CACHE_KEY_FIELDS),
+            **copy.deepcopy(dict(forged)),
         },
         request=_make_request_mock("/v1/chat/completions", {"Content-Type": "application/json"}),
         user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", team_id="caller-team"),
@@ -1220,6 +1226,18 @@ async def test_scoped_cache_ignores_caller_supplied_cache_keys(monkeypatch: pyte
     assert "user_api_key_team_id" not in updated["litellm_params"]["metadata"]
     assert "user_api_key_hash" not in updated["litellm_params"]["metadata"]
     assert updated["metadata"]["user_api_key_team_id"] == "caller-team"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache_scope", ["team", "key"])
+async def test_scoped_cache_strips_a_forged_cache_key_on_a_request_without_litellm_params(
+    monkeypatch: pytest.MonkeyPatch, cache_scope: str
+):
+    updated: Final = await _add_data_with_forged_cache_key(monkeypatch, cache_scope, _FORGED_TOP_LEVEL_CACHE_KEY_ONLY)
+
+    assert "cache_key" not in updated
+    assert "preset_cache_key" not in updated
+    assert "litellm_params" not in updated
 
 
 @pytest.mark.asyncio
