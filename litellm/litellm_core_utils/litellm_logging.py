@@ -2857,6 +2857,10 @@ class Logging(LiteLLMLoggingBaseClass):
             setattr(result, "usage", transformed_usage)
         return result
 
+    def set_non_streaming_response(self) -> None:
+        self.stream = False
+        self.model_call_details["stream"] = False
+
     def _with_client_facing_stream_model(
         self,
         response: ModelResponse
@@ -2872,8 +2876,14 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _with_continued_response_id(
         self,
-        response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
-    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
+        response: ModelResponse
+        | TextCompletionResponse
+        | ResponsesAPIResponse
+        | InteractionsAPIResponse
+        | SearchResponse,
+    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | SearchResponse:
+        if isinstance(response, SearchResponse):
+            return response
         response_id: Final = self.model_call_details.get("continued_response_id")
         if not isinstance(response_id, str) or getattr(response, "id", None) == response_id:
             return response

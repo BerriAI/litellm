@@ -2980,7 +2980,9 @@ class ProxyBaseLLMRequestProcessing:
             if (
                 route_type != "asearch"
                 and self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request)
-            ) or self._is_streaming_response(response):  # use generate_responses to stream responses
+            ) or self._is_streaming_response(
+                cast(object, response)  # cast-ok: the router result is checked by type inside this helper
+            ):
                 selected_data_generator: AsyncGenerator[str, None] | None = None
                 # Call response headers hook for streaming success
                 stream_callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(

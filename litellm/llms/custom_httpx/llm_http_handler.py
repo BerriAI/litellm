@@ -2184,8 +2184,7 @@ class BaseLLMHTTPHandler:
                 response.close()
 
         if logging_obj.stream is True or optional_params.get("stream") is True:
-            logging_obj.stream = False
-            logging_obj.model_call_details["stream"] = False
+            logging_obj.set_non_streaming_response()
 
         return provider_config.transform_search_response(
             raw_response=response,
@@ -2308,8 +2307,7 @@ class BaseLLMHTTPHandler:
                 await response.aclose()
 
         if logging_obj.stream is True or optional_params.get("stream") is True:
-            logging_obj.stream = False
-            logging_obj.model_call_details["stream"] = False
+            logging_obj.set_non_streaming_response()
 
         return provider_config.transform_search_response(
             raw_response=response,
