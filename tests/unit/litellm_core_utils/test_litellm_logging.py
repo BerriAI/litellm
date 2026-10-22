@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import pytest_asyncio
+from requests_mock import Mocker
 from mcp.types import AudioContent, CallToolResult, ImageContent, TextContent
 from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
@@ -2044,11 +2045,12 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
     ],
 )
 def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
-    monkeypatch: pytest.MonkeyPatch, api_host: str | None, expected_endpoint: str
+    monkeypatch: pytest.MonkeyPatch, api_host: str | None, expected_endpoint: str, requests_mock: Mocker
 ) -> None:
     """The exporter must post to Langtrace's complete /api/trace path with the key in x-api-key,
     without leaking it into the process-wide OTEL_EXPORTER_OTLP_TRACES_HEADERS."""
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.trace.export import SpanExportResult
 
     from litellm.integrations.opentelemetry import OpenTelemetry
     from litellm.litellm_core_utils import litellm_logging as logging_module
@@ -2070,8 +2072,10 @@ def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
         assert type(logger) is OpenTelemetry and logger.callback_name == "langtrace"
         exporter: Final = logger._get_span_processor().span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
-        assert exporter._endpoint == expected_endpoint
-        assert exporter._headers == {"x-api-key": api_key}
+        collector: Final = requests_mock.post(expected_endpoint, status_code=200)
+        assert exporter.export([]) is SpanExportResult.SUCCESS
+        assert collector.call_count == 1
+        assert collector.last_request.headers["x-api-key"] == api_key
         assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
     finally:
         logging_module._in_memory_loggers.clear()

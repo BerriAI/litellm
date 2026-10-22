@@ -2,8 +2,13 @@
 event loop: the preset does no network I/O, and a custom exporter mints the JWT
 lazily on its first export (in the BatchSpanProcessor worker thread)."""
 
+from typing import Final
+
 import httpx
 import pytest
+import respx
+from requests_mock import Mocker
+from opentelemetry.sdk.trace.export import SpanExportResult
 
 from litellm.integrations.otel.plumbing import providers
 from litellm.integrations.otel.model.config import ExporterSpec
@@ -75,50 +80,38 @@ def test_dynamic_cred_presets_tag_exporter_with_matching_owner(monkeypatch):
         )
 
 
-def test_agentops_exporter_mints_jwt_lazily(monkeypatch):
-    pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
-    monkeypatch.setattr(
-        agentops_mod, "_fetch_agentops_jwt", lambda _k: {"token": "jwt-xyz"}
+def test_agentops_exporter_mints_jwt_lazily(requests_mock: Mocker, respx_mock: respx.MockRouter) -> None:
+    auth: Final = respx_mock.post(agentops_mod._AGENTOPS_AUTH_ENDPOINT).respond(200, json={"token": "jwt-xyz"})
+    collector: Final = requests_mock.post(_AGENTOPS_ENDPOINT, status_code=200)
+    exporter: Final = _build_agentops_exporter(
+        ExporterSpec(kind=_AGENTOPS_EXPORTER_KIND, endpoint=_AGENTOPS_ENDPOINT, options={"api_key": "ak"})
     )
-    spec = ExporterSpec(
-        kind=_AGENTOPS_EXPORTER_KIND,
-        endpoint=_AGENTOPS_ENDPOINT,
-        options={"api_key": "ak"},
+    try:
+        assert auth.call_count == 0
+        assert exporter.export([]) is SpanExportResult.SUCCESS
+        assert exporter.export([]) is SpanExportResult.SUCCESS
+        assert auth.call_count == 1
+        assert [request.headers.get("Authorization") for request in collector.request_history] == [
+            "Bearer jwt-xyz",
+            "Bearer jwt-xyz",
+        ]
+    finally:
+        exporter.shutdown()
+
+
+def test_agentops_exporter_tolerates_fetch_failure(requests_mock: Mocker, respx_mock: respx.MockRouter) -> None:
+    auth: Final = respx_mock.post(agentops_mod._AGENTOPS_AUTH_ENDPOINT).respond(500)
+    collector: Final = requests_mock.post(_AGENTOPS_ENDPOINT, status_code=200)
+    exporter: Final = _build_agentops_exporter(
+        ExporterSpec(kind=_AGENTOPS_EXPORTER_KIND, endpoint=_AGENTOPS_ENDPOINT, options={"api_key": "ak"})
     )
-    exporter = _build_agentops_exporter(spec)
-
-    # No auth header until the first export triggers the (off-loop) fetch.
-    assert "Authorization" not in exporter._session.headers
-    exporter._ensure_authenticated()
-    assert exporter._session.headers["Authorization"] == "Bearer jwt-xyz"
-
-    # Cached: a second resolution does not re-fetch.
-    calls = []
-    monkeypatch.setattr(
-        agentops_mod,
-        "_fetch_agentops_jwt",
-        lambda k: calls.append(k) or {"token": "again"},
-    )
-    exporter._ensure_authenticated()
-    assert calls == []
-
-
-def test_agentops_exporter_tolerates_fetch_failure(monkeypatch):
-    pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
-
-    def _raise(_k):
-        raise RuntimeError("auth down")
-
-    monkeypatch.setattr(agentops_mod, "_fetch_agentops_jwt", _raise)
-    exporter = _build_agentops_exporter(
-        ExporterSpec(
-            kind=_AGENTOPS_EXPORTER_KIND,
-            endpoint=_AGENTOPS_ENDPOINT,
-            options={"api_key": "ak"},
-        )
-    )
-    exporter._ensure_authenticated()  # must not raise
-    assert "Authorization" not in exporter._session.headers
+    try:
+        assert exporter.export([]) is SpanExportResult.SUCCESS
+        assert exporter.export([]) is SpanExportResult.SUCCESS
+        assert auth.call_count == 1
+        assert [request.headers.get("Authorization") for request in collector.request_history] == [None, None]
+    finally:
+        exporter.shutdown()
 
 
 def test_fetch_jwt_uses_owned_client_not_shared_pool(monkeypatch):
