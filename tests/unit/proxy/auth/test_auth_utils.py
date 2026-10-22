@@ -4425,6 +4425,34 @@ def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
     assert "langfuse_host" in str(exc.value)
 
 
+def test_proxy_wide_selective_configurable_clientside_auth_params():
+    """Proxy-wide selective opt-in via general_settings.configurable_clientside_auth_params admits
+    named params for every model without opening unlisted banned params."""
+    # When langfuse_environment is admitted proxy-wide:
+    is_request_body_safe(
+        request_body={
+            "model": "gpt-4",
+            "langfuse_environment": "staging",
+        },
+        general_settings={"configurable_clientside_auth_params": ["langfuse_environment"]},
+        llm_router=None,
+        model="gpt-4",
+    )
+
+    # But api_base remains banned:
+    with pytest.raises(ValueError, match="Rejected Request: api_base is not allowed in request body"):
+        is_request_body_safe(
+            request_body={
+                "model": "gpt-4",
+                "langfuse_environment": "staging",
+                "api_base": "https://attacker.example",
+            },
+            general_settings={"configurable_clientside_auth_params": ["langfuse_environment"]},
+            llm_router=None,
+            model="gpt-4",
+        )
+
+
 def test_observability_ban_covers_canonical_supported_callback_params():
     """Guard test: every entry in the canonical
     ``_supported_callback_params`` allow-list must end up either banned by
