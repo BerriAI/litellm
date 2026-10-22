@@ -177,7 +177,8 @@ async fn hosted_provider_failure_preserves_status_body_and_request_id() {
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .respond_with(ResponseTemplate::new(429).set_body_json(error.clone()))
-        .expect(1)
+        // The first try and the default two retries, all on the group's one deployment.
+        .expect(3)
         .mount(&upstream)
         .await;
     let request = Request::post("/v1/messages")

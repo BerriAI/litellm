@@ -64,7 +64,7 @@ async fn a_group_retries_failures_on_its_healthy_deployment(
 #[case::messages("/v1/messages")]
 #[case::chat("/v1/chat/completions")]
 #[tokio::test]
-async fn a_group_whose_deployments_all_fail_returns_the_last_failure_after_trying_each(
+async fn a_group_whose_deployments_all_fail_returns_the_last_failure_after_every_retry(
     #[case] endpoint: &str,
 ) {
     let first = upstream(500).await;
@@ -78,7 +78,10 @@ async fn a_group_whose_deployments_all_fail_returns_the_last_failure_after_tryin
     )
     .await;
     assert_eq!(response.status(), 500);
-    assert_eq!((hits(&first).await, hits(&second).await), (1, 1));
+    // Each deployment once, then the third attempt (two retries by default) on either.
+    let (first, second) = (hits(&first).await, hits(&second).await);
+    assert_eq!(first + second, 3);
+    assert!(first >= 1 && second >= 1, "{first} {second}");
 }
 
 #[rstest]
@@ -231,9 +234,11 @@ async fn a_retry_sends_the_same_body_as_the_first_attempt(
     let response = support::post(app, endpoint, request).await;
     assert_eq!(response.status(), 500);
     let (first, second) = (sent_bodies(&first).await, sent_bodies(&second).await);
-    assert_eq!((first.len(), second.len()), (1, 1));
-    assert_eq!(first, second);
+    assert!(!first.is_empty() && !second.is_empty());
+    let bodies: Vec<_> = first.into_iter().chain(second).collect();
+    assert_eq!(bodies.len(), 3);
+    assert!(bodies.iter().all(|body| *body == bodies[0]));
     if let Some(expected) = expected {
-        assert_eq!(first[0], expected.to_string());
+        assert_eq!(bodies[0], expected.to_string());
     }
 }
