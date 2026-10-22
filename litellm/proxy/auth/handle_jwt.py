@@ -821,6 +821,10 @@ class JWTHandler:
     async def _put_cached_value(self, cache_key: str, value: JWKKeyValue | str | float, ttl: float) -> None:
         await self.user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
+    async def _delete_cached_value(self, cache_key: str) -> None:
+        await self.user_api_key_cache.async_delete_cache(key=cache_key)
+
     async def _cached_with_stale_fallback(
         self,
         cache_key: str,
@@ -840,7 +844,9 @@ class JWTHandler:
         if cached is not None:
             return cached
 
-        servable: Final = await self._get_servable_stale_copy(cache_key=cache_key, ttl=ttl)
+        servable: Final[tuple[_CachedValueT, float] | None] = await self._get_servable_stale_copy(
+            cache_key=cache_key, ttl=ttl
+        )
         if servable is not None:
             stale, _ = servable
             verbose_proxy_logger.debug(
@@ -884,10 +890,13 @@ class JWTHandler:
         refresh: Callable[[], Awaitable[_CachedValueT]],
         log_context: str,
     ) -> None:
-        """Refresh ``cache_key`` off the request path; failures keep the stale copy in use.
+        """Refresh ``cache_key`` off the request path.
 
         Takes the single-flight lock so a concurrent cold-start caller cannot start a second fetch, and
-        reuses the unreachable backoff so a sustained outage still costs one fetch per window.
+        reuses the unreachable backoff so a sustained outage still costs one fetch per window. An
+        unreachable IdP keeps the bounded stale copy in use; a reachable IdP that answers badly
+        invalidates it, so the next request takes the blocking path and surfaces the error instead of
+        trusting keys the IdP may have rotated away.
         """
         try:
             lock: Final = self._refresh_locks.setdefault(cache_key, asyncio.Lock())
@@ -900,7 +909,9 @@ class JWTHandler:
                     cache_key=cache_key, ttl=ttl, stale_ttl=stale_ttl, refresh=refresh
                 )
                 if isinstance(outcome, JWKSUnreachableError):
-                    servable: Final = await self._get_servable_stale_copy(cache_key=cache_key, ttl=ttl)
+                    servable: Final[tuple[_CachedValueT, float] | None] = await self._get_servable_stale_copy(
+                        cache_key=cache_key, ttl=ttl
+                    )
                     if servable is None:
                         verbose_proxy_logger.warning(
                             "JWT Auth: background JWKS refresh for %s failed and no trusted copy remains: %s",
@@ -917,7 +928,11 @@ class JWTHandler:
                             outcome=outcome,
                             age=age,
                         )
-        except Exception as e:  # noqa: BLE001  # background refreshes never surface; staleness bounds model the failure
+        except Exception as e:  # noqa: BLE001  # only non-transport failures reach here; unreachable is an outcome value
+            # A reachable IdP that answers badly must surface its error, not keep the stale copy
+            # trusted: drop it so the next request takes the blocking refresh path and raises.
+            await self._delete_cached_value(f"{STALE_CACHE_KEY_PREFIX}{cache_key}")
+            await self._delete_cached_value(f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{cache_key}")
             verbose_proxy_logger.warning(
                 "JWT Auth: background JWKS refresh for %s raised unexpectedly: %s", log_context, e
             )
@@ -969,7 +984,9 @@ class JWTHandler:
         if stale_ttl <= 0:
             raise outcome
 
-        servable: Final = await self._get_servable_stale_copy(cache_key=cache_key, ttl=ttl)
+        servable: Final[tuple[_CachedValueT, float] | None] = await self._get_servable_stale_copy(
+            cache_key=cache_key, ttl=ttl
+        )
         if servable is None:
             raise outcome
         stale, age = servable

@@ -4833,8 +4833,9 @@ async def test_stale_fallback_warns_with_the_kid_and_how_stale_the_jwks_copy_is(
 async def test_unparseable_jwks_response_never_poisons_the_cached_keys(caplog):
     """A reachable IdP that answers badly must not poison the cache, and the failure must be loud.
 
-    The request itself is still served from the trusted copy while the refresh runs off-path; what the
-    stale fallback never does is store the garbled body as the key set.
+    The in-flight request is still served from the trusted copy while the refresh runs off-path, but the
+    garbled body invalidates the stale copy, so the next request takes the blocking path and the parse
+    error surfaces instead of silently trusting keys the IdP may have rotated away.
     """
     import logging
 
@@ -4861,16 +4862,22 @@ async def test_unparseable_jwks_response_never_poisons_the_cached_keys(caplog):
     await _await_background_jwks_refresh(jwt_handler, active_cache_key)
 
     assert await cache.async_get_cache(key=active_cache_key) is None
-    assert await cache.async_get_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_cache_key}") == [jwk]
+    assert await cache.async_get_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_cache_key}") is None
+    assert await cache.async_get_cache(key=f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{active_cache_key}") is None
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert any("raised unexpectedly" in m and "garbled-key" in m for m in warnings)
+
+    with pytest.raises(Exception, match="Error parsing response"):
+        await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="garbled-key")
 
 
 @pytest.mark.asyncio
 async def test_jwks_error_response_is_not_cached_over_the_last_known_good_keys(caplog):
     """An IdP error body must never be stored as the key set, least of all as the stale copy.
 
-    The request itself is still served from the trusted copy while the refresh runs off-path.
+    The in-flight request is still served from the trusted copy while the refresh runs off-path, but the
+    error invalidates the stale copy, so the next request takes the blocking path and the 503 surfaces
+    instead of silently trusting keys the IdP may have rotated away.
     """
     import logging
 
@@ -4897,9 +4904,13 @@ async def test_jwks_error_response_is_not_cached_over_the_last_known_good_keys(c
     await _await_background_jwks_refresh(jwt_handler, active_cache_key)
 
     assert await cache.async_get_cache(key=active_cache_key) is None
-    assert await cache.async_get_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_cache_key}") == [jwk]
+    assert await cache.async_get_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_cache_key}") is None
+    assert await cache.async_get_cache(key=f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{active_cache_key}") is None
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert any("raised unexpectedly" in m and "erroring-key" in m for m in warnings)
+
+    with pytest.raises(Exception, match="returned status 503"):
+        await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="erroring-key")
 
 
 @pytest.mark.asyncio
