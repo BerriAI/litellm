@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_name_from_message,
     strip_prefill_prefix_field,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import (
     type_to_response_format_param,  # pyright: ignore[reportUnknownVariableType]  # base_utils helper returns an untyped dict
@@ -339,10 +340,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         stream: bool | None = None,
     ) -> str:
         use_ai_gateway: Final = self.uses_ai_gateway(model)
-        api_base = self._get_api_base(api_base, use_ai_gateway=use_ai_gateway)
-        url_base: Final = api_base.rstrip("/") if use_ai_gateway else api_base
-        complete_url: Final = f"{url_base}/chat/completions"
-        return complete_url
+        return join_api_base(self._get_api_base(api_base, use_ai_gateway=use_ai_gateway), "chat/completions")
 
     def get_supported_openai_params(self, model: str | None = None) -> list:
         return [

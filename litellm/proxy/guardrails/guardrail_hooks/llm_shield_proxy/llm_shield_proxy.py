@@ -494,7 +494,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         sse: Final = AnthropicSSERestorer(step)
         events: Final = ResponsesStreamRestorer(step, rehydrate)
         carries: Final[CarryWindows] = {}
-        last_chunk = None  # rebind-ok: tracks the most recent chunk for the final flush.
+        last_chunk = None  # rebind-ok: tracks the most recent chunk with choices for the final flush.
 
         async for chunk in response:
             if isinstance(chunk, (bytes, str)):
@@ -506,7 +506,8 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                     yield event
                 continue
             restored_chunk = detached(chunk)
-            last_chunk = restored_chunk
+            if getattr(restored_chunk, "choices", None):
+                last_chunk = restored_chunk
             for choice in attribute_items(restored_chunk, "choices"):
                 await self._restore_choice(choice, carries, session_id)
             yield restored_chunk

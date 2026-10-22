@@ -9,6 +9,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -107,9 +108,8 @@ class LangFlowConfig(BaseConfig):
                 "api_base is required for LangFlow. Set it via LANGFLOW_API_BASE env var or api_base parameter."
             )
 
-        api_base = api_base.rstrip("/")
         flow_id: Final = quote(self._get_flow_id(model, optional_params), safe="")
-        return f"{api_base}/api/v1/run/{flow_id}"
+        return join_api_base(api_base, f"api/v1/run/{flow_id}")
 
     def _get_last_user_message(self, messages: list[AllMessageValues]) -> str:
         """Extract the text of the last user message to use as input_value."""

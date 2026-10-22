@@ -156,6 +156,9 @@ DEFAULT_REPLICATE_POLLING_RETRIES: Final = get_env_int("DEFAULT_REPLICATE_POLLIN
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_int("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1)
 DEFAULT_IMAGE_TOKEN_COUNT: Final = get_env_int("DEFAULT_IMAGE_TOKEN_COUNT", 250)
 HF_CONFIG_FETCH_TIMEOUT_SECONDS: Final = 10.0
+HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS: Final = get_env_int_in_range(
+    "HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS", 300, 1, 86400
+)
 
 # Maximum wall-clock seconds a streaming response is allowed to run.
 # Streams exceeding this duration are terminated with a Timeout error.
@@ -608,6 +611,7 @@ NON_LLM_CONNECTION_TIMEOUT: Final = get_env_int(
 )  # timeout for adjacent services (e.g. jwt auth)
 MAX_EXCEPTION_MESSAGE_LENGTH: Final = get_env_int("MAX_EXCEPTION_MESSAGE_LENGTH", 2000)
 MAX_STRING_LENGTH_PROMPT_IN_DB: Final = get_env_int("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048)
+MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB: Final = 64 * 1024
 BEDROCK_MAX_POLICY_SIZE: Final = get_env_int("BEDROCK_MAX_POLICY_SIZE", 75)
 # One entry per distinct AWS credential-argument set. Per-user cost attribution passes the attributed
 # identity as aws_session_name, so this bounds how many attributed identities keep a cached STS session.
@@ -1654,6 +1658,7 @@ BAGGAGE_MAPPED_TAGS_METADATA_KEY: Final = "_baggage_mapped_tags"
 VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
