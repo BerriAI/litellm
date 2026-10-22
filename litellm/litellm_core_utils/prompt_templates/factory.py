@@ -1669,6 +1669,7 @@ def convert_to_gemini_tool_call_result(
 
 _TOOL_USE_ID_FALLBACK: Final = "tool_use_id"
 _ANTHROPIC_TOOL_USE_ID_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
+_BEDROCK_TOOL_USE_ID_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_.:-]")
 _BEDROCK_TOOL_USE_ID_MAX_LEN: Final = 64
 _BEDROCK_TOOL_USE_ID_HASH_LEN: Final = 8
 
