@@ -117,7 +117,6 @@ from litellm.litellm_core_utils.logging_worker import optional_callback_budget
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
-    perform_redaction,
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redacted_model_call_details_for_custom_logger,
@@ -3719,11 +3718,8 @@ class Logging(LiteLLMLoggingBaseClass):
                         call_type=self.call_type,
                     )
                 elif isinstance(callback, CustomLogger):
-                    result = cast(  # cast-ok: legacy redaction returns heterogeneous response objects
-                        object,
-                        redact_message_input_output_from_custom_logger(
-                            result=result, litellm_logging_obj=self, custom_logger=callback
-                        ),
+                    result = redact_message_input_output_from_custom_logger(
+                        result=result, litellm_logging_obj=self, custom_logger=callback
                     )
                     self.model_call_details, result = await callback.async_logging_hook(
                         kwargs=self.model_call_details,
@@ -3760,10 +3756,11 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
             self.shadow_eval_request_snapshot = None
+            body_free_logger: Final = CustomLogger(message_logging=False)
             self.model_call_details = redacted_model_call_details_for_custom_logger(
-                self.model_call_details, CustomLogger(message_logging=False)
+                self.model_call_details, body_free_logger
             )
-            perform_redaction(self.model_call_details, None)
+            redact_message_input_output_from_custom_logger(self, None, body_free_logger)
             assembled_stream: Final = "async_complete_streaming_response" in self.model_call_details
             accounting_response: Final[object] = (
                 self.model_call_details["async_complete_streaming_response"] if assembled_stream else result
