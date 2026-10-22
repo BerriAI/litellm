@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 from collections import Counter
 from collections.abc import Awaitable, Mapping
@@ -74,6 +75,10 @@ def _default_cache() -> InMemoryCache:
 
 def _default_fetch_lock() -> asyncio.Lock:
     return _latest_release_fetch_lock
+
+
+def _default_release_check_enabled() -> bool:
+    return os.getenv("LITELLM_DISABLE_LATEST_RELEASE_CHECK", "").strip().lower() != "true"
 
 
 def _bucket_for(line: str) -> _Bucket | None:
@@ -188,12 +193,16 @@ async def latest_release_info(
     client: Annotated[_AsyncGetClient, Depends(_default_client)],
     cache: Annotated[InMemoryCache, Depends(_default_cache)],
     fetch_lock: Annotated[asyncio.Lock, Depends(_default_fetch_lock)],
+    release_check_enabled: Annotated[bool, Depends(_default_release_check_enabled)],
 ) -> LatestReleaseInfo | None:
     """
     Latest stable LiteLLM GitHub release with the PR count of its whole minor line (e.g. v1.105.0 + v1.105.1)
     split into new features, bug fixes and other updates.
     Returns null when GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
+    Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without contacting GitHub.
     """
+    if not release_check_enabled:
+        return None
     result: Final = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
     if isinstance(result, LatestReleaseUnavailable):
         verbose_proxy_logger.warning("LiteLLM: latest release info unavailable: %s", result.reason)

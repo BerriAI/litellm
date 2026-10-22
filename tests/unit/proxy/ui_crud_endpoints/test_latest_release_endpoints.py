@@ -368,6 +368,19 @@ class TestLatestReleaseInfoEndpoint:
         assert response.status_code == 200
         assert response.json() is None
 
+    @pytest.mark.parametrize(
+        ("flag", "expected_body", "expected_github_calls"),
+        [("true", None, 0), (" TRUE ", None, 0), ("false", EXPECTED_INFO, 1)],
+    )
+    def test_disable_flag_skips_github(self, http_client, monkeypatch, flag, expected_body, expected_github_calls):
+        monkeypatch.setenv("LITELLM_DISABLE_LATEST_RELEASE_CHECK", flag)
+        client = _RecordingClient([_github_response()])
+        _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
+        response = http_client.get("/get/latest_release_info")
+        assert response.status_code == 200
+        assert response.json() == expected_body
+        assert len(client.calls) == expected_github_calls
+
     def test_repeated_requests_reuse_cache(self, http_client):
         client = _RecordingClient([_github_response()])
         _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
