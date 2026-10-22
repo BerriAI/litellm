@@ -14,10 +14,12 @@ import { DataTable } from "@/components/shared/DataTable";
 import ModelFilters from "@/components/model_filters";
 import {
   fetchMCPServers,
+  getGatewayBaseUrl,
   getAgentsList,
   getConfigFieldSetting,
   getGlobalLitellmHeaderName,
   getProxyBaseUrl,
+  getUiPageUrl,
   getUiConfig,
   modelHubCall,
   modelHubPublicModelsCall,
@@ -52,6 +54,7 @@ import {
   isDecisionMode,
 } from "@/lib/decisionModels";
 import DecisionModelGarden from "@/components/AIHub/DecisionModelGarden";
+import { ModelCustomMetadata } from "./ModelCustomMetadata";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -151,7 +154,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
       // If token is invalid, redirect to login
       if (!isTokenValid) {
-        window.location.replace(getLoginUrl(getProxyBaseUrl()));
+        window.location.replace(getUiPageUrl(getLoginUrl(getProxyBaseUrl())));
         return;
       }
     }
@@ -457,9 +460,9 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
             <div className="flex items-center space-x-4">
               <p>Model Hub URL:</p>
               <div className="flex items-center bg-border px-2 py-1 rounded-sm">
-                <p className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</p>
+                <p className="mr-2">{getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}</p>
                 <button
-                  onClick={() => void copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
+                  onClick={() => void copyToClipboard(getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`))}
                   className="p-1 hover:bg-accent rounded-sm transition-colors"
                   title="Copy URL"
                 >
@@ -717,6 +720,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                       <p className="mt-1">{selectedModel.description}</p>
                     </div>
                   )}
+                  <ModelCustomMetadata
+                    customTags={selectedModel.custom_tags}
+                    customMetadata={selectedModel.custom_metadata}
+                  />
                 </div>
               </div>
 
@@ -829,7 +836,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <SyntaxHighlighter language="python" className="text-sm" style={syntaxTheme}>
                   {modelUsageExample(
                     selectedModel.mode,
-                    getProxyBaseUrl(),
+                    getGatewayBaseUrl(),
                     selectedModel.model_group,
                     getGlobalLitellmHeaderName(),
                   )}

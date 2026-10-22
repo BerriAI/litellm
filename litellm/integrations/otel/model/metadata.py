@@ -42,6 +42,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast, get_args
 
+from pydantic import TypeAdapter
+
 from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
@@ -56,6 +58,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
 
 _INTERNAL_CALL_ORIGINS: Final[frozenset[str]] = frozenset(get_args(InternalCallOrigin))
+_AUTH_ATTRIBUTE: Final = TypeAdapter(object)
 
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
@@ -129,7 +132,7 @@ class RequestIdentity:
         snapshot) is flattened to dotted keys so ``requester_metadata.<key>``
         resolves too.
         """
-        get: Final[Callable[[str], object]] = lambda name: getattr(auth, name, None)  # noqa: E731
+        get: Final[Callable[[str], object]] = lambda name: _AUTH_ATTRIBUTE.validate_python(getattr(auth, name, None))  # noqa: E731
         auth_meta: Final = tuple(
             (meta_key, str(value))
             for meta_key, attr in (
@@ -246,11 +249,16 @@ class LLMCallEvent:
     # ``InternalCallOrigin`` such as ``autorouter_classifier``), ``None`` for the
     # caller's own provider attempt.
     purpose: str | None
+    # True for a response served from the litellm response cache. A cache hit
+    # never hands off to a provider, so ``upstream_started`` stays False even
+    # though the call completed and is worth a span.
+    cache_hit: bool
     # A best-effort ``"{operation} {model}"`` name known at ``pre_call`` time. The
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
     provisional_span_name: str
     time_to_first_chunk_seconds: float | None
+    completion_start_seconds: float | None
     trace: TraceControls
     session_id: str | None
 
@@ -270,8 +278,10 @@ class LLMCallEvent:
             upstream_started=kwargs.get("api_call_start_time") is not None,
             upstream_start_seconds=_epoch_seconds(kwargs.get("api_call_start_time")),
             purpose=internal_call_origin(payload, kwargs),
+            cache_hit=bool(payload.get("cache_hit")) if payload else False,  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
+            completion_start_seconds=_epoch_seconds(kwargs.get("completion_start_time")),
             trace=trace,
             session_id=caller_session_id(kwargs, trace),
         )

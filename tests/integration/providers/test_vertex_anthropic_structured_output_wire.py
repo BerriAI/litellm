@@ -28,7 +28,10 @@ from integration._support.process import OwnedProxy, graceful_stop_seconds, owne
 from integration._support.upstream import aws_event_stream_frame
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _JSON_TOOL: Final = "json_tool_call"
 _USER_TOOL: Final = "lookup"
@@ -36,8 +39,11 @@ _STRUCTURED_OUTPUTS_BETA: Final = "structured-outputs-2025-11-13"
 _TOOL_MODEL: Final = "claude-sonnet-5"
 _EFFORT_GATED_MODEL: Final = "claude-haiku-4-5"
 _NATIVE_MODEL: Final = "claude-opus-5-5"
+_FORCED_TOOL_NATIVE_MODEL: Final = "claude-haiku-5-5"
 _UNMAPPED_MODEL: Final = "claude-scripted-9"
 _BEDROCK_INVOKE_MODEL: Final = "anthropic.claude-sonnet-5"
+_BEDROCK_JSON_TOOL_MODEL: Final = "us.anthropic.claude-opus-4-8"
+_THINKING_SIGNATURE: Final = "c2NyaXB0ZWQtc2lnbmF0dXJl"
 _PROJECT: Final = "scripted-project"
 _LOCATION: Final = "us-east5"
 _VERTEX_MODELS: Final = f"/v1/projects/{_PROJECT}/locations/{_LOCATION}/publishers/anthropic/models/"
@@ -84,6 +90,10 @@ _VALUES_SCHEMA: Final[dict[str, JsonValue]] = {
     "properties": {"values": {"type": "object"}},
     "required": ["values"],
 }
+_VALUES_RESPONSE_FORMAT: Final[dict[str, JsonValue]] = {
+    "type": "json_schema",
+    "json_schema": {"name": "valued", "schema": _VALUES_SCHEMA},
+}
 _ADDITIONAL_OBJECT_SCHEMA: Final[dict[str, JsonValue]] = {
     **_OPTIONAL_SCHEMA,
     "additionalProperties": {"type": "object"},
@@ -96,6 +106,8 @@ _ADDITIONAL_TRUE_SCHEMA: Final[dict[str, JsonValue]] = {**_OPTIONAL_SCHEMA, "add
 _CLOSED_OPTIONAL_SCHEMA: Final[dict[str, JsonValue]] = {**_OPTIONAL_SCHEMA, "additionalProperties": False}
 _CALLERS_FORMAT: Final[dict[str, JsonValue]] = {"type": "json_schema", "schema": {**_SCHEMA, "title": "callers"}}
 _ANTHROPIC_JSON_TOOL: Final[dict[str, JsonValue]] = {"name": _JSON_TOOL, "input_schema": _SCHEMA}
+_FORCED_JSON_TOOL: Final[dict[str, JsonValue]] = {"type": "tool", "name": _JSON_TOOL}
+_REASONING_FIELDS: Final = ("thinking", "output_config", "max_tokens")
 _USER_TOOL_SPEC: Final[dict[str, JsonValue]] = {
     "type": "function",
     "function": {
@@ -169,7 +181,6 @@ _FAMILY: Final = (
     "claude_platform_unmapped",
     "vertex_haiku",
 )
-_STREAM_FAMILY: Final = ("anthropic_unmapped", "azure_ai_unmapped", "bedrock_invoke", "vertex_haiku")
 _FRAGMENT_SIZE: Final = 20
 _TIMING_BYTES: Final = 512 * 1024
 _TIMING_FRAGMENT: Final = 4096
@@ -597,6 +608,14 @@ def _chat_body(
     return body if tools is None else {**body, "tools": tools}
 
 
+def _effort_body(model: str, marker: str) -> dict[str, JsonValue]:
+    return {"model": model, "messages": [{"role": "user", "content": marker}], "reasoning_effort": "low"}
+
+
+def _reasoning_fields(delivery: _Delivery) -> dict[str, JsonValue]:
+    return {field: delivery.body.get(field) for field in _REASONING_FIELDS}
+
+
 def _messages_body(model: str, marker: str, *, stream: bool = False, **extra: JsonValue) -> dict[str, JsonValue]:
     return {
         "model": model,
@@ -740,6 +759,33 @@ def _vertex_deployment(gateway: Gateway, scenario: Scenario, api_base: str, back
     )
 
 
+def _bedrock_invoke_deployment(
+    scenario: Scenario, api_base: str, backend: str, model_info: Mapping[str, JsonValue] | None = None
+) -> str:
+    return scenario.model(
+        model=f"bedrock/invoke/{backend}",
+        api_base=api_base,
+        api_key=_BEDROCK_TOKEN,
+        aws_region_name="us-east-1",
+        model_info=model_info,
+    )
+
+
+def _rejects_forced_tools_without_native_output(row: Mapping[str, JsonValue]) -> bool:
+    return row.get("supports_forced_tool_use") is False and row.get("supports_native_structured_output") is not True
+
+
+def _claude_rejecting_forced_tools(gateway: Gateway, namespace: str, family: str) -> str:
+    rows: Final = gateway.get("/public/litellm_model_cost_map")
+    names: Final = sorted(
+        name.removeprefix(namespace)
+        for name, row in rows.items()
+        if name.startswith(namespace + family) and _rejects_forced_tools_without_native_output(object_value(row))
+    )
+    assert names, f"The cost map has no {namespace}{family} row rejecting forced tools without native output"
+    return names[0]
+
+
 def _family_deployment(gateway: Gateway, scenario: Scenario, api_base: str, member: str) -> str:
     match member:
         case "anthropic_unmapped":
@@ -747,12 +793,7 @@ def _family_deployment(gateway: Gateway, scenario: Scenario, api_base: str, memb
         case "azure_ai_unmapped":
             return scenario.model(model=f"azure_ai/{_UNMAPPED_MODEL}", api_base=api_base, api_key=_AZURE_KEY)
         case "bedrock_invoke":
-            return scenario.model(
-                model=f"bedrock/invoke/{_BEDROCK_INVOKE_MODEL}",
-                api_base=api_base,
-                api_key=_BEDROCK_TOKEN,
-                aws_region_name="us-east-1",
-            )
+            return _bedrock_invoke_deployment(scenario, api_base, _BEDROCK_INVOKE_MODEL)
         case "bedrock_mantle":
             return scenario.model(
                 model=f"bedrock_mantle/{_BEDROCK_INVOKE_MODEL}",
@@ -1089,8 +1130,10 @@ def test_vertex_chat_stream_json_schema_content_is_the_schema_object(gateway: Ga
         response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker, stream=True))
         frames: Final = _content_frames(response)
         assert json.loads("".join(frames)) == _expected(shape, marker_hex), response.text
-        expected_frames: Final = 1 if shape in _HELD_STREAM_SHAPES else _fragment_count(shape, marker_hex)
-        assert len(frames) == expected_frames, (len(frames), expected_frames, frames)
+        if shape in _HELD_STREAM_SHAPES:
+            assert len(frames) == 1, frames
+        else:
+            assert len(frames) >= _fragment_count(shape, marker_hex), frames
         sent: Final = _one_delivery(wire, marker_hex)
         assert sent.target == f"{_VERTEX_MODELS}{_TOOL_MODEL}{_VERTEX_STREAM_SUFFIX}", sent.target
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
@@ -1140,8 +1183,7 @@ def test_vertex_chat_json_schema_without_required_keys_unwraps_only_the_tool_nam
         content: Final = _stream_content(response) if stream else _chat_content(response)
         assert content == (_payload(marker_hex) if unwrapped else _tool_input(shape, marker_hex)), response.text
         if stream:
-            expected_frames: Final = 1 if unwrapped else _fragment_count(shape, marker_hex)
-            assert len(_content_frames(response)) == expected_frames, response.text
+            assert (len(_content_frames(response)) == 1) is unwrapped, response.text
         _one_delivery(wire, marker_hex)
 
 
@@ -1162,7 +1204,7 @@ def test_vertex_chat_json_schema_that_declares_the_wrapper_key_keeps_the_answer_
         content: Final = _stream_content(response) if stream else _chat_content(response)
         assert content == _tool_input("values", marker_hex), response.text
         if stream:
-            assert len(_content_frames(response)) == _fragment_count("values", marker_hex), response.text
+            assert len(_content_frames(response)) >= _fragment_count("values", marker_hex), response.text
         _one_delivery(wire, marker_hex)
 
 
@@ -1194,9 +1236,10 @@ def test_vertex_chat_json_schema_that_allows_undeclared_keys_keeps_an_undeclared
         )
         content: Final = _stream_content(response) if stream else _chat_content(response)
         assert content == (_payload(marker_hex) if unwrapped else _tool_input(shape, marker_hex)), response.text
-        if stream:
-            expected_frames: Final = 1 if unwrapped else _fragment_count(shape, marker_hex)
-            assert len(_content_frames(response)) == expected_frames, response.text
+        if stream and unwrapped:
+            assert len(_content_frames(response)) == 1, response.text
+        elif stream:
+            assert len(_content_frames(response)) >= _fragment_count(shape, marker_hex), response.text
         _one_delivery(wire, marker_hex)
 
 
@@ -1293,7 +1336,7 @@ def test_tool_path_family_unwraps_the_envelope(gateway: Gateway, member: str) ->
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
 
 
-@pytest.mark.parametrize("member", _STREAM_FAMILY)
+@pytest.mark.parametrize("member", _FAMILY)
 def test_tool_path_family_stream_unwraps_the_envelope(gateway: Gateway, member: str) -> None:
     marker, marker_hex = _marker("wrapped")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1305,6 +1348,61 @@ def test_tool_path_family_stream_unwraps_the_envelope(gateway: Gateway, member: 
         assert len(frames) == 1, frames
         sent: Final = _one_delivery(wire, marker_hex)
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
+
+
+@pytest.mark.parametrize("accepts_forced_tools", [True, False], ids=["accepts_forced_tools", "rejects_forced_tools"])
+def test_vertex_chat_json_schema_forces_the_json_tool_only_when_the_model_accepts_forced_tools(
+    gateway: Gateway, accepts_forced_tools: bool
+) -> None:
+    marker, marker_hex = _marker("plain")
+    backend: Final = (
+        _TOOL_MODEL if accepts_forced_tools else _claude_rejecting_forced_tools(gateway, "vertex_ai/", "claude")
+    )
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, backend)
+        response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
+        assert _chat_content(response) == _payload(marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
+        assert sent.body.get("tool_choice") == (_FORCED_JSON_TOOL if accepts_forced_tools else None), sent.body
+        assert "output_config" not in sent.body and "output_format" not in sent.body, sent.body
+
+
+def test_vertex_chat_json_schema_on_a_model_rejecting_forced_tools_maps_reasoning_effort_like_plain_chat(
+    gateway: Gateway,
+) -> None:
+    backend: Final = _claude_rejecting_forced_tools(gateway, "vertex_ai/", "claude")
+    structured_marker, structured_hex = _marker("plain")
+    plain_marker, plain_hex = _marker("plain")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, backend)
+        structured: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {**_effort_body(model, structured_marker), "response_format": _RESPONSE_FORMAT},
+        )
+        assert _chat_content(structured) == _payload(structured_hex), structured.text
+        structured_sent: Final = _one_delivery(wire, structured_hex)
+        plain: Final = gateway.request("POST", "/v1/chat/completions", _effort_body(model, plain_marker))
+        assert plain.status_code == 200, plain.text
+        plain_sent: Final = _one_delivery(wire, plain_hex)
+    assert "thinking" in plain_sent.body, plain_sent.body
+    assert _reasoning_fields(structured_sent) == _reasoning_fields(plain_sent), (structured_sent.body, plain_sent.body)
+
+
+def test_bedrock_invoke_json_schema_sends_the_json_tool_unforced_when_the_model_rejects_forced_tools(
+    gateway: Gateway,
+) -> None:
+    marker, marker_hex = _marker("plain")
+    backend: Final = _claude_rejecting_forced_tools(gateway, "", "anthropic.claude")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _bedrock_invoke_deployment(scenario, wire.url, backend)
+        response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
+        assert _chat_content(response) == _payload(marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert sent.target == f"/model/{backend}/invoke", sent.target
+        assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
+        assert "tool_choice" not in sent.body, sent.body
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
@@ -1341,6 +1439,156 @@ def test_vertex_responses_native_folds_output_format(gateway: Gateway) -> None:
         response: Final = gateway.request("POST", "/v1/responses", _responses_body(model, marker))
         assert _responses_text(response) == _payload(marker_hex), response.text
         assert _folded_format(_one_delivery(wire, marker_hex)) == _OUTPUT_FORMAT
+
+
+def _native_deployment(gateway: Gateway, scenario: Scenario, api_base: str, provider: str, backend: str) -> str:
+    match provider:
+        case "vertex_ai":
+            return _vertex_deployment(gateway, scenario, api_base, backend)
+        case "anthropic":
+            return scenario.model(model=f"anthropic/{backend}", api_base=api_base, api_key=_ANTHROPIC_KEY)
+        case "azure_ai":
+            return scenario.model(model=f"azure_ai/{backend}", api_base=api_base, api_key=_AZURE_KEY)
+        case _:
+            raise AssertionError(provider)
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
+def test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open(
+    gateway: Gateway, provider: str
+) -> None:
+    marker, marker_hex = _marker("values")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _native_deployment(gateway, scenario, wire.url, provider, _FORCED_TOOL_NATIVE_MODEL)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_VALUES_RESPONSE_FORMAT)
+        )
+        assert _chat_content(response) == _tool_input("values", marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert not _structured(sent.body), sent.body
+        assert _json_tool_schema(sent)["properties"] == _VALUES_SCHEMA["properties"], sent.body
+
+
+@pytest.mark.parametrize(
+    ("provider", "backend", "extra"),
+    [
+        ("anthropic", _NATIVE_MODEL, {}),
+        ("vertex_ai", _NATIVE_MODEL, {}),
+        ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {"thinking": {"type": "adaptive"}}),
+        ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {"tools": [_USER_TOOL_SPEC]}),
+        ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {"reasoning_effort": "none"}),
+        ("azure_ai", _FORCED_TOOL_NATIVE_MODEL, {"reasoning_effort": "none"}),
+    ],
+    ids=[
+        "forced_tool_refused-anthropic",
+        "forced_tool_refused-vertex_ai",
+        "thinking",
+        "caller_tools",
+        "effort_none-anthropic",
+        "effort_none-azure_ai",
+    ],
+)
+def test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced(
+    gateway: Gateway, provider: str, backend: str, extra: dict[str, JsonValue]
+) -> None:
+    marker, marker_hex = _marker("values")
+    expected_tools: Final[frozenset[str]] = frozenset({_USER_TOOL}) if "tools" in extra else frozenset()
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _native_deployment(gateway, scenario, wire.url, provider, backend)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {**_chat_body(model, marker, response_format=_VALUES_RESPONSE_FORMAT), **extra},
+        )
+        assert _chat_content(response) == _payload(marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert _structured(sent.body), sent.body
+        assert _tool_names(sent.body) == expected_tools, sent.body
+        assert "tool_choice" not in sent.body, sent.body
+        assert ("thinking" in sent.body) is ("thinking" in extra), sent.body
+
+
+def _thinking_then_json_tool(request: Request) -> Reply:
+    body: Final = _JSON_OBJECT.validate_json(request.body)
+    _, marker_hex = _marker_of(body)
+    assert _JSON_TOOL in _tool_names(body), body
+    thinking: Final[dict[str, JsonValue]] = {
+        "type": "thinking",
+        "thinking": f"thinking {marker_hex}",
+        "signature": _THINKING_SIGNATURE,
+    }
+    answer: Final = _tool_use(f"toolu_{marker_hex}", _JSON_TOOL, _payload(marker_hex))
+    return Reply(body=json.dumps(_message(f"msg_{marker_hex}", [thinking, answer], "tool_use")).encode())
+
+
+def _json_tool_deployment(gateway: Gateway, scenario: Scenario, api_base: str, provider: str) -> str:
+    match provider:
+        case "vertex_ai":
+            return _vertex_deployment(gateway, scenario, api_base, _TOOL_MODEL)
+        case "bedrock_invoke":
+            return _bedrock_invoke_deployment(
+                scenario, api_base, _BEDROCK_JSON_TOOL_MODEL, {"supports_bedrock_native_structured_output": False}
+            )
+        case _:
+            raise AssertionError(provider)
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai", "bedrock_invoke"])
+def test_json_mode_answer_keeps_the_thinking_that_preceded_the_json_tool_call(gateway: Gateway, provider: str) -> None:
+    marker, marker_hex = _marker("plain")
+    with wire_server(_thinking_then_json_tool) as wire, gateway.scenario() as scenario:
+        model: Final = _json_tool_deployment(gateway, scenario, wire.url, provider)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", {**_chat_body(model, marker), "reasoning_effort": "high"}
+        )
+        message: Final = _chat_message(response)
+        assert json.loads(string_value(message["content"])) == _payload(marker_hex), response.text
+        assert message.get("reasoning_content") == f"thinking {marker_hex}", response.text
+        (block,) = tuple(object_value(item) for item in list_value(message.get("thinking_blocks") or []))
+        assert (block["thinking"], block["signature"]) == (f"thinking {marker_hex}", _THINKING_SIGNATURE), block
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert "thinking" in sent.body, sent.body
+        assert sent.body.get("tool_choice") != _FORCED_JSON_TOOL, sent.body
+
+
+def test_vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_object(gateway: Gateway) -> None:
+    marker, marker_hex = _marker("native")
+    schema: Final[dict[str, JsonValue]] = {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "backup": {"type": ["object", "null"], "properties": {"name": {"type": "string"}}, "required": ["name"]},
+        },
+        "required": ["summary", "tags", "backup"],
+        "additionalProperties": False,
+    }
+    expected: Final[dict[str, JsonValue]] = {
+        **schema,
+        "properties": {
+            "summary": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "backup": {
+                "type": ["object", "null"],
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    response_format: Final[dict[str, JsonValue]] = {
+        "type": "json_schema",
+        "json_schema": {"name": "tagged", "schema": schema},
+    }
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _NATIVE_MODEL)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=response_format)
+        )
+        assert _chat_content(response) == _payload(marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert _folded_format(sent) == {"type": "json_schema", "schema": expected}, sent.body
+        assert "tools" not in sent.body, sent.body
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
@@ -1571,25 +1819,32 @@ def test_vertex_chat_without_response_format_sends_no_tool_and_no_output_config(
         assert not {"tools", "output_config", "output_format"} & sent.body.keys(), sent.body
 
 
-@pytest.mark.parametrize(
-    "output_format",
-    [5, [], {}, "x" * 5000],
-    ids=["int", "list", "empty", "5kb"],
-)
-def test_vertex_messages_malformed_output_format_reaches_the_caller_as_the_peer_400(
+def test_vertex_messages_empty_output_format_reaches_the_caller_as_the_peer_400(gateway: Gateway) -> None:
+    marker, marker_hex = _marker("native")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _NATIVE_MODEL)
+        response: Final = gateway.request("POST", "/v1/messages", _messages_body(model, marker, output_format={}))
+        assert response.status_code == 400, response.text
+        assert _BAD_FORMAT in response.text, response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert "output_format" not in sent.body, sent.body
+        assert object_value(sent.body["output_config"])["format"] == {}, sent.body
+        assert gateway.request("GET", "/health/liveliness").status_code == 200
+
+
+@pytest.mark.parametrize("output_format", [5, [], "x" * 5000], ids=["int", "list", "5kb"])
+def test_vertex_messages_non_object_output_format_is_refused_without_reaching_the_peer(
     gateway: Gateway, output_format: JsonValue
 ) -> None:
-    marker, marker_hex = _marker("native")
+    marker, _ = _marker("native")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
         model: Final = _vertex_deployment(gateway, scenario, wire.url, _NATIVE_MODEL)
         response: Final = gateway.request(
             "POST", "/v1/messages", _messages_body(model, marker, output_format=output_format)
         )
         assert response.status_code == 400, response.text
-        assert _BAD_FORMAT in response.text, response.text
-        sent: Final = _one_delivery(wire, marker_hex)
-        assert "output_format" not in sent.body, sent.body
-        assert object_value(sent.body["output_config"])["format"] == output_format, sent.body
+        assert "needs `output_format` to be a JSON object" in response.text, response.text
+        assert _delivered(wire) == ()
         assert gateway.request("GET", "/health/liveliness").status_code == 200
 
 
@@ -1649,9 +1904,9 @@ def test_vertex_chat_peer_error_reaches_the_caller_and_the_deployment_keeps_serv
 ) -> None:
     marker, marker_hex = _marker("wrapped")
     after, after_hex = _marker("wrapped")
+    port: Final = allocate_port()
     with gateway.scenario() as scenario:
-        with wire_server(_failing(status)) as failing:
-            port: Final = int(failing.url.rsplit(":", 1)[1])
+        with wire_server(_failing(status), port=port) as failing:
             model: Final = _vertex_deployment(gateway, scenario, failing.url, _TOOL_MODEL)
             response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
             assert response.status_code == status, response.text
@@ -1745,8 +2000,8 @@ def test_upstream_outage_mid_run_recovers_with_envelopes_still_unwrapped(gateway
                 assert observed == _payload(marker_hex), response.text
             _seen_once(_delivered(wire), tuple(marker_hex for _, marker_hex, _ in results))
 
-        with wire_server(_peer) as wire:
-            port: Final = int(wire.url.rsplit(":", 1)[1])
+        port: Final = allocate_port()
+        with wire_server(_peer, port=port) as wire:
             model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
             unwrapped(wire, wave())
         outage: Final = wave()

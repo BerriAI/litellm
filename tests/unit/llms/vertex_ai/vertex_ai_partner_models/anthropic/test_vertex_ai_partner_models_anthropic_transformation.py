@@ -1,7 +1,9 @@
 
 import copy
 import json
+from collections.abc import Mapping
 from typing import Final
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -18,6 +20,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
 @pytest.mark.parametrize(
@@ -915,6 +918,44 @@ def test_sanitize_folds_output_format_into_output_config(model: str, data: dict,
     assert request["output_config"] == expected_output_config
 
 
+def _vertex_chat_request_with_output_format(
+    output_format: object, litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    return VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-6",
+        messages=[{"role": "user", "content": "What is 6 times 7?"}],
+        optional_params={"max_tokens": 64, "output_format": output_format},
+        litellm_params=dict(litellm_params),
+        headers={},
+    )
+
+
+def test_vertex_chat_request_drops_a_malformed_output_format_under_per_request_drop_params():
+    request: Final = _vertex_chat_request_with_output_format("json", {"drop_params": True})
+
+    assert "output_format" not in request
+    assert "output_config" not in request
+
+
+def test_vertex_chat_request_drops_a_malformed_output_format_under_the_global_drop_params_flag(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    request: Final = _vertex_chat_request_with_output_format("json", {})
+
+    assert "output_format" not in request
+    assert "output_config" not in request
+
+
+def test_vertex_chat_request_rejects_a_malformed_output_format_without_drop_params_naming_the_proxy_setting():
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        _vertex_chat_request_with_output_format("json", {})
+
+    assert error.value.status_code == 400
+    assert "litellm_settings:\n drop_params: true" in str(error.value)
+
+
 def test_vertex_ai_native_response_format_reaches_vertex_as_output_config_format(local_model_cost_map):
     config = VertexAIAnthropicConfig()
     schema: Final = {"type": "object", "properties": {"result": {"type": "string"}}, "required": ["result"]}
@@ -966,6 +1007,40 @@ def test_vertex_ai_fable_5_1_response_format_uses_native_output_format(local_mod
     assert "output_format" in result_params
     assert "tool_choice" not in result_params
     assert "tools" not in result_params
+
+
+def _is_tool_based_vertex_claude_rejecting_forced_tools(info: Mapping[str, object]) -> bool:
+    return (
+        info.get("litellm_provider") == "vertex_ai-anthropic_models"
+        and info.get("supports_forced_tool_use") is False
+        and info.get("supports_native_structured_output") is not True
+    )
+
+
+def test_vertex_ai_tool_based_response_format_skips_forced_tool_choice_when_model_rejects_it(local_model_cost_map):
+    model: Final = next(
+        name.removeprefix("vertex_ai/")
+        for name, info in litellm.model_cost.items()
+        if _is_tool_based_vertex_claude_rejecting_forced_tools(info)
+    )
+    result_params: Final = VertexAIAnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            }
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "output_format" not in result_params
+    assert "tools" in result_params
+    assert "tool_choice" not in result_params
 
 
 def test_vertex_ai_anthropic_tool_based_response_format_still_upgrades_legacy_thinking(local_model_cost_map):
@@ -1090,3 +1165,23 @@ def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_convers
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user", "system"]
     assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+
+
+def test_refusal_stop_details_kept_through_vertex_anthropic_transform():
+    body: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE
+    result: Final = VertexAIAnthropicConfig().transform_response(
+        model="claude-sonnet-5-5",
+        raw_response=httpx.Response(status_code=200, headers={}, json=body),
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"] == ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]

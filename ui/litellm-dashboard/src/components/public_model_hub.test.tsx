@@ -28,6 +28,8 @@ vi.mock("./networking", async (importOriginal) => {
       litellm_version: "1.0.0",
       useful_links: {},
     }),
+    getProxyBaseUrl: vi.fn(() => "https://backend.example.com"),
+    getGatewayBaseUrl: vi.fn(() => "https://gateway.example.com"),
     agentHubPublicModelsCall: vi.fn().mockResolvedValue([]),
     mcpHubPublicServersCall: vi.fn().mockResolvedValue([]),
     skillHubPublicCall: vi.fn().mockResolvedValue({ plugins: [] }),
@@ -515,6 +517,29 @@ describe("public hub MCP details modal", () => {
     // so finding it proves the modal rendered and the url assertion is not vacuous.
     await screen.findByText("Server Overview");
     expect(screen.queryByText(PUBLIC_SERVER_URL)).not.toBeInTheDocument();
+  });
+
+  it("uses the backend URL in displayed and copied MCP examples", async () => {
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([mockMcpServer]);
+
+    const user = userEvent.setup();
+    const clipboardWriteText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    renderHub();
+
+    await user.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    await user.click(await screen.findByRole("button", { name: "exa_test" }));
+    await screen.findByText("Server Overview");
+
+    expect(screen.getByText(/https:\/\/backend\.example\.com\/exa_test\/mcp/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Copy to clipboard" }));
+
+    expect(clipboardWriteText).toHaveBeenCalledWith(
+      expect.stringContaining('"url": "https://backend.example.com/exa_test/mcp"'),
+    );
+    const copiedSnippet = clipboardWriteText.mock.calls[0]?.[0] as string;
+    expect(copiedSnippet).not.toContain("https://gateway.example.com");
+    clipboardWriteText.mockRestore();
   });
 
   it("closes the server details modal from its close control", async () => {

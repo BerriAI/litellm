@@ -35,6 +35,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
 )
 from litellm.types.utils import CallTypes, ModelResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 
 @pytest.fixture
@@ -8063,3 +8064,44 @@ async def test_during_call_masking_rewrites_only_pii_block_in_content_list(
     ]
     assert messages[1]["content"] == "Hello, how can I help you today?"
     assert messages[2]["content"] == "who is the president of the united states?"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrail_config", "upstream_answer"),
+    [
+        pytest.param(
+            {"guardrailIdentifier": "wf0hkdb5x07f", "guardrailVersion": "DRAFT"},
+            {"action": "NONE", "outputs": [], "assessments": []},
+            id="apply_guardrail",
+        ),
+        pytest.param(
+            {"checks": {"contentFilter": {"categories": [{"category": "VIOLENCE"}]}}, "content_filter_threshold": 0.5},
+            {"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 0.1}]}}},
+            id="invoke_guardrail_checks",
+        ),
+    ],
+)
+async def test_guardrail_secret_lookups_leave_the_event_loop_free(
+    guardrail_config: dict[str, object],
+    upstream_answer: dict[str, object],
+    respx_mock: respx.MockRouter,
+    httpx_transport: None,
+    aws_test_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    vault: Final = host_in_loop_probing_vault(monkeypatch, "AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION_NAME")
+    guardrail: Final = BedrockGuardrail(**guardrail_config)
+    upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=upstream_answer))
+
+    _ = await guardrail.make_bedrock_api_request(
+        source="INPUT",
+        messages=[{"role": "user", "content": "hello"}],
+        request_data={"messages": []},
+    )
+
+    assert vault.read.is_set()
+    assert not vault.read_on_loop.is_set()
+    assert upstream.calls.last.request.url.host == "bedrock-runtime.us-west-2.amazonaws.com"

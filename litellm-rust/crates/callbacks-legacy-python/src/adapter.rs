@@ -9,7 +9,7 @@ use litellm_host::{
     interceptors::{RawResponse, RequestContext, WireRequest},
     lifecycle::{FailureOrigin, Timing, epoch_seconds},
 };
-use litellm_host_python::{HookStep, from_py, missing_state, to_py};
+use litellm_host_python::{Error as HostError, HookStep, from_py, to_py};
 use pyo3::{
     exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
@@ -160,7 +160,7 @@ impl LegacyLogging {
         self.response
             .as_ref()
             .map(|response| HookStep::Ready(response.clone_ref(py)))
-            .ok_or_else(missing_state)
+            .ok_or_else(|| HostError::MissingState.into())
     }
 
     fn dispatch_success(&self, py: Python<'_>) -> PyResult<()> {
@@ -209,7 +209,7 @@ impl LegacyLogging {
 
     fn stream_success(&self, py: Python<'_>, stream: &DeliveredStream) -> PyResult<()> {
         let logger = self.logger()?;
-        let billing = self.stream_billing().ok_or_else(missing_state)?;
+        let billing = self.stream_billing().ok_or(HostError::MissingState)?;
         let billed = Streaming::Success.call(
             py,
             (
@@ -525,7 +525,7 @@ impl LegacyLogging {
             return self.stream_failure(py);
         }
         if origin == FailureOrigin::Call && self.logger.is_some() && self.runs_deployment_hooks() {
-            let error = self.error.as_ref().ok_or_else(missing_state)?;
+            let error = self.error.as_ref().ok_or(HostError::MissingState)?;
             return Ok(HookStep::Await(
                 DeploymentHooks::after_failure(py, self.call.kwargs(), error, self.call_type())?,
                 Self::resume_deployment_failure,
@@ -536,7 +536,7 @@ impl LegacyLogging {
 
     pub(crate) fn stream_opened(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()> {
         if self.stream_billing().is_none() {
-            return Err(missing_state());
+            return Err(HostError::MissingState.into());
         }
         if let Some(key) = &self.cache_key {
             head.bind(py).set_item("cache_key", key)?;
@@ -551,7 +551,7 @@ impl LegacyLogging {
     }
 
     pub(crate) fn stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {
-        let stream = self.stream.as_mut().ok_or_else(missing_state)?;
+        let stream = self.stream.as_mut().ok_or(HostError::MissingState)?;
         if stream.first_chunk.is_none() {
             stream.first_chunk = Some(datetime(py, epoch_seconds())?);
         }

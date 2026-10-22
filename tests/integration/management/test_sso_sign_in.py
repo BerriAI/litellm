@@ -18,7 +18,7 @@ from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
 
-pytestmark: Final = pytest.mark.timeout(300)
+pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 CLIENT_ID: Final = "integration-sso-client"
 CLIENT_SECRET: Final = "integration-sso-secret"

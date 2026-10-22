@@ -1,8 +1,12 @@
 import asyncio
 import json
+import random
+import sys
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -43,6 +47,47 @@ async def test_async_increment_delegates_to_locked_sync_path():
     assert await cache.async_increment("counter", 2) == 2
     assert await cache.async_increment("counter", 3) == 5
     assert cache.get_cache("counter") == 5
+
+
+class _AnotherReaderExpiresTheEntryFirstCache(InMemoryCache):
+    other_reader_started = False
+    other_reader_result: object = "not run"
+
+    def evict_element_if_expired(self, key: str) -> bool:
+        if not self.other_reader_started:
+            self.other_reader_started = True
+            self.other_reader_result = self.get_cache(key)
+        return super().evict_element_if_expired(key)
+
+
+def test_get_cache_reads_an_entry_another_reader_just_expired_as_a_miss() -> None:
+    cache: Final = _AnotherReaderExpiresTheEntryFirstCache()
+    cache.set_cache("tokenizer_failure", "HF unavailable", ttl=-1)
+
+    assert cache.get_cache("tokenizer_failure") is None
+    assert cache.other_reader_result is None
+
+
+class _ClockThatLetsAnotherReaderRunFirst:
+    cache: InMemoryCache | None = None
+    other_reader_result: object = "not run"
+
+    def __call__(self) -> float:
+        cache: Final = self.cache
+        if cache is not None:
+            self.cache = None
+            self.other_reader_result = cache.get_cache("tokenizer_failure")
+        return 100.0
+
+
+def test_get_cache_reads_an_entry_another_reader_expires_during_the_expiry_check_as_a_miss() -> None:
+    clock: Final = _ClockThatLetsAnotherReaderRunFirst()
+    cache: Final = InMemoryCache(clock=clock)
+    cache.set_cache("tokenizer_failure", "HF unavailable", ttl=-1)
+    clock.cache = cache
+
+    assert cache.get_cache("tokenizer_failure") is None
+    assert clock.other_reader_result is None
 
 
 def test_in_memory_openai_obj_cache():
@@ -230,6 +275,66 @@ def test_in_memory_cache_heap_size_staus_bounded():
 
     # Expiration heap should only have 1 entry
     assert len(in_memory_cache.expiration_heap) == 1
+
+
+def test_in_memory_cache_heap_stays_bounded_when_a_live_key_is_rewritten_with_a_new_ttl() -> None:
+    in_memory_cache = InMemoryCache(max_size_in_memory=10)
+    in_memory_cache.set_cache(key="expires_first", value="pin", ttl=300)
+
+    for i in range(1_000):
+        in_memory_cache.delete_cache("hot_key")
+        in_memory_cache.set_cache(key="hot_key", value=f"value_{i}", ttl=3600)
+
+    assert in_memory_cache.get_cache("hot_key") == "value_999"
+    assert len(in_memory_cache.expiration_heap) <= 2 * in_memory_cache.max_size_in_memory + 1
+
+
+@pytest.fixture
+def fine_grained_thread_switching() -> Iterator[None]:
+    previous_interval: Final = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    yield
+    sys.setswitchinterval(previous_interval)
+
+
+def _keys_until(deadline: float, rng: random.Random) -> Iterator[str]:
+    while time.monotonic() < deadline:
+        yield f"hot_{rng.randrange(5)}" if rng.random() < 0.7 else f"cold_{rng.randrange(40)}"
+
+
+def _rewrite_keys_until(cache: InMemoryCache, deadline: float, seed: int) -> None:
+    rng: Final = random.Random(seed)
+    for key in _keys_until(deadline, rng):
+        cache.delete_cache(key)
+        cache.set_cache(key, "pin", ttl=rng.choice((300, 3600)))
+
+
+@pytest.mark.usefixtures("fine_grained_thread_switching")
+def test_in_memory_cache_survives_threads_rewriting_keys_in_a_full_cache() -> None:
+    cache: Final = InMemoryCache(max_size_in_memory=5)
+    deadline: Final = time.monotonic() + 0.5
+    thread_count: Final = 8
+
+    with ThreadPoolExecutor(max_workers=thread_count) as executor:
+        futures: Final = tuple(
+            executor.submit(_rewrite_keys_until, cache, deadline, seed) for seed in range(thread_count)
+        )
+
+    assert [future.exception() for future in futures] == [None] * thread_count
+    keys: Final = (*(f"hot_{i}" for i in range(5)), *(f"cold_{i}" for i in range(40)))
+    assert sum(cache.get_cache(key) is not None for key in keys) <= cache.max_size_in_memory
+
+
+def test_in_memory_cache_stays_bounded_when_entries_have_no_usable_expiry() -> None:
+    cache: Final = InMemoryCache(max_size_in_memory=10)
+    for i in range(30):
+        cache.set_cache(key=f"nan_{i}", value="response", ttl="NaN")
+    cache.set_cache(key="fresh", value="response", ttl=60)
+
+    keys: Final = (*(f"nan_{i}" for i in range(30)), "fresh")
+    retained: Final = tuple(key for key in keys if cache.get_cache(key) is not None)
+    assert len(retained) <= cache.max_size_in_memory
+    assert cache.get_cache("fresh") == "response"
 
 
 def test_in_memory_cache_prunes_expired_heap_entries_below_capacity():
