@@ -1105,6 +1105,19 @@ async def list_gateway_tools(
     )
 
 
+async def _resolve_catalog_caller(context: OperationContext) -> UserAPIKeyAuth | None:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+
+    caller: Final = await MCPRequestHandler.refresh_catalog_authority(context.user_api_key_auth)
+    if caller is not None and getattr(caller, "mcp_toolset_id", None) is not None:
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
+
+        return await apply_toolset_scope(caller, caller.mcp_toolset_id)
+    return caller
+
+
 async def list_gateway_catalog(
     context: OperationContext, request: CatalogListRequest, *, log_list_tools_to_spendlogs: bool = True
 ) -> CatalogListResult:
@@ -1123,12 +1136,7 @@ async def list_gateway_catalog(
     )
     from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
-    refreshed_caller = await MCPRequestHandler.refresh_catalog_authority(context.user_api_key_auth)
-    if refreshed_caller is not None and getattr(refreshed_caller, "mcp_toolset_id", None) is not None:
-        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
-
-        refreshed_caller = await apply_toolset_scope(refreshed_caller, refreshed_caller.mcp_toolset_id)
-    context = replace(context, _caller=refreshed_caller)
+    context = replace(context, _caller=await _resolve_catalog_caller(context))
     params: Final = request.params or PaginatedRequestParams()
     if isinstance(request, ListToolsRequest):
         return await list_gateway_tools(context, params, log_list_tools_to_spendlogs=log_list_tools_to_spendlogs)
