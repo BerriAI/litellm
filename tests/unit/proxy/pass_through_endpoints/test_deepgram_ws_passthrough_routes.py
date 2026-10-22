@@ -303,7 +303,12 @@ def test_deepgram_listen_rejects_connections_without_a_litellm_key():
     relay = _FakeRelay()
     client = TestClient(_app_with_relay(relay))
 
-    with patch(GET_CREDENTIALS, return_value="dg-provider-key") as get_credentials:
+    with (
+        patch(GET_CREDENTIALS, return_value="dg-provider-key") as get_credentials,
+        patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
+            "litellm.proxy.proxy_server", master_key="sk-master", prisma_client=MagicMock()
+        ),
+    ):
         with pytest.raises(WebSocketDisconnect) as disconnect:
             with client.websocket_connect("/deepgram/v1/listen?model=nova-3"):
                 pass
