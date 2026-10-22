@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
 
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::{AliasIssue, Catalog, ModelInfo, UtcHours, Weekday};
+use crate::{AliasIssue, Catalog, Mode, ModelInfo, UtcHours, Weekday};
 
 /// A registry entry violates the checked-in catalog contract.
 #[derive(Debug, Error)]
@@ -68,6 +69,9 @@ fn validate_entry_inner(model_name: &str, value: &Value) -> Result<(), String> {
         if names.iter().any(|name| !name.is_string()) {
             return Err(format!("{model_name}.aliases must contain strings"));
         }
+    }
+    if let Some(mode) = object.get("mode") {
+        Mode::deserialize(mode).map_err(|error| format!("{model_name}.mode: {error}"))?;
     }
     let info: ModelInfo =
         serde_json::from_value(value.clone()).map_err(|error| format!("{model_name}: {error}"))?;

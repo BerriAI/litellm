@@ -45,6 +45,7 @@ fn fixture_catalog() -> Catalog {
 #[rstest]
 #[case::decisions("decisions", Mode::Decisions)]
 #[case::legacy_evaluation("evaluation", Mode::Evaluation)]
+#[case::extraction("extraction", Mode::Extraction)]
 fn parses_decision_modes(#[case] mode: &str, #[case] expected: Mode) {
     let source = json!({"Test":{"litellm_provider":"test","mode":mode}}).to_string();
     let catalog = Catalog::parse(source.as_bytes(), Provenance::default()).unwrap();
@@ -54,6 +55,25 @@ fn parses_decision_modes(#[case] mode: &str, #[case] expected: Mode) {
         Some(expected)
     );
     assert_eq!(serde_json::to_value(expected).unwrap(), json!(mode));
+}
+
+/// A mode added upstream after this build must not drop every other entry with it.
+#[rstest]
+fn unknown_mode_reads_as_absent() {
+    let source = json!({
+        "New":{"litellm_provider":"test","mode":"not_a_mode_yet","max_tokens":10},
+        "Old":{"litellm_provider":"test","mode":"chat"}
+    })
+    .to_string();
+    let catalog = Catalog::parse(source.as_bytes(), Provenance::default()).unwrap();
+
+    let new = catalog.lookup("New").unwrap().entry.info();
+    assert_eq!(new.mode, None);
+    assert_eq!(new.max_tokens, Some(10));
+    assert_eq!(
+        catalog.lookup("Old").unwrap().entry.info().mode,
+        Some(Mode::Chat)
+    );
 }
 
 #[rstest]
