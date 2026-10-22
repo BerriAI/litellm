@@ -74,7 +74,7 @@ def _anthropic_error_detail(
     return with_call_id
 
 
-def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
+def anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
     from litellm.proxy.proxy_server import (
         _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; error JSONResponses returned by the route must stamp the OTel server span like the global ProxyException handler does
         general_settings_view,
@@ -285,7 +285,7 @@ async def anthropic_response(
         log_llm_api_exception(e, base_llm_response_processor.litellm_call_id)
 
         if isinstance(e, ProxyException):
-            return _anthropic_error_json_response(
+            return anthropic_error_json_response(
                 with_litellm_call_id(e, base_llm_response_processor.litellm_call_id), request
             )
 
@@ -308,10 +308,10 @@ async def anthropic_response(
         )
 
         if isinstance(e, HTTPException):
-            return _anthropic_error_json_response(proxy_exception_from_http_exception(e, headers), request)
+            return anthropic_error_json_response(proxy_exception_from_http_exception(e, headers), request)
 
         error_msg: Final = f"{e}"
-        return _anthropic_error_json_response(
+        return anthropic_error_json_response(
             ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=openai_error_type(e, error_status_code(e, 500)),
@@ -405,7 +405,7 @@ async def count_tokens(
             token_fields if isinstance(token_fields, ProxyException) else _token_count_request(token_fields)
         )
         if isinstance(token_request, ProxyException):
-            return _anthropic_error_json_response(token_request, request)
+            return anthropic_error_json_response(token_request, request)
 
         token_response: Final = await count_request_tokens(
             request=token_request,
@@ -414,12 +414,12 @@ async def count_tokens(
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:
-        return _anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)
+        return anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)
     except ProxyException as e:
-        return _anthropic_error_json_response(e, request)
+        return anthropic_error_json_response(e, request)
     except Exception as e:
         log_llm_api_exception(e, litellm_call_id)
-        return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
+        return anthropic_error_json_response(proxy_exception_from_route_error(e), request)
     else:
         return {"input_tokens": token_response.total_tokens, **count_source_fields(token_response)}
 
