@@ -1177,4 +1177,20 @@ describe("getUiConfig runtime backend discovery", () => {
       discovery_mode: "well_known_fallback",
     });
   });
+  it("encodes special characters in logId when calling uiSpendLogDetailsCall", async () => {
+    const originalFetch = global.fetch;
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ id: "test" }),
+    });
+    global.fetch = mockFetch;
+
+    try {
+      await Networking.uiSpendLogDetailsCall("token-123", "chatcmpl-123#a1", "2026-01-01");
+      const calledUrl = String(mockFetch.mock.calls.at(-1)?.[0]);
+      expect(calledUrl).toContain("/spend/logs/ui/chatcmpl-123%23a1?start_date=2026-01-01");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
 });

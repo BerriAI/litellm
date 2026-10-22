@@ -9,6 +9,7 @@ single markdown report that can be pasted into a bug report or handed to another
 import json
 import os
 import re
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -177,7 +178,7 @@ class SpendLogsFetcher:
             return DebugFailure(f"Unexpected {uri} response: {e}")
 
     def payload(self, request_id: str) -> RequestResponsePayload | None | DebugFailure:
-        uri: Final = f"/spend/logs/ui/{request_id}"
+        uri: Final = f"/spend/logs/ui/{urllib.parse.quote(request_id, safe='')}"
         raw: Final = self._get(uri)
         if isinstance(raw, DebugFailure):
             return raw
