@@ -40,12 +40,12 @@ pub use general::{
 pub use guardrail::{Guardrail, GuardrailParams};
 pub use litellm::{
     AiohttpSettings, AzureBlobCacheParams, BackgroundMode, BudgetSettings, CacheParams,
-    CachingSettings, CallerIdentity, ClientCertificateSettings, CustomProvider, DiskCacheParams,
-    FallbackSettings, GcsCacheParams, Http2Settings, LiteLlmSettings, LoggingSettings,
-    McpToolSettings, ModelGroupSettings, PriorityReservationSettings, ProxyCacheTtlParams,
-    QdrantCacheParams, RedisCacheParams, RedisServerCacheParams, ResponsesSettings, S3CacheParams,
-    SemanticCacheParams, SocketSettings, TeamDefaultSettings, TlsSettings,
-    UpperboundKeyGenerateParams, ValkeyCacheParams,
+    CachingSettings, CallbackVar, CallerIdentity, ClientCertificateSettings, CustomProvider,
+    DiskCacheParams, FallbackSettings, GcsCacheParams, Http2Settings, LiteLlmSettings,
+    LoggingSettings, McpToolSettings, ModelGroupSettings, PriorityReservationSettings,
+    ProxyCacheTtlParams, QdrantCacheParams, RedisCacheParams, RedisServerCacheParams,
+    ResponsesSettings, S3CacheParams, SemanticCacheParams, SocketSettings, TeamDefaultSettings,
+    TlsSettings, UpperboundKeyGenerateParams, ValkeyCacheParams,
 };
 pub use litellm_python_compat::read::Spelled;
 pub use litellm_router_types::LitellmParams;

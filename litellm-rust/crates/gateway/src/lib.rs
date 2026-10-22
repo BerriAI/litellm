@@ -1,6 +1,5 @@
 mod error;
 mod secrets;
-pub use error::Error;
 
 use std::{sync::Arc, time::Instant};
 
@@ -12,6 +11,7 @@ use axum::{
     response::Response,
 };
 use http_body_util::BodyExt;
+use uuid::Uuid;
 
 use litellm_config::Config;
 use litellm_config_load::Environment;
@@ -21,7 +21,8 @@ use litellm_http::{ClientVariant, HttpClientPool, Resolution, media::PublicDnsRe
 use litellm_inference::resources::CoreResources;
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
-use uuid::Uuid;
+
+pub use error::Error;
 
 pub fn build_inference(config: &Config, process: &Environment) -> Result<Arc<Gateway>, Error> {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
@@ -32,7 +33,11 @@ pub fn build_inference(config: &Config, process: &Environment) -> Result<Arc<Gat
             .map(|(name, value)| (name.clone(), value.expose().to_owned())),
     );
     let http_settings = litellm_config_load::http_settings(&config.litellm_settings, &lookup);
-    let http = Resolution::from(&http_settings).config;
+    let resolution = Resolution::from(&http_settings);
+    for unsupported in &resolution.unsupported {
+        litellm_tracing::warn!("{unsupported}");
+    }
+    let http = resolution.config;
     let client = pool.client(&http, ClientVariant::Provider)?;
     let secrets = Arc::new(secrets::ConfigSecrets::new(
         environment,

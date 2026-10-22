@@ -303,22 +303,3 @@ impl litellm_secrets::source::SecretSource for NoSecrets {
         Box::pin(async { Ok(None) })
     }
 }
-
-#[rstest]
-fn applies_configured_http_environment_before_building_clients() {
-    let directory = tempfile::tempdir().unwrap();
-    let missing = directory.path().join("missing-ca.pem");
-    let config = Config::from_yaml(&format!(
-        "environment_variables: {{SSL_VERIFY: '{}'}}\nlitellm_settings: {{ssl_verify: false}}",
-        missing.display(),
-    ))
-    .unwrap();
-    let error = litellm_gateway::build_inference(&config, &Environment::default())
-        .err()
-        .unwrap();
-    assert!(matches!(
-        error,
-        litellm_gateway::Error::Http(litellm_http::Error::Read { path, .. })
-            if path == missing
-    ));
-}

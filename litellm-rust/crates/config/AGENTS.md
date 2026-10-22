@@ -42,6 +42,7 @@ Sections split one YAML mapping into several structs with nested `#[serde(flatte
 Which gives these rules
 
 - Each mapping has exactly one `#[serde(flatten)] additional_fields: Object`, declared last on the outermost struct of that mapping. Flattened sub-structs stay plain, with no flatten field inside
+- The exception is a mapping where Python gives every unnamed key one meaning, like the callback vars in a `default_team_settings` entry. Its catch-all is a typed map named for that meaning (`inline_callback_vars`), so a value of the wrong shape fails to parse
 - A key belongs to exactly one struct. Which one is decided by who reads it, see `src/AGENTS.md`
 - Never combine `deny_unknown_fields` with flatten, on either the outer or the flattened struct. It is fine on a struct that is never flattened and has no flatten fields
 

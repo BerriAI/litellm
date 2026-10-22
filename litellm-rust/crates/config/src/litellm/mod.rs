@@ -8,7 +8,7 @@ mod transport;
 use serde::Deserialize;
 
 pub use self::{
-    budget::{BudgetSettings, TeamDefaultSettings, UpperboundKeyGenerateParams},
+    budget::{BudgetSettings, CallbackVar, TeamDefaultSettings, UpperboundKeyGenerateParams},
     caching::{
         AzureBlobCacheParams, CacheParams, CachingSettings, DiskCacheParams, GcsCacheParams,
         ProxyCacheTtlParams, QdrantCacheParams, RedisCacheParams, RedisServerCacheParams,
@@ -297,8 +297,11 @@ mod tests {
         );
         assert_eq!(background.ttl, Some(Spelled::Value(60)));
         let team = &settings.budget.default_team_settings.unwrap()[0];
-        assert_eq!(team.team_id.as_deref(), Some("team-1"));
-        assert!(team.additional_fields.contains_key("success_callback"));
+        assert_eq!(team.team_id, "team-1");
+        assert_eq!(
+            team.success_callback.as_deref(),
+            Some(&["langfuse".to_owned()][..])
+        );
         let upperbound = settings.budget.upperbound_key_generate_params.unwrap();
         assert_eq!(upperbound.max_budget, Some(Spelled::Value(100.0)));
         assert_eq!(upperbound.duration.as_deref(), Some("30d"));
@@ -319,7 +322,10 @@ mod tests {
     #[case::cache_raw("  cache_params: {s3_config: {secret: SENTINEL}}")]
     #[case::gitlab_object("  global_gitlab_config: {access_token: SENTINEL}")]
     #[case::s3_callback_object("  s3_callback_params: {s3_aws_secret_access_key: SENTINEL}")]
-    #[case::team_object("  default_team_settings: [{team_id: t, langfuse_secret: SENTINEL}]")]
+    #[case::team_inline_var("  default_team_settings: [{team_id: t, langfuse_secret: SENTINEL}]")]
+    #[case::team_callback_vars(
+        "  default_team_settings: [{team_id: t, callback_vars: {langfuse_secret: SENTINEL}}]"
+    )]
     #[case::fallbacks_raw("  default_fallbacks: [SENTINEL]")]
     #[case::user_params_raw("  default_internal_user_params: {models: [SENTINEL]}")]
     #[case::callback_entry("  callbacks: [SENTINEL]")]
