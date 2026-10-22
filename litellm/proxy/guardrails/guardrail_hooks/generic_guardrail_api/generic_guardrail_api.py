@@ -8,7 +8,7 @@
 import fnmatch
 import os
 from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -590,11 +590,20 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
 
             headers: Final = self._build_request_headers()
+            request_payload: Final = self._request_body(guardrail_request, structured_messages)
+            shown_messages_raw: Final = request_payload.get("structured_messages")
+            shown_messages: Final = (
+                cast(  # cast-ok: JSON-serialized structured_messages from GenericGuardrailAPIRequest
+                    Sequence[AllMessageValues], shown_messages_raw
+                )
+                if isinstance(shown_messages_raw, list)
+                else guardrail_request.structured_messages
+            )
 
             # Make the API request
             # Use mode="json" to ensure all iterables are converted to lists
             response: Final = await self._post_check(
-                self._request_body(guardrail_request, structured_messages),
+                request_payload,
                 headers,
                 self.num_retries,
             )
@@ -623,7 +632,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 images=images,
                 tools=tools,
                 structured_messages=structured_messages,
-                shown_messages=guardrail_request.structured_messages,
+                shown_messages=shown_messages,
                 guardrail_response=guardrail_response,
             )
 
