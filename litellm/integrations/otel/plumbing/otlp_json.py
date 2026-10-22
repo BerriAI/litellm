@@ -15,6 +15,7 @@ from google.protobuf.json_format import MessageToDict
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export import SpanExportResult
 
 JSON_CONTENT_TYPE: Final = "application/json"
 _HEX_ID_KEYS: Final = frozenset({"traceId", "spanId", "parentSpanId"})
@@ -66,12 +67,22 @@ class OTLPJsonSpanExporter(OTLPSpanExporter):
     def __init__(
         self,
         endpoint: str | None,
-        headers: dict[str, str],  # mutable-ok: SDK __init__ takes Dict
+        headers: Mapping[str, str],
         certificate_file: str | None = None,
         session: "requests.Session | None" = None,
     ) -> None:
-        super().__init__(endpoint=endpoint, headers=headers, certificate_file=certificate_file, session=session)
-        self._session.headers["Content-Type"] = JSON_CONTENT_TYPE
+        super().__init__(
+            endpoint=endpoint,
+            headers={**headers, "Content-Type": JSON_CONTENT_TYPE},
+            certificate_file=certificate_file,
+            session=session,
+        )
 
-    def _serialize_spans(self, spans: Sequence[ReadableSpan]) -> bytes:
-        return encode_spans_json(spans)
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        if self._shutdown:
+            return SpanExportResult.FAILURE
+        payload: Final = encode_spans_json(spans)
+        if 0 < self._max_request_size < len(payload):
+            return SpanExportResult.FAILURE
+        result: Final = self._client.export(payload)
+        return SpanExportResult.SUCCESS if result.success else SpanExportResult.FAILURE
