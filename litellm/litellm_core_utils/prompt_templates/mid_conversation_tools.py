@@ -1,12 +1,15 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import chain
-from typing import Final, TypeVar, cast
+from typing import TYPE_CHECKING, Final, overload
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 
-_Request: Final = TypeVar("_Request", bound=Mapping[str, object])
+if TYPE_CHECKING:
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +58,15 @@ def _tool_name(tool: object) -> str | None:
     return name if isinstance(name, str) else None
 
 
-def resolve_midturn_tool_changes(request: _Request) -> _Request:
+@overload
+def resolve_midturn_tool_changes(request: AnthropicMessagesRequest) -> AnthropicMessagesRequest: ...
+
+
+@overload
+def resolve_midturn_tool_changes(request: Mapping[str, object]) -> Mapping[str, object]: ...
+
+
+def resolve_midturn_tool_changes(request: Mapping[str, object]) -> Mapping[str, object]:
     """Resolve tool availability once so authorization and translation agree."""
     messages: Final = parts_of(request.get("messages"))
     changes: Final = tuple(chain.from_iterable(_message_tool_changes(message) for message in messages))
@@ -71,11 +82,8 @@ def resolve_midturn_tool_changes(request: _Request) -> _Request:
         definitions[name] for name in last_change if name in definitions and name not in existing_names
     )
     removed: Final = frozenset(change.name for change in last_change.values() if change.remove)
-    return cast(  # cast-ok: preserve request fields, replacing only its tools and messages payloads
-        _Request,
-        {
-            **request,
-            "tools": [tool for tool in (*tools, *added) if _tool_name(tool) not in removed],
-            "messages": [cleaned for message in messages if (cleaned := _without_tool_changes(message)) is not None],
-        },
-    )
+    return {
+        **request,
+        "tools": [tool for tool in (*tools, *added) if _tool_name(tool) not in removed],
+        "messages": [cleaned for message in messages if (cleaned := _without_tool_changes(message)) is not None],
+    }
