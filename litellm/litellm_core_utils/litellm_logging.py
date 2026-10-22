@@ -7062,21 +7062,23 @@ class StandardLoggingPayloadSetup:
             return None
         user_agent_tags: list[str] | None = None
         headers: Final = proxy_server_request.get("headers", {})
-        if headers is not None and isinstance(headers, dict):
-            request_headers: Final = cast(  # cast-ok: request headers are untyped framework data
-                dict[str, str | None], headers
-            )
-            if "user-agent" in request_headers:
-                user_agent: Final = request_headers["user-agent"]
-                if user_agent is not None:
-                    if user_agent_tags is None:
-                        user_agent_tags = []
-                    user_agent_part: str | None = None
-                    if "/" in user_agent:
-                        user_agent_part = user_agent.split("/")[0]
-                    if user_agent_part is not None:
-                        user_agent_tags.append("User-Agent: " + user_agent_part)
-                    user_agent_tags.append("User-Agent: " + user_agent)
+        if not isinstance(headers, dict):
+            return None
+        # Header names are case-insensitive: a client that sends "User-Agent"
+        # or "USER-AGENT" must still be tagged (#40979).
+        user_agent: Final = next(
+            (v for k, v in headers.items() if str(k).lower() == "user-agent"),
+            None,
+        )
+        if user_agent is not None:
+            if user_agent_tags is None:
+                user_agent_tags = []
+            user_agent_part: str | None = None
+            if "/" in user_agent:
+                user_agent_part = user_agent.split("/")[0]
+            if user_agent_part is not None:
+                user_agent_tags.append("User-Agent: " + user_agent_part)
+            user_agent_tags.append("User-Agent: " + user_agent)
         return user_agent_tags
 
     @staticmethod
