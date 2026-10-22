@@ -6,6 +6,7 @@
 mod caching;
 mod chat_completions;
 mod client_side;
+mod deployment_params;
 mod error;
 mod hooks;
 pub mod messages;

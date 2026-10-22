@@ -134,6 +134,7 @@ async fn handle(
                     crate::observe::record(name, deployment);
                     request::authorize(identity, name, deployment).await?;
                     let mut body = body?;
+                    crate::deployment_params::apply(deployment, &mut body);
                     let extra_headers = client_headers.for_deployment(deployment, &mut body);
                     if ChatCompletionsRoute::serves_openai(
                         &deployment.model,
