@@ -47,6 +47,7 @@ from litellm.types.llms.openai import (
     ChatCompletionImageObject,
     ChatCompletionTextObject,
     ChatCompletionUserMessage,
+    ChatCompletionVideoObject,
 )
 from litellm.types.llms.vertex_ai import *
 from litellm.types.llms.vertex_ai import (
@@ -737,6 +738,31 @@ def gemini_convert_messages_with_history(
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts: list[PartType] = []
                     for element_idx, element in enumerate(_message_content):
+                        match element["type"]:
+                            case "video_url":
+                                video_element = cast(  # cast-ok: the discriminator identifies video content
+                                    ChatCompletionVideoObject, element
+                                )
+                                video_source = video_element["video_url"]
+                                video_url: str
+                                video_detail: str | None
+                                match video_source:
+                                    case str():
+                                        video_url = video_source
+                                        video_detail = None
+                                    case _:
+                                        video_url = video_source["url"]
+                                        video_detail = video_source.get("detail")
+                                _parts.append(
+                                    _process_gemini_media(
+                                        image_url=video_url,
+                                        media_resolution_enum=_convert_detail_to_media_resolution_enum(video_detail),
+                                        model=model,
+                                        vertex_project=vertex_project,
+                                        vertex_credentials=vertex_credentials,
+                                    )
+                                )
+                                continue
                         if element["type"] == "text" and "text" in element and len(element["text"]) > 0:
                             element = cast(ChatCompletionTextObject, element)
                             _part = PartType(text=element["text"])
