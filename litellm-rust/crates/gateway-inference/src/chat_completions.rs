@@ -8,6 +8,7 @@ use axum::{
     http::{HeaderMap, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
 };
+use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host_http::Sse;
 use litellm_inference_chat::{
     ChatCompletionsRoute,
@@ -19,7 +20,11 @@ use serde_json::{Map, Value};
 
 use litellm_gateway_hooks::Route;
 
-use crate::{Deployment, Error, Gateway, JsonBody, request};
+use crate::{
+    Deployment, Error, Gateway, JsonBody, cache_control_injection,
+    messages::{ANTHROPIC_API_HEADER_PROVIDERS, ANTHROPIC_API_HEADERS},
+    request,
+};
 
 const ENV_REFERENCE: &str = "os.environ/";
 
@@ -105,18 +110,7 @@ async fn handle(
         None => route,
     };
 
-    // Chat forwards no client headers of its own; hooks may set some.
-    let extra_headers = tracking
-        .as_ref()
-        .and_then(|tracking| tracking.edit_headers(Vec::new()))
-        .filter(|headers| !headers.is_empty())
-        .map(|headers| {
-            headers
-                .into_iter()
-                .map(|(name, value)| (name, Value::from(value)))
-                .collect::<Map<String, Value>>()
-        });
-    let extra_headers = &extra_headers;
+    let client_headers = &ClientHeaders::new(headers, tracking.as_ref());
     let cache_headers = crate::caching::CacheHeaders::default();
     let mut body = Some(body);
     let routed = gateway
@@ -139,12 +133,18 @@ async fn handle(
                     let deployment = attempt.deployment;
                     crate::observe::record(name, deployment);
                     request::authorize(identity, name, deployment).await?;
-                    let body = body?;
+                    let mut body = body?;
+                    crate::deployment_params::apply(deployment, &mut body);
+                    let extra_headers = client_headers.for_deployment(deployment, &mut body);
+                    let injection_points = body.remove(cache_control_injection::INJECTION_POINTS);
                     if ChatCompletionsRoute::serves_openai(
                         &deployment.model,
                         deployment.custom_llm_provider.as_deref(),
                     ) {
-                        return openai(gateway, deployment, body, extra_headers.clone()).await;
+                        return openai(gateway, deployment, body, extra_headers).await;
+                    }
+                    if let Some(points) = &injection_points {
+                        cache_control_injection::apply(points, &mut body);
                     }
                     let (messages, mut optional_params) = split(body);
                     let stream = ChatCompletionsRoute::is_stream(&optional_params);
@@ -157,7 +157,7 @@ async fn handle(
                         api_key,
                         api_base,
                         custom_llm_provider: deployment.custom_llm_provider.clone(),
-                        extra_headers: extra_headers.clone(),
+                        extra_headers,
                         timeout: deployment.timeout,
                         drop_params: Some(drop_params(gateway, deployment)),
                         model_info: gateway.model_info(),
@@ -184,6 +184,77 @@ async fn handle(
     match tracking {
         Some(tracking) => tracking.finish(routed).await,
         None => routed,
+    }
+}
+
+/// The client headers a chat call can send on, as Python's proxy forwards them: the Anthropic
+/// API headers, which only Anthropic-speaking providers get, and any header a hook set.
+struct ClientHeaders {
+    anthropic: Map<String, Value>,
+    hooks: Map<String, Value>,
+}
+
+impl ClientHeaders {
+    fn new(headers: &HeaderMap, tracking: Option<&crate::hooks::Tracking>) -> Self {
+        let forwarded: Vec<(String, String)> = ANTHROPIC_API_HEADERS
+            .iter()
+            .filter_map(|name| {
+                let value = headers.get(*name)?.to_str().ok()?;
+                Some(((*name).to_owned(), value.to_owned()))
+            })
+            .collect();
+        let sent = match tracking {
+            Some(tracking) => tracking
+                .edit_headers(forwarded.clone())
+                .unwrap_or(forwarded),
+            None => forwarded,
+        };
+        let (anthropic, hooks) = sent.into_iter().partition::<Vec<_>, _>(|(name, _)| {
+            ANTHROPIC_API_HEADERS
+                .iter()
+                .any(|scoped| scoped.eq_ignore_ascii_case(name))
+        });
+        let map = |headers: Vec<(String, String)>| {
+            headers
+                .into_iter()
+                .map(|(name, value)| (name, Value::from(value)))
+                .collect()
+        };
+        Self {
+            anthropic: map(anthropic),
+            hooks: map(hooks),
+        }
+    }
+
+    /// The headers one attempt sends: the body's `extra_headers`, which leave the body, then
+    /// the Anthropic API headers when the deployment's provider takes them, as Python lays
+    /// them over the body's, then the hooks' headers.
+    fn for_deployment(
+        &self,
+        deployment: &Deployment,
+        body: &mut Map<String, Value>,
+    ) -> Option<Map<String, Value>> {
+        let mut headers = match body.remove("extra_headers") {
+            Some(Value::Object(headers)) => headers,
+            Some(Value::Null) | None => Map::new(),
+            Some(other) => {
+                body.insert("extra_headers".into(), other);
+                Map::new()
+            }
+        };
+        let custom = deployment.custom_llm_provider.as_deref();
+        let provider = get_custom_llm_provider(&deployment.model, custom)
+            .map(|resolved| resolved.custom_llm_provider)
+            .or(custom);
+        if provider.is_some_and(|provider| {
+            ANTHROPIC_API_HEADER_PROVIDERS
+                .split(',')
+                .any(|scoped| scoped == provider)
+        }) {
+            headers.extend(self.anthropic.clone());
+        }
+        headers.extend(self.hooks.clone());
+        (!headers.is_empty()).then_some(headers)
     }
 }
 
