@@ -198,7 +198,7 @@ def get_error_message(error_obj) -> str | None:
         return None
 
 
-def _get_error_request_id(error_obj) -> str | None:
+def _get_error_request_id(error_obj: object) -> str | None:
     """
     Return the provider request id carried by an error object, if any.
 
@@ -208,27 +208,23 @@ def _get_error_request_id(error_obj) -> str | None:
     - `body["error"]["request_id"]` — nested inside the error object
     - the `request_id` attribute the OpenAI SDK sets on its exceptions
     """
-    try:
-        if hasattr(error_obj, "body"):
-            _error_obj_body: Final = getattr(error_obj, "body")
-            if isinstance(_error_obj_body, dict):
-                _body_request_id: Final = _error_obj_body.get("request_id")
-                if isinstance(_body_request_id, str) and _body_request_id:
-                    return _body_request_id
+    _error_obj_body: Final = getattr(error_obj, "body", None)
+    if isinstance(_error_obj_body, dict):
+        _body_request_id: Final = _error_obj_body.get("request_id")
+        if isinstance(_body_request_id, str) and _body_request_id:
+            return _body_request_id
 
-                nested_error: Final = _error_obj_body.get("error")
-                if isinstance(nested_error, dict):
-                    _nested_request_id: Final = nested_error.get("request_id")
-                    if isinstance(_nested_request_id, str) and _nested_request_id:
-                        return _nested_request_id
+        nested_error: Final = _error_obj_body.get("error")
+        if isinstance(nested_error, dict):
+            _nested_request_id: Final = nested_error.get("request_id")
+            if isinstance(_nested_request_id, str) and _nested_request_id:
+                return _nested_request_id
 
-        _attr_request_id: Final = getattr(error_obj, "request_id", None)
-        if isinstance(_attr_request_id, str) and _attr_request_id:
-            return _attr_request_id
+    _attr_request_id: Final = getattr(error_obj, "request_id", None)
+    if isinstance(_attr_request_id, str) and _attr_request_id:
+        return _attr_request_id
 
-        return None
-    except Exception:
-        return None
+    return None
 
 
 ####### EXCEPTION MAPPING ################
