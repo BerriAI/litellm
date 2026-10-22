@@ -191,7 +191,7 @@ def test_gemini_convert_messages_sibling_file_block_for_pre_gemini_3():
     )
     new_fr = next(p["function_response"] for p in new_parts if "function_response" in p)
     nested = new_fr.get("parts") or []
-    assert any(p.get("inline_data", {}).get("mime_type") == "application/pdf" for p in nested]
+    assert any(p.get("inline_data", {}).get("mime_type") == "application/pdf" for p in nested)
 
 
 def _get_gemini_function_response_inline_data_parts(result):
