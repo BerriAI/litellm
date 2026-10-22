@@ -7,6 +7,7 @@ Covers:
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Final
 
 import pytest
 
@@ -16,6 +17,51 @@ from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
     extract_request_tool_names,
 )
+
+
+@pytest.mark.parametrize("already_declared", [False, True])
+@pytest.mark.asyncio
+async def test_midturn_tool_additions_cannot_bypass_key_allowlist(already_declared: bool) -> None:
+    data: Final = {
+        "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}] if already_declared else [],
+        "messages": [
+            {"role": "user", "content": "Use the available tool"},
+            {
+                "role": "system",
+                "content": [{
+                    "type": "tool_addition",
+                    "tool": {
+                        "type": "tool_definition",
+                        "definition": {"name": "run_sql", "input_schema": {"type": "object"}},
+                    },
+                }],
+            },
+        ],
+    }
+    token: Final = UserAPIKeyAuth(api_key="test-key", metadata={"allowed_tools": ["get_weather"]})
+
+    with pytest.raises(ProxyException, match="run_sql"):
+        await check_tools_allowlist(request_body=data, valid_token=token, team_object=None, route="/v1/messages")
+
+
+@pytest.mark.asyncio
+async def test_allowed_midturn_tool_addition_reaches_authorization() -> None:
+    data: Final = {
+        "messages": [{
+            "role": "system",
+            "content": [{
+                "type": "tool_addition",
+                "tool": {
+                    "type": "tool_definition",
+                    "definition": {"name": "get_weather", "input_schema": {"type": "object"}},
+                },
+            }],
+        }],
+    }
+    token: Final = UserAPIKeyAuth(api_key="test-key", metadata={"allowed_tools": ["get_weather"]})
+
+    assert extract_request_tool_names("/v1/messages", data) == ["get_weather"]
+    await check_tools_allowlist(request_body=data, valid_token=token, team_object=None, route="/v1/messages")
 
 
 def _token(metadata=None, team_metadata=None):

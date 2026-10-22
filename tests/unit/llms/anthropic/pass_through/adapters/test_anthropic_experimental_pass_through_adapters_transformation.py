@@ -1,4 +1,5 @@
 import base64
+import copy
 import functools
 import json
 from collections.abc import Mapping
@@ -5419,3 +5420,134 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
             ],
         }
     ]
+
+
+@pytest.mark.parametrize("preserve_midturn_system", [False, True])
+@pytest.mark.parametrize("with_text", [False, True])
+def test_midturn_tool_definition_reaches_chat_completions(preserve_midturn_system: bool, with_text: bool) -> None:
+    tool: Final = {
+        "name": "get_weather",
+        "description": "Get the weather for a city",
+        "input_schema": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    }
+    text: Final = [{"type": "text", "text": "A new tool is available."}] if with_text else []
+    request: Final = {
+        "model": "hosted_vllm/test-model",
+        "max_tokens": 128,
+        "messages": [
+            {"role": "user", "content": "What is the weather in Dallas?"},
+            {
+                "role": "system",
+                "content": [*text, {"type": "tool_addition", "tool": {"type": "tool_definition", "definition": tool}}],
+            },
+        ],
+    }
+    original: Final = copy.deepcopy(request)
+
+    translated, mapping = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        request, preserve_midturn_system=preserve_midturn_system
+    )
+
+    assert translated.get("tools") == [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": tool["description"],
+                "parameters": tool["input_schema"],
+            },
+        }
+    ]
+    expected_note: Final = text if preserve_midturn_system else [{"type": "text", "text": CONVERTED_SYSTEM_NOTE}, *text]
+    assert translated["messages"] == [
+        request["messages"][0],
+        *([{"role": "system" if preserve_midturn_system else "user", "content": expected_note}] if with_text else []),
+    ]
+    assert mapping == {}
+    assert request == original
+
+
+@pytest.mark.parametrize(
+    "actions,available",
+    [
+        (("tool_addition",), True),
+        (("tool_addition", "tool_addition"), True),
+        (("tool_addition", "tool_removal"), False),
+        (("tool_addition", "tool_removal", "tool_addition"), True),
+        (("tool_removal",), False),
+    ],
+)
+def test_midturn_tool_changes_update_existing_tools_in_message_order(actions: tuple[str, ...], available: bool) -> None:
+    tool: Final = {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}
+    request: Final = {
+        "model": "hosted_vllm/test-model",
+        "max_tokens": 128,
+        "tools": [tool],
+        "messages": [
+            {"role": "user", "content": "Check the weather."},
+            *(
+                {
+                    "role": "system",
+                    "content": [{"type": action, "tool": {"type": "tool_reference", "name": "get_weather"}}],
+                }
+                for action in actions
+            ),
+        ],
+    }
+    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+    assert translated.get("tools", []) == (
+        [{"type": "function", "function": {"name": "get_weather", "parameters": tool["input_schema"]}}]
+        if available
+        else []
+    )
+    assert translated["messages"] == [request["messages"][0]]
+
+
+@pytest.mark.parametrize("already_declared", [False, True])
+@pytest.mark.parametrize("reactivate", [False, True])
+def test_inline_tool_changes_keep_definitions_and_historical_calls(already_declared: bool, reactivate: bool) -> None:
+    tool_name: Final = "mcp__weather__" + "long_tool_name_" * 5
+    tool: Final = {"name": tool_name, "description": "Original", "input_schema": {"type": "object", "properties": {}}}
+    addition: Final = {"type": "tool_addition", "tool": {"type": "tool_definition", "definition": tool}}
+    reference: Final = {"type": "tool_reference", "name": tool_name}
+    request: Final = {
+        "model": "hosted_vllm/test-model",
+        "max_tokens": 128,
+        "tools": [tool] if already_declared else [],
+        "messages": [
+            {"role": "user", "content": "Check the weather."},
+            {"role": "system", "content": [addition, addition]},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "call_weather", "name": tool_name, "input": {}}],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_weather", "content": "Sunny"}]},
+            {"role": "system", "content": [{"type": "tool_removal", "tool": reference}]},
+            *([{"role": "system", "content": [{"type": "tool_addition", "tool": reference}]}] if reactivate else []),
+        ],
+    }
+    original: Final = copy.deepcopy(request)
+    translated, mapping = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+    short_name: Final = truncate_tool_name(tool_name)
+
+    assert translated.get("tools", []) == (
+        [
+            {
+                "type": "function",
+                "function": {"name": short_name, "description": "Original", "parameters": tool["input_schema"]},
+            }
+        ]
+        if reactivate
+        else []
+    )
+    assert translated["messages"][1]["tool_calls"] == [
+        {"id": "call_weather", "type": "function", "function": {"name": short_name, "arguments": "{}"}}
+    ]
+    assert translated["messages"][2] == {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"}
+    assert len(translated["messages"]) == 3
+    assert mapping == ({short_name: tool_name} if reactivate else {})
+    assert request == original

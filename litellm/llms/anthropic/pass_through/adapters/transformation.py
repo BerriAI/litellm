@@ -10,6 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_tools import resolve_midturn_tool_changes
 from litellm.llms.anthropic.pass_through.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
@@ -1246,63 +1247,63 @@ class LiteLLMAnthropicMessagesAdapter:
             - tool_name_mapping maps truncated tool names back to original names
               for tools that exceeded OpenAI's 64-char limit
         """
-        # Debug: Processing Anthropic message request
+        request: Final = resolve_midturn_tool_changes(anthropic_message_request)
         new_messages: list[AllMessageValues] = []
         tool_name_mapping: dict[str, str] = {}
 
         ## CONVERT ANTHROPIC MESSAGES TO OPENAI
         messages_list: Final[list[AllAnthropicPassThroughMessageValues]] = cast(
             list[AllAnthropicPassThroughMessageValues],
-            anthropic_message_request["messages"],
+            request["messages"],
         )
         new_messages = self.translate_anthropic_messages_to_openai(
             messages=messages_list,
-            model=anthropic_message_request.get("model"),
+            model=request.get("model"),
             custom_llm_provider=custom_llm_provider,
             preserve_midturn_system=preserve_midturn_system,
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
-        self._add_system_message_to_messages(new_messages, anthropic_message_request)
+        self._add_system_message_to_messages(new_messages, request)
 
         new_kwargs: Final[ChatCompletionRequest] = {
-            "model": anthropic_message_request["model"],
+            "model": request["model"],
             "messages": new_messages,
         }
         ## CONVERT METADATA (user_id + litellm metadata)
         self._translate_metadata_to_openai(
-            anthropic_message_request=anthropic_message_request,
+            anthropic_message_request=request,
             new_kwargs=new_kwargs,
             custom_llm_provider=custom_llm_provider,
         )
         ## CONVERT TOOL CHOICE
         self._translate_tool_choice_to_openai(
-            anthropic_message_request=anthropic_message_request,
+            anthropic_message_request=request,
             new_kwargs=new_kwargs,
         )
         ## CONVERT TOOLS
         tool_name_mapping = self._translate_tools_to_openai(
-            anthropic_message_request=anthropic_message_request,
+            anthropic_message_request=request,
             new_kwargs=new_kwargs,
         )
         ## CONVERT THINKING
         self._translate_thinking_to_openai(
-            anthropic_message_request=anthropic_message_request,
+            anthropic_message_request=request,
             new_kwargs=new_kwargs,
             custom_llm_provider=custom_llm_provider,
             drop_params=drop_params,
         )
         ## CONVERT STOP_SEQUENCES
         self._translate_stop_sequences_to_openai(
-            anthropic_message_request=anthropic_message_request,
+            anthropic_message_request=request,
             new_kwargs=new_kwargs,
         )
         ## CONVERT OUTPUT_FORMAT to RESPONSE_FORMAT
         self._translate_output_format_to_openai(
-            anthropic_message_request=anthropic_message_request,
+            anthropic_message_request=request,
             new_kwargs=new_kwargs,
         )
         self._copy_untranslated_anthropic_params(
-            anthropic_message_request=anthropic_message_request,
+            anthropic_message_request=request,
             new_kwargs=new_kwargs,
         )
 
