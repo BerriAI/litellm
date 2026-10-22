@@ -1,20 +1,20 @@
+use futures_util::TryStreamExt;
+use rstest::{fixture, rstest};
+use serde_json::json;
+use std::sync::Arc;
+use wiremock::ResponseTemplate;
+
+use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
 use litellm_host::{
     interceptors::{ExecutionFacts, ResultSource},
     lifecycle::ExecutionEvent,
 };
-use std::sync::Arc;
-
-use futures_util::TryStreamExt;
-use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
 use litellm_inference_responses::{
     Error,
     route::Responses,
     types::{ResponsesCall, ResponsesOutput},
 };
 use litellm_inference_testing::{RecordingSecrets, no_secrets};
-use rstest::{fixture, rstest};
-use serde_json::json;
-use wiremock::ResponseTemplate;
 
 mod support;
 use support::*;
@@ -538,6 +538,7 @@ async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credent
         .logger()
         .instrument(async {
             let connection = ResponsesWebSocketConnection::connect_url(
+                &litellm_http::Client::plain_for_test(),
                 &format!("ws://{address}/responses"),
                 &std::collections::HashMap::from([(
                     "authorization".into(),
