@@ -191,5 +191,14 @@ def test_gemini_convert_messages_sibling_file_block_for_pre_gemini_3():
     )
     new_fr = next(p["function_response"] for p in new_parts if "function_response" in p)
     nested = new_fr.get("parts") or []
-    assert any(p.get("inline_data", {}).get("mime_type") == "application/pdf" for p in nested)
+    assert any(p.get("inline_data", {}).get("mime_type") == "application/pdf" for p in nested]
 
+
+def _get_gemini_function_response_inline_data_parts(result):
+    assert isinstance(result, list), "expected Gemini parts list"
+    assert len(result) == 1, "multimodal function responses should stay in one part"
+    function_response_part = result[0]
+    assert "inline_data" not in function_response_part, "inline_data should be nested under function_response.parts"
+    function_response = function_response_part["function_response"]
+    nested_parts = function_response["parts"]
+    return [part["inline_data"] for part in nested_parts if "inline_data" in part]
