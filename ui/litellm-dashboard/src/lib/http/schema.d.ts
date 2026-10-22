@@ -50234,6 +50234,12 @@ export interface components {
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
+            /**
+             * Cancel On Disconnect
+             * @description Opt this model group into cancelling non-streaming upstream calls when the client disconnects. Enabled if any deployment in the group opts in. A global cancel_on_disconnect setting still applies to every group.
+             * @default false
+             */
+            cancel_on_disconnect: boolean;
             /** Cost Per Ptu Per Hour */
             cost_per_ptu_per_hour?: number | null;
             /** Created At */
