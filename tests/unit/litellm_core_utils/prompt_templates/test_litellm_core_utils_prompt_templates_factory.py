@@ -1843,7 +1843,6 @@ def test_convert_gemini_tool_call_result_with_image_url():
         message=message_str_format,
         last_message_with_tool_calls=last_message_with_tool_calls,
         forward_function_call_id=True,  # Gemini 3+: media nested in functionResponse.parts
-
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert len(inline_parts) == 1
@@ -1865,7 +1864,6 @@ def test_convert_gemini_tool_call_result_with_image_url():
         message=message_dict_format,
         last_message_with_tool_calls=last_message_with_tool_calls,
         forward_function_call_id=True,  # Gemini 3+: media nested in functionResponse.parts
-
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result2)
     assert len(inline_parts) == 1
@@ -1910,7 +1908,6 @@ def test_convert_gemini_tool_call_result_with_anthropic_image_block():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
         forward_function_call_id=True,  # Gemini 3+: media nested in functionResponse.parts
-
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert len(inline_parts) == 1, "expected exactly one inline_data part"
@@ -1968,7 +1965,6 @@ def test_convert_gemini_tool_call_result_with_multiple_anthropic_image_blocks():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
         forward_function_call_id=True,  # Gemini 3+: media nested in functionResponse.parts
-
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert len(inline_parts) == 2, f"expected 2 inline_data parts, got {len(inline_parts)}"
@@ -2006,7 +2002,6 @@ def test_convert_gemini_tool_call_result_with_data_url_string():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
         forward_function_call_id=True,  # Gemini 3+: media nested in functionResponse.parts
-
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert len(inline_parts) == 1, "data-URL image string was not converted to inline_data"
@@ -2043,7 +2038,6 @@ def test_convert_gemini_tool_call_result_with_data_url_extra_params():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
         forward_function_call_id=True,  # Gemini 3+: media nested in functionResponse.parts
-
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert len(inline_parts) == 1
