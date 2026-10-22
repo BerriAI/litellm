@@ -1,6 +1,5 @@
 mod auth;
 mod error;
-mod mcp_settings;
 mod secrets;
 pub use error::Error;
 
@@ -82,20 +81,8 @@ pub async fn build_mcp(
     pool: &HttpClientPool,
     http: &litellm_http::HttpClientConfig,
 ) -> Result<Option<litellm_gateway_mcp::ConfiguredGateway>, Error> {
-    if !config.mcp_tools.is_empty() {
-        return Err(Error::McpSetting("mcp_tools".into()));
-    }
     if config.mcp_servers.is_empty() {
         return Ok(None);
-    }
-    if let Some(setting) = mcp_settings::first_unsupported(config) {
-        return Err(Error::McpSetting(setting.into()));
-    }
-    if !config.guardrails.is_empty()
-        || !config.policies.is_empty()
-        || !config.policy_attachments.is_empty()
-    {
-        return Err(Error::McpSetting("guardrails or policies".into()));
     }
     Auth::from_config(config, secrets.clone())
         .validate()
