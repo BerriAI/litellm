@@ -87,5 +87,5 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         model_response.object = _json_response.get("object")
         model_response.system_fingerprint = _json_response.get("system_fingerprint")
         if "service_tier" in _json_response:
-            model_response.service_tier = _json_response.get("service_tier")
+            model_response.service_tier = _json_response.get("service_tier")  # rebind-ok: fills the caller's response
         return model_response
