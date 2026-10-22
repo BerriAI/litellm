@@ -39,12 +39,12 @@ git clone https://github.com/YOUR_USERNAME/litellm.git
 cd litellm
 
 # Create a new branch for your feature (see "Commit and Branch Conventions" below)
-git checkout -b feature/your-feature
+git checkout -b litellm_your_feature
 
 # Install development dependencies
 make install-dev
 
-# Install git hooks that enforce commit + branch conventions (one-time, opt-in)
+# Install git hooks that enforce commit conventions (one-time, opt-in)
 make install-hooks
 
 # Verify your setup works
@@ -55,7 +55,7 @@ That's it! Your local development environment is ready.
 
 ## Commit and Branch Conventions
 
-Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) and branches follow [Conventional Branches](https://conventional-branch.github.io/). Run `make install-hooks` once per clone to enable the local git hooks that enforce these — see the [contributor docs](https://docs.litellm.ai/docs/extras/contributing_code#commit-and-branch-conventions) for the full type list, examples, the protected-branch bypass list, and how to opt out.
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). Internal contributors name branches with the `litellm_` prefix and no `/`, and fork branches can use any name. Run `make install-hooks` once per clone to enable the local hook that enforces the commit convention. See the [contributor docs](https://docs.litellm.ai/docs/extras/contributing_code#commit-and-branch-conventions) for details
 
 ### 2. Development Workflow
 
@@ -78,8 +78,8 @@ uv run pytest tests/unit/<your_test_file>.py -v
 git add .
 git commit -m "feat(scope): your descriptive commit message"
 
-# Push and create a PR (branch must follow Conventional Branches — see above)
-git push origin feature/your-feature
+# Push and create a PR
+git push origin litellm_your_feature
 ```
 
 ## Adding Testing
@@ -98,7 +98,7 @@ Add your tests to the [`tests/unit/` directory](https://github.com/BerriAI/litel
 
 The `tests/unit/` directory follows the same structure as `litellm/`:
 
-- `litellm/proxy/caching_routes.py` → `tests/test_litellm/proxy/test_caching_routes.py`
+- `litellm/proxy/caching_routes.py` → `tests/unit/proxy/test_caching_routes.py`
 - `litellm/utils.py` → `tests/unit/test_utils.py`
 
 ### Example Test
@@ -136,7 +136,7 @@ If you're running broader test suites, proxy tests, or anything that touches Pos
 make install-test-deps
 ```
 
-This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary` (used by `pytest-postgresql`), `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
+This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary`, `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
 
 ### Running Linting and Formatting Checks
 

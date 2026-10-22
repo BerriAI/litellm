@@ -27,11 +27,15 @@ from integration._support.mcp import (
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 TENANT: Final = "00000000-0000-4000-8000-0000000a3650"
 REJECTED: Final = "Agent 365 guardrail rejected the tool call"
 GUARDRAIL_ROWS: Final = (
-    "SELECT metadata->'guardrail_information' AS gi FROM \"LiteLLM_SpendLogs\" "
-    'WHERE api_key = %s AND call_type = %s ORDER BY "startTime"'
+    "SELECT COALESCE(jsonb_path_query_first(metadata, "
+    "'$.guardrail_information[*] ? (@.guardrail_name == $name).guardrail_status', "
+    "jsonb_build_object('name', %s::text)) #>> '{}', 'none') AS status "
+    'FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND call_type = %s ORDER BY "startTime"'
 )
 FALLBACKS: Final = (None, "fail_open", "fail_closed")
 
@@ -95,11 +99,11 @@ class Rig:
 
     def guardrail_statuses(self, call_type: str, at_least: int) -> list[str]:
         rows: Final = eventually(
-            lambda: read_rows(GUARDRAIL_ROWS, (sha256(self.key.encode()).hexdigest(), call_type)),
+            lambda: read_rows(GUARDRAIL_ROWS, (self.alias, sha256(self.key.encode()).hexdigest(), call_type)),
             lambda seen: len(seen) >= at_least,
             seconds=70,
         )
-        return [row["gi"][0]["guardrail_status"] if row["gi"] else "none" for row in rows]
+        return [str(row["status"]) for row in rows]
 
 
 @contextmanager

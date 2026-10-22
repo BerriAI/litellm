@@ -39,10 +39,10 @@ class _ScanKwargs(TypedDict):
     server_name: ReadOnly[str]
     mcp_rate_limit_server_name: ReadOnly[str]
     user_api_key_auth: ReadOnly[UserAPIKeyAuth | None]
-    user_api_key_user_id: ReadOnly[object]
-    user_api_key_team_id: ReadOnly[object]
-    user_api_key_end_user_id: ReadOnly[object]
-    user_api_key_hash: ReadOnly[object]
+    user_api_key_user_id: ReadOnly[str | None]
+    user_api_key_team_id: ReadOnly[str | None]
+    user_api_key_end_user_id: ReadOnly[str | None]
+    user_api_key_hash: ReadOnly[str | None]
     headers: ReadOnly[Mapping[str, str]]
     mcp_tool_description: ReadOnly[str]
     mcp_input_schema: ReadOnly[Mapping[str, object]]
@@ -208,10 +208,10 @@ async def _guarded_catalog_entry(
         "server_name": server.name,
         "mcp_rate_limit_server_name": server.alias or server.server_name or server.name,
         "user_api_key_auth": user_api_key_auth,
-        "user_api_key_user_id": getattr(user_api_key_auth, "user_id", None),
-        "user_api_key_team_id": getattr(user_api_key_auth, "team_id", None),
-        "user_api_key_end_user_id": getattr(user_api_key_auth, "end_user_id", None),
-        "user_api_key_hash": getattr(user_api_key_auth, "api_key", None),
+        "user_api_key_user_id": user_api_key_auth.user_id if user_api_key_auth else None,
+        "user_api_key_team_id": user_api_key_auth.team_id if user_api_key_auth else None,
+        "user_api_key_end_user_id": user_api_key_auth.end_user_id if user_api_key_auth else None,
+        "user_api_key_hash": user_api_key_auth.api_key if user_api_key_auth else None,
         "headers": logging_safe_mcp_headers(raw_headers),
         "mcp_tool_description": tool.description or "",
         "mcp_input_schema": tool.input_schema,

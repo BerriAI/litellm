@@ -40,7 +40,7 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAIImageGenerationOptionalParams]:  # mutable-ok: inherited contract
-        return list(_SUPPORTED_PARAMS)  # mutable-ok: inherited contract
+        return list(_SUPPORTED_PARAMS)
 
     def map_openai_params(
         self,
@@ -49,7 +49,7 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: inherited contract
-        return {**optional_params, **pick(non_default_params, _SUPPORTED_PARAMS)}  # mutable-ok: inherited contract
+        return {**optional_params, **pick(non_default_params, _SUPPORTED_PARAMS)}
 
     def get_complete_url(
         self,
@@ -82,7 +82,7 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict[str, object],  # mutable-ok: inherited contract
         headers: dict[str, object],  # mutable-ok: inherited contract
     ) -> dict[str, object]:  # mutable-ok: inherited contract
-        return {"model": model, "prompt": prompt, **optional_params}  # mutable-ok: inherited contract
+        return {"model": model, "prompt": prompt, **optional_params}
 
     def transform_image_generation_response(
         self,

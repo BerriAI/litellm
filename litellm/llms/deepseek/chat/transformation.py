@@ -3,13 +3,14 @@ Translates from OpenAI's `/v1/chat/completions` to DeepSeek's `/v1/chat/completi
 """
 
 from collections.abc import Coroutine, Mapping, Sequence
-from typing import Any, Final, Literal, cast, overload
+from typing import Final, Literal, cast, overload
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     extract_search_results_text,
 )
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_reasoning, supports_vision
@@ -104,7 +105,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -116,7 +117,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         DeepSeek vision models accept image_url content blocks in user
         messages (https://api-docs.deepseek.com/guides/vision), so those
@@ -129,7 +130,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         forward_images: Final = any(
             isinstance(message.get("content"), list) for message in messages
         ) and supports_vision(model=model, custom_llm_provider="deepseek")
-        transformed: Final = [  # mutable-ok: provider messages must stay JSON-array lists the base transform mutates
+        transformed: Final = [
             self._forward_or_collapse_content(message=message, forward_images=forward_images) for message in messages
         ]
 
@@ -155,7 +156,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         collapsed: Final = convert_content_list_to_str(message=message)
         if not collapsed or collapsed == content:
             return message
-        collapsed_message: Final = {**message, "content": collapsed}  # mutable-ok: wire messages are plain JSON dicts
+        collapsed_message: Final = {**message, "content": collapsed}
         return cast(AllMessageValues, collapsed_message)  # cast-ok: TypedDict spread narrows to dict
 
     def _is_vision_forwardable_content(self, message: AllMessageValues, content: Sequence[object]) -> bool:
@@ -204,8 +205,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         search_text: Final = extract_search_results_text(message_fields.get("search_results"))
         if not search_text:
             return message
-        forwarded_content: Final = [*content, {"type": "text", "text": search_text}]  # mutable-ok: JSON-array content
-        forwarded: Final = {  # mutable-ok: wire messages are plain JSON dicts
+        forwarded_content: Final = [*content, {"type": "text", "text": search_text}]
+        forwarded: Final = {
             **{key: value for key, value in message_fields.items() if key != "search_results"},
             "content": forwarded_content,
         }
@@ -363,10 +364,4 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """
         If api_base is not provided, use the default DeepSeek /chat/completions endpoint.
         """
-        if not api_base:
-            api_base = "https://api.deepseek.com/beta"
-
-        if not api_base.endswith("/chat/completions"):
-            api_base = f"{api_base}/chat/completions"
-
-        return api_base
+        return ensure_api_route(api_base or "https://api.deepseek.com/beta", "chat/completions")

@@ -2,9 +2,10 @@ import asyncio
 import os
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import cache
 from typing import Final
+from urllib.parse import unquote
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -27,9 +28,23 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
 AZURE_STORAGE_TOKEN_SCOPE: Final = "https://storage.azure.com/.default"
+_ADLS_SAFE_NAME: Final = str.maketrans("/", "_", "=")
+_DOT_OR_EMPTY_SEGMENTS: Final = frozenset(("", ".", ".."))
+
+
+def adls_safe_file_name(payload_id: str | None) -> str:
+    """A Responses API id is base64 behind `resp_`, and the Data Lake service rejects its `=` padding and `/`, so
+    that name drops the padding and maps `/` to `_`. Standard base64 has no `_` and its padding is fixed by the
+    length, so those ids stay distinct. Every other id, including a caller's `x-litellm-call-id`, is used as is
+    unless it has an empty, `.` or `..` path segment, which gets the same rewrite so the file keeps its own name in
+    the log directory"""
+    name: Final = payload_id or str(uuid.uuid4())
+    if not name.startswith("resp_") and _DOT_OR_EMPTY_SEGMENTS.isdisjoint(unquote(name).split("/")):
+        return f"{name}.json"
+    return f"{name.translate(_ADLS_SAFE_NAME)}.json"
 
 
 @cache
@@ -46,6 +61,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         build_credential_chain_token_provider: Callable[
             [], Callable[[], str]
         ] = _cached_credential_chain_token_provider,
+        clock: Callable[[], float] = time.time,
         **kwargs,
     ):
         try:
@@ -69,6 +85,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self.azure_storage_endpoint_suffix: str = (
                 os.getenv("AZURE_STORAGE_ENDPOINT_SUFFIX") or AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX
             )
+            self._clock: Callable[[], float] = clock
             self._service_client = None
             # Time that the azure service client expires, in order to reset the connection pool and keep it fresh
             self._service_client_timeout: float | None = None
@@ -143,6 +160,24 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("AzureBlobStorageLogger Layer Error - %s", e)
 
+    async def async_log_audit_log_event(self, audit_log: StandardAuditLogPayload) -> None:
+        now: Final = datetime.now(timezone.utc)
+        file_path: Final = f"audit_logs/{now.strftime('%Y-%m-%d')}/{now.strftime('%H-%M-%S')}_{audit_log['id']}.json"
+        await self._upload_json_to_file_path(file_path=file_path, json_payload=safe_dumps(audit_log))
+
+    async def _upload_json_to_file_path(self, file_path: str, json_payload: str) -> None:
+        payload_bytes: Final = json_payload.encode("utf-8")
+        if self.azure_storage_account_key:
+            await self._upload_bytes_with_account_key(file_path=file_path, content=payload_bytes)
+            return
+
+        await self.set_valid_azure_ad_token()
+        async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        base_url: Final = f"{self.azure_storage_dfs_endpoint}/{self.azure_storage_file_system}/{file_path}"
+        await self._create_file(async_client, base_url)
+        await self._append_data(async_client, base_url, json_payload)
+        await self._flush_data(async_client, base_url, len(payload_bytes))
+
     async def async_send_batch(self):
         """
         Sends the in memory logs queue to Azure Blob Storage
@@ -182,7 +217,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
                 json_payload: Final = safe_dumps(payload) + "\n"  # Add newline for each log entry
                 payload_bytes: Final = json_payload.encode("utf-8")
-                filename: Final = f"{payload.get('id') or str(uuid.uuid4())}.json"
+                filename: Final = adls_safe_file_name(payload.get("id"))
                 base_url = f"{self.azure_storage_dfs_endpoint}/{self.azure_storage_file_system}/{filename}"
 
                 # Execute the 3-step upload process
@@ -331,7 +366,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         from azure.storage.filedatalake.aio import DataLakeServiceClient
 
         # expire old clients to recover from connection issues
-        if self._service_client_timeout and self._service_client and self._service_client_timeout > time.time():
+        if self._service_client_timeout and self._service_client and self._service_client_timeout <= self._clock():
             await self._service_client.close()
             self._service_client = None
         if not self._service_client:
@@ -339,7 +374,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 account_url=self.azure_storage_dfs_endpoint,
                 credential=self.azure_storage_account_key,
             )
-            self._service_client_timeout = time.time() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+            self._service_client_timeout = self._clock() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
         return self._service_client
 
     async def upload_to_azure_data_lake_with_azure_account_key(self, payload: StandardLoggingPayload):
@@ -349,41 +384,22 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         This is used when Azure Storage Account Key is set - Azure Storage Account Key does not work directly with Azure Rest API
         """
 
-        # Create an async service client
-
-        service_client: Final = await self.get_service_client()
-        # Get file system client
-        file_system_client: Final = service_client.get_file_system_client(file_system=self.azure_storage_file_system)
-
         try:
-            # Create directory with today's date
-            from datetime import datetime
-
             today: Final = datetime.now().strftime("%Y-%m-%d")
-            directory_client: Final = file_system_client.get_directory_client(today)
-
-            # check if the directory exists
-            if not await directory_client.exists():
-                await directory_client.create_directory()
-                verbose_logger.debug("Created directory: %s", today)
-
-            # Create a file client
-            file_name: Final = f"{payload.get('id') or str(uuid.uuid4())}.json"
-            file_client: Final = directory_client.get_file_client(file_name)
-
-            # Create the file
-            await file_client.create_file()
-
-            # Content to append
-            content: Final = safe_dumps(payload).encode("utf-8")
-
-            # Append content to the file
-            await file_client.append_data(data=content, offset=0, length=len(content))
-
-            # Flush the content to finalize the file
-            await file_client.flush_data(position=len(content), offset=0)
-
+            file_name: Final = adls_safe_file_name(payload.get("id"))
+            await self._upload_bytes_with_account_key(
+                file_path=f"{today}/{file_name}", content=safe_dumps(payload).encode("utf-8")
+            )
             verbose_logger.debug("Successfully uploaded and wrote to %s/%s", today, file_name)
 
         except Exception as e:
             verbose_logger.exception("Error occurred: %s", e)
+
+    async def _upload_bytes_with_account_key(self, file_path: str, content: bytes) -> None:
+        service_client: Final = await self.get_service_client()
+        file_client: Final = service_client.get_file_system_client(
+            file_system=self.azure_storage_file_system
+        ).get_file_client(file_path)
+        await file_client.create_file()
+        await file_client.append_data(data=content, offset=0, length=len(content))
+        await file_client.flush_data(position=len(content), offset=0)
