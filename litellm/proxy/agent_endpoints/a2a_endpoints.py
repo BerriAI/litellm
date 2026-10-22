@@ -203,9 +203,7 @@ def _forwarding_headers(
     backend_auth_header: Mapping[str, str] | None,
 ) -> dict[str, str] | None:
     backend_auth: Final = tuple(backend_auth_header.items()) if backend_auth_header else ()
-    minted_names: Final = frozenset(
-        name.lower() for name, _ in backend_auth
-    ) | _MINTED_A2A_IDENTITY_HEADERS
+    minted_names: Final = frozenset(name.lower() for name, _ in backend_auth) | _MINTED_A2A_IDENTITY_HEADERS
     passthrough: Final = tuple(
         (name, value)
         for name, value in (agent_extra_headers.items() if agent_extra_headers else ())
