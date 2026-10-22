@@ -5,7 +5,7 @@ from typing import Literal, TypeAlias
 
 from typing_extensions import ReadOnly, Required, TypedDict
 
-ExaSearchMode: TypeAlias = Literal["instant", "fast", "auto", "deep-lite", "deep", "deep-reasoning"]
+ExaSearchMode: TypeAlias = Literal["lite", "instant", "fast", "auto", "deep-lite", "deep", "deep-reasoning"]
 ExaPageSection: TypeAlias = Literal["header", "navigation", "banner", "body", "sidebar", "footer", "metadata"]
 
 

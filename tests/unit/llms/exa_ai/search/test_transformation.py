@@ -519,6 +519,7 @@ def test_exa_estimate_prices_one_request_however_many_queries_it_joins() -> None
 @pytest.mark.parametrize(
     ("search_type", "pricing_model"),
     [
+        ("lite", "exa_ai/search-lite"),
         ("instant", "exa_ai/search-instant"),
         ("auto", "exa_ai/search"),
         ("fast", "exa_ai/search"),
@@ -557,3 +558,21 @@ def test_exa_estimate_ignores_invalid_result_counts(count: object) -> None:
     assert search_provider_cost_per_query(
         "exa_ai/search", "exa_ai", optional_params={"numResults": count}
     ) == search_provider_cost_per_query("exa_ai/search", "exa_ai")
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.usefixtures("exa_api_key")
+@pytest.mark.asyncio
+async def test_lite_search_preserves_mode_and_highlights(respx_mock: respx.MockRouter, asynchronous: bool) -> None:
+    route: Final = respx_mock.post(EXA_SEARCH_URL).respond(json=FULL_RESPONSE)
+    response: Final = (
+        await litellm.asearch(query="question", search_provider="exa_ai", type="lite", contents={"highlights": True})
+        if asynchronous
+        else litellm.search(query="question", search_provider="exa_ai", type="lite", contents={"highlights": True})
+    )
+    assert json.loads(route.calls.last.request.content) == {
+        "query": "question",
+        "type": "lite",
+        "contents": {"highlights": True},
+    }
+    assert response.results[0].snippet == "\n\n".join(FULL_RESULT["highlights"])
