@@ -211,7 +211,7 @@ class KeenableSearchConfig(BaseSearchConfig):
                 headers=dict(raw_response.headers),
             )
 
-        logging_obj.optional_params = {
+        logging_obj.optional_params = {  # rebind-ok: hands the keyless flag to the search cost calculator
             **logging_obj.optional_params,
             KEENABLE_KEYLESS_PARAM: _answered_keyless(raw_response),
         }

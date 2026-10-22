@@ -284,6 +284,7 @@ jobs:
               tests/unit/llms/inception
               tests/unit/llms/infinity
               tests/unit/llms/jina_ai
+              tests/unit/llms/keenable
               tests/unit/llms/lambda_ai
               tests/unit/llms/langflow
               tests/unit/llms/langgraph
