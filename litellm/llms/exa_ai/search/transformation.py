@@ -114,6 +114,9 @@ class ExaAISearchConfig(BaseSearchConfig):
             **({"contents": {"text": True}} if "contents" not in provider_params else {}),
         }
 
+    def should_stream_search(self, optional_params: Mapping[str, object]) -> bool:
+        return optional_params.get("stream") is True and optional_params.get("outputSchema") is not None
+
     def transform_search_response(
         self,
         raw_response: httpx.Response,

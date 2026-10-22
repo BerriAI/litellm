@@ -3,6 +3,7 @@ Base Search transformation configuration.
 """
 
 import builtins
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
 
@@ -103,6 +104,9 @@ class BaseSearchConfig:
         Override in provider-specific implementations.
         """
         return "Unknown Search Provider"
+
+    def should_stream_search(self, optional_params: Mapping[str, object]) -> bool:
+        return False
 
     def supports_rich_search_input(self) -> bool:
         """
@@ -277,7 +281,7 @@ class BaseSearchConfig:
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform provider-specific Search response to standard format.
