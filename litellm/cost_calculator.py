@@ -2457,9 +2457,26 @@ def pricing_entry_for_cost_calc(
     )
     if bedrock_model_info is not None:
         return bedrock_model_info["key"], bedrock_model_info
-    candidates: Final = (selected_model, _get_response_model(completion_response), model)
+    base_model_provider: Final = (
+        _base_model_pricing_provider(
+            base_model,
+            _get_provider_for_cost_calc(
+                model=model,
+                custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            ),
+        )
+        if base_model is not None and custom_pricing is not True
+        else None
+    )
+    pricing_provider: Final = base_model_provider or custom_llm_provider
+    candidates: Final = (
+        (selected_model, pricing_provider),
+        (_get_response_model(completion_response), custom_llm_provider),
+        (model, custom_llm_provider),
+        *(((selected_model, None),) if base_model is not None else ()),
+    )
     resolved: Final = next(
-        (info for info in (_cost_map_model_info(name, custom_llm_provider) for name in candidates if name) if info),
+        (info for info in (_cost_map_model_info(name, provider) for name, provider in candidates if name) if info),
         None,
     )
     if resolved is None:
