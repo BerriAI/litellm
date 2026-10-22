@@ -9595,7 +9595,7 @@ class ProviderConfigManager:
 
             return get_nvidia_nim_rerank_config(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            return litellm.VertexAIRerankConfig()
+            return ProviderConfigManager._get_vertex_ai_rerank_config_cached()
         elif litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIRerankConfig()
         elif litellm.LlmProviders.VOYAGE == provider:
@@ -9613,6 +9613,16 @@ class ProviderConfigManager:
 
             return get_dashscope_family_rerank_config(provider.value)
         return litellm.CohereRerankConfig()
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def _get_vertex_ai_rerank_config_cached() -> BaseRerankConfig:
+        """One shared instance, so the `VertexBase` credential cache it holds outlives a request.
+
+        A fresh instance starts with an empty `_credentials_project_mapping`, so every
+        rerank would load and refresh the Google credentials again.
+        """
+        return litellm.VertexAIRerankConfig()
 
     @staticmethod
     def get_provider_decisions_config(model: str, provider: LlmProviders) -> BaseDecisionsConfig | None:
