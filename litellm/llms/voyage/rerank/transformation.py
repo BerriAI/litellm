@@ -11,6 +11,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
@@ -80,9 +81,9 @@ class VoyageRerankConfig(BaseRerankConfig):
         api_base = api_base.rstrip("/")
         if not api_base.endswith("/v1/rerank"):
             if api_base.endswith("/v1"):
-                api_base = f"{api_base}/rerank"
+                api_base = join_api_base(api_base, "rerank")
             else:
-                api_base = f"{api_base}/v1/rerank"
+                api_base = join_api_base(api_base, "v1/rerank")
         return api_base
 
     def transform_rerank_request(
