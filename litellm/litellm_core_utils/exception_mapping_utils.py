@@ -102,6 +102,8 @@ class ExceptionCheckers:
             "`inputs` tokens + `max_new_tokens` must be",
             "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
+            "exceeds the context window of this model",  # OpenAI
+            "exceeded model token limit",  # Moonshot
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:

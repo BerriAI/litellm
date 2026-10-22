@@ -593,7 +593,7 @@ async def test_responses_stream_error_event_raises_bad_request() -> None:
         stream: Final = await litellm.aresponses(
             model="openai/gpt-5-mini", api_key="sk-test", input="oversized prompt", stream=True
         )
-        with pytest.raises(litellm.BadRequestError) as exc_info:
+        with pytest.raises(litellm.ContextWindowExceededError) as exc_info:
             _ = [event async for event in stream]
         requests: Final = tuple(route.calls)
 
