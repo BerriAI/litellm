@@ -24,8 +24,8 @@ from pydantic import JsonValue
 
 if TYPE_CHECKING:
     from litellm.models.managed_files import LiteLLM_ManagedFileTable
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import OpenAIFileObject
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 SortOrder: TypeAlias = Literal["asc", "desc"]
 ResourceKind: TypeAlias = Literal["files", "batches"]
@@ -55,9 +55,7 @@ class ManagedObjectRow(ManagedResourceRow, Protocol):
     unified_object_id: str
 
 
-RowT = TypeVar(
-    "RowT", bound=ManagedResourceRow
-)  # rebind-ok: TypeVar declarations must stay bare assignments for pyright
+RowT = TypeVar("RowT", bound=ManagedResourceRow)
 
 
 class ManagedTable(Protocol[RowT]):

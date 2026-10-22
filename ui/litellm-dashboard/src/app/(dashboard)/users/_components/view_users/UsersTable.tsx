@@ -33,6 +33,7 @@ interface UsersTableProps {
   isLoading: boolean;
   possibleUIRoles: Record<string, Record<string, string>> | null;
   teams: UsersTableTeamOption[] | null;
+  canViewUserUsage: boolean;
   sorting: SortingState;
   onSortingChange: OnChangeFn<SortingState>;
   pagination: PaginationState;
@@ -74,6 +75,7 @@ export function UsersTable({
   isLoading,
   possibleUIRoles,
   teams,
+  canViewUserUsage,
   sorting,
   onSortingChange,
   pagination,
@@ -95,12 +97,13 @@ export function UsersTable({
     const columnDeps = {
       possibleUIRoles,
       includeSelection: selectionEnabled,
+      canViewUserUsage,
       onUserClick,
       onDeleteUser,
       onResetPassword,
     };
     return getUsersTableColumns(columnDeps);
-  }, [possibleUIRoles, selectionEnabled, onUserClick, onDeleteUser, onResetPassword]);
+  }, [possibleUIRoles, selectionEnabled, canViewUserUsage, onUserClick, onDeleteUser, onResetPassword]);
 
   const roleOptions = useMemo(
     () =>
@@ -192,7 +195,7 @@ export function UsersTable({
                   <SearchSelect
                     options={roleOptions}
                     value={(get("user_role") as string) || undefined}
-                    onValueChange={(value) => set("user_role", value)}
+                    onValueChange={(value) => set("user_role", value ?? undefined)}
                     placeholder="Select a role…"
                     emptyText="No roles found"
                   />
@@ -201,7 +204,7 @@ export function UsersTable({
                   <SearchSelect
                     options={teamOptions}
                     value={(get("team") as string) || undefined}
-                    onValueChange={(value) => set("team", value)}
+                    onValueChange={(value) => set("team", value ?? undefined)}
                     placeholder="Select a team…"
                     emptyText="No teams found"
                   />

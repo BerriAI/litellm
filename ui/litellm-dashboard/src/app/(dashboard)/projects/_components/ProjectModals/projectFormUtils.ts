@@ -16,6 +16,11 @@ const buildModelLimitMap = (
 const buildMetadata = (entries: ProjectFormValues["metadata"]): Record<string, string> | undefined =>
   entries && Object.fromEntries(entries.flatMap((entry) => (entry.key ? [[entry.key, entry.value] as const] : [])));
 
+const roundBudget = (value: number): number => {
+  const rounded = Math.round(value * 100) / 100;
+  return Number.isFinite(rounded) ? rounded : value;
+};
+
 const buildProjectApiParams = (values: ProjectFormValues, sendEmpty: boolean) => {
   const limitEntries = values.modelLimits ?? [];
   const modelRpmLimit = buildModelLimitMap(limitEntries, (entry) => entry.rpm);
@@ -35,7 +40,7 @@ const buildProjectApiParams = (values: ProjectFormValues, sendEmpty: boolean) =>
     project_alias: values.project_alias,
     description: values.description,
     models: values.models ?? [],
-    max_budget: values.max_budget === undefined ? undefined : Math.round(values.max_budget * 100) / 100,
+    max_budget: values.max_budget == null ? undefined : roundBudget(values.max_budget),
     blocked: values.isBlocked ?? false,
     ...guardrailsParam,
     ...(keep(modelRpmLimit) && { model_rpm_limit: modelRpmLimit }),
@@ -53,4 +58,7 @@ export const buildProjectCreateParams = (values: ProjectFormValues) => buildProj
  * /project/update leaves an omitted key untouched, so a limit the operator cleared has to go out as
  * an explicitly empty map. Omitting it is what silently kept a removed quota enforced.
  */
-export const buildProjectUpdateParams = (values: ProjectFormValues) => buildProjectApiParams(values, true);
+export const buildProjectUpdateParams = (values: ProjectFormValues, savedMaxBudget?: number | null) => ({
+  ...buildProjectApiParams(values, true),
+  ...(values.max_budget == null && savedMaxBudget != null ? { max_budget: null } : {}),
+});
