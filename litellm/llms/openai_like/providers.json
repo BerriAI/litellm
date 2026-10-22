@@ -249,5 +249,11 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "nearai": {
+    "base_url": "https://cloud-api.near.ai/v1",
+    "api_key_env": "NEARAI_API_KEY",
+    "api_base_env": "NEARAI_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/embeddings"]
   }
 }

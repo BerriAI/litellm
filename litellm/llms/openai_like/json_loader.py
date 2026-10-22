@@ -12,6 +12,7 @@ from litellm._logging import verbose_logger
 from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
+_SUPPORTED_ENDPOINTS_ADAPTER: Final = TypeAdapter(list[str])
 
 
 class SimpleProviderConfig:
@@ -26,7 +27,9 @@ class SimpleProviderConfig:
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
-        self.supported_endpoints = data.get("supported_endpoints", [])
+        self.supported_endpoints: list[str] = _SUPPORTED_ENDPOINTS_ADAPTER.validate_python(
+            data.get("supported_endpoints", [])
+        )
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
@@ -85,6 +88,13 @@ class JSONProviderRegistry:
         if provider is None:
             return False
         return "/v1/responses" in provider.supported_endpoints
+
+    @classmethod
+    def supports_embeddings(cls, slug: str) -> bool:
+        provider: Final = cls._providers.get(slug)
+        if provider is None:
+            return False
+        return "/v1/embeddings" in provider.supported_endpoints
 
     @classmethod
     def list_providers(cls) -> list:
