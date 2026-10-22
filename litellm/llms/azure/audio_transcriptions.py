@@ -1,19 +1,16 @@
 from collections.abc import Coroutine, Mapping
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 from openai import AsyncAzureOpenAI, AsyncStream, AzureOpenAI, Stream
 from openai.types.audio import TranscriptionStreamEvent
-from openai.types.audio.transcription_create_params import (
-    TranscriptionCreateParamsBase,
-    TranscriptionCreateParamsStreaming,
-)
 from pydantic import BaseModel
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.llms.base_llm.audio_transcription.transformation import (
+    acreate_sdk_transcription,
+    create_sdk_transcription,
     sdk_compatible_transcription_request_data,
-    sdk_compatible_transcription_response,
 )
 from litellm.types.utils import FileTypes
 from litellm.utils import (
@@ -98,23 +95,9 @@ class AzureAudioTranscription(AzureChatCompletion):
             },
         )
 
-        if data.get("stream") is True:
-            return azure_client.audio.transcriptions.create(
-                **cast(  # cast-ok: SDK file handles have no runtime validation schema
-                    TranscriptionCreateParamsStreaming, sdk_data
-                ),
-                timeout=timeout,
-            )
-
-        response: Final = sdk_compatible_transcription_response(
-            azure_client.audio.transcriptions.create(
-                **cast(  # cast-ok: SDK file handles have no runtime validation schema
-                    TranscriptionCreateParamsBase, {key: value for key, value in sdk_data.items() if key != "stream"}
-                ),
-                stream=False,
-                timeout=timeout,
-            )
-        )
+        _, response = create_sdk_transcription(azure_client, sdk_data, timeout)
+        if isinstance(response, Stream):
+            return response
 
         if isinstance(response, BaseModel):
             stringified_response = response.model_dump()
@@ -182,24 +165,9 @@ class AzureAudioTranscription(AzureChatCompletion):
                 },
             )
 
-            if data.get("stream") is True:
-                return await async_azure_client.audio.transcriptions.create(
-                    **cast(  # cast-ok: SDK file handles have no runtime validation schema
-                        TranscriptionCreateParamsStreaming, data
-                    ),
-                    timeout=timeout,
-                )
-
-            raw_response: Final = await async_azure_client.audio.transcriptions.with_raw_response.create(
-                **cast(  # cast-ok: SDK file handles have no runtime validation schema
-                    TranscriptionCreateParamsBase, {key: value for key, value in data.items() if key != "stream"}
-                ),
-                stream=False,
-                timeout=timeout,
-            )
-
-            headers: Final = dict(raw_response.headers)
-            response = sdk_compatible_transcription_response(raw_response.parse())
+            headers, response = await acreate_sdk_transcription(async_azure_client, data, timeout)
+            if isinstance(response, AsyncStream):
+                return response
 
             if isinstance(response, BaseModel):
                 stringified_response = response.model_dump()

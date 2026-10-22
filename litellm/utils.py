@@ -2047,10 +2047,7 @@ def client(original_function):
             # MODEL CALL
             result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
-            if _is_streaming_request(
-                kwargs=kwargs,
-                call_type=call_type,
-            ):
+            if _returns_requested_stream(kwargs, call_type, result):
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
                     chunks = []
                     for idx, chunk in enumerate(result):
@@ -2353,7 +2350,7 @@ def client(original_function):
                 raise
             end_time = datetime.datetime.now()
 
-            streaming_requested: Final = _is_streaming_request(kwargs=kwargs, call_type=call_type)
+            streaming_requested: Final = _returns_requested_stream(kwargs, call_type, result)
             if streaming_requested or _is_converted_stream_result(result):
                 logging_obj.stream = True
                 logging_obj.model_call_details["stream"] = True

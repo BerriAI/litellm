@@ -329,12 +329,11 @@ def test_streaming_transcription_keeps_streaming_with_output_guardrails(
     auth_as: Callable[[], AbstractContextManager[None]],
     monkeypatch: pytest.MonkeyPatch,
     configuration: str,
-    expected_status: int,
 ) -> None:
     guardrail: Final = CustomGuardrail(
         guardrail_name="transcription-output",
-        event_hook=GuardrailEventHooks.pre_call if configuration == "pre_call" else GuardrailEventHooks.post_call,
-        default_on=configuration in ("default", "pre_call"),
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=configuration == "default",
     )
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     if configuration == "policy":

@@ -1,5 +1,7 @@
+import asyncio
 import io
 import json
+import queue
 import wave
 from collections.abc import Callable, Iterator
 from datetime import datetime
@@ -11,6 +13,7 @@ import pytest
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AsyncStream, AzureOpenAI, OpenAI
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.audio_utils.transcription_streaming import wrap_transcription_stream
 from litellm.llms.azure.audio_transcriptions import AzureAudioTranscription
 from litellm.llms.custom_httpx.http_handler import HTTPHandler

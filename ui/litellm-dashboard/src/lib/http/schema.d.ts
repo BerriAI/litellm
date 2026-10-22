@@ -29944,12 +29944,6 @@ export interface components {
              */
             allow_cli_sso_verification_uri_complete?: boolean | null;
             /**
-             * Allow Non Billable Realtime Protocols
-             * @description Allow Realtime WebRTC setup endpoints whose inference usage bypasses LiteLLM spend tracking and budget enforcement
-             * @default false
-             */
-            allow_non_billable_realtime_protocols: boolean;
-            /**
              * Allow Unmanaged Response Ids
              * @description If True, lets keys address Responses API ids that this proxy did not issue (raw provider ids, or ids issued before response-id encryption was configured). Such an id carries no owner, so no ownership check can run on it; ids this proxy did issue keep full ownership enforcement. Off by default, in which case an unrecognized response id is rejected with 403
              */
