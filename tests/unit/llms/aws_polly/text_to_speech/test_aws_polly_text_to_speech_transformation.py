@@ -1,6 +1,10 @@
-import litellm
+import json
+from unittest.mock import MagicMock, patch
+
+import httpx
 import pytest
-from unittest.mock import MagicMock
+
+import litellm
 
 
 @pytest.mark.asyncio
@@ -143,11 +147,6 @@ async def test_aws_polly_tts_sends_engine_from_model(engine: str) -> None:
     provider prefix before the config reads it, which used to turn every
     engine into the neural default.
     """
-    import json
-    from unittest.mock import patch
-
-    import httpx
-
     mock_httpx_response = MagicMock(spec=httpx.Response)
     mock_httpx_response.content = b"fake_audio_data"
     mock_httpx_response.status_code = 200
