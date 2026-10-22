@@ -22,7 +22,7 @@ def _history_with_two_tool_pairs():
                 {
                     "type": "tool_result",
                     "tool_use_id": "t1",
-                    "content": "first result",
+                    "content": "first result: the forecast for the first city, sunny and mild",
                 }
             ],
         },
@@ -36,7 +36,7 @@ def _history_with_two_tool_pairs():
                 {
                     "type": "tool_result",
                     "tool_use_id": "t2",
-                    "content": "second result",
+                    "content": "second result: the forecast for the second city, rainy and cold",
                 }
             ],
         },
@@ -50,9 +50,7 @@ async def test_unknown_edit_type_is_noop():
         messages=messages,
         tools=None,
         system=None,
-        context_management_spec={
-            "edits": [{"type": "totally_not_a_real_edit_20999999"}]
-        },
+        context_management_spec={"edits": [{"type": "totally_not_a_real_edit_20999999"}]},
     )
     assert result.applied_edits == []
     assert result.messages == messages

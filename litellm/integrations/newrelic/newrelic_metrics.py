@@ -109,7 +109,7 @@ def _metric_record_from_payload(standard_logging_object: StandardLoggingPayload)
 
 def _bucket_metrics(bucket_records: tuple[NewRelicMetricRecord, ...]) -> tuple[NewRelicMetric, ...]:
     first: Final = bucket_records[0]
-    attributes: Final[Mapping[str, str]] = {  # mutable-ok: JSON leaf; safe_dumps stringifies MappingProxyType
+    attributes: Final[Mapping[str, str]] = {
         key: value[:NEWRELIC_METRIC_ATTRIBUTE_MAX_LEN]
         for key, value in (
             ("team_id", first.team_id),
@@ -150,7 +150,7 @@ def _team_budget_gauges(record: NewRelicMetricRecord) -> tuple[NewRelicMetric, .
     team_max_budget: Final = record.team_max_budget
     if team_max_budget is None:
         return ()
-    attributes: Final[Mapping[str, str]] = {  # mutable-ok: JSON leaf; safe_dumps stringifies MappingProxyType
+    attributes: Final[Mapping[str, str]] = {
         key: value[:NEWRELIC_METRIC_ATTRIBUTE_MAX_LEN]
         for key, value in (("team_id", record.team_id), ("team_alias", record.team_alias))
         if value
@@ -265,7 +265,7 @@ class NewRelicMetricsLogger(CustomBatchLogger):
                         dropped,
                         NEWRELIC_METRICS_MAX_DRAIN_PASSES,
                     )
-                self.log_queue[:] = list(survivors)  # mutable-ok: leave late arrivals for the next serialized drain
+                self.log_queue[:] = list(survivors)
 
     async def _drain_flush_once(self) -> None:
         """Attempt every queued record once, in ``batch_size`` chunks, without

@@ -6,9 +6,11 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrResponseFormat,
-        OcrUsageInfo, PreparedOcrRequest, decode_and_normalize_response,
+        BaseOcrConfig, OcrConnection, PreparedOcrRequest, decode_and_normalize_response,
     },
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrResponseFormat, OcrUsageInfo,
 };
 
 const MISTRAL_OCR_API_BASE: &str = "https://api.mistral.ai/v1";
@@ -326,7 +328,7 @@ mod tests {
             .transform_ocr_response(
                 "model",
                 raw,
-                crate::base_llm::ocr::transformation::OcrResponseFormat::Native,
+                litellm_llms_types::formats::ocr::OcrResponseFormat::Native,
             )
             .unwrap();
         assert_eq!(response.pages[0].index, 2);

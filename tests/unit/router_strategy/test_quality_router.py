@@ -851,7 +851,7 @@ class TestDecisionMetadata:
             "opus": [2],
             "opus-next": [3],
         }
-        quality_router.litellm_router_instance.get_deployment_model_info.side_effect = (
+        quality_router.litellm_router_instance.cached_deployment_model_info.side_effect = (
             lambda deployment_id, model: {
                 "input_cost_per_token": {
                     "id-haiku": 0.000001,

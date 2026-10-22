@@ -8,6 +8,7 @@ from datetime import datetime
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.models.verification_token import (
     LiteLLM_VerificationToken,
 )
@@ -122,6 +123,37 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         """Find all tokens belonging to a user."""
         records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"user_id": user_id})
         return self._to_model_list(records)
+
+    async def find_newest_reusable_llm_api_key(
+        self, user_id: str, team_id: str | None
+    ) -> LiteLLM_VerificationToken | None:
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(
+            where={
+                "user_id": user_id,
+                "team_id": team_id,
+                "expires": None,
+                "AND": [
+                    {"OR": [{"blocked": False}, {"blocked": None}]},
+                    {
+                        "OR": [
+                            {"team_id": None},
+                            {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}},
+                        ]
+                    },
+                    {
+                        "OR": [
+                            {"allowed_routes": {"is_empty": True}},
+                            {"allowed_routes": {"has": "llm_api_routes"}},
+                        ]
+                    },
+                ],
+            },
+            order={"created_at": "desc"},
+        )
+        return next(
+            (key for key in self._to_model_list(records) if key.metadata.get("auto_registered") is not True),
+            None,
+        )
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a team."""

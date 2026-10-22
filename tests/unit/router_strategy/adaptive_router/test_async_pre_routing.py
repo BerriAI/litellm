@@ -52,7 +52,7 @@ async def test_records_savings_baseline_and_conversation_shape():
         {"litellm_params": {"model": "openai/fast"}, "model_info": {"id": "fast-id"}},
         {"litellm_params": {"model": "openai/smart"}, "model_info": {"id": "smart-id"}},
     ]
-    router_instance.get_deployment_model_info.side_effect = lambda deployment_id, model: {
+    router_instance.cached_deployment_model_info.side_effect = lambda deployment_id, model: {
         "input_cost_per_token": 0.00000015 if deployment_id == "fast-id" else 0.000005,
         "output_cost_per_token": 0.00000015 if deployment_id == "fast-id" else 0.000005,
     }

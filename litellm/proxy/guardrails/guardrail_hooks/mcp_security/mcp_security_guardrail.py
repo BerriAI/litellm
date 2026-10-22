@@ -5,6 +5,7 @@ Validates that MCP servers referenced in request tools are registered
 on the LiteLLM gateway. Blocks or alerts when unregistered servers are found.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final, Literal
 
 from fastapi import HTTPException
@@ -46,7 +47,7 @@ class MCPSecurityGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is not True:
             return data
 
-        unregistered: Final = self._find_unregistered_mcp_servers(data)
+        unregistered: Final = await self._find_unregistered_mcp_servers(data)
         if not unregistered:
             return data
 
@@ -90,21 +91,22 @@ class MCPSecurityGuardrail(CustomGuardrail):
         return server_names
 
     @staticmethod
-    def _find_unregistered_mcp_servers(data: dict) -> set[str]:
+    async def _find_unregistered_mcp_servers(data: Mapping[str, object]) -> frozenset[str]:
         """Check tools in data against the MCP server registry. Returns set of unregistered server names."""
         tools: Final = data.get("tools")
         if not tools or not isinstance(tools, list):
-            return set()
+            return frozenset()
 
         requested_servers: Final = MCPSecurityGuardrail._extract_mcp_server_names_from_tools(tools)
         if not requested_servers:
-            return set()
+            return frozenset()
 
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
 
-        registry: Final = global_mcp_server_manager.get_registry()
-        registered_names: Final = set(registry.keys())
+        async with global_mcp_server_manager.catalog.operation():
+            registry: Final = global_mcp_server_manager.get_registry()
+            registered_names: Final = set(registry.keys())
 
-        return requested_servers - registered_names
+            return frozenset(requested_servers - registered_names)

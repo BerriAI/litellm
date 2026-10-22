@@ -1,8 +1,8 @@
 //! Credentials the caller supplies as Python callables, projected out of a route's
 //! keyword arguments and acquired on the host's own thread when the call asks for one.
 
+use crate::callable::wrap_failure;
 use litellm_auth::{ResolvedCredential, SecretValue};
-use litellm_host_python::wrap_failure;
 use pyo3::{
     exceptions::PyTypeError,
     gc::{PyTraverseError, PyVisit},

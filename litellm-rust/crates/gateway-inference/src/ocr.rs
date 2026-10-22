@@ -1,45 +1,51 @@
+use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
-use axum::{
-    Json,
-    extract::{Request, State},
-    response::{IntoResponse, Response},
-};
+use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use litellm_auth::SecretValue;
-use litellm_core::ocr::{
-    client::perform,
-    types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput},
-};
-use litellm_llms::base_llm::ocr::transformation::OcrDocument;
+use litellm_inference_ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
+use litellm_llms::base_llm::ocr::transformation::decode_request_value;
+use litellm_llms_types::formats::ocr::OcrDocument;
 use serde_json::Value;
 
-use crate::{Error, Gateway, request};
+use crate::{
+    Error, Gateway,
+    request::{self, InferenceBody},
+};
 
-pub(crate) async fn create(State(gateway): State<Arc<Gateway>>, request: Request) -> Response {
-    match handle(&gateway, request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => error.openai_response(),
-    }
+pub(crate) async fn create(
+    State(gateway): State<Arc<Gateway>>,
+    identity: AuthenticatedRequest,
+    headers: HeaderMap,
+    body: InferenceBody,
+) -> Result<impl IntoResponse, Error> {
+    handle(&gateway, &identity, &headers, body).await.map(Json)
 }
 
-async fn handle(gateway: &Gateway, request: Request) -> Result<Value, Error> {
-    let header_format = request
-        .headers()
+async fn handle(
+    gateway: &Gateway,
+    identity: &AuthenticatedRequest,
+    headers: &HeaderMap,
+    InferenceBody {
+        fields: body,
+        upload,
+    }: InferenceBody,
+) -> Result<Value, Error> {
+    let header_format = headers
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let (body, upload) = request::parse(request).await?;
-    let deployment = request::deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, &body)?;
+    request::authorize_model(identity, deployment, &body).await?;
     let document = match upload {
         Some(upload) => OcrDocumentInput::Bytes {
             bytes: upload.bytes,
             file_name: upload.file_name,
             mime_type: upload.mime_type,
         },
-        None => OcrDocument::try_from(
-            body.get("document")
-                .cloned()
-                .ok_or_else(|| Error::InvalidBody("document is required".into()))?,
+        None => decode_request_value::<OcrDocument>(
+            body.get("document").cloned().unwrap_or_default(),
+            "document",
         )?
         .into(),
     };
@@ -69,7 +75,7 @@ async fn handle(gateway: &Gateway, request: Request) -> Result<Value, Error> {
             ..Default::default()
         },
     )?;
-    let response = perform(&gateway.ocr, call).await?;
+    let response = gateway.ocr.execute(call, &(), None).await?;
     match response.provider_native_response {
         Some(native) => Ok(Value::Object(native)),
         None => Ok(response.into_json()),

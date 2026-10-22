@@ -4,7 +4,7 @@ Base OCR types shared by the Rust OCR route and Python consumers.
 
 import builtins
 from collections.abc import Mapping
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from pydantic import PrivateAttr
 
@@ -45,7 +45,7 @@ class OCRPageImage(LiteLLMPydanticObjectBase):
     """Image extracted from OCR page."""
 
     image_base64: str | None = None
-    bbox: dict[str, Any] | None = None
+    bbox: dict[str, builtins.object] | None = None
 
     model_config = {"extra": "allow"}
 
@@ -80,7 +80,7 @@ class OCRResponse(LiteLLMPydanticObjectBase):
 
     pages: list[OCRPage]
     model: str
-    document_annotation: Any | None = None
+    document_annotation: builtins.object | None = None
     usage_info: OCRUsageInfo | None = None
     content: str | None = None
     tables: list[dict[str, builtins.object]] | None = None
@@ -90,6 +90,14 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     model_config = {"extra": "allow"}
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def set_provider_native_response(self, native_response: Mapping[str, builtins.object]) -> None:
         """Keep the provider's own response payload alongside the normalized one."""

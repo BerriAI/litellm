@@ -1,7 +1,11 @@
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import BaseModel, ValidationError
 
 
 from litellm.integrations.galileo import GalileoObserve
@@ -905,3 +909,78 @@ async def test_galileo_async_log_success_appends_and_flushes(galileo_v2_env):
 
     assert "/ingest/traces/" in flushed_url["url"]
     assert logger.in_memory_records == []
+
+
+class RealtimeEvent(BaseModel):
+    type: str
+
+
+@dataclass(frozen=True)
+class ThirdPartyEvent:
+    model_dump: object
+
+
+@pytest.mark.parametrize(
+    ("event", "expected_output"),
+    [
+        (RealtimeEvent(type="response.done"), '[{"type": "response.done"}]'),
+        (ThirdPartyEvent(model_dump=lambda: {"type": "custom"}), '[{"type": "custom"}]'),
+        (ThirdPartyEvent(model_dump=lambda: [Decimal("2.5")]), '[["2.5"]]'),
+        (Decimal("1.5"), '["1.5"]'),
+    ],
+)
+def test_galileo_realtime_output_serializes_events_that_json_cannot_encode(
+    galileo_v2_env: None, event: object, expected_output: str
+) -> None:
+    assert GalileoObserve().get_output_str_from_response([event], {"call_type": "_arealtime"}) == expected_output
+
+
+@pytest.mark.parametrize("model_dump", [None, "not callable"])
+def test_galileo_realtime_output_with_a_model_dump_that_cannot_be_called_raises_a_validation_error(
+    galileo_v2_env: None, model_dump: object
+) -> None:
+    with pytest.raises(ValidationError) as raised:
+        GalileoObserve().get_output_str_from_response(
+            [ThirdPartyEvent(model_dump=model_dump)], {"call_type": "_arealtime"}
+        )
+
+    assert "input_value" not in str(raised.value)
+
+
+@dataclass(frozen=True)
+class ThirdPartyMessage:
+    json: object
+
+
+def _chat_response_carrying(message: object) -> ModelResponse:
+    response: Final = ModelResponse(choices=[Choices(message=Message(content="replaced", role="assistant"))])
+    response.choices[0].message = message
+    return response
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_output"),
+    [
+        (
+            ThirdPartyMessage(json=lambda: '{"role":"assistant","content":"hi"}'),
+            '{"role": "assistant", "content": "hi"}',
+        ),
+        (
+            ThirdPartyMessage(json=lambda: {"role": "assistant", "content": "hi"}),
+            '{"role": "assistant", "content": "hi"}',
+        ),
+        (ThirdPartyMessage(json=lambda: '"just text"'), "just text"),
+        (ThirdPartyMessage(json=lambda: None), ""),
+        ({"role": "assistant", "content": "hi"}, '{"role": "assistant", "content": "hi"}'),
+        ("plain reply", "plain reply"),
+        (None, ""),
+    ],
+)
+def test_galileo_output_str_of_a_chat_response_whose_message_is_not_a_litellm_message(
+    galileo_v2_env: None, message: object, expected_output: str
+) -> None:
+    output: Final = GalileoObserve().get_output_str_from_response(
+        _chat_response_carrying(message), {"call_type": "acompletion"}
+    )
+
+    assert output == expected_output
