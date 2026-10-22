@@ -117,19 +117,19 @@ resource "aws_security_group" "alb" {
   vpc_id      = local.vpc_id
 
   ingress {
-    description = "HTTP from anywhere"
+    description = "HTTP from alb_ingress_cidrs"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = var.alb_ingress_cidrs
   }
 
   ingress {
-    description = "HTTPS from anywhere"
+    description = "HTTPS from alb_ingress_cidrs"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = var.alb_ingress_cidrs
   }
 
   egress {
