@@ -1112,10 +1112,12 @@ async def _resolve_catalog_caller(context: OperationContext) -> UserAPIKeyAuth |
     )
 
     caller: Final = await MCPRequestHandler.refresh_catalog_authority(context.user_api_key_auth)
-    if caller is not None and getattr(caller, "mcp_toolset_id", None) is not None:
-        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
+    if caller is not None:
+        toolset_id: Final = getattr(caller, "mcp_toolset_id", None)
+        if isinstance(toolset_id, str):
+            from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
 
-        return await apply_toolset_scope(caller, caller.mcp_toolset_id)
+            return await apply_toolset_scope(caller, toolset_id)
     return caller
 
 
