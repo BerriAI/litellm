@@ -451,23 +451,24 @@ class LowestLatencyLoggingHandler(CustomLogger):
             if _deployment is None:
                 continue  # skip to next one
 
-            for _deployment_tpm in (
-                _deployment.get("tpm", None),
-                _deployment.get("litellm_params", {}).get("tpm", None),
-                _deployment.get("model_info", {}).get("tpm", None),
-                float("inf"),
-            ):
-                if _deployment_tpm is not None:
-                    break
-
-            for _deployment_rpm in (
-                _deployment.get("rpm", None),
-                _deployment.get("litellm_params", {}).get("rpm", None),
-                _deployment.get("model_info", {}).get("rpm", None),
-                float("inf"),
-            ):
-                if _deployment_rpm is not None:
-                    break
+            _deployment_tpm = (
+                _deployment["tpm"]
+                if _deployment.get("tpm", None) is not None
+                else _deployment["litellm_params"]["tpm"]
+                if _deployment.get("litellm_params", {}).get("tpm", None) is not None
+                else _deployment["model_info"]["tpm"]
+                if _deployment.get("model_info", {}).get("tpm", None) is not None
+                else float("inf")
+            )
+            _deployment_rpm = (
+                _deployment["rpm"]
+                if _deployment.get("rpm", None) is not None
+                else _deployment["litellm_params"]["rpm"]
+                if _deployment.get("litellm_params", {}).get("rpm", None) is not None
+                else _deployment["model_info"]["rpm"]
+                if _deployment.get("model_info", {}).get("rpm", None) is not None
+                else float("inf")
+            )
             item_latency = item_map.get("latency_normalized", [])
             item_ttft_latency = item_map.get("time_to_first_token_seconds", [])
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
