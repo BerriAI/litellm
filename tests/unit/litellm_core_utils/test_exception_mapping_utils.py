@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
     exception_type,
     extract_and_raise_litellm_exception,
+    get_error_message,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -506,6 +507,98 @@ def test_openai_compatible_429_still_maps_to_rate_limit():
         )
 
     assert excinfo.value.status_code == 429
+
+
+class _FakeErrorObj:
+    """Minimal stand-in for an SDK exception carrying a parsed error body."""
+
+    def __init__(self, body=None, request_id=None):
+        self.body = body
+        if request_id is not None:
+            self.request_id = request_id
+
+
+def test_get_error_message_appends_top_level_request_id():
+    """DashScope/Bailian returns `request_id` as a top-level sibling of
+    `error` in the response body. Extracting only `error.message` dropped it
+    from the final error text (issue #47839)."""
+    error_obj = _FakeErrorObj(
+        body={
+            "error": {
+                "message": "Incorrect API key provided.",
+                "type": "invalid_request_error",
+                "param": None,
+                "code": "invalid_api_key",
+            },
+            "request_id": "343604ce-3795-9363-8be6-f4aa3f4613ee",
+        }
+    )
+
+    assert get_error_message(error_obj=error_obj) == (
+        "Incorrect API key provided. (request_id: 343604ce-3795-9363-8be6-f4aa3f4613ee)"
+    )
+
+
+def test_get_error_message_appends_request_id_for_flat_body():
+    error_obj = _FakeErrorObj(body={"message": "Something went wrong", "request_id": "req_flat_123"})
+
+    assert get_error_message(error_obj=error_obj) == "Something went wrong (request_id: req_flat_123)"
+
+
+def test_get_error_message_appends_nested_error_request_id():
+    error_obj = _FakeErrorObj(body={"error": {"message": "Bad request", "request_id": "req_nested_456"}})
+
+    assert get_error_message(error_obj=error_obj) == "Bad request (request_id: req_nested_456)"
+
+
+def test_get_error_message_appends_sdk_request_id_attribute():
+    error_obj = _FakeErrorObj(body={"error": {"message": "Unauthorized"}}, request_id="req_sdk_789")
+
+    assert get_error_message(error_obj=error_obj) == "Unauthorized (request_id: req_sdk_789)"
+
+
+def test_get_error_message_without_request_id_is_unchanged():
+    error_obj = _FakeErrorObj(body={"error": {"message": "Plain error", "code": "some_code"}})
+
+    assert get_error_message(error_obj=error_obj) == "Plain error"
+
+
+def test_get_error_message_does_not_duplicate_request_id():
+    error_obj = _FakeErrorObj(body={"message": "Failed (request_id: req_dup_1)", "request_id": "req_dup_1"})
+
+    assert get_error_message(error_obj=error_obj) == "Failed (request_id: req_dup_1)"
+
+
+def test_dashscope_auth_error_message_includes_provider_request_id():
+    """End-to-end (issue #47839): a DashScope 401 through the
+    OpenAI-compatible exception mapping must keep the provider request id
+    in the final AuthenticationError message."""
+    dashscope_body = {
+        "error": {
+            "message": "Incorrect API key provided. For details, see: "
+            "https://help.aliyun.com/zh/model-studio/error-code#apikey-error",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "invalid_api_key",
+        },
+        "request_id": "343604ce-3795-9363-8be6-f4aa3f4613ee",
+    }
+    original_exception = OpenAIError(
+        status_code=401,
+        message=f"Error code: 401 - {dashscope_body}",
+        headers={},
+        body=dashscope_body,
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(
+            model="dashscope/deepseek-v4-flash",
+            original_exception=original_exception,
+            custom_llm_provider="dashscope",
+        )
+
+    assert "343604ce-3795-9363-8be6-f4aa3f4613ee" in str(excinfo.value)
+    assert "Incorrect API key provided" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(

@@ -167,19 +167,65 @@ def get_error_message(error_obj) -> str | None:
         if error_obj is None:
             return None
 
+        message: str | None = None
         if hasattr(error_obj, "body"):
             _error_obj_body: Final = getattr(error_obj, "body")
             if isinstance(_error_obj_body, dict):
                 # OpenAI-style: {"message": "...", "type": "...", ...}
                 if _error_obj_body.get("message"):
-                    return _error_obj_body.get("message")
+                    message = _error_obj_body.get("message")
+                else:
+                    # Azure-style: {"error": {"message": "...", ...}}
+                    nested_error: Final = _error_obj_body.get("error")
+                    if isinstance(nested_error, dict):
+                        message = nested_error.get("message")
 
-                # Azure-style: {"error": {"message": "...", ...}}
+        if message is None:
+            return None
+
+        # Some providers (e.g. DashScope/Bailian) return the request id as a
+        # top-level sibling of `error` in the response body, not inside
+        # `error.message`. Extracting only the message drops it, leaving users
+        # without the provider request id needed to investigate the failure
+        # (https://github.com/BerriAI/litellm/issues/47839). Append it to the
+        # extracted message when it is available and not already present.
+        request_id: Final = _get_error_request_id(error_obj)
+        if request_id is not None and isinstance(message, str) and request_id not in message:
+            message = f"{message} (request_id: {request_id})"
+
+        return message
+    except Exception:
+        return None
+
+
+def _get_error_request_id(error_obj) -> str | None:
+    """
+    Return the provider request id carried by an error object, if any.
+
+    Checks, in order:
+    - `body["request_id"]` — top-level sibling of `error`
+      (e.g. `{"error": {...}, "request_id": "..."}` from DashScope)
+    - `body["error"]["request_id"]` — nested inside the error object
+    - the `request_id` attribute the OpenAI SDK sets on its exceptions
+    """
+    try:
+        if hasattr(error_obj, "body"):
+            _error_obj_body: Final = getattr(error_obj, "body")
+            if isinstance(_error_obj_body, dict):
+                _body_request_id: Final = _error_obj_body.get("request_id")
+                if isinstance(_body_request_id, str) and _body_request_id:
+                    return _body_request_id
+
                 nested_error: Final = _error_obj_body.get("error")
                 if isinstance(nested_error, dict):
-                    return nested_error.get("message")
+                    _nested_request_id: Final = nested_error.get("request_id")
+                    if isinstance(_nested_request_id, str) and _nested_request_id:
+                        return _nested_request_id
 
-        # If all else fails, return None
+        _attr_request_id: Final = getattr(error_obj, "request_id", None)
+        if isinstance(_attr_request_id, str) and _attr_request_id:
+            return _attr_request_id
+
         return None
     except Exception:
         return None
