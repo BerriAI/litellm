@@ -1,27 +1,12 @@
 use std::{collections::BTreeMap, fmt, ops::Deref};
 
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 
 pub type Value = serde_yaml_ng::Value;
-pub type AdditionalFields = BTreeMap<String, Value>;
 
 #[derive(Clone, Default, Deserialize)]
 #[serde(transparent)]
 pub struct Object(BTreeMap<String, Value>);
-
-impl Object {
-    pub fn get(&self, key: &str) -> Option<&Value> {
-        self.0.get(key)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-}
 
 impl Deref for Object {
     type Target = BTreeMap<String, Value>;
@@ -40,14 +25,27 @@ impl fmt::Debug for Object {
     }
 }
 
-/// Python's callback shorthand: one entry or a list of them, kept as the values written.
-pub(crate) fn one_or_many<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Vec<Value>>, D::Error> {
-    Ok(
-        Option::<Value>::deserialize(deserializer)?.map(|value| match value {
-            Value::Sequence(values) => values,
-            one => vec![one],
-        }),
-    )
+#[derive(Clone, Deserialize)]
+#[serde(transparent)]
+pub struct Raw(Value);
+
+impl Raw {
+    pub fn get(&self) -> &Value {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Raw {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kind = match &self.0 {
+            Value::Null => "null",
+            Value::Bool(_) => "bool",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Sequence(_) => "sequence",
+            Value::Mapping(_) => "mapping",
+            Value::Tagged(_) => "tagged",
+        };
+        formatter.debug_tuple("Raw").field(&kind).finish()
+    }
 }

@@ -1,5 +1,6 @@
 mod auth;
 mod error;
+mod mcp_settings;
 mod secrets;
 pub use error::Error;
 
@@ -15,6 +16,7 @@ use axum::{
 use http_body_util::BodyExt;
 
 use litellm_config::Config;
+use litellm_config_load::{Environment, Transport};
 use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{
@@ -26,34 +28,18 @@ use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
 
-pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
+pub fn build_inference(config: &Config, process: &Environment) -> Result<Arc<Gateway>, Error> {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let environment = secrets::environment_values(&config.environment_variables)?;
-    let lookup = |name: &str| {
+    let lookup = process.clone().overlaid(
         environment
-            .get(name)
-            .map(|value| value.expose().to_owned())
-            .or_else(|| std::env::var(name).ok())
-    };
-    let settings = &config.litellm_settings;
+            .iter()
+            .map(|(name, value)| (name.clone(), value.expose().to_owned())),
+    );
+    let transport = Transport::lower(&config.litellm_settings, &lookup);
     let http_settings = HttpSettings::from_layers([
-        HttpSettingsLayer::from_environment(&lookup),
-        HttpSettingsLayer {
-            ssl_verify: settings.ssl_verify.as_ref().map(|value| match value {
-                litellm_config::Spelled::Value(true) => SslVerify::Enabled,
-                litellm_config::Spelled::Value(false) => SslVerify::Disabled,
-                litellm_config::Spelled::Text(value) => SslVerify::parse(value),
-            }),
-            ssl_certificate: settings.ssl_certificate.as_ref().map(Into::into),
-            ssl_security_level: settings.ssl_security_level.clone(),
-            ssl_ecdh_curve: settings.ssl_ecdh_curve.clone(),
-            force_ipv4: settings.force_ipv4,
-            http2: settings.http2,
-            aiohttp_trust_env: settings.aiohttp_trust_env,
-            disable_aiohttp_trust_env: settings.disable_aiohttp_trust_env,
-            disable_aiohttp_transport: settings.disable_aiohttp_transport,
-            ..Default::default()
-        },
+        transport_layer(&transport),
+        HttpSettingsLayer::from_environment(&|name: &str| lookup.var(name).map(str::to_owned)),
     ]);
     let http = Resolution::from(&http_settings).config;
     let client = pool.client(&http, ClientVariant::Provider)?;
@@ -70,6 +56,25 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     )?))
 }
 
+fn transport_layer(transport: &Transport) -> HttpSettingsLayer {
+    HttpSettingsLayer {
+        ssl_verify: Some(match &transport.ssl_verify {
+            litellm_config_load::SslVerify::Enabled => SslVerify::Enabled,
+            litellm_config_load::SslVerify::Disabled => SslVerify::Disabled,
+            litellm_config_load::SslVerify::CaBundle(path) => SslVerify::CaBundle(path.clone()),
+        }),
+        ssl_certificate: transport.ssl_certificate.clone(),
+        ssl_security_level: transport.ssl_security_level.clone(),
+        ssl_ecdh_curve: transport.ssl_ecdh_curve.clone(),
+        force_ipv4: Some(transport.force_ipv4),
+        http2: Some(transport.http2),
+        aiohttp_trust_env: Some(transport.aiohttp_trust_env),
+        disable_aiohttp_trust_env: Some(transport.disable_aiohttp_trust_env),
+        disable_aiohttp_transport: Some(transport.disable_aiohttp_transport),
+        ..Default::default()
+    }
+}
+
 pub async fn build_mcp(
     config: &Config,
     secrets: Arc<dyn litellm_secrets::source::SecretSource>,
@@ -83,14 +88,8 @@ pub async fn build_mcp(
     if config.mcp_servers.is_empty() {
         return Ok(None);
     }
-    if let Some(setting) = config
-        .general_settings
-        .additional_fields
-        .keys()
-        .chain(config.litellm_settings.additional_fields.keys())
-        .find(|key| key.starts_with("mcp_"))
-    {
-        return Err(Error::McpSetting(setting.clone()));
+    if let Some(setting) = mcp_settings::first_unsupported(config) {
+        return Err(Error::McpSetting(setting.into()));
     }
     if !config.guardrails.is_empty()
         || !config.policies.is_empty()

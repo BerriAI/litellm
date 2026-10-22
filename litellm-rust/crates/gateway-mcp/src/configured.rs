@@ -136,7 +136,7 @@ fn validate(name: &str, config: &McpServer) -> Result<(), ConnectError> {
             if config
                 .command
                 .as_ref()
-                .is_none_or(|command| command.trim().is_empty())
+                .is_none_or(|command| command.expose().trim().is_empty())
                 || config.url.is_some()
             {
                 return Err(invalid(
@@ -377,11 +377,12 @@ async fn connect_service<C: StreamableHttpClient>(
             .await?;
             let program = config
                 .command
-                .as_deref()
+                .as_ref()
+                .map(SecretValue::expose)
                 .ok_or_else(|| invalid(name, "stdio requires command"))?;
             let mut command = tokio::process::Command::new(program);
             command
-                .args(&config.args)
+                .args(config.args.iter().map(SecretValue::expose))
                 .envs(environment)
                 .kill_on_drop(true);
             ().serve_with_ct(TokioChildProcess::new(command)?, shutdown)

@@ -3647,12 +3647,25 @@ name = "litellm-config"
 version = "0.1.0"
 dependencies = [
  "litellm-auth-types",
+ "litellm-python-compat",
  "litellm-router-types",
+ "macro_rules_attribute",
  "rstest",
  "serde",
  "serde_json",
  "serde_yaml_ng",
  "strum",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-config-load"
+version = "0.1.0"
+dependencies = [
+ "litellm-config",
+ "litellm-core-utils",
+ "rstest",
+ "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.19",
 ]
@@ -3737,6 +3750,7 @@ dependencies = [
  "http-body-util",
  "litellm-auth-types",
  "litellm-config",
+ "litellm-config-load",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
@@ -4291,6 +4305,7 @@ name = "litellm-router-types"
 version = "0.1.0"
 dependencies = [
  "litellm-auth-types",
+ "litellm-python-compat",
  "rstest",
  "serde",
  "serde_json",

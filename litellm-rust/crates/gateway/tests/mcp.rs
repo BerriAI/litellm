@@ -5,7 +5,13 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
+use rstest::{fixture, rstest};
+use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
+use tower::ServiceExt;
+
 use litellm_config::Config;
+use litellm_config_load::Environment;
 use litellm_gateway_mcp::{
     HttpConfig,
     rmcp::{
@@ -17,10 +23,6 @@ use litellm_gateway_mcp::{
         },
     },
 };
-use rstest::{fixture, rstest};
-use serde_json::{Value, json};
-use tokio_util::sync::CancellationToken;
-use tower::ServiceExt;
 
 #[derive(Clone)]
 struct Upstream;
@@ -126,7 +128,7 @@ mcp_servers:
         upstream.url
     ))
     .unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference = litellm_gateway::build_inference(&config, &Environment::default()).unwrap();
     let shutdown = CancellationToken::new();
     let mcp = litellm_gateway::build_mcp(
         &config,
@@ -243,7 +245,7 @@ async fn rejects_unsupported_or_invalid_settings_before_serving(
     #[case] expected: &str,
 ) {
     let config = Config::from_yaml(&format!("general_settings: {{master_key: gateway-key}}\nmcp_servers:\n  docs:\n    url: http://127.0.0.1:1/mcp\n    {settings}\n")).unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference = litellm_gateway::build_inference(&config, &Environment::default()).unwrap();
     let result = litellm_gateway::build_mcp(
         &config,
         Arc::new(NoSecrets),
@@ -261,7 +263,7 @@ async fn rejects_unsupported_or_invalid_settings_before_serving(
 #[tokio::test]
 async fn mcp_is_optional_and_requires_admission_credentials_when_enabled() {
     let empty = Config::from_yaml("{}").unwrap();
-    let inference = litellm_gateway::build_inference(&empty).unwrap();
+    let inference = litellm_gateway::build_inference(&empty, &Environment::default()).unwrap();
     assert!(
         litellm_gateway::build_mcp(
             &empty,
@@ -311,7 +313,9 @@ fn applies_configured_http_environment_before_building_clients() {
         missing.display(),
     ))
     .unwrap();
-    let error = litellm_gateway::build_inference(&config).err().unwrap();
+    let error = litellm_gateway::build_inference(&config, &Environment::default())
+        .err()
+        .unwrap();
     assert!(matches!(
         error,
         litellm_gateway::Error::Http(litellm_http::Error::Read { path, .. })
@@ -320,16 +324,51 @@ fn applies_configured_http_environment_before_building_clients() {
 }
 
 #[rstest]
-#[case::client_policy("general_settings: {master_key: key, mcp_allowed_clients: [approved]}")]
-#[case::guardrail("guardrails: [{guardrail_name: policy}]")]
-#[case::local_tools("mcp_tools: [{name: custom}]")]
+#[case::client_policy(
+    "general_settings: {master_key: key, mcp_allowed_clients: [approved]}",
+    "mcp_allowed_clients"
+)]
+#[case::aliases(
+    "general_settings: {master_key: key}\nlitellm_settings: {mcp_aliases: {d: docs}}",
+    "mcp_aliases"
+)]
+#[case::tool_search(
+    "general_settings: {master_key: key}\nlitellm_settings: {mcp_tool_search: {top_k: 3}}",
+    "mcp_tool_search"
+)]
+#[case::advertised_versions(
+    "general_settings: {mcp_advertised_versions: [2025-06-18]}",
+    "mcp_advertised_versions"
+)]
+#[case::spelled_bool(
+    "general_settings: {mcp_require_explicit_server_scope: 'true'}",
+    "mcp_require_explicit_server_scope"
+)]
+#[case::header(
+    "general_settings: {mcp_client_side_auth_header_name: x-auth}",
+    "mcp_client_side_auth_header_name"
+)]
+#[case::hops(
+    "general_settings: {mcp_xff_num_trusted_hops: 2}",
+    "mcp_xff_num_trusted_hops"
+)]
+#[case::signing(
+    "general_settings: {mcp_session_token_signing: {algorithm: RS256}}",
+    "mcp_session_token_signing"
+)]
+#[case::semantic_filter(
+    "litellm_settings: {mcp_semantic_tool_filter: {enabled: true}}",
+    "mcp_semantic_tool_filter"
+)]
+#[case::guardrail("guardrails: [{guardrail_name: policy}]", "guardrails or policies")]
+#[case::local_tools("mcp_tools: [{name: custom}]", "mcp_tools")]
 #[tokio::test]
-async fn refuses_unimplemented_global_mcp_policy(#[case] settings: &str) {
+async fn refuses_unimplemented_global_mcp_policy(#[case] settings: &str, #[case] key: &str) {
     let config = Config::from_yaml(&format!(
         "{settings}\nmcp_servers: {{docs: {{url: 'http://127.0.0.1:1/mcp'}}}}\n"
     ))
     .unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference = litellm_gateway::build_inference(&config, &Environment::default()).unwrap();
     let error = litellm_gateway::build_mcp(
         &config,
         Arc::new(NoSecrets),
@@ -340,5 +379,31 @@ async fn refuses_unimplemented_global_mcp_policy(#[case] settings: &str) {
     .await
     .err()
     .unwrap();
-    assert!(matches!(error, litellm_gateway::Error::McpSetting(_)));
+    assert!(matches!(error, litellm_gateway::Error::McpSetting(setting) if setting == key));
+}
+
+#[rstest]
+#[case::general("general_settings: {mcp_whatever: 1}")]
+#[case::litellm("litellm_settings: {mcp_whatever: 1}")]
+#[case::null("general_settings: {mcp_trusted_proxy_ranges: null}")]
+#[case::allowed_hosts("general_settings: {mcp_allowed_hosts: [localhost]}")]
+#[case::allowed_origins("general_settings: {mcp_allowed_origins: ['https://app.test']}")]
+#[tokio::test]
+async fn unknown_null_or_supported_mcp_keys_do_not_block_mcp(#[case] settings: &str) {
+    let config = Config::from_yaml(&format!(
+        "{settings}\nmcp_servers: {{docs: {{url: 'http://127.0.0.1:1/mcp'}}}}\n"
+    ))
+    .unwrap();
+    let inference = litellm_gateway::build_inference(&config, &Environment::default()).unwrap();
+    let error = litellm_gateway::build_mcp(
+        &config,
+        Arc::new(NoSecrets),
+        CancellationToken::new(),
+        &inference.resources.pool,
+        &inference.http,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(matches!(error, litellm_gateway::Error::Auth(_)), "{error}");
 }
