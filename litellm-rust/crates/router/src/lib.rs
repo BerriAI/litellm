@@ -223,8 +223,9 @@ impl Router {
     }
 
     /// Runs `call` on a deployment of `group` and, while `classify` names the error a
-    /// [`Failure`] and `num_retries` allows, again on a deployment not yet tried. Every
-    /// failure counts toward its deployment's cooldown. A call that returned `Ok` is never
+    /// [`Failure`] and `num_retries` allows, again: on a deployment not yet tried, or once every
+    /// deployment has been tried, on any of them, as Python's router retries a group of one.
+    /// Every failure counts toward its deployment's cooldown. A call that returned `Ok` is never
     /// repeated, so a stream that already started is not retried.
     pub async fn route<'a, T, E, F, Fut, C>(
         &self,
@@ -258,17 +259,19 @@ impl Router {
             .saturating_add(1);
         let skipped = excluded.len();
         let mut tried = excluded;
+        let mut made = 0;
         let mut index = group
             .choose(self.policy.strategy, self.now(), &tried, rand::random())
             .unwrap_or_default();
         loop {
             tried.push(index);
+            made += 1;
             let member = group.member(index);
             let in_flight = InFlight::enter(&member.health);
             let attempt = Attempt {
                 deployment: &member.deployment,
                 id: &member.id,
-                last: tried.len() - skipped >= attempts || tried.len() >= group.len(),
+                last: made >= attempts,
             };
             let last = attempt.last;
             let error = match call(attempt).await {
@@ -310,8 +313,15 @@ impl Router {
                     "deployment cooling down"
                 );
             }
+            let draw = rand::random();
             let next = (!last)
-                .then(|| group.choose(self.policy.strategy, self.now(), &tried, rand::random()))
+                .then(|| {
+                    group
+                        .choose(self.policy.strategy, self.now(), &tried, draw)
+                        .or_else(|| {
+                            group.choose(self.policy.strategy, self.now(), &tried[..skipped], draw)
+                        })
+                })
                 .flatten();
             let Some(next) = next else {
                 return Err(error);
@@ -321,7 +331,7 @@ impl Router {
                 from = index,
                 to = next,
                 ?failure,
-                "retrying on another deployment"
+                "retrying"
             );
             index = next;
         }
@@ -537,6 +547,7 @@ mod tests {
         let tried = tried.into_inner();
         let mut models: Vec<&str> = tried.iter().map(|(model, _)| model.as_str()).collect();
         models.sort_unstable();
+        models.dedup();
         assert_eq!(Some(models), expected);
         assert_eq!(tried.last().map(|(_, last)| *last), Some(true));
         assert!(matches!(result, Some(Err(Some(Failure::Unavailable)))));
@@ -629,27 +640,36 @@ mod tests {
     }
 
     #[rstest]
-    #[case::bounded_by_num_retries(&["a", "b", "c", "d"], 1, 2)]
-    #[case::bounded_by_deployments(&["a", "b"], 5, 2)]
-    #[case::no_retries(&["a", "b"], 0, 1)]
+    #[case::bounded_by_num_retries(&["a", "b", "c", "d"], 1, 2, 2)]
+    #[case::reusing_deployments_once_all_are_tried(&["a", "b"], 5, 6, 2)]
+    #[case::a_group_of_one(&["a"], 2, 3, 1)]
+    #[case::no_retries(&["a", "b"], 0, 1, 1)]
     #[tokio::test]
-    async fn retries_stop_at_num_retries_or_untried_deployments(
+    async fn retries_stop_at_num_retries_and_prefer_untried_deployments(
         #[case] models: &[&str],
         #[case] num_retries: u32,
         #[case] attempts: usize,
+        #[case] deployments: usize,
     ) {
         let router = router(models, retries(num_retries));
 
         let (tried, result) = send(&router, |_| Err(Some(Failure::Unavailable))).await;
 
-        let distinct: BTreeMap<_, _> = tried.iter().cloned().collect();
-        assert_eq!((tried.len(), distinct.len()), (attempts, attempts));
+        let distinct: BTreeMap<_, _> = tried.iter().map(|(model, _)| (model, ())).collect();
+        let first: BTreeMap<_, _> = tried[..deployments]
+            .iter()
+            .map(|(model, _)| (model, ()))
+            .collect();
+        assert_eq!(
+            (tried.len(), distinct.len(), first.len()),
+            (attempts, deployments, deployments)
+        );
         assert_eq!(tried.last().map(|(_, last)| *last), Some(true));
         assert_eq!(result.err(), Some(Some(Failure::Unavailable)));
     }
 
     #[rstest]
-    #[case::single_deployment(&["a"], 2, vec![true])]
+    #[case::single_deployment(&["a"], 2, vec![false, false, true])]
     #[case::three_deployments(&["a", "b", "c"], 2, vec![false, false, true])]
     #[tokio::test]
     async fn last_marks_the_final_possible_attempt(
