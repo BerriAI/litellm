@@ -183,7 +183,9 @@ class VertexFineTuningAPI(VertexLLM):
                     f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
                 )
 
-            verbose_logger.debug("got response from creating fine tuning job: %s", response.json())
+            verbose_logger.debug(
+                "got response from creating fine tuning job: %s", _JSON_VALUE.validate_python(response.json())
+            )
 
             vertex_response: Final = ResponseTuningJob(
                 **response.json(),
@@ -267,7 +269,9 @@ class VertexFineTuningAPI(VertexLLM):
                 f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
             )
 
-        verbose_logger.debug("got response from creating fine tuning job: %s", response.json())
+        verbose_logger.debug(
+            "got response from creating fine tuning job: %s", _JSON_VALUE.validate_python(response.json())
+        )
         vertex_response: Final = ResponseTuningJob(
             **response.json(),
         )

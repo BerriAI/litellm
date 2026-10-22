@@ -15,16 +15,16 @@ const QUESTION_FIELD: Record<string, string> = {
   criteria: "options",
 };
 
-const humanize = (segment: string): string => segment.replace(/_/g, " ");
+const humanize = (segment: PropertyKey): string => String(segment).replace(/_/g, " ");
 
-export function issueLabel(path: string): string {
-  const [head, question, field] = path.split(".");
+export function issueLabel(path: readonly PropertyKey[]): string {
+  const [head = "root", question, field] = path;
   if (head !== "questions" || question === undefined) {
-    return TOP_LEVEL[head] ?? humanize(head);
+    return TOP_LEVEL[String(head)] ?? humanize(head);
   }
-  const title = /^\d+$/.test(question) ? `Question ${Number(question) + 1}` : `Question "${question}"`;
+  const title = typeof question === "number" ? `Question ${question + 1}` : `Question "${String(question)}"`;
   if (field === undefined) {
     return title;
   }
-  return `${title} ${QUESTION_FIELD[field] ?? humanize(field)}`;
+  return `${title} ${QUESTION_FIELD[String(field)] ?? humanize(field)}`;
 }

@@ -145,6 +145,10 @@ def _unified_hook_fields(guardrail: "CustomGuardrail", request_data: Mapping[str
     }
 
 
+def _instance_attributes(value: object) -> Mapping[str, object]:
+    return vars(value)
+
+
 def _strict_guardrail_modes_enabled() -> bool:
     """Whether guardrail-mode validation raises (default) or logs a warning.
 
@@ -396,7 +400,7 @@ class CustomGuardrail(CustomLogger):
 
     def inject_advisory_message(
         self,
-        data: dict[str, Any],  # mutable-ok: caller's dict is mutated in place, matching mark_pre_call_hook_ran
+        data: dict[str, object],  # mutable-ok: caller's dict is mutated in place, matching mark_pre_call_hook_ran
         message: str,
     ) -> bool:
         """
@@ -473,8 +477,8 @@ class CustomGuardrail(CustomLogger):
     def raise_sensitive_data_route_exception(
         self,
         route_to_model: str,
-        request_data: dict[str, Any],
-        detection_info: dict[str, Any] | None = None,
+        request_data: dict[str, object],
+        detection_info: dict[str, object] | None = None,
     ) -> None:
         """
         Raise an exception to reroute the request to a different model.
@@ -620,8 +624,8 @@ class CustomGuardrail(CustomLogger):
 
     def handle_sensitive_data_detection(
         self,
-        request_data: dict[str, Any],
-        detection_info: dict[str, Any] | None = None,
+        request_data: dict[str, object],
+        detection_info: dict[str, object] | None = None,
     ) -> None:
         """
         Handle sensitive data detection based on guardrail configuration.
@@ -691,9 +695,7 @@ class CustomGuardrail(CustomLogger):
         supported_event_hooks: list[GuardrailEventHooks],
     ) -> None:
         allowed_hooks: Final = frozenset(supported_event_hooks) | (
-            frozenset((GuardrailEventHooks.logging_only,))
-            if self.uses_apply_guardrail_interface() and not self.use_native_lifecycle_hooks
-            else frozenset()
+            frozenset((GuardrailEventHooks.logging_only,)) if self.accepts_logging_only_mode() else frozenset()
         )
 
         def _validate_event_hook_list_is_in_supported_event_hooks(
@@ -865,8 +867,13 @@ class CustomGuardrail(CustomLogger):
                     return True
         return False
 
-    def uses_apply_guardrail_interface(self) -> bool:
-        return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
+    @classmethod
+    def uses_apply_guardrail_interface(cls) -> bool:
+        return cls.apply_guardrail is not CustomGuardrail.apply_guardrail
+
+    @classmethod
+    def accepts_logging_only_mode(cls) -> bool:
+        return cls.uses_apply_guardrail_interface() and not cls.use_native_lifecycle_hooks
 
     @classmethod
     def supports_logging_only_scope(cls) -> bool:
@@ -888,7 +895,9 @@ class CustomGuardrail(CustomLogger):
             ) from e
         return unified_guardrail
 
-    async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict | None:
         # should run guardrail
         litellm_guardrails: Final = kwargs.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
@@ -1023,7 +1032,7 @@ class CustomGuardrail(CustomLogger):
             )
             return kwargs, result
         litellm_params: Final = kwargs.get("litellm_params") or {}
-        scratch_metadata: Final = {
+        scratch_metadata: Final[dict[str, object]] = {  # mutable-ok: apply_guardrail records its verdict here
             key: value
             for key, value in (litellm_params.get("metadata") or {}).items()
             if key != "standard_logging_guardrail_information"
@@ -1077,11 +1086,11 @@ class CustomGuardrail(CustomLogger):
 
     async def _scan_logged_call(
         self,
-        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        kwargs: dict[str, object],  # mutable-ok: CustomLogger.async_logging_hook contract
         response: object | None,
         translation: "BaseTranslation",
         output_translation: "BaseTranslation",
-        scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
+        scratch_metadata: dict[str, object],  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
         scratch_fields: Final = self._copy_scratch_request_fields(kwargs)
         scratch_input, scratch_tools = scratch_fields or (None, None)
@@ -1129,6 +1138,17 @@ class CustomGuardrail(CustomLogger):
         duplicate the out-of-scope messages.
         """
         return False
+
+    def supports_structured_messages(self) -> bool:
+        """Whether this guardrail scans every row of ``structured_messages`` and returns texts that agree with them.
+
+        Guardrails that scan only part of the rows (the latest user turn, the
+        last row, the turns after the last assistant turn, or no tool results),
+        derive their returned texts from the rows, or cannot rewrite rows whose
+        content is a list of parts, override this to return False. Translation handlers that can rewrite the request from ``texts``
+        alone, like Bedrock Converse, then hand them only ``texts``.
+        """
+        return True
 
     def _suppressed_by_auto_router_compression(self) -> bool:
         """True when an auto router's own compression policy suppresses this guardrail.
@@ -1579,7 +1599,7 @@ class CustomGuardrail(CustomLogger):
         """
         Update the guardrails litellm params in memory
         """
-        for key, value in vars(litellm_params).items():
+        for key, value in _instance_attributes(litellm_params).items():
             setattr(self, key, value)
 
     def get_guardrails_messages_for_call_type(

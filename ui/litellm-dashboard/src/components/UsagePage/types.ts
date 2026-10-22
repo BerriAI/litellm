@@ -1,6 +1,7 @@
 export interface SpendMetrics {
   spend: number;
   flat_cost?: number;
+  ptu_hours?: number;
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
