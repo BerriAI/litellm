@@ -89,6 +89,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     with_litellm_call_id,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
+from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
@@ -937,7 +938,7 @@ def _system_prompt_text(system_input: object) -> str:
     return "".join(_prompt_block_text(block) for block in system_input)
 
 
-def _count_request_input_tokens(model: str, request_input: object, system_input: object) -> int:
+def count_request_input_tokens(model: str, request_input: object, system_input: object) -> int:
     system_text: Final = _system_prompt_text(system_input)
     system_tokens: Final = litellm.token_counter(model=model, text=system_text) if system_text else 0
     if isinstance(request_input, str):
@@ -958,7 +959,7 @@ def _estimate_dispatched_failure_usage(model: str, request_input: object, system
     the same tokenizer fallback interrupted streams use, so the spend log's
     failure row records what was sent instead of zero."""
     try:
-        input_tokens: Final = _count_request_input_tokens(
+        input_tokens: Final = count_request_input_tokens(
             model=model, request_input=request_input, system_input=system_input
         )
     except Exception:
@@ -997,6 +998,8 @@ _INPUT_ESTIMABLE_CALL_TYPES: Final = frozenset(
 )
 
 
+_RESPONSES_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.aresponses.value))
+
 _FAILED_ATTEMPTS_USAGE: Final = TypeAdapter(tuple[tuple[Usage, float], ...])
 
 
@@ -1015,13 +1018,14 @@ def _billed_across_attempts(
     )
 
 
-def _failure_usage_to_lift(
+def _current_failure_usage_to_lift(
     model_call_details: Mapping[str, object],
     request_body: Mapping[str, object],
     dispatched: bool,
     provider_billed: bool = False,
     deployment_id: str | None = None,
     base_model: str | None = None,
+    dispatched_call_type: str | None = None,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
@@ -1037,9 +1041,6 @@ def _failure_usage_to_lift(
     failure stays at zero cost. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
     recovered_usage: Final = model_call_details.get("combined_usage_object")
-    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
-    if failed_attempts:
-        return _billed_across_attempts(failed_attempts, recovered_usage, model_call_details.get("response_cost"))
     if recovered_usage is not None:
         return recovered_usage, model_call_details.get("response_cost")
     if not dispatched:
@@ -1048,7 +1049,7 @@ def _failure_usage_to_lift(
         # The proxy-only error handler stamps this flag on a client disconnect too, even though the
         # request had already reached the provider, so a billed failure keeps its estimate.
         return None
-    estimated_usage: Final = _estimated_prompt_usage(model_call_details, request_body)
+    estimated_usage: Final = _estimated_prompt_usage(model_call_details, request_body, dispatched_call_type)
     if estimated_usage is None:
         return None
     if not provider_billed:
@@ -1059,13 +1060,14 @@ def _failure_usage_to_lift(
 
 
 def _estimated_prompt_usage(
-    model_call_details: Mapping[str, object], request_body: Mapping[str, object]
+    model_call_details: Mapping[str, object], request_body: Mapping[str, object], dispatched_call_type: str | None
 ) -> Usage | None:
     """The input-only Usage estimate for the prompt this request sent, or None when the call type has no
     estimable input. The raw request body backfills the system prompt when the SDK bridges an endpoint
     (e.g. /v1/messages on a chat-completions provider) without filling optional_params."""
     if str(model_call_details.get("call_type")) not in _INPUT_ESTIMABLE_CALL_TYPES:
         return None
+    dispatched_input: Final = model_call_details.get("messages")
     optional_params: Final = model_call_details.get("optional_params")
     dispatched_system: Final = (
         (optional_params.get("system") or optional_params.get("instructions"))
@@ -1082,7 +1084,11 @@ def _estimated_prompt_usage(
     )
     return _estimate_dispatched_failure_usage(
         model=str(model_call_details.get("model") or ""),
-        request_input=model_call_details.get("messages"),
+        request_input=(
+            messages_since_newest_compaction(dispatched_input)
+            if dispatched_call_type in _RESPONSES_CALL_TYPES
+            else dispatched_input
+        ),
         system_input=system_input,
     )
 
@@ -1281,6 +1287,31 @@ def _estimated_input_cost(
     return next((cost for cost in candidate_costs if cost is not None), 0.0)
 
 
+def _failure_usage_to_lift(
+    model_call_details: Mapping[str, object],
+    request_body: Mapping[str, object],
+    dispatched: bool,
+    provider_billed: bool = False,
+    deployment_id: str | None = None,
+    base_model: str | None = None,
+    dispatched_call_type: str | None = None,
+) -> tuple[object, object] | None:
+    current_attempt: Final = _current_failure_usage_to_lift(
+        model_call_details,
+        request_body,
+        dispatched,
+        provider_billed,
+        deployment_id,
+        base_model,
+        dispatched_call_type=dispatched_call_type,
+    )
+    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
+    if not failed_attempts:
+        return current_attempt
+    current_usage, current_cost = current_attempt if current_attempt is not None else (None, None)
+    return _billed_across_attempts(failed_attempts, current_usage, current_cost)
+
+
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
@@ -1424,7 +1455,9 @@ def _provider_billed_the_failure(exception: Exception) -> bool:
     return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
 
 
-def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed: bool = False) -> Mapping[str, object]:
+def _failure_fields_to_lift(
+    request_data: Mapping[str, object], provider_billed: bool = False, dispatched_call_type: str | None = None
+) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
     onto request_data first: the request start and first-handoff instants for
@@ -1444,13 +1477,14 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
     _usage_to_lift: Final = _failure_usage_to_lift(
         model_call_details=_model_call_details,
         request_body=request_data,
-        dispatched=_first_handoff is not None,
+        dispatched=_model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
         provider_billed=_billed,
         deployment_id=_deployment_id,
         base_model=_base_model,
+        dispatched_call_type=dispatched_call_type,
     )
     _prompt_estimate: Final = (
-        _estimated_prompt_usage(_model_call_details, request_data)
+        _estimated_prompt_usage(_model_call_details, request_data, dispatched_call_type)
         if _billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
         else None
     )
@@ -3614,6 +3648,7 @@ class ProxyLogging:
         error_type: ProxyErrorTypes | None = None,
         route: str | None = None,
         traceback_str: str | None = None,
+        dispatched_call_type: str | None = None,
     ) -> HTTPException | None:
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
@@ -3684,7 +3719,9 @@ class ProxyLogging:
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
-                request_data, provider_billed=_provider_billed_the_failure(original_exception)
+                request_data,
+                provider_billed=_provider_billed_the_failure(original_exception),
+                dispatched_call_type=dispatched_call_type or _call_type_for_route(user_api_key_dict.request_route),
             )
         )
 

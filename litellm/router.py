@@ -260,6 +260,7 @@ from litellm.router_utils.fallback_event_handlers import (
     attempted_retries_for_request,
     carry_over_pre_routing_selection,
     carry_over_routed_deployment,
+    carry_superseded_attempt_usage,
     check_non_standard_fallback_format,
     clear_pre_routing_selection,
     committed_retry_budget_for_request,
@@ -6721,6 +6722,7 @@ class Router:
             verbose_router_logger.debug(
                 "Retrying stream that failed before content, attempt %s of %s", attempt + 1, budget
             )
+            carry_superseded_attempt_usage(retry_kwargs)
             try:
                 response = await attempt_function(**retry_kwargs)
             except Exception as retry_error:  # noqa: BLE001  # the fallback chain judges the failed retry
@@ -14067,6 +14069,7 @@ class Router:
             input_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=typed_input,
                 responses_api_request={"instructions": instructions} if instructions is not None else {},
+                only_since_compaction=True,
             )
             return litellm.token_counter(
                 messages=cast(list, input_messages),  # cast-ok: transformed chat messages

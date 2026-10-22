@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from httpx._types import FileTypes, RequestFiles
 
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+from litellm.litellm_core_utils.url_utils import SSRFError, join_api_base, validate_url
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -177,8 +177,8 @@ class HostedVLLMVideoConfig(OpenAIVideoConfig):
             )
         trimmed: Final = resolved_api_base.rstrip("/")
         if trimmed.endswith("/v1"):
-            return f"{trimmed}/videos"
-        return f"{trimmed}/v1/videos"
+            return join_api_base(trimmed, "videos")
+        return join_api_base(trimmed, "v1/videos")
 
     def transform_video_create_request(
         self,
