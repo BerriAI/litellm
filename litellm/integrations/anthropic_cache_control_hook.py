@@ -75,12 +75,6 @@ _GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
 OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
     {"text", "image", "image_url", "file", "input_audio", "input_text", "input_image", "input_file"}
 )
-# Block types a marker never reaches the provider on. Anthropic accepts one on text,
-# image, tool_use, tool_result and document, so a thinking block is refused there; a
-# tool_reference is rebuilt from its type and tool_name alone by the tool_result
-# conversion, which drops everything else. A list of refused types rather than
-# accepted ones, so a block type this code has not been told about still takes one.
-ANTHROPIC_BLOCK_TYPES_WITHOUT_CACHE_CONTROL: Final = frozenset({"thinking", "redacted_thinking", "tool_reference"})
 OPENAI_API_HOST: Final = "api.openai.com"
 OPENAI_API_BASE_ENV_VARS: Final = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
@@ -338,25 +332,6 @@ def _may_carry_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
     return message.get("role") != "assistant"
 
 
-def _index_of_block_accepting_cache_control(content: Sequence[object], on_a_tool_message: bool) -> int | None:
-    """Last block a marker written here reaches the provider on, searched from the end.
-
-    An empty text block is replaced by a placeholder unless it sits on a tool message,
-    where it goes out inside the tool_result.
-    """
-    for index in range(len(content) - 1, -1, -1):
-        block = content[index]
-        if not isinstance(block, dict):
-            continue
-        fields = cast(dict[str, object], block)  # cast-ok: a runtime dict whose value types are not known here
-        if fields.get("type") in ANTHROPIC_BLOCK_TYPES_WITHOUT_CACHE_CONTROL:
-            continue
-        if fields.get("type") == "text" and not fields.get("text") and not on_a_tool_message:
-            continue
-        return index
-    return None
-
-
 def _role_of(message: object) -> object:
     """The ``role`` of a message dict, or None for anything else."""
     if not isinstance(message, dict):
@@ -375,7 +350,7 @@ def _message_accepts_cache_control(message: object) -> bool:
         return content != "" or on_a_tool_message
     if isinstance(content, list):
         blocks: Final = cast(Sequence[object], content)  # cast-ok: a runtime list whose block types are not known here
-        return _index_of_block_accepting_cache_control(blocks, on_a_tool_message) is not None
+        return _last_index_accepting_cache_control(blocks, on_a_tool_message) is not None
     return False
 
 
@@ -389,18 +364,28 @@ EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
 
 
-def _accepts_cache_control(part: object) -> bool:
+def _accepts_cache_control(part: object, on_a_tool_message: bool) -> bool:
+    # A tool_reference is rebuilt from its type and tool_name alone by the tool_result
+    # conversion, and an empty text block is replaced by a placeholder unless it sits on
+    # a tool message, where it goes out inside the tool_result: a marker on either is lost.
     match part:
-        case {"type": "thinking" | "redacted_thinking"}:
+        case {"type": "thinking" | "redacted_thinking" | "tool_reference"}:
             return False
+        case {"type": "text", "text": str(text)} if text:
+            return True
+        case {"type": "text"}:
+            return on_a_tool_message
         case dict():
             return True
         case _:
             return False
 
 
-def _last_index_accepting_cache_control(parts: Sequence[object]) -> int | None:
-    return next((index for index in reversed(range(len(parts))) if _accepts_cache_control(parts[index])), None)
+def _last_index_accepting_cache_control(parts: Sequence[object], on_a_tool_message: bool) -> int | None:
+    return next(
+        (index for index in reversed(range(len(parts))) if _accepts_cache_control(parts[index], on_a_tool_message)),
+        None,
+    )
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -810,14 +795,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # 1. if string, insert cache control in the message
         if isinstance(message_content, str):
             message["cache_control"] = control
-        # 2. list of objects - the last block that accepts a marker, per Anthropic spec
+        # 2. list of objects - only apply to the last item Claude accepts a breakpoint on
         elif isinstance(message_content, list):
-            blocks: Final = cast(Sequence[object], message_content)  # cast-ok: TypedDict blocks read as objects
-            target_index: Final = _index_of_block_accepting_cache_control(
-                blocks, on_a_tool_message=_role_of(message) == "tool"
+            markable_index: Final = _last_index_accepting_cache_control(
+                message_content, on_a_tool_message=_role_of(message) == "tool"
             )
-            if target_index is not None:
-                message_content[target_index]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
+            if markable_index is not None:
+                message_content[markable_index]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
         return message
 
     @staticmethod

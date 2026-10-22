@@ -5016,6 +5016,7 @@ async def test_anthropic_cache_control_hook_skips_a_thinking_block(monkeypatch: 
         "content": [
             {"type": "text", "text": "The answer is 4.", "cache_control": {"type": "ephemeral"}},
             {"type": "thinking", "thinking": "Adding two and two.", "signature": "sig"},
+            {"type": "redacted_thinking", "data": "redacted"},
         ],
     }
 
