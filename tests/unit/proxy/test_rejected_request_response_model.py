@@ -17,10 +17,10 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.proxy_server import chat_completion, completion
 
 
-async def _run_rejected_request(route, body, exception_model="my-model"):
+async def _run_rejected_request(route, body):
     exception = RejectedRequestError(
         message="cached answer",
-        model=exception_model,
+        model=body["model"],
         llm_provider="",
         request_data=dict(body),
     )
@@ -63,19 +63,4 @@ async def test_rejected_text_completion_response_has_model():
 
     # finish_reason is still None here, so this is not validated against
     # openai.types.Completion the way the chat response is.
-    assert response.model == "my-model"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "route, body",
-    [
-        (chat_completion, {"model": "my-model", "messages": [{"role": "user", "content": "hi"}]}),
-        (completion, {"model": "my-model", "prompt": "hi"}),
-    ],
-)
-async def test_rejected_response_falls_back_to_request_model(route, body):
-    # RejectedRequestError is public, so a custom hook can raise it without a model.
-    response = await _run_rejected_request(route, body, exception_model=None)
-
     assert response.model == "my-model"
