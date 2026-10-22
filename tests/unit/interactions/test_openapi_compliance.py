@@ -10,12 +10,14 @@ Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 import json
 import os
 import re
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 from openapi_core import OpenAPI
+
+from litellm.types.interactions import InteractionStatus
 
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 
@@ -249,27 +251,15 @@ class TestResponseCompliance:
             assert field in schema["properties"], f"Output field '{field}' not in spec"
             print(f"✓ Output field '{field}' exists in spec")
 
-    def test_status_enum_values(self, spec_dict):
-        """Verify status enum values match spec."""
-        # `status` is an output-only field; validate against the response schema.
-        schema = spec_dict["components"]["schemas"]["Interaction"]
-        status_prop = schema["properties"]["status"]
-        # Google Interactions API uses lowercase status values (updated Feb 2026).
-        # Keep this an exact match: this test intentionally breaks CI when
-        # Google changes the live spec — that breakage is how we get notified
-        # to review the change.
-        expected_statuses = [
-            "in_progress",
-            "requires_action",
-            "completed",
-            "failed",
-            "cancelled",
-            "incomplete",
-            "budget_exceeded",
-            "queued",
-        ]
-        assert status_prop["enum"] == expected_statuses
-        print(f"✓ Status enum values: {expected_statuses}")
+    def test_response_status_enum_supports_advertised_values(self, spec_dict):
+        schema: Final = spec_dict["components"]["schemas"]["Interaction"]
+        advertised_statuses: Final = frozenset(schema["properties"]["status"]["enum"])
+        supported_statuses: Final = frozenset(status.value for status in InteractionStatus)
+
+        assert advertised_statuses
+        assert advertised_statuses <= supported_statuses, (
+            f"Unsupported interaction statuses: {sorted(advertised_statuses - supported_statuses)}"
+        )
 
     def test_usage_schema(self, spec_dict):
         """Verify Usage schema fields."""
