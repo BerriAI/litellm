@@ -1566,18 +1566,18 @@ def _guardrail_configured_hooks(guardrail: CustomGuardrail) -> frozenset[str] | 
     ``None`` means unrestricted (``event_hook`` unset), which matches every
     lifecycle event — including response / streaming hooks.
     """
-    event_hook = guardrail.event_hook
+    event_hook: Final = guardrail.event_hook
     if event_hook is None:
         return None
     if isinstance(event_hook, Mode):
-        hooks: set[str] = set()
+        hooks: Final[set[str]] = set()  # mutable-ok: local accumulator, frozen before return
         for tag_value in event_hook.tags.values():
             if isinstance(tag_value, list):
                 hooks.update(_normalize_guardrail_hook_name(value) for value in tag_value)
             else:
                 hooks.add(_normalize_guardrail_hook_name(tag_value))
         if event_hook.default:
-            default_list = event_hook.default if isinstance(event_hook.default, list) else [event_hook.default]
+            default_list: Final = event_hook.default if isinstance(event_hook.default, list) else [event_hook.default]
             hooks.update(_normalize_guardrail_hook_name(value) for value in default_list)
         return frozenset(hooks)
     if isinstance(event_hook, list):
@@ -1591,7 +1591,7 @@ def _guardrail_affects_streaming(guardrail: CustomGuardrail) -> bool:
     Streaming fast-path gates must not treat a purely pre-call guardrail as a
     reason to pay the per-chunk ``async_post_call_streaming_hook`` path.
     """
-    hooks = _guardrail_configured_hooks(guardrail)
+    hooks: Final = _guardrail_configured_hooks(guardrail)
     if hooks is None:
         return True
     return bool(hooks - _PRE_CALL_ONLY_HOOKS)
@@ -1604,7 +1604,7 @@ def _guardrail_affects_during_call(guardrail: CustomGuardrail) -> bool:
     ``during_mcp_call``. That capability must keep the hook live so
     MCP-only guardrails are not skipped by the early return.
     """
-    hooks = _guardrail_configured_hooks(guardrail)
+    hooks: Final = _guardrail_configured_hooks(guardrail)
     if hooks is None:
         return True
     return bool(
@@ -3311,8 +3311,8 @@ class ProxyLogging:
         has_iterator_override = False
         has_streaming_chunk_override = False
         has_guardrail = False
-        has_streaming_guardrail = False
-        has_during_call_guardrail = False
+        has_streaming_guardrail = False  # rebind-ok: set while scanning callbacks below
+        has_during_call_guardrail = False  # rebind-ok: set while scanning callbacks below
         has_pre_call_override = False
         has_content_enforcer = False
         has_moderation_override = False
