@@ -2365,3 +2365,45 @@ class TestStreamingScanKey:
         for released in (text_only, finished_tool_call):
             ended = handler.released_stream_as_ended(released)
             assert len(ended) == len(released) and all(a is b for a, b in zip(ended, released, strict=True))
+
+
+def _weather_tool_call(location: str) -> dict:
+    return {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": json.dumps({"location": location})},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", [None, "Let me check."])
+async def test_history_reasoning_content_is_guardrailed_and_written_back(content: Optional[str]):
+    guardrail = MockGuardrail()
+    data = {
+        "messages": [
+            {"role": "user", "content": "weather in boston?"},
+            {
+                "role": "assistant",
+                "content": content,
+                "reasoning_content": "the user wants boston weather",
+                "tool_calls": [_weather_tool_call("boston")],
+            },
+        ]
+    }
+
+    await OpenAIChatCompletionsHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.last_inputs["texts"] == [
+        "weather in boston?",
+        *([] if content is None else [content]),
+        "the user wants boston weather",
+    ]
+    assert data["messages"] == [
+        {"role": "user", "content": "WEATHER IN BOSTON?"},
+        {
+            "role": "assistant",
+            "content": None if content is None else content.upper(),
+            "reasoning_content": "THE USER WANTS BOSTON WEATHER",
+            "tool_calls": [_weather_tool_call("BOSTON")],
+        },
+    ]
