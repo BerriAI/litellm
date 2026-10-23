@@ -241,6 +241,19 @@ class TestGeminiImageEditTransformation:
         )
         assert logging_usage["completion_tokens_details"]["image_tokens"] == 1716
 
+    def test_transform_image_edit_response_non_object_body_keeps_the_error_class(self) -> None:
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = ["not", "an", "object"]
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        with pytest.raises(AttributeError):
+            self.config.transform_image_edit_response(
+                model=self.model,
+                raw_response=mock_response,
+                logging_obj=self.logging_obj,
+            )
+
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         optional_params = {}
 

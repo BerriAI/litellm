@@ -1,7 +1,7 @@
 import asyncio
 import time
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from pydantic import TypeAdapter
@@ -12,6 +12,7 @@ from litellm.constants import (
     RUNWAYML_DEFAULT_API_VERSION,
     RUNWAYML_POLLING_TIMEOUT,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -42,11 +43,12 @@ class _RunwayMLTask(TypedDict, total=False):
     failureCode: ReadOnly[str | None]
 
 
-_RUNWAY_TASK_ADAPTER: Final = TypeAdapter(_RunwayMLTask)
+_JSON_VALUE: Final = TypeAdapter(object)
 
 
 def _parse_runway_task(response: httpx.Response) -> _RunwayMLTask:
-    return _RUNWAY_TASK_ADAPTER.validate_json(response.content)
+    task: Final = decoded_json_object(_JSON_VALUE.validate_python(response.json()))
+    return cast(_RunwayMLTask, task)  # cast-ok: the payload passes through unvalidated, as before it was typed
 
 
 class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):

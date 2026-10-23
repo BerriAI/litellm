@@ -271,3 +271,26 @@ async def test_compactifai_async_completion(respx_mock):
 
     assert response.choices[0].message.content == "Async response from CompactifAI"
     assert response.usage.total_tokens == 23
+
+
+def test_compactifai_non_object_response_body_keeps_the_error_class():
+    from unittest.mock import MagicMock
+
+    from litellm.llms.compactifai.chat.transformation import CompactifAIChatConfig
+
+    raw_response = httpx.Response(
+        200, json=[], request=httpx.Request("POST", "https://api.compactif.ai/v1/chat/completions")
+    )
+
+    with pytest.raises(AttributeError):
+        CompactifAIChatConfig().transform_response(
+            model="cai-llama-3-1-8b-slim",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )

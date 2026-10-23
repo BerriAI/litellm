@@ -12,6 +12,8 @@ from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+
 
 class _PromptFileJson(TypedDict):
     """JSON form of a .prompt file: rendered template text plus its frontmatter."""
@@ -377,6 +379,12 @@ class PromptManager:
             for prompt_id, template in self.prompts.items()
         }
 
-    def load_prompts_from_json_data(self, prompt_data: Mapping[str, Mapping[str, object]]) -> None:
-        """Load additional prompts from JSON data (merges with existing prompts)."""
-        self._load_prompts_from_json({prompt_id: dict(entry) for prompt_id, entry in prompt_data.items()})
+    def load_prompts_from_json_data(self, prompt_data: Mapping[str, object]) -> None:
+        """Load additional prompts from JSON data (merges with existing prompts). Entries that are not
+        mappings are skipped, the same as a malformed entry inside the loader."""
+        entries: Final = {
+            prompt_id: dict(entry)
+            for prompt_id, raw in prompt_data.items()
+            if (entry := as_str_mapping(raw)) is not None
+        }
+        self._load_prompts_from_json(entries)

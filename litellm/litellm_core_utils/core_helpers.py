@@ -58,6 +58,13 @@ def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
 
 
+def decoded_json_object(value: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(value)
+    if mapping is not None:
+        return mapping
+    raise AttributeError(f"{type(value).__name__!r} object has no attribute 'get'", name="get", obj=value)
+
+
 @runtime_checkable
 class _SupportsIter(Protocol):
     def __iter__(self) -> Iterator[object]: ...

@@ -8,6 +8,7 @@ from httpx._types import RequestFiles
 from pydantic import TypeAdapter
 
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.gemini.common_utils import (
@@ -34,9 +35,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _JSON_VALUES: Final = TypeAdapter(Iterable[object])
-_USAGE_METADATA: Final = TypeAdapter(dict[str, object])
 
 
 class _JsonResponse(Protocol):
@@ -146,16 +145,16 @@ class GeminiImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        payload: Final = _JSON_OBJECT.validate_python(response_json)
+        payload: Final = decoded_json_object(response_json)
         candidates: Final = payload.get("candidates", [])
         data_list: Final[list[ImageObject]] = []
 
         for candidate in _JSON_VALUES.validate_python(candidates):
-            content = _JSON_OBJECT.validate_python(candidate).get("content", {})
-            parts = _JSON_OBJECT.validate_python(content).get("parts", [])
+            content = decoded_json_object(candidate).get("content", {})
+            parts = decoded_json_object(content).get("parts", [])
             for part in _JSON_VALUES.validate_python(parts):
-                inline_data = _JSON_OBJECT.validate_python(part).get("inlineData")
-                image_data = _JSON_OBJECT.validate_python(inline_data).get("data") if inline_data else None
+                inline_data = decoded_json_object(part).get("inlineData")
+                image_data = decoded_json_object(inline_data).get("data") if inline_data else None
                 if image_data:
                     data_list.append(
                         ImageObject(
@@ -166,9 +165,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         model_response.data = cast(list[OpenAIImage], data_list)
         if "usageMetadata" in payload:
-            model_response.usage = transform_gemini_image_usage(
-                _USAGE_METADATA.validate_python(payload["usageMetadata"])
-            )
+            model_response.usage = transform_gemini_image_usage(dict(decoded_json_object(payload["usageMetadata"])))
         return model_response
 
     def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, object]]:

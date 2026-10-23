@@ -11,6 +11,7 @@ from pydantic import InstanceOf, JsonValue, TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -132,7 +133,6 @@ def is_gemini_image_model(model: str) -> bool:
 
 
 _JSON_VALUE: Final = TypeAdapter(object)
-_MODEL_LISTING: Final = TypeAdapter(Mapping[str, object])
 _MODELS: Final = TypeAdapter(Iterable[Mapping[str, object]])
 _MODEL_NAME: Final = TypeAdapter(InstanceOf[str])
 
@@ -419,7 +419,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from Gemini. Status code: {response.status_code}, Response: {response.json()}"
             )
 
-        listing: Final = _MODEL_LISTING.validate_python(response.json())
+        listing: Final = decoded_json_object(_JSON_VALUE.validate_python(response.json()))
 
         litellm_model_names: Final = self.process_model_name(_MODELS.validate_python(listing["models"]))
         return litellm_model_names

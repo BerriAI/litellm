@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -136,13 +136,6 @@ class OpenAIError(BaseLLMException):
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
-
-
-def decoded_json_object(value: object) -> Mapping[str, object]:
-    mapping: Final = as_str_mapping(value)
-    if mapping is not None:
-        return mapping
-    raise AttributeError(f"{type(value).__name__!r} object has no attribute 'get'", name="get", obj=value)
 
 
 ####### Error Handling Utils for OpenAI API #######################

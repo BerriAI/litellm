@@ -9,11 +9,12 @@ so the full proxy -> router -> OpenAI SDK -> httpx path is exercised.
 import json
 import time
 import uuid
-from collections.abc import Mapping
 from typing import Final
 
 import httpx
 from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 
 # ---------------------------------------------------------------------------
 # Pre-built response templates
@@ -58,7 +59,6 @@ _JSON_HEADERS: Final = {
 }
 
 _DECODED_JSON: Final = TypeAdapter(object)
-_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
 
 
 class MockOpenAITransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
@@ -75,7 +75,7 @@ class MockOpenAITransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
             body: Final = _DECODED_JSON.validate_python(json.loads(request.content))
         except (json.JSONDecodeError, ValueError):
             return ("mock-model", False)
-        model: Final = _REQUEST_BODY.validate_python(body).get("model", "mock-model")
+        model: Final = decoded_json_object(body).get("model", "mock-model")
         return (model, False)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:

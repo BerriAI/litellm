@@ -9,6 +9,7 @@ import httpx
 from pydantic import InstanceOf, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.secret_managers.main import get_secret_str
@@ -25,9 +26,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-_RESPONSE_BODY: Final = TypeAdapter(InstanceOf[dict[str, object]])
 _JSON_VALUES: Final = TypeAdapter(Iterable[object])
-_JSON_OBJECT: Final = TypeAdapter(InstanceOf[Mapping[str, object]])
 _MESSAGE: Final = TypeAdapter(InstanceOf[dict[str, object]])
 _SIZED: Final = TypeAdapter(InstanceOf[Sized])
 _TOOL_CALLS: Final = TypeAdapter(InstanceOf[Sequence[object]])
@@ -98,19 +97,19 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
         )
 
         ## RESPONSE OBJECT
-        response_json: Final = _RESPONSE_BODY.validate_python(_json_body(raw_response))
+        response_json: Final = decoded_json_object(_json_body(raw_response))
 
         # Handle JSON mode if needed
         if json_mode:
             for choice in _JSON_VALUES.validate_python(response_json["choices"]):
-                message = _JSON_OBJECT.validate_python(choice).get("message")
+                message = decoded_json_object(choice).get("message")
                 message_fields = _MESSAGE.validate_python(message) if message else None
                 if message_fields is not None and message_fields.get("tool_calls"):
                     # Convert tool calls to content for JSON mode
                     tool_calls = message_fields.get("tool_calls", [])
                     if len(_SIZED.validate_python(tool_calls)) == 1:
-                        first_call = _JSON_OBJECT.validate_python(_TOOL_CALLS.validate_python(tool_calls)[0])
-                        function = _JSON_OBJECT.validate_python(first_call["function"])
+                        first_call = decoded_json_object(_TOOL_CALLS.validate_python(tool_calls)[0])
+                        function = decoded_json_object(first_call["function"])
                         message_fields["content"] = function.get("arguments", "")
                         message_fields["tool_calls"] = None
 

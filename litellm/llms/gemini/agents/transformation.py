@@ -13,9 +13,9 @@ from collections.abc import Mapping
 from typing import Any, Final, Protocol
 
 import httpx
-from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
@@ -29,9 +29,6 @@ from litellm.types.agents import (
 # Keys inside litellm_params that should be forwarded to the Gemini
 # create-agent body verbatim.
 _GEMINI_AGENT_BODY_KEYS: Final = ("base_agent", "instructions", "base_environment")
-
-_AGENT_PAYLOAD: Final = TypeAdapter(dict[str, object])
-_AGENT_LISTING: Final = TypeAdapter(Mapping[str, object])
 
 
 class _JsonResponse(Protocol):
@@ -176,7 +173,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
                 raw_response.status_code,
             )
             decoded = {"id": name}
-        data: Final = _AGENT_PAYLOAD.validate_python(decoded)
+        data: Final = dict(decoded_json_object(decoded))
         # Gemini uses "id" as the identifier; normalise to both fields.
         data.setdefault("id", name)
         data.setdefault("name", data["id"])
@@ -209,7 +206,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
             decoded: object = _json_body(raw_response)
         except Exception:
             decoded = {}
-        data: Final = _AGENT_LISTING.validate_python(decoded)
+        data: Final = decoded_json_object(decoded)
         verbose_logger.debug("GeminiAgentsConfig list response: %s", data)
         return AgentListResponse.model_validate(
             {
@@ -242,7 +239,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
             decoded: object = _json_body(raw_response)
         except Exception:
             decoded = {"id": name}
-        data: Final = _AGENT_PAYLOAD.validate_python(decoded)
+        data: Final = dict(decoded_json_object(decoded))
         data.setdefault("id", name)
         data.setdefault("name", data["id"])
         verbose_logger.debug("GeminiAgentsConfig get response: %s", data)
@@ -306,7 +303,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
             decoded: object = _json_body(raw_response)
         except Exception:
             decoded = {}
-        data: Final = _AGENT_LISTING.validate_python(decoded)
+        data: Final = decoded_json_object(decoded)
         verbose_logger.debug("GeminiAgentsConfig list_versions response for '%s': %s", name, data)
         return AgentVersionsResponse.model_validate(
             {

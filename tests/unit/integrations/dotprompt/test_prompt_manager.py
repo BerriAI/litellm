@@ -362,6 +362,22 @@ def test_load_prompts_from_json_data():
     assert rendered == "Dynamic prompt: test"
 
 
+def test_load_prompts_from_json_data_skips_malformed_entries():
+    manager = PromptManager(prompt_directory=str(Path(__file__).parent))
+    initial_count = len(manager.prompts)
+
+    manager.load_prompts_from_json_data(
+        {
+            "valid_prompt": {"content": "Valid: {{value}}", "metadata": {"model": "gpt-4"}},
+            "string_entry": "not a prompt",
+            "null_entry": None,
+        }
+    )
+
+    assert len(manager.prompts) == initial_count + 1
+    assert manager.render("valid_prompt", {"value": "ok"}) == "Valid: ok"
+
+
 def test_prompt_file_to_json_conversion():
     """Test converting .prompt files to JSON format."""
     # Create a temporary prompt file with frontmatter

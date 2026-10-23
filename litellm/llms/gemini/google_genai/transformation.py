@@ -6,9 +6,9 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 import httpx
-from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
@@ -35,8 +35,6 @@ else:
     ToolConfigDict = Any
 
 from ..common_utils import get_api_key_from_env
-
-_RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
 
 
 class _JsonResponse(Protocol):
@@ -402,7 +400,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             )
 
         logging_obj.model_call_details["httpx_response"] = raw_response
-        response: Final = self.convert_citation_sources_to_citations(_RESPONSE_BODY.validate_python(decoded))
+        response: Final = self.convert_citation_sources_to_citations(dict(decoded_json_object(decoded)))
 
         return GenerateContentResponse(**response)
 
