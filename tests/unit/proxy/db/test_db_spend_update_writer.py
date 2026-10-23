@@ -19,7 +19,11 @@ from redis.exceptions import DataError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
-from litellm.constants import DB_SPEND_UPDATE_JOB_NAME, REDIS_UPDATE_BUFFER_KEY, SPEND_ROLLUP_LOCK_TIMEOUT_MS
+from litellm.constants import (
+    DB_SPEND_UPDATE_JOB_NAME,
+    REDIS_TOOL_DISCOVERY_BUFFER_KEY,
+    SPEND_ROLLUP_LOCK_TIMEOUT_MS,
+)
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
@@ -2396,14 +2400,23 @@ class _InMemoryRedis:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lock_held_by_another_pod", [False, True])
-async def test_commit_with_redis_writes_discovered_tools_on_leader_and_non_leader(lock_held_by_another_pod: bool):
+async def test_commit_with_redis_writes_every_workers_tools_in_one_statement_from_the_leader_only(
+    lock_held_by_another_pod: bool,
+):
     redis = _InMemoryRedis()
     if lock_held_by_another_pod:
         assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=DB_SPEND_UPDATE_JOB_NAME)
+    other_worker = DBSpendUpdateWriter(redis_cache=redis)
+    other_worker.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "mcp_server"})
+    other_worker.tool_discovery_queue.add_update({"tool_name": "search", "origin": "user_defined"})
+    await other_worker.redis_update_buffer.store_tool_discoveries_in_redis(other_worker.tool_discovery_queue)
+
     db_writer = DBSpendUpdateWriter(redis_cache=redis)
     db_writer.pod_lock_manager.redis_cache = redis
     db_writer.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    db_writer.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
     prisma_client = MagicMock()
+    prisma_client.db.execute_raw = AsyncMock(return_value=2)
     prisma_client.db.litellm_tooltable.upsert = AsyncMock()
 
     await db_writer._commit_spend_updates_to_db_with_redis(
@@ -2412,11 +2425,18 @@ async def test_commit_with_redis_writes_discovered_tools_on_leader_and_non_leade
         proxy_logging_obj=MagicMock(),
     )
 
-    upserted = [c.kwargs["where"] for c in prisma_client.db.litellm_tooltable.upsert.await_args_list]
-    assert upserted == [{"tool_name": "get_weather"}]
-    assert (REDIS_UPDATE_BUFFER_KEY in redis.lists) is lock_held_by_another_pod, (
-        f"spend buffer left in redis={list(redis.lists)}, only the lock holder may drain it"
-    )
+    assert db_writer.tool_discovery_queue.flush() == [], "every worker hands its tools to redis each tick"
+    prisma_client.db.litellm_tooltable.upsert.assert_not_awaited()
+    if lock_held_by_another_pod:
+        prisma_client.db.execute_raw.assert_not_awaited()
+        assert len(redis.lists[REDIS_TOOL_DISCOVERY_BUFFER_KEY]) == 2, "non-leaders leave their tools for the leader"
+        return
+    assert REDIS_TOOL_DISCOVERY_BUFFER_KEY not in redis.lists
+    prisma_client.db.execute_raw.assert_awaited_once()
+    sql, *params = prisma_client.db.execute_raw.call_args.args
+    assert sql.startswith('INSERT INTO "LiteLLM_ToolTable"') and 'ON CONFLICT ("tool_name")' in sql
+    rows = {params[i + 1]: params[i + 3] for i in range(0, len(params), 10)}
+    assert rows == {"get_weather": 3, "search": 1}, f"one row per tool summed across workers, got {params}"
 
 
 @pytest.mark.asyncio

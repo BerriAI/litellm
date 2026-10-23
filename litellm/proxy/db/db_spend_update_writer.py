@@ -1657,7 +1657,7 @@ class DBSpendUpdateWriter:
             window_spend_update_queue=self.window_spend_update_queue,
         )
 
-        await self._flush_tool_discovery_queue(prisma_client=prisma_client)
+        await self.redis_update_buffer.store_tool_discoveries_in_redis(tool_discovery_queue=self.tool_discovery_queue)
 
         # Only commit from redis to db if this pod is the leader
         if await self.pod_lock_manager.acquire_lock(
@@ -1783,6 +1783,7 @@ class DBSpendUpdateWriter:
                             )
                         raise
                 uncommitted.pop("window_spend_update_transactions", None)
+                await self._commit_tool_discoveries_from_redis(prisma_client=prisma_client)
             except Exception as e:
                 spend_log_error(
                     "Spend tracking - failed to commit spend updates from Redis to DB. "
@@ -2094,7 +2095,7 @@ class DBSpendUpdateWriter:
         self,
         prisma_client: PrismaClient,
     ) -> None:
-        """Flush ToolDiscoveryQueue and batch-upsert new tools into LiteLLM_ToolTable."""
+        """Flush ToolDiscoveryQueue and write it to LiteLLM_ToolTable in one statement."""
         from litellm.proxy.db.tool_registry_writer import batch_upsert_tools
 
         try:
@@ -2103,6 +2104,14 @@ class DBSpendUpdateWriter:
                 await batch_upsert_tools(prisma_client=prisma_client, items=items)
         except Exception as e:
             verbose_proxy_logger.debug("_flush_tool_discovery_queue error (non-blocking): %s", e)
+
+    async def _commit_tool_discoveries_from_redis(self, prisma_client: PrismaClient) -> None:
+        """Leader only: drain every worker's tool rows from Redis and write them in one statement."""
+        from litellm.proxy.db.tool_registry_writer import batch_upsert_tools
+
+        items: Final = await self.redis_update_buffer.get_all_tool_discoveries_from_redis_buffer()
+        if items:
+            await batch_upsert_tools(prisma_client=prisma_client, items=items)
 
     @staticmethod
     async def handle_spend_update_failure(

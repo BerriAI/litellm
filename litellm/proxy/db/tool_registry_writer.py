@@ -15,6 +15,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
+from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import aggregate_tool_discoveries
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -103,58 +104,76 @@ def _row_to_model(row: object) -> LiteLLM_ToolTableRow:
     )
 
 
+_TOOL_ROW_COLUMNS: Final[tuple[str, ...]] = (
+    "tool_id",
+    "tool_name",
+    "origin",
+    "call_count",
+    "created_by",
+    "updated_by",
+    "key_hash",
+    "team_id",
+    "key_alias",
+    "user_agent",
+)
+_TOOL_ROW_CASTS: Final[Mapping[str, str]] = MappingProxyType({"call_count": "integer"})
+
+
+def _tool_row_params(item: ToolDiscoveryQueueItem) -> tuple[str | int | None, ...]:
+    created_by: Final = item.get("created_by") or "system"
+    return (
+        str(uuid.uuid4()),
+        item.get("tool_name", ""),
+        item.get("origin") or "user_defined",
+        item.get("call_count", 1),
+        created_by,
+        created_by,
+        item.get("key_hash"),
+        item.get("team_id"),
+        item.get("key_alias"),
+        item.get("user_agent"),
+    )
+
+
+def build_tool_bulk_upsert(items: Sequence[ToolDiscoveryQueueItem]) -> tuple[str, tuple[str | int | None, ...]]:
+    """One INSERT ... ON CONFLICT statement for a batch of distinct tool_names, plus its positional arguments.
+
+    A new tool_name starts at the batch's call_count with the untrusted policies the table defaults to. An
+    existing row keeps its policies and caller fields and only adds the batch's call_count."""
+    width: Final = len(_TOOL_ROW_COLUMNS)
+    rows: Final = ", ".join(
+        "("
+        + ", ".join(
+            f"${row_index * width + offset + 1}::{_TOOL_ROW_CASTS.get(column, 'text')}"
+            for offset, column in enumerate(_TOOL_ROW_COLUMNS)
+        )
+        + ", (NOW() AT TIME ZONE 'UTC'), (NOW() AT TIME ZONE 'UTC'))"
+        for row_index in range(len(items))
+    )
+    columns: Final = ", ".join(f'"{column}"' for column in _TOOL_ROW_COLUMNS)
+    sql: Final = (
+        f'INSERT INTO "LiteLLM_ToolTable" ({columns}, "last_used_at", "updated_at")\n'
+        f"VALUES {rows}\n"
+        'ON CONFLICT ("tool_name") DO UPDATE SET\n'
+        '  "call_count" = "LiteLLM_ToolTable"."call_count" + EXCLUDED."call_count",\n'
+        '  "last_used_at" = EXCLUDED."last_used_at",\n'
+        '  "updated_at" = EXCLUDED."updated_at"'
+    )
+    return sql, tuple(value for item in items for value in _tool_row_params(item))
+
+
 async def batch_upsert_tools(
     prisma_client: "PrismaClient",
-    items: list[ToolDiscoveryQueueItem],
+    items: Sequence[ToolDiscoveryQueueItem],
 ) -> None:
-    """
-    Batch-upsert tool registry rows via Prisma.
-
-    On first insert: sets input_policy/output_policy = "untrusted" (default), call_count = 1.
-    On conflict: increments call_count; preserves existing policies.
-    """
-    if not items:
+    """Write a batch of discovered tools to LiteLLM_ToolTable in a single statement."""
+    rows: Final = aggregate_tool_discoveries(items)
+    if not rows:
         return
     try:
-        data: Final = [item for item in items if item.get("tool_name")]
-        if not data:
-            return
-        now: Final = datetime.now(timezone.utc)
-        table: Final = _tool_table_actions(prisma_client)
-        for item in data:
-            tool_name = item.get("tool_name", "")
-            origin = item.get("origin") or "user_defined"
-            created_by = item.get("created_by") or "system"
-            key_hash = item.get("key_hash")
-            team_id = item.get("team_id")
-            key_alias = item.get("key_alias")
-            user_agent = item.get("user_agent")
-            await table.upsert(
-                where={"tool_name": tool_name},
-                data={
-                    "create": {
-                        "tool_id": str(uuid.uuid4()),
-                        "tool_name": tool_name,
-                        "origin": origin,
-                        "input_policy": "untrusted",
-                        "output_policy": "untrusted",
-                        "call_count": 1,
-                        "created_by": created_by,
-                        "updated_by": created_by,
-                        "key_hash": key_hash,
-                        "team_id": team_id,
-                        "key_alias": key_alias,
-                        "user_agent": user_agent,
-                        "last_used_at": now,
-                    },
-                    "update": {
-                        "call_count": {"increment": 1},
-                        "updated_at": now,
-                        "last_used_at": now,
-                    },
-                },
-            )
-        verbose_proxy_logger.debug("tool_registry_writer: upserted %d tool(s)", len(data))
+        sql, params = build_tool_bulk_upsert(rows)
+        await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
+        verbose_proxy_logger.debug("tool_registry_writer: upserted %d tool(s)", len(rows))
     except Exception as e:
         verbose_proxy_logger.error("tool_registry_writer batch_upsert_tools error: %s", e)
 

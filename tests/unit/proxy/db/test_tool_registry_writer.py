@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from prisma.errors import PrismaError
 
-
 from litellm.proxy.db.tool_registry_writer import (
     ToolPolicyRegistry,
     batch_upsert_tools,
@@ -62,9 +61,8 @@ def _make_prisma(
     prisma = MagicMock()
     prisma.db.litellm_tooltable = MagicMock()
     prisma.db.litellm_tooltable.upsert = AsyncMock(return_value=upsert_return)
-    prisma.db.litellm_tooltable.find_many = AsyncMock(
-        return_value=find_many_rows if find_many_rows is not None else []
-    )
+    prisma.db.execute_raw = AsyncMock(return_value=1)
+    prisma.db.litellm_tooltable.find_many = AsyncMock(return_value=find_many_rows if find_many_rows is not None else [])
     prisma.db.litellm_tooltable.find_unique = AsyncMock(return_value=find_unique_row)
     prisma.db.litellm_verificationtoken = MagicMock()
     prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=list(key_rows))
@@ -73,28 +71,32 @@ def _make_prisma(
     return prisma
 
 
+def _statement(prisma) -> tuple[str, tuple[object, ...]]:
+    prisma.db.execute_raw.assert_awaited_once()
+    sql, *params = prisma.db.execute_raw.call_args.args
+    return sql, tuple(params)
+
+
 @pytest.mark.asyncio
-async def test_batch_upsert_tools_calls_upsert():
+async def test_batch_upsert_tools_inserts_a_new_tool_with_the_batch_call_count_and_adds_it_on_conflict():
     prisma = _make_prisma()
-    items = [{"tool_name": "tool_a", "origin": "mcp_server", "created_by": None}]
-    await batch_upsert_tools(prisma, items)
-    prisma.db.litellm_tooltable.upsert.assert_awaited_once()
-    call_kw = prisma.db.litellm_tooltable.upsert.call_args.kwargs
-    assert call_kw["where"] == {"tool_name": "tool_a"}
-    assert call_kw["data"]["create"]["tool_name"] == "tool_a"
-    assert call_kw["data"]["create"]["origin"] == "mcp_server"
-    assert call_kw["data"]["create"]["input_policy"] == "untrusted"
-    assert call_kw["data"]["create"]["output_policy"] == "untrusted"
-    assert call_kw["data"]["create"]["call_count"] == 1
-    assert call_kw["data"]["update"]["call_count"] == {"increment": 1}
-    assert "updated_at" in call_kw["data"]["update"]
+    await batch_upsert_tools(
+        prisma, [{"tool_name": "tool_a", "origin": "mcp_server", "created_by": None, "call_count": 4}]
+    )
+    sql, params = _statement(prisma)
+    assert sql.startswith('INSERT INTO "LiteLLM_ToolTable"')
+    assert 'ON CONFLICT ("tool_name") DO UPDATE SET' in sql
+    assert '"call_count" = "LiteLLM_ToolTable"."call_count" + EXCLUDED."call_count"' in sql
+    assert '"input_policy"' not in sql, "policies come from the table defaults and are never overwritten"
+    assert params[1:] == ("tool_a", "mcp_server", 4, "system", "system", None, None, None, None)
+    prisma.db.litellm_tooltable.upsert.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_batch_upsert_tools_empty_list():
     prisma = _make_prisma()
     await batch_upsert_tools(prisma, [])
-    prisma.db.litellm_tooltable.upsert.assert_not_awaited()
+    prisma.db.execute_raw.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -102,21 +104,22 @@ async def test_batch_upsert_tools_skips_empty_names():
     prisma = _make_prisma()
     items = [{"tool_name": "", "origin": None}, {"tool_name": None}]  # type: ignore[list-item]
     await batch_upsert_tools(prisma, items)
-    prisma.db.litellm_tooltable.upsert.assert_not_awaited()
+    prisma.db.execute_raw.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_batch_upsert_multiple_tools_calls_upsert_per_tool():
+async def test_batch_upsert_many_tools_is_one_statement_with_one_row_per_distinct_tool():
     prisma = _make_prisma()
     items = [
-        {"tool_name": "tool_a", "origin": "mcp_server", "created_by": None},
-        {"tool_name": "tool_b", "origin": "user_defined", "created_by": "alice"},
+        {"tool_name": "tool_a", "origin": "mcp_server", "created_by": None, "call_count": 2},
+        {"tool_name": "tool_b", "origin": "user_defined", "created_by": "alice", "call_count": 1},
+        {"tool_name": "tool_a", "origin": "user_defined", "created_by": "bob", "call_count": 5},
     ]
     await batch_upsert_tools(prisma, items)
-    assert prisma.db.litellm_tooltable.upsert.await_count == 2
-    calls = prisma.db.litellm_tooltable.upsert.call_args_list
-    assert calls[0].kwargs["where"]["tool_name"] == "tool_a"
-    assert calls[1].kwargs["where"]["tool_name"] == "tool_b"
+    sql, params = _statement(prisma)
+    assert sql.count("$1::text") == 1 and "$11::text" in sql and "$21::text" not in sql
+    assert params[1:10] == ("tool_a", "mcp_server", 7, "system", "system", None, None, None, None)
+    assert params[11:20] == ("tool_b", "user_defined", 1, "alice", "alice", None, None, None, None)
 
 
 @pytest.mark.asyncio
@@ -215,9 +218,7 @@ async def test_get_tool_found():
     result = await get_tool(prisma, "my_tool")
     assert result is not None
     assert result.tool_name == "my_tool"
-    prisma.db.litellm_tooltable.find_unique.assert_awaited_once_with(
-        where={"tool_name": "my_tool"}
-    )
+    prisma.db.litellm_tooltable.find_unique.assert_awaited_once_with(where={"tool_name": "my_tool"})
 
 
 @pytest.mark.asyncio
@@ -254,9 +255,7 @@ async def test_update_tool_policy_calls_upsert_then_get_tool():
         updated_by="admin",
     )
     prisma = _make_prisma(find_unique_row=row)
-    result = await update_tool_policy(
-        prisma, "my_tool", updated_by="admin", input_policy="blocked"
-    )
+    result = await update_tool_policy(prisma, "my_tool", updated_by="admin", input_policy="blocked")
     assert result is not None
     assert result.input_policy == "blocked"
     prisma.db.litellm_tooltable.upsert.assert_awaited_once()
@@ -264,20 +263,14 @@ async def test_update_tool_policy_calls_upsert_then_get_tool():
     assert call_kw["where"] == {"tool_name": "my_tool"}
     assert call_kw["data"]["update"]["input_policy"] == "blocked"
     assert call_kw["data"]["update"]["updated_by"] == "admin"
-    prisma.db.litellm_tooltable.find_unique.assert_awaited_with(
-        where={"tool_name": "my_tool"}
-    )
+    prisma.db.litellm_tooltable.find_unique.assert_awaited_with(where={"tool_name": "my_tool"})
 
 
 @pytest.mark.asyncio
 async def test_get_tools_by_names_returns_policy_map():
     rows = [
-        _mock_row(
-            tool_name="tool_a", input_policy="trusted", output_policy="untrusted"
-        ),
-        _mock_row(
-            tool_name="tool_b", input_policy="blocked", output_policy="untrusted"
-        ),
+        _mock_row(tool_name="tool_a", input_policy="trusted", output_policy="untrusted"),
+        _mock_row(tool_name="tool_b", input_policy="blocked", output_policy="untrusted"),
     ]
     prisma = _make_prisma(find_many_rows=rows)
     result = await get_tools_by_names(prisma, ["tool_a", "tool_b"])
@@ -285,9 +278,7 @@ async def test_get_tools_by_names_returns_policy_map():
         "tool_a": ("trusted", "untrusted"),
         "tool_b": ("blocked", "untrusted"),
     }
-    prisma.db.litellm_tooltable.find_many.assert_awaited_once_with(
-        where={"tool_name": {"in": ["tool_a", "tool_b"]}}
-    )
+    prisma.db.litellm_tooltable.find_many.assert_awaited_once_with(where={"tool_name": {"in": ["tool_a", "tool_b"]}})
 
 
 @pytest.mark.asyncio
@@ -382,12 +373,8 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_first_read():
         return []
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_tooltable.find_many = AsyncMock(
-        side_effect=_flaky_find_many
-    )
-    mock_prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(
-        return_value=[]
-    )
+    mock_prisma_client.db.litellm_tooltable.find_many = AsyncMock(side_effect=_flaky_find_many)
+    mock_prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(return_value=[])
     mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
     mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
     mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
@@ -397,10 +384,7 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_first_read():
     assert len(invocations) == 2
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
     reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
-    assert (
-        reconnect_kwargs["reason"]
-        == "sync_tool_policy_from_db_tools_lookup_failure"
-    )
+    assert reconnect_kwargs["reason"] == "sync_tool_policy_from_db_tools_lookup_failure"
     assert registry.is_initialized()
 
 
@@ -421,9 +405,7 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_second_read()
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_tooltable.find_many = AsyncMock(return_value=[])
-    mock_prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(
-        side_effect=_flaky_perms_find_many
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(side_effect=_flaky_perms_find_many)
     mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
     mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
     mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
@@ -433,7 +415,4 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_second_read()
     assert len(perms_invocations) == 2
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
     reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
-    assert (
-        reconnect_kwargs["reason"]
-        == "sync_tool_policy_from_db_perms_lookup_failure"
-    )
+    assert reconnect_kwargs["reason"] == "sync_tool_policy_from_db_perms_lookup_failure"

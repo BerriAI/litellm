@@ -480,6 +480,7 @@ REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_end_user_sp
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_tag_spend_update_buffer"
 REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_window_spend_update_buffer"
+REDIS_TOOL_DISCOVERY_BUFFER_KEY: Final = "litellm_tool_discovery_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT: Final = get_env_int("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100)
 REDIS_SPEND_LOGS_BUFFER_KEY: Final = "litellm_spend_logs_buffer"
 REDIS_SPEND_LOGS_BUFFER_MAX_ROWS: Final = 100000
