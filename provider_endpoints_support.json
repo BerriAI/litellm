@@ -778,7 +778,8 @@
         "rerank": false,
         "a2a": true,
         "interactions": true,
-        "video_generations": true
+        "video_generations": true,
+        "realtime": true
       }
     },
     "qwencloud": {
