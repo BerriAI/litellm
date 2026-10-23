@@ -108,7 +108,12 @@ class PrismaBudgetListExecutor:
 
     async def find_many(self, plan: QueryPlan) -> Sequence[BudgetListItem]:
         clauses, params = where_sql(plan.where)
-        ordering: Final = order_by_sql(plan.order).replace('"budget_duration"', _BUDGET_DURATION_SECONDS)
+        ordering: Final = ", ".join(
+            order_by_sql((key,)).replace("NULLS LAST", "NULLS FIRST")
+            if key.descending and key.field in ("max_budget", "tpm_limit", "rpm_limit", "tpd_limit")
+            else order_by_sql((key,))
+            for key in plan.order
+        ).replace('"budget_duration"', _BUDGET_DURATION_SECONDS)
         sql: Final = (
             f"SELECT {SELECTED_COLUMNS} FROM {BUDGET_TABLE}"
             + (f" WHERE {clauses}" if clauses else "")

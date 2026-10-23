@@ -172,7 +172,7 @@ def test_appends_the_tiebreaker_to_an_explicit_sort(query_raw, as_proxy_admin):
 
     _get("sort=-max_budget")
 
-    assert 'ORDER BY "max_budget" DESC NULLS LAST, "budget_id" ASC NULLS LAST' in _select_call(query_raw)[0]
+    assert 'ORDER BY "max_budget" DESC NULLS FIRST, "budget_id" ASC NULLS LAST' in _select_call(query_raw)[0]
 
 
 def test_accepts_duration_sorting(query_raw, as_proxy_admin):
