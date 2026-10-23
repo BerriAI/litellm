@@ -294,51 +294,17 @@ async def test_env_vars_lock_the_settings_and_are_listed_without_their_values(
 
 
 @pytest.mark.parametrize(
-    ("groups", "destination", "posthog_opt_in", "enabled", "chat_posthog_enabled"),
+    ("groups", "enabled"),
     [
-        (
-            frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.PAGE_NAVIGATION}),
-            TelemetryDestination.HTTP,
-            False,
-            True,
-            False,
-        ),
-        (
-            frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.PAGE_NAVIGATION}),
-            TelemetryDestination.HTTP,
-            True,
-            True,
-            True,
-        ),
-        (
-            frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.PAGE_NAVIGATION}),
-            TelemetryDestination.LOCAL_TABLE,
-            True,
-            True,
-            False,
-        ),
-        (frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.PAGE_NAVIGATION}), None, True, True, False),
-        (
-            frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.REQUEST_SUCCESS}),
-            TelemetryDestination.HTTP,
-            True,
-            False,
-            False,
-        ),
-        (frozenset[TelemetryGroup](), TelemetryDestination.HTTP, True, False, False),
-        (frozenset[TelemetryGroup](), None, False, False, False),
+        (frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.PAGE_NAVIGATION}), True),
+        (frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.REQUEST_SUCCESS}), False),
+        (frozenset[TelemetryGroup](), False),
     ],
 )
 def test_any_ui_user_can_ask_whether_page_navigation_events_are_wanted(
-    groups: frozenset[TelemetryGroup],
-    destination: TelemetryDestination | None,
-    posthog_opt_in: bool,
-    enabled: bool,
-    chat_posthog_enabled: bool,
+    groups: frozenset[TelemetryGroup], enabled: bool
 ) -> None:
     runtime: Final = TelemetryRuntime()
-    runtime.destination = destination
-    runtime.settings = TelemetrySettings(chat_posthog_enabled=posthog_opt_in)
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
@@ -346,7 +312,71 @@ def test_any_ui_user_can_ask_whether_page_navigation_events_are_wanted(
     app.dependency_overrides[telemetry_runtime_dependency] = lambda: runtime
     response: Final = TestClient(app).get("/telemetry/ui_events/enabled")
     assert response.status_code == 200, response.text
-    assert response.json() == {"enabled": enabled, "chat_posthog_enabled": chat_posthog_enabled}
+    assert response.json() == {"enabled": enabled, "chat_posthog_enabled": False}
+
+
+@pytest.mark.parametrize("has_database", [False, True])
+@pytest.mark.asyncio
+async def test_chat_metrics_are_enabled_without_configuring_general_telemetry(has_database: bool) -> None:
+    db: Final = SettingsDatabase() if has_database else None
+    client, runtime = await _settings_client(LitellmUserRoles.INTERNAL_USER, TelemetrySettings(), db)
+    async with client:
+        response: Final = await client.get("/telemetry/ui_events/enabled")
+    await runtime.stop()
+    assert runtime.sink is None
+    assert runtime.destination is None
+    assert response.status_code == 200, response.text
+    assert response.json() == {"enabled": False, "chat_posthog_enabled": True}
+
+
+@pytest.mark.parametrize(
+    ("settings", "stored_groups", "chat_posthog_enabled"),
+    [
+        (TelemetrySettings(disabled=True), None, False),
+        (TelemetrySettings(chat_posthog_enabled=False), None, False),
+        (TelemetrySettings(groups=""), None, False),
+        (TelemetrySettings(destination=TelemetryDestination.LOCAL_TABLE), None, False),
+        (TelemetrySettings(), '{"groups": []}', False),
+        (TelemetrySettings(), '{"groups": ["heartbeat"], "destination": "local_table"}', False),
+        (TelemetrySettings(), '{"groups": ["heartbeat"]}', True),
+        (TelemetrySettings(groups="heartbeat"), '{"groups": []}', True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_chat_metrics_respect_explicit_opt_outs_and_local_only_reporting(
+    settings: TelemetrySettings, stored_groups: str | None, chat_posthog_enabled: bool
+) -> None:
+    db: Final = SettingsDatabase(stored_groups=stored_groups)
+    client, runtime = await _settings_client(LitellmUserRoles.INTERNAL_USER, settings, db)
+    async with client:
+        response: Final = await client.get("/telemetry/ui_events/enabled")
+    await runtime.stop()
+    assert response.status_code == 200, response.text
+    assert response.json() == {"enabled": False, "chat_posthog_enabled": chat_posthog_enabled}
+
+
+@pytest.mark.asyncio
+async def test_chat_metrics_fail_closed_when_stored_policy_cannot_be_read() -> None:
+    db: Final = SettingsDatabase()
+    client, runtime = await _settings_client(LitellmUserRoles.INTERNAL_USER, TelemetrySettings(), db)
+    db.fail_reads = True
+    async with client:
+        response: Final = await client.get("/telemetry/ui_events/enabled")
+    await runtime.stop()
+    assert response.status_code == 503
+    assert "chat_posthog_enabled" not in response.json()
+
+
+@pytest.mark.parametrize("stored_groups", ['{"groups": ["unknown"]}', '{"groups": ["token_info"]}'])
+@pytest.mark.asyncio
+async def test_chat_metrics_stay_off_when_stored_groups_are_invalid(stored_groups: str) -> None:
+    db: Final = SettingsDatabase(stored_groups=stored_groups)
+    client, runtime = await _settings_client(LitellmUserRoles.INTERNAL_USER, TelemetrySettings(), db)
+    async with client:
+        response: Final = await client.get("/telemetry/ui_events/enabled")
+    await runtime.stop()
+    assert response.status_code == 200, response.text
+    assert response.json() == {"enabled": False, "chat_posthog_enabled": False}
 
 
 def test_the_proxy_app_disables_chat_posthog_when_telemetry_is_uninitialized() -> None:

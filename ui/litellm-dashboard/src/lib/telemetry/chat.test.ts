@@ -32,6 +32,12 @@ afterEach(() => {
 });
 
 describe("Chat metrics", () => {
+  it("should not fetch settings, create an identity, or send events merely by being imported", () => {
+    expect(mocks.get).not.toHaveBeenCalled();
+    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(storage.size).toBe(0);
+  });
+
   it("should count daily activity once and every accepted query with an opaque ID", async () => {
     await chat.recordChatActive("alice@example.com");
     await chat.recordChatActive("alice@example.com");

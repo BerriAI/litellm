@@ -25,15 +25,15 @@ def test_without_env_vars_the_stored_groups_apply_and_nothing_is_reported_as_set
     assert policy.locked_off is False
 
 
-def test_chat_posthog_is_off_by_default() -> None:
-    assert TelemetrySettings().chat_posthog_enabled is False
+def test_chat_posthog_is_on_by_default() -> None:
+    assert TelemetrySettings().chat_posthog_enabled is True
 
 
-def test_chat_posthog_requires_an_explicit_environment_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_TELEMETRY_CHAT_POSTHOG_ENABLED", "true")
+def test_chat_posthog_can_be_disabled_by_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_TELEMETRY_CHAT_POSTHOG_ENABLED", "false")
     settings: Final = load_settings()
     assert isinstance(settings, TelemetrySettings)
-    assert settings.chat_posthog_enabled is True
+    assert settings.chat_posthog_enabled is False
     assert env_policy(settings).set_variables == ("LITELLM_TELEMETRY_CHAT_POSTHOG_ENABLED",)
 
 
