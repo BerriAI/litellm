@@ -58,18 +58,6 @@ def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[st
     return MappingProxyType({**litellm_params, "api_version": _resolve_responses_api_version(api_base, litellm_params)})
 
 
-def _get_explicit_v1_responses_url(api_base: str | None) -> str | None:
-    if api_base is None:
-        return None
-    url: Final = httpx.URL(api_base)
-    path: Final = urlsplit(str(url)).path.rstrip("/")
-    if path.endswith("/openai/v1"):
-        return str(url.copy_with(path=f"{path}/responses"))
-    if path.endswith("/openai/v1/responses"):
-        return str(url.copy_with(path=path))
-    return None
-
-
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     # Parameters not supported by Azure Responses API
     AZURE_UNSUPPORTED_PARAMS = ["context_management"]
@@ -224,11 +212,22 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
         """
         resolved_api_base: Final = BaseAzureLLM.resolve_azure_api_base(api_base)
-        explicit_v1_url: Final = _get_explicit_v1_responses_url(resolved_api_base)
+        responses_params: Final = _with_responses_api_version(resolved_api_base, litellm_params)
+        parsed_base: Final = urlsplit(resolved_api_base or "")
+        path: Final = parsed_base.path.rstrip("/")
+        if path.endswith(("/openai/v1", "/openai/v1/responses")):
+            responses_path: Final = f"{path}/responses" if path.endswith("/openai/v1") else path
+            return BaseAzureLLM.get_base_azure_url(
+                api_base=parsed_base._replace(path=responses_path).geturl(),
+                litellm_params=responses_params,
+                route="/openai/v1/responses",
+                default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
+            )
+
         return BaseAzureLLM.get_base_azure_url(
-            api_base=explicit_v1_url or resolved_api_base,
-            litellm_params=_with_responses_api_version(resolved_api_base, litellm_params),
-            route="/openai/v1/responses" if explicit_v1_url is not None else "/openai/responses",
+            api_base=resolved_api_base,
+            litellm_params=responses_params,
+            route="/openai/responses",
             default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
         )
 
