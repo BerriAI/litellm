@@ -121,7 +121,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
   rotation_interval: keyData.rotation_interval,
 });
 
-export const keyEditFormSchema = z.object({
+const keyEditFormShape = {
   key_alias: z.custom<string | undefined>(),
   models: z.custom<string[] | undefined>(),
   allowed_routes: z.custom<string | undefined>(),
@@ -166,7 +166,9 @@ export const keyEditFormSchema = z.object({
   disabled_callbacks: z.custom<string[] | undefined>(),
   auto_rotate: z.custom<boolean | undefined>(),
   rotation_interval: z.custom<string | undefined>(),
-});
+};
+
+export const keyEditFormSchema = z.object(keyEditFormShape).partial();
 
 export interface MountedFieldGates {
   canViewPolicies: boolean;
