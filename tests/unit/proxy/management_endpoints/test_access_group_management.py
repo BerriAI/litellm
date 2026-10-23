@@ -74,7 +74,6 @@ async def test_create_duplicate_access_group_fails():
         patch("litellm.proxy.proxy_server.llm_router", mock_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
-
         # Should raise 409 Conflict
         with pytest.raises(HTTPException) as exc_info:
             await create_model_group(data=request_data, user_api_key_dict=mock_user)
@@ -103,9 +102,7 @@ async def test_create_access_group_with_model_ids_tags_only_specific_deployments
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
-        return_value=deploy_a
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=deploy_a)
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
     mock_user = UserAPIKeyAuth(
@@ -126,15 +123,11 @@ async def test_create_access_group_with_model_ids_tags_only_specific_deployments
             new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
         ),
     ):
-        response = await create_model_group(
-            data=request_data, user_api_key_dict=mock_user
-        )
+        response = await create_model_group(data=request_data, user_api_key_dict=mock_user)
 
     assert response.models_updated == 1
     assert response.model_ids == ["deploy-A"]
-    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(
-        where={"model_id": "deploy-A"}
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(where={"model_id": "deploy-A"})
     assert mock_prisma.db.litellm_proxymodeltable.update.call_count == 1
     update_call = mock_prisma.db.litellm_proxymodeltable.update.call_args
     assert update_call.kwargs["where"] == {"model_id": "deploy-A"}
@@ -169,9 +162,7 @@ async def test_create_access_group_with_model_names_tags_all_deployments():
     )
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
-        side_effect=[[], [deploy_a, deploy_b, deploy_c]]
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(side_effect=[[], [deploy_a, deploy_b, deploy_c]])
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
     mock_user = UserAPIKeyAuth(
@@ -179,9 +170,7 @@ async def test_create_access_group_with_model_names_tags_all_deployments():
         user_role=LitellmUserRoles.PROXY_ADMIN,
     )
 
-    request_data = NewModelGroupRequest(
-        access_group="production-models", model_names=["gpt-4o"]
-    )
+    request_data = NewModelGroupRequest(access_group="production-models", model_names=["gpt-4o"])
 
     with (
         patch("litellm.proxy.proxy_server.llm_router", mock_router),
@@ -191,9 +180,7 @@ async def test_create_access_group_with_model_names_tags_all_deployments():
             new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
         ),
     ):
-        response = await create_model_group(
-            data=request_data, user_api_key_dict=mock_user
-        )
+        response = await create_model_group(data=request_data, user_api_key_dict=mock_user)
 
     assert response.models_updated == 3
     assert response.model_names == ["gpt-4o"]
@@ -217,9 +204,7 @@ async def test_create_access_group_model_ids_takes_priority_over_model_names():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
-        return_value=deploy_a
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=deploy_a)
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
     mock_user = UserAPIKeyAuth(
@@ -241,14 +226,10 @@ async def test_create_access_group_model_ids_takes_priority_over_model_names():
             new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
         ),
     ):
-        response = await create_model_group(
-            data=request_data, user_api_key_dict=mock_user
-        )
+        response = await create_model_group(data=request_data, user_api_key_dict=mock_user)
 
     assert response.models_updated == 1
-    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(
-        where={"model_id": "deploy-A"}
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(where={"model_id": "deploy-A"})
 
 
 @pytest.mark.asyncio
@@ -367,7 +348,6 @@ async def test_create_access_group_surfaces_dropped_models():
     assert "deploy-A" in str(exc_info.value.detail)
 
 
-
 @pytest.mark.asyncio
 async def test_create_access_group_trusts_reload_snapshot_over_post_lock_fresh_read():
     """A concurrent reconcile sampled after the lock is released must not make this
@@ -396,9 +376,7 @@ async def test_create_access_group_trusts_reload_snapshot_over_post_lock_fresh_r
         patch(
             "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
             new=AsyncMock(
-                return_value=ReconcileOutcome(
-                    still_desired=frozenset({"deploy-A"}), live_after=frozenset({"deploy-A"})
-                )
+                return_value=ReconcileOutcome(still_desired=frozenset({"deploy-A"}), live_after=frozenset({"deploy-A"}))
             ),
         ),
     ):
@@ -575,6 +553,7 @@ async def test_create_access_group_model_missing_everywhere_still_400s():
     assert exc_info.value.status_code == 400
     assert model_name in str(exc_info.value.detail)
 
+
 @dataclass
 class _FakeBudgetRow:
     budget_id: str
@@ -619,6 +598,7 @@ class _FakeBudgetTable:
             max_budget=data.get("max_budget"),
             soft_budget=data.get("soft_budget"),
             budget_duration=data.get("budget_duration"),
+            budget_reset_at=data.get("budget_reset_at"),
         )
         self.rows[budget_id] = row
         self.create_calls.append(dict(data))
@@ -1128,9 +1108,7 @@ async def test_deleting_the_access_group_strips_deployments_before_dropping_the_
     cache = _FakeAuthCache()
 
     with _proxy_with_stubbed_reload(prisma):
-        response = await delete_access_group(
-            access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache
-        )
+        response = await delete_access_group(access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache)
 
     assert response.models_updated == 1
     assert prisma.access_group_budget_table.rows == {}
@@ -1282,10 +1260,115 @@ async def test_deleting_an_access_group_that_never_had_a_budget_still_evicts():
     cache = _FakeAuthCache(journal)
 
     with _proxy_with_stubbed_reload(prisma):
-        response = await delete_access_group(
-            access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache
-        )
+        response = await delete_access_group(access_group="prod-models", user_api_key_dict=_admin(), auth_cache=cache)
 
     assert response.models_updated == 1
     assert prisma.access_group_budget_table.rows == {}
     _assert_evicted_after_write(journal, "prod-models", "access_group_budget.delete:prod-models")
+
+
+@pytest.mark.asyncio
+async def test_yaml_group_budget_survives_router_replacement_and_removal():
+    from typing import Final
+
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        delete_access_group_budget,
+        get_access_group_budget,
+        list_access_groups,
+        set_access_group_budget,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import AccessGroupBudgetRequest
+
+    prisma: Final = _FakePrismaClient([])
+    cache: Final = _FakeAuthCache([])
+    models: Final = [
+        {
+            "model_name": "yaml-model",
+            "litellm_params": {"model": "openai/group-budget-probe", "api_key": "synthetic"},
+            "model_info": {"id": "yaml-id", "access_groups": ["yaml-pool", "yaml-pool"]},
+        }
+    ]
+    with _proxy(prisma), patch("litellm.proxy.proxy_server.llm_router", Router(model_list=models)):
+        created: Final = await set_access_group_budget(
+            "yaml-pool", AccessGroupBudgetRequest(soft_budget=300, budget_duration="1mo"), _admin(), cache
+        )
+        listed: Final = await list_access_groups(_admin())
+        assert [(g.access_group, g.model_names, g.deployment_count) for g in listed.access_groups] == [
+            ("yaml-pool", ["yaml-model"], 1)
+        ]
+        assert created.budget.soft_budget == 300
+        assert created.budget.max_budget is None
+    with _proxy(prisma), patch("litellm.proxy.proxy_server.llm_router", Router(model_list=models)):
+        assert await get_access_group_budget("yaml-pool") == created
+    with _proxy(prisma), patch("litellm.proxy.proxy_server.llm_router", Router(model_list=[])):
+        assert await get_access_group_budget("yaml-pool") == created
+        remaining: Final = await list_access_groups(_admin())
+        assert [(g.access_group, g.model_names, g.deployment_count) for g in remaining.access_groups] == [
+            ("yaml-pool", [], 0)
+        ]
+        assert (await delete_access_group_budget("yaml-pool", cache)).budget_deleted is True
+
+
+@pytest.mark.asyncio
+async def test_discovery_counts_database_deployment_once_and_uses_current_database_membership():
+    from typing import Final
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import get_all_access_groups
+
+    prisma: Final = _FakePrismaClient([], deployments=[_deployment("db-id", "same-name", ("pool",))])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "same-name",
+                "litellm_params": {"model": "openai/probe", "api_key": "synthetic"},
+                "model_info": {"id": "db-id", "db_model": True, "access_groups": ["stale"]},
+            },
+            {
+                "model_name": "same-name",
+                "litellm_params": {"model": "openai/probe", "api_key": "synthetic"},
+                "model_info": {"id": "yaml-id", "access_groups": ["pool"]},
+            },
+        ]
+    )
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        groups: Final = await get_all_access_groups(prisma)
+    assert tuple(groups) == ("pool",)
+    assert groups["pool"].model_names == ["same-name"]
+    assert groups["pool"].deployment_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["update", "delete"])
+@pytest.mark.parametrize("with_database_member", [False, True])
+async def test_membership_mutations_preserve_yaml_groups_and_their_budget(operation, with_database_member):
+    from typing import Final
+
+    from fastapi import HTTPException
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        delete_access_group,
+        update_access_group,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import UpdateModelGroupRequest
+
+    prisma: Final = _FakePrismaClient([], deployments=[_deployment()] if with_database_member else [])
+    _seed_budget(prisma, "prod-models", spend=12.0, soft_budget=300.0)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "yaml-model",
+                "litellm_params": {"model": "openai/probe", "api_key": "synthetic"},
+                "model_info": {"id": "yaml-id", "access_groups": ["prod-models"]},
+            }
+        ]
+    )
+    with _proxy(prisma), patch("litellm.proxy.proxy_server.llm_router", router):
+        mutation: Final = (
+            delete_access_group("prod-models", _admin(), _FakeAuthCache())
+            if operation == "delete"
+            else update_access_group("prod-models", UpdateModelGroupRequest(model_names=["yaml-model"]), _admin())
+        )
+        with pytest.raises(HTTPException) as error:
+            await mutation
+    assert error.value.status_code == 400
+    assert "config.yaml" in str(error.value.detail)
+    assert prisma.access_group_budget_table.rows["prod-models"].spend == 12.0
+    assert prisma.model_table.updates == []

@@ -27,9 +27,11 @@ from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
+    get_model_access_group_budgets_batch,
     get_team_object,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.user_api_key_cache import model_access_group_spend_counter_key
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import (
     DBSpendUpdateWriter,
@@ -61,6 +63,8 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import BilledFailedAttempt, ProxyUpdateSpend
+from litellm.types.integrations.slack_alerting import CallInfo, Litellm_EntityType
+from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     CallTypes,
@@ -682,6 +686,8 @@ class _ProxyDBLogger(CustomLogger):
                     if not charged:
                         return
 
+                    await alert_model_access_group_soft_budgets(model_access_groups, proxy_logging_obj)
+
                     # update cache (fire-and-forget for backward compat:
                     # cached object fields, soft budget alerts, etc.)
                     asyncio.create_task(
@@ -1086,6 +1092,7 @@ async def _update_database_and_spend_counters_in_batch(
             end_time=end_time,
             org_id=org_id,
             project_id=project_id,
+            resolved_model_access_groups=model_access_groups,
         )
     except Exception:
         if budget_reservation is not None:
@@ -1183,4 +1190,42 @@ async def _invalidate_budget_reservation_counters(
 
     await invalidate_budget_reservation_counters(
         budget_reservation=budget_reservation,
+    )
+
+
+async def alert_model_access_group_soft_budgets(groups: Sequence[str], proxy_logging_obj: "ProxyLogging") -> None:
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if not groups or prisma_client is None or not proxy_logging_obj.alerting:
+        return
+    budgets: Final = await get_model_access_group_budgets_batch(
+        access_group_names=groups, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+    )
+    await asyncio.gather(
+        *(_alert_model_access_group_soft_budget(budget, proxy_logging_obj) for budget in budgets.values()),
+        return_exceptions=True,
+    )
+
+
+async def _alert_model_access_group_soft_budget(
+    budget: ModelAccessGroupBudget, proxy_logging_obj: "ProxyLogging"
+) -> None:
+    from litellm.proxy.proxy_server import get_current_spend
+
+    if budget.soft_budget is None:
+        return
+    spend: Final = await get_current_spend(
+        counter_key=model_access_group_spend_counter_key(budget.access_group_name), fallback_spend=budget.spend
+    )
+    if spend < budget.soft_budget:
+        return
+    await proxy_logging_obj.budget_alerts(
+        type="soft_budget",
+        user_info=CallInfo(
+            spend=spend,
+            soft_budget=budget.soft_budget,
+            token=f"model_access_group:{budget.access_group_name}:{budget.budget_reset_at}",
+            key_alias=budget.access_group_name,
+            event_group=Litellm_EntityType.MODEL_ACCESS_GROUP,
+        ),
     )

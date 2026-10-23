@@ -311,7 +311,7 @@ class _MagBudgetRow:
     def __init__(self, access_group_name: str, spend: float = 0.0, max_budget: float | None = None) -> None:
         self.access_group_name = access_group_name
         self.spend = spend
-        self.litellm_budget_table = None if max_budget is None else SimpleNamespace(max_budget=max_budget)
+        self.litellm_budget_table = None if max_budget is None else SimpleNamespace(max_budget=max_budget, soft_budget=None, budget_reset_at=None)
 
 
 class _RecordingPrismaClient:

@@ -246,6 +246,11 @@ async def handle_budget_for_entity(
             _budget: Final[_PrismaBudgetRecord] = await BudgetRepository(prisma_client).table.create(
                 data={
                     **new_budget_data,
+                    **(
+                        {"budget_reset_at": get_budget_reset_time(budget_row.budget_duration)}
+                        if budget_row.budget_duration is not None
+                        else {}
+                    ),
                     "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                     "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 }
