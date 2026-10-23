@@ -1,5 +1,6 @@
 mod auth;
 mod error;
+mod http;
 mod secrets;
 pub use error::Error;
 
@@ -17,10 +18,7 @@ use http_body_util::BodyExt;
 use litellm_config::Config;
 use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::{Gateway, ModelRouter};
-use litellm_http::{
-    ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
-    media::PublicDnsResolver,
-};
+use litellm_http::{ClientVariant, HttpClientPool, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
@@ -35,26 +33,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
             .map(|value| value.expose().to_owned())
             .or_else(|| std::env::var(name).ok())
     };
-    let settings = &config.litellm_settings;
-    let http_settings = HttpSettings::from_layers([
-        HttpSettingsLayer::from_environment(&lookup),
-        HttpSettingsLayer {
-            ssl_verify: settings.ssl_verify.as_ref().map(|value| match value {
-                litellm_config::Spelled::Value(true) => SslVerify::Enabled,
-                litellm_config::Spelled::Value(false) => SslVerify::Disabled,
-                litellm_config::Spelled::Text(value) => SslVerify::parse(value),
-            }),
-            ssl_certificate: settings.ssl_certificate.as_ref().map(Into::into),
-            ssl_security_level: settings.ssl_security_level.clone(),
-            ssl_ecdh_curve: settings.ssl_ecdh_curve.clone(),
-            force_ipv4: settings.force_ipv4,
-            http2: settings.http2,
-            aiohttp_trust_env: settings.aiohttp_trust_env,
-            disable_aiohttp_trust_env: settings.disable_aiohttp_trust_env,
-            disable_aiohttp_transport: settings.disable_aiohttp_transport,
-            ..Default::default()
-        },
-    ]);
+    let http_settings = http::http_settings(&lookup, &config.litellm_settings)?;
     let http = Resolution::from(&http_settings).config;
     let client = pool.client(&http, ClientVariant::Provider)?;
     let secrets = Arc::new(secrets::ConfigSecrets::new(

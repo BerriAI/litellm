@@ -1,5 +1,5 @@
 use hyper_util::client::proxy::matcher::Matcher;
-use litellm_core_utils::settings::Lookup;
+use litellm_layered::Lookup;
 use veil::Redact;
 
 #[derive(Clone, Redact, Default, PartialEq, Eq, Hash)]
@@ -14,14 +14,22 @@ pub struct EnvironmentProxies {
 }
 
 impl EnvironmentProxies {
-    pub fn from_environment(env: &impl Lookup) -> Self {
+    pub fn from_environment(env: &(impl Lookup + ?Sized)) -> Self {
         Self::resolve(env, cfg!(windows))
     }
 
-    fn resolve(env: &impl Lookup, names_ignore_case: bool) -> Self {
+    pub fn from_env(env: &(impl Lookup + ?Sized)) -> Result<Option<Self>, litellm_layered::Error> {
+        Ok(Some(Self::from_environment(env)).filter(|proxies| *proxies != Self::default()))
+    }
+
+    fn resolve(env: &(impl Lookup + ?Sized), names_ignore_case: bool) -> Self {
         let lowercase_first = |upper: Option<&str>, lower: &str| {
             env.get(lower)
-                .or_else(|| upper.and_then(|name| env.truthy(name)))
+                .or_else(|| {
+                    upper
+                        .and_then(|name| env.get(name))
+                        .filter(|value| !value.is_empty())
+                })
                 .unwrap_or_default()
         };
         let is_cgi = env.get("REQUEST_METHOD").is_some();
@@ -80,18 +88,10 @@ impl EnvironmentProxies {
 
 #[cfg(test)]
 mod tests {
+    use litellm_layered::Env;
     use rstest::rstest;
 
     use super::*;
-
-    fn env_of(values: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
-        move |name| {
-            values
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| value.to_string())
-        }
-    }
 
     fn url(value: &str) -> reqwest::Url {
         reqwest::Url::parse(value).unwrap()
@@ -108,7 +108,7 @@ mod tests {
         #[case] target: &str,
         #[case] expected: bool,
     ) {
-        let proxies = EnvironmentProxies::from_environment(&env_of(env));
+        let proxies = EnvironmentProxies::from_environment(&Env::of(env));
         assert_eq!(proxies.matcher()(&url(target)), expected);
     }
 
@@ -126,8 +126,8 @@ mod tests {
         #[case] equivalent: &'static [(&'static str, &'static str)],
     ) {
         assert_eq!(
-            EnvironmentProxies::from_environment(&env_of(env)),
-            EnvironmentProxies::from_environment(&env_of(equivalent))
+            EnvironmentProxies::from_environment(&Env::of(env)),
+            EnvironmentProxies::from_environment(&Env::of(equivalent))
         );
     }
 
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn a_cgi_request_still_proxies_https_through_the_configured_proxy() {
-        let proxies = EnvironmentProxies::from_environment(&env_of(&[
+        let proxies = EnvironmentProxies::from_environment(&Env::of(&[
             ("REQUEST_METHOD", "GET"),
             ("HTTPS_PROXY", "http://proxy:3128"),
         ]));
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn debug_output_hides_proxy_credentials_but_shows_which_variables_are_set() {
-        let proxies = EnvironmentProxies::from_environment(&env_of(&[
+        let proxies = EnvironmentProxies::from_environment(&Env::of(&[
             ("HTTPS_PROXY", "http://operator:hunter2@proxy.corp:3128"),
             ("NO_PROXY", "internal.test"),
         ]));
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn an_empty_environment_proxies_nothing() {
-        let proxies = EnvironmentProxies::from_environment(&env_of(&[]));
+        let proxies = EnvironmentProxies::from_environment(&Env::of(&[]));
         assert_eq!(proxies, EnvironmentProxies::default());
         assert!(proxies.reqwest_proxies().is_empty());
     }

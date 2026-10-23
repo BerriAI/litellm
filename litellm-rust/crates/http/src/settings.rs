@@ -3,10 +3,8 @@ use std::{
     time::Duration,
 };
 
-use litellm_core_utils::{
-    serde_compat::parse_str_bool,
-    settings::{Layer, Lookup, merge},
-};
+use litellm_core_utils::serde_compat::parse_str_bool;
+use litellm_layered::{Invalid, Layered, Lookup, read, read_env};
 
 use crate::proxy::EnvironmentProxies;
 
@@ -25,6 +23,10 @@ impl SslVerify {
             _ => Self::CaBundle(PathBuf::from(value)),
         }
     }
+
+    pub fn parse_env(value: &str) -> Result<Option<Self>, Invalid> {
+        Ok(Some(Self::parse(value)))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -34,78 +36,62 @@ pub struct TcpKeepalive {
     pub retries: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct HttpSettingsLayer {
-    pub ssl_verify: Option<SslVerify>,
-    pub ssl_cert_file: Option<PathBuf>,
-    pub ssl_certificate: Option<PathBuf>,
-    pub ssl_security_level: Option<String>,
-    pub ssl_ecdh_curve: Option<String>,
-    pub force_ipv4: Option<bool>,
-    pub http2: Option<bool>,
-    pub aiohttp_trust_env: Option<bool>,
-    pub disable_aiohttp_trust_env: Option<bool>,
-    pub disable_aiohttp_transport: Option<bool>,
-    pub user_agent: Option<String>,
-    pub tcp_keepalive: Option<TcpKeepalive>,
-    pub pool_idle_timeout: Option<Duration>,
-    pub proxies: Option<EnvironmentProxies>,
-}
-
-impl HttpSettingsLayer {
-    pub fn from_environment(env: &impl Lookup) -> Self {
-        let seconds = |name: &str, default: u32| {
-            Duration::from_secs(u64::from(env.parsed::<u32>(name).unwrap_or(default)))
+impl TcpKeepalive {
+    pub fn from_env(env: &(impl Lookup + ?Sized)) -> Result<Option<Self>, litellm_layered::Error> {
+        if read_env(env, &["AIOHTTP_SO_KEEPALIVE"], false, read::enabled)?.is_none() {
+            return Ok(None);
+        }
+        let seconds = |names: &'static [&'static str], default: u64| {
+            Ok::<_, litellm_layered::Error>(
+                read_env(env, names, false, read::seconds)?.unwrap_or(Duration::from_secs(default)),
+            )
         };
-        Self {
-            ssl_verify: env.get("SSL_VERIFY").map(|value| SslVerify::parse(&value)),
-            ssl_cert_file: env.truthy("SSL_CERT_FILE").map(PathBuf::from),
-            ssl_certificate: env.get("SSL_CERTIFICATE").map(PathBuf::from),
-            ssl_security_level: env.get("SSL_SECURITY_LEVEL"),
-            ssl_ecdh_curve: env.get("SSL_ECDH_CURVE"),
-            force_ipv4: None,
-            http2: env.enabled("LITELLM_HTTP2"),
-            aiohttp_trust_env: env.enabled("AIOHTTP_TRUST_ENV"),
-            disable_aiohttp_trust_env: env.enabled("DISABLE_AIOHTTP_TRUST_ENV"),
-            disable_aiohttp_transport: env.enabled("DISABLE_AIOHTTP_TRANSPORT"),
-            user_agent: env.get("LITELLM_USER_AGENT"),
-            tcp_keepalive: env.enabled("AIOHTTP_SO_KEEPALIVE").map(|_| TcpKeepalive {
-                idle: seconds("AIOHTTP_TCP_KEEPIDLE", 60),
-                interval: seconds("AIOHTTP_TCP_KEEPINTVL", 30),
-                retries: env.parsed("AIOHTTP_TCP_KEEPCNT").unwrap_or(5),
-            }),
-            pool_idle_timeout: env
-                .parsed::<u32>("AIOHTTP_KEEPALIVE_TIMEOUT")
-                .map(|timeout| Duration::from_secs(u64::from(timeout))),
-            proxies: Some(EnvironmentProxies::from_environment(env))
-                .filter(|proxies| *proxies != EnvironmentProxies::default()),
-        }
+        Ok(Some(Self {
+            idle: seconds(&["AIOHTTP_TCP_KEEPIDLE"], 60)?,
+            interval: seconds(&["AIOHTTP_TCP_KEEPINTVL"], 30)?,
+            retries: read_env(env, &["AIOHTTP_TCP_KEEPCNT"], false, read::parsed)?.unwrap_or(5),
+        }))
     }
 }
 
-impl Layer for HttpSettingsLayer {
-    fn or(self, lower: Self) -> Self {
-        Self {
-            ssl_verify: self.ssl_verify.or(lower.ssl_verify),
-            ssl_cert_file: self.ssl_cert_file.or(lower.ssl_cert_file),
-            ssl_certificate: self.ssl_certificate.or(lower.ssl_certificate),
-            ssl_security_level: self.ssl_security_level.or(lower.ssl_security_level),
-            ssl_ecdh_curve: self.ssl_ecdh_curve.or(lower.ssl_ecdh_curve),
-            force_ipv4: self.force_ipv4.or(lower.force_ipv4),
-            http2: self.http2.or(lower.http2),
-            aiohttp_trust_env: self.aiohttp_trust_env.or(lower.aiohttp_trust_env),
-            disable_aiohttp_trust_env: self
-                .disable_aiohttp_trust_env
-                .or(lower.disable_aiohttp_trust_env),
-            disable_aiohttp_transport: self
-                .disable_aiohttp_transport
-                .or(lower.disable_aiohttp_transport),
-            user_agent: self.user_agent.or(lower.user_agent),
-            tcp_keepalive: self.tcp_keepalive.or(lower.tcp_keepalive),
-            pool_idle_timeout: self.pool_idle_timeout.or(lower.pool_idle_timeout),
-            proxies: self.proxies.or(lower.proxies),
-        }
-    }
+#[derive(Layered)]
+pub struct HttpKeys {
+    #[layer(env = "SSL_VERIFY", read = SslVerify::parse_env, litellm_setting = "ssl_verify")]
+    pub ssl_verify: SslVerify,
+    #[layer(env = "SSL_CERT_FILE", read = read::truthy)]
+    pub ssl_cert_file: PathBuf,
+    #[layer(env = "SSL_CERTIFICATE", read = read::text, litellm_setting = "ssl_certificate")]
+    pub ssl_certificate: PathBuf,
+    #[layer(env = "SSL_SECURITY_LEVEL", read = read::text, litellm_setting = "ssl_security_level")]
+    pub ssl_security_level: String,
+    #[layer(env = "SSL_ECDH_CURVE", read = read::text, litellm_setting = "ssl_ecdh_curve")]
+    pub ssl_ecdh_curve: String,
+    #[layer(litellm_setting = "force_ipv4")]
+    pub force_ipv4: bool,
+    #[layer(env = "LITELLM_HTTP2", read = read::enabled, litellm_setting = "http2")]
+    pub http2: bool,
+    #[layer(env = "AIOHTTP_TRUST_ENV", read = read::enabled, litellm_setting = "aiohttp_trust_env")]
+    pub aiohttp_trust_env: bool,
+    #[layer(
+        env = "DISABLE_AIOHTTP_TRUST_ENV",
+        read = read::enabled,
+        litellm_setting = "disable_aiohttp_trust_env"
+    )]
+    pub disable_aiohttp_trust_env: bool,
+    #[layer(
+        env = "DISABLE_AIOHTTP_TRANSPORT",
+        read = read::enabled,
+        litellm_setting = "disable_aiohttp_transport"
+    )]
+    pub disable_aiohttp_transport: bool,
+    #[layer(env = "LITELLM_USER_AGENT", read = read::text, keep_blank)]
+    pub user_agent: String,
+    #[layer(from_env = TcpKeepalive::from_env)]
+    pub tcp_keepalive: TcpKeepalive,
+    #[layer(env = "AIOHTTP_KEEPALIVE_TIMEOUT", read = read::seconds)]
+    pub pool_idle_timeout: Duration,
+    #[layer(from_env = EnvironmentProxies::from_env)]
+    pub proxies: EnvironmentProxies,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,11 +131,8 @@ impl Default for HttpSettings {
     }
 }
 
-impl HttpSettings {
-    pub fn from_layers(
-        highest_precedence_first: impl IntoIterator<Item = HttpSettingsLayer>,
-    ) -> Self {
-        let merged = merge(highest_precedence_first);
+impl From<HttpKeysPartial> for HttpSettings {
+    fn from(merged: HttpKeysPartial) -> Self {
         let defaults = Self::default();
         let http2 = merged.http2.unwrap_or(defaults.http2);
         Self {
@@ -173,7 +156,9 @@ impl HttpSettings {
             ..defaults
         }
     }
+}
 
+impl HttpSettings {
     pub fn without_missing_files(self, exists: &dyn Fn(&Path) -> bool) -> Self {
         Self {
             ssl_verify: match self.ssl_verify {
@@ -190,19 +175,16 @@ impl HttpSettings {
 mod tests {
     use rstest::rstest;
 
+    use litellm_layered::{Env, merge};
+
     use super::*;
 
-    fn no_env(_: &str) -> Option<String> {
-        None
+    fn stack(highest_first: impl IntoIterator<Item = HttpKeysPartial>) -> HttpSettings {
+        HttpSettings::from(merge(highest_first))
     }
 
-    fn env_of(values: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
-        move |name| {
-            values
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| value.to_string())
-        }
+    fn from_env(values: &[(&str, &str)]) -> HttpKeysPartial {
+        HttpKeysPartial::from_env(&Env::of(values)).unwrap()
     }
 
     #[rstest]
@@ -219,22 +201,22 @@ mod tests {
 
     #[test]
     fn higher_layers_override_lower_ones() {
-        let configured = HttpSettingsLayer {
+        let configured = HttpKeysPartial {
             ssl_verify: Some(SslVerify::Enabled),
             ssl_certificate: Some("/configured/client.pem".into()),
             ssl_security_level: Some("configured".into()),
             user_agent: Some("configured/1".into()),
-            ..HttpSettingsLayer::default()
+            ..HttpKeysPartial::default()
         };
-        let environment = HttpSettingsLayer::from_environment(&env_of(&[
+        let environment = from_env(&[
             ("SSL_VERIFY", "false"),
             ("SSL_CERT_FILE", "/env/roots.pem"),
             ("SSL_CERTIFICATE", "/env/client.pem"),
             ("SSL_SECURITY_LEVEL", "DEFAULT@SECLEVEL=1"),
             ("SSL_ECDH_CURVE", "X25519"),
             ("LITELLM_USER_AGENT", "env/2"),
-        ]));
-        let settings = HttpSettings::from_layers([environment, configured]);
+        ]);
+        let settings = stack([environment, configured]);
         assert_eq!(settings.ssl_verify, Some(SslVerify::Disabled));
         assert_eq!(settings.ssl_cert_file, Some("/env/roots.pem".into()));
         assert_eq!(settings.ssl_certificate, Some("/env/client.pem".into()));
@@ -248,35 +230,32 @@ mod tests {
 
     #[test]
     fn an_explicit_false_in_a_higher_layer_beats_a_lower_true() {
-        let higher = HttpSettingsLayer {
+        let higher = HttpKeysPartial {
             http2: Some(false),
             force_ipv4: Some(false),
-            ..HttpSettingsLayer::default()
+            ..HttpKeysPartial::default()
         };
-        let lower = HttpSettingsLayer {
+        let lower = HttpKeysPartial {
             http2: Some(true),
             force_ipv4: Some(true),
-            ..HttpSettingsLayer::default()
+            ..HttpKeysPartial::default()
         };
-        let settings = HttpSettings::from_layers([higher, lower]);
+        let settings = stack([higher, lower]);
         assert!(!settings.http2);
         assert!(!settings.force_ipv4);
     }
 
     #[test]
     fn an_empty_environment_is_an_empty_layer_so_lower_layers_and_defaults_apply() {
-        assert_eq!(
-            HttpSettingsLayer::from_environment(&no_env),
-            HttpSettingsLayer::default()
-        );
-        let configured = HttpSettingsLayer {
+        assert_eq!(from_env(&[]), HttpKeysPartial::default());
+        let configured = HttpKeysPartial {
             ssl_verify: Some(SslVerify::CaBundle("/configured/roots.pem".into())),
             http2: Some(true),
             user_agent: Some("configured/1".into()),
-            ..HttpSettingsLayer::default()
+            ..HttpKeysPartial::default()
         };
         assert_eq!(
-            HttpSettings::from_layers([HttpSettingsLayer::default(), configured]),
+            stack([HttpKeysPartial::default(), configured]),
             HttpSettings {
                 ssl_verify: Some(SslVerify::CaBundle("/configured/roots.pem".into())),
                 http2: true,
@@ -284,35 +263,48 @@ mod tests {
                 ..HttpSettings::default()
             }
         );
-        assert_eq!(HttpSettings::from_layers([]), HttpSettings::default());
+        assert_eq!(stack([]), HttpSettings::default());
     }
 
     #[test]
-    fn empty_certificate_is_retained_for_validation_while_empty_tuning_is_absent() {
-        let configured = HttpSettingsLayer {
+    fn blank_environment_values_fall_through_to_the_configured_settings() {
+        let configured = HttpKeysPartial {
             ssl_certificate: Some("/configured/client.pem".into()),
             ssl_security_level: Some("configured".into()),
             ssl_ecdh_curve: Some("X25519".into()),
-            ..HttpSettingsLayer::default()
+            ..HttpKeysPartial::default()
         };
-        let environment = HttpSettingsLayer::from_environment(&env_of(&[
+        let environment = from_env(&[
             ("SSL_CERTIFICATE", ""),
-            ("SSL_SECURITY_LEVEL", ""),
+            ("SSL_SECURITY_LEVEL", " "),
             ("SSL_ECDH_CURVE", ""),
-        ]));
-        let settings = HttpSettings::from_layers([environment, configured]);
-        assert_eq!(settings.ssl_certificate, Some(PathBuf::new()));
-        assert_eq!(settings.ssl_security_level, None);
-        assert_eq!(settings.ssl_ecdh_curve, None);
+        ]);
+        let settings = stack([environment, configured]);
+        assert_eq!(
+            settings.ssl_certificate,
+            Some(PathBuf::from("/configured/client.pem"))
+        );
+        assert_eq!(settings.ssl_security_level.as_deref(), Some("configured"));
+        assert_eq!(settings.ssl_ecdh_curve.as_deref(), Some("X25519"));
+    }
+
+    #[test]
+    fn an_empty_user_agent_environment_value_beats_the_configured_one() {
+        let configured = HttpKeysPartial {
+            user_agent: Some("configured/1".into()),
+            ..HttpKeysPartial::default()
+        };
+        let settings = stack([from_env(&[("LITELLM_USER_AGENT", "")]), configured]);
+        assert_eq!(settings.user_agent.as_deref(), Some(""));
     }
 
     #[test]
     fn socket_keepalive_follows_the_aiohttp_variables_with_python_defaults() {
-        let tuned = HttpSettings::from_layers([HttpSettingsLayer::from_environment(&env_of(&[
+        let tuned = stack([from_env(&[
             ("AIOHTTP_SO_KEEPALIVE", "True"),
             ("AIOHTTP_TCP_KEEPIDLE", "45"),
             ("AIOHTTP_KEEPALIVE_TIMEOUT", "30"),
-        ]))]);
+        ])]);
         assert_eq!(
             tuned.tcp_keepalive,
             Some(TcpKeepalive {
@@ -326,9 +318,7 @@ mod tests {
 
     #[test]
     fn socket_keepalive_stays_off_unless_enabled() {
-        let settings = HttpSettings::from_layers([HttpSettingsLayer::from_environment(&env_of(
-            &[("AIOHTTP_TCP_KEEPIDLE", "45")],
-        ))]);
+        let settings = stack([from_env(&[("AIOHTTP_TCP_KEEPIDLE", "45")])]);
         assert_eq!(settings.tcp_keepalive, None);
         assert_eq!(settings.pool_idle_timeout, Duration::from_secs(15));
     }
@@ -338,13 +328,13 @@ mod tests {
         disable_aiohttp_trust_env: bool,
         disable_aiohttp_transport: bool,
         http2: bool,
-    ) -> HttpSettingsLayer {
-        HttpSettingsLayer {
+    ) -> HttpKeysPartial {
+        HttpKeysPartial {
             aiohttp_trust_env: Some(aiohttp_trust_env),
             disable_aiohttp_trust_env: Some(disable_aiohttp_trust_env),
             disable_aiohttp_transport: Some(disable_aiohttp_transport),
             http2: Some(http2),
-            ..HttpSettingsLayer::default()
+            ..HttpKeysPartial::default()
         }
     }
 
@@ -355,22 +345,21 @@ mod tests {
     #[case::http2_uses_httpx(proxy_flags(false, true, false, true), true)]
     #[case::aiohttp_disabled(proxy_flags(false, true, true, false), true)]
     fn environment_proxies_apply_unless_the_aiohttp_transport_opts_out(
-        #[case] layer: HttpSettingsLayer,
+        #[case] layer: HttpKeysPartial,
         #[case] expected: bool,
     ) {
-        assert_eq!(HttpSettings::from_layers([layer]).trust_proxy_env, expected);
+        assert_eq!(stack([layer]).trust_proxy_env, expected);
     }
 
     #[test]
     fn a_proxy_opt_out_in_one_source_still_yields_to_trust_env_from_another() {
-        let environment =
-            HttpSettingsLayer::from_environment(&env_of(&[("DISABLE_AIOHTTP_TRUST_ENV", "true")]));
-        let configured = HttpSettingsLayer {
+        let environment = from_env(&[("DISABLE_AIOHTTP_TRUST_ENV", "true")]);
+        let configured = HttpKeysPartial {
             aiohttp_trust_env: Some(true),
-            ..HttpSettingsLayer::default()
+            ..HttpKeysPartial::default()
         };
-        assert!(!HttpSettings::from_layers([environment.clone()]).trust_proxy_env);
-        assert!(HttpSettings::from_layers([environment, configured]).trust_proxy_env);
+        assert!(!stack([environment.clone()]).trust_proxy_env);
+        assert!(stack([environment, configured]).trust_proxy_env);
     }
 
     #[test]
@@ -411,7 +400,7 @@ mod tests {
             | "DISABLE_AIOHTTP_TRUST_ENV" => Some(value.to_string()),
             _ => None,
         };
-        let layer = HttpSettingsLayer::from_environment(&env);
+        let layer = HttpKeysPartial::from_env(&env).unwrap();
         assert_eq!(layer.http2, expected);
         assert_eq!(layer.aiohttp_trust_env, expected);
         assert_eq!(layer.disable_aiohttp_transport, expected);

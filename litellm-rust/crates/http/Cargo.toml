@@ -14,6 +14,7 @@ rmcp = { version = "=3.4.1", default-features = false, features = ["client", "tr
 reqwest-mcp = { package = "reqwest", version = "0.13.2", default-features = false, features = ["rustls-no-provider", "json", "stream", "http2"], optional = true }
 http.workspace = true
 litellm-core-utils.workspace = true
+litellm-layered.workspace = true
 hyper-util.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

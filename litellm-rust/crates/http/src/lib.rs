@@ -24,5 +24,5 @@ pub use config::{ClientIdentity, HttpClientConfig, Resolution, Verify};
 pub use error::{Error, TlsSource};
 pub use pool::{ClientVariant, HttpClientPool};
 pub use proxy::EnvironmentProxies;
-pub use settings::{HttpSettings, HttpSettingsLayer, SslVerify, TcpKeepalive};
+pub use settings::{HttpKeys, HttpKeysPartial, HttpSettings, SslVerify, TcpKeepalive};
 pub use tls::{KeyExchangeGroup, Tls12CipherSuite, Unsupported};
