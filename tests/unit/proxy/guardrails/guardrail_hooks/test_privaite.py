@@ -103,6 +103,16 @@ class _FakeEngine:
                 raise _FakePIIBlockedError(hit)
         return anonymized, mapping
 
+    async def gate_document(self, value):
+        """The block gate without the rewrite, like PIIEngine.gate_document."""
+        self.gated = [*getattr(self, "gated", []), value]
+        blocked = set(getattr(self.config, "block_entities", None) or [])
+        mapping = _FakeMapping()
+        self._scrub(json.dumps(value), mapping)
+        detected = {fake.strip("<>").rsplit("_", 1)[0] for fake in mapping.get_all_fakes()}
+        if detected & blocked:
+            raise _FakePIIBlockedError(detected & blocked)
+
     async def process_response(self, text, _mapping):
         for fake, original in _FAKES.items():
             text = text.replace(fake, original)
@@ -1458,3 +1468,106 @@ async def test_streaming_restores_copies_and_leaves_the_chunks_litellm_reassembl
     assert [chunk.choices[0].delta.content for chunk in source] == ["Hi <PERS", "ON_1>"], (
         "the chunks LiteLLM keeps to rebuild the logged and cached response must keep the placeholder"
     )
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scrubs_extra_body_in_place():
+    # LiteLLM merges extra_body over the request it sends, so extra_body.messages
+    # would otherwise replace the scrubbed messages on the wire.
+    gr = _make_guardrail()
+    extra_body = {"messages": [{"role": "user", "content": "Email marie@acme.com"}], "top_k": 5}
+    data = {"messages": [{"role": "user", "content": "hi"}], "extra_body": extra_body}
+    data["proxy_server_request"] = {"body": dict(data)}
+    out = await gr.async_pre_call_hook(None, None, data, "completion")
+
+    assert out["extra_body"] is extra_body
+    assert extra_body == {"messages": [{"role": "user", "content": "Email <EMAIL_ADDRESS_1>"}], "top_k": 5}
+    assert data["proxy_server_request"]["body"]["extra_body"]["messages"][0]["content"] == "Email <EMAIL_ADDRESS_1>"
+    assert out["metadata"]["privaite_map"] == {"<EMAIL_ADDRESS_1>": "marie@acme.com"}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_block_gate_reads_extra_body():
+    from fastapi import HTTPException
+
+    gr = _make_guardrail(block_entities=["EMAIL_ADDRESS"])
+    data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "extra_body": {"messages": [{"role": "user", "content": "marie@acme.com"}]},
+    }
+    with pytest.raises(HTTPException) as ei:
+        await gr.async_pre_call_hook(None, None, data, "completion")
+    assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"input": "hi", "instructions": "The user is marie@acme.com."},
+        {"system": [{"type": "text", "text": "The user is marie@acme.com."}]},
+    ],
+)
+async def test_pre_call_block_gate_reads_the_agent_prompt(data):
+    from fastapi import HTTPException
+
+    gr = _make_guardrail(block_entities=["EMAIL_ADDRESS"])
+    with pytest.raises(HTTPException) as ei:
+        await gr.async_pre_call_hook(None, None, data, "aresponses")
+    assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_pre_call_agent_prompt_is_relayed_verbatim():
+    gr = _make_guardrail(block_entities=["EMAIL_ADDRESS"])
+    data = {"input": "hi", "instructions": "The user is Marie Dupont."}
+    out = await gr.async_pre_call_hook(None, None, data, "aresponses")
+    assert out["instructions"] == "The user is Marie Dupont."
+    assert gr._engine.gated == ["The user is Marie Dupont."]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_agent_prompt_is_not_read_without_block_entities():
+    gr = _make_guardrail()
+    data = {"input": "hi", "instructions": "The user is marie@acme.com."}
+    out = await gr.async_pre_call_hook(None, None, data, "aresponses")
+    assert out["instructions"] == "The user is marie@acme.com."
+    assert getattr(gr._engine, "gated", []) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("data", "field"),
+    [
+        ({"prompt": [9906, 1917]}, "prompt"),
+        ({"prompt": [[9906], [1917]]}, "prompt"),
+        ({"prompt": ["hi", [9906]]}, "prompt"),
+        ({"input": [9906, 1917]}, "input"),
+    ],
+)
+async def test_pre_call_block_gate_refuses_token_ids(data, field):
+    # No detector reads token IDs, so the gate cannot check them.
+    from fastapi import HTTPException
+
+    gr = _make_guardrail(block_entities=["EMAIL_ADDRESS"])
+    with pytest.raises(HTTPException) as ei:
+        await gr.async_pre_call_hook(None, None, data, "atext_completion")
+    assert ei.value.status_code == 400
+    assert f"tokenized {field}" in ei.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_token_ids_pass_without_block_entities():
+    gr = _make_guardrail()
+    out = await gr.async_pre_call_hook(None, None, {"prompt": [9906, 1917]}, "atext_completion")
+    assert out["prompt"] == [9906, 1917]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_extra_body_only_request_is_scanned():
+    # No top-level messages at all: the early return must not skip the scan.
+    gr = _make_guardrail()
+    extra_body = {"messages": [{"role": "user", "content": "Email marie@acme.com"}]}
+    out = await gr.async_pre_call_hook(None, None, {"extra_body": extra_body}, "completion")
+    assert extra_body["messages"][0]["content"] == "Email <EMAIL_ADDRESS_1>"
+    assert out["metadata"]["privaite_map"] == {"<EMAIL_ADDRESS_1>": "marie@acme.com"}

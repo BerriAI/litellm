@@ -63,6 +63,10 @@ GENERIC_TEXT_FIELDS: Final = ("output", "arguments", "input", "text", "reason")
 """Text-bearing fields of an unknown Responses item. Every one is scanned, since an
 mcp_call carries both `arguments` and `output`."""
 
+AGENT_PROMPT_FIELDS: Final = ("instructions", "system")
+"""The caller's own prompt: Responses `instructions`, Anthropic `system`. Relayed
+verbatim, as the PrivAiTe gateway does, but read by the block gate."""
+
 
 def leaf(text: object, write: Write) -> Iterator[Slot]:
     if isinstance(text, str) and text:
@@ -208,6 +212,8 @@ def has_aux_fields(data: JsonObject) -> bool:
     web_search: Final = as_object(data.get("web_search_options"))
     if web_search is not None and "user_location" in web_search:
         return True
+    if data.get("extra_body"):
+        return True
     suffix: Final = data.get("suffix")
     if isinstance(suffix, str) and suffix:
         return True
@@ -217,14 +223,21 @@ def has_aux_fields(data: JsonObject) -> bool:
 
 def aux_field_slots(data: JsonObject) -> Iterator[Slot]:
     """Request text outside messages and input that LiteLLM forwards verbatim: chat
-    `prediction.content`, `web_search_options.user_location`, and the completions `suffix`
-    and `prompt`. A tokenized (integer array) prompt passes through unscanned."""
+    `prediction.content`, `web_search_options.user_location`, every string leaf of
+    `extra_body`, and the completions `suffix` and `prompt`. A tokenized (integer array)
+    prompt passes through unscanned.
+
+    LiteLLM merges `extra_body` over the request it sends, so `extra_body.messages`
+    replaced the scrubbed messages on the wire. Its keys are provider specific
+    (`contents` for Gemini, say), so it is walked whole rather than by field name."""
     prediction: Final = as_object(data.get("prediction"))
     if prediction is not None and prediction.get("content") is not None:
         yield from data_slots(prediction["content"], field_writer(prediction, "content"))
     web_search: Final = as_object(data.get("web_search_options"))
     if web_search is not None and web_search.get("user_location") is not None:
         yield from data_slots(web_search["user_location"], field_writer(web_search, "user_location"))
+    if data.get("extra_body") is not None:
+        yield from data_slots(data["extra_body"], top_level_writer(data, "extra_body"))
     yield from leaf(data.get("suffix"), top_level_writer(data, "suffix"))
     prompt: Final = data.get("prompt")
     if isinstance(prompt, str):
@@ -235,3 +248,28 @@ def aux_field_slots(data: JsonObject) -> Iterator[Slot]:
         return
     for index, part in enumerate(parts):
         yield from leaf(part, item_writer(parts, index))
+
+
+def carries_request_text(data: JsonObject) -> bool:
+    """Whether the request has a field the anonymization pass reads."""
+    return bool(data.get("messages") or data.get("input")) or prompt_variables(data) is not None or has_aux_fields(data)
+
+
+def agent_prompts(data: JsonObject) -> tuple[object, ...]:
+    """The non-empty agent prompt fields, for the block gate."""
+    return tuple(data[name] for name in AGENT_PROMPT_FIELDS if data.get(name))
+
+
+def _is_token_list(value: object) -> bool:
+    items: Final = as_array(value) or ()
+    return len(items) > 0 and all(type(item) is int for item in items)
+
+
+def tokenized_fields(data: JsonObject) -> tuple[str, ...]:
+    """The completions `prompt` or embeddings `input` sent as token IDs: a list of
+    integers, or a batch holding one. No detector reads token IDs."""
+    return tuple(
+        name
+        for name in ("prompt", "input")
+        if _is_token_list(data.get(name)) or any(_is_token_list(item) for item in as_array(data.get(name)) or ())
+    )

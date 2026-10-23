@@ -6,12 +6,17 @@ the reversible map in the request metadata, and the post-call hooks consume it t
 the real values in the response, streaming included. The request surface scanned matches
 the PrivAiTe core: chat `messages`, every Responses `input` item shape and
 `prompt.variables`, the `/v1/completions` `prompt` and `suffix`, and the chat
-`prediction.content` and `web_search_options.user_location` fields. Responses API
+`prediction.content` and `web_search_options.user_location` fields. Every string leaf
+of `extra_body` is scanned too, since LiteLLM merges it over the request it sends.
+Other top-level fields are not scanned (`user`, `metadata`, tool definitions, and any
+field LiteLLM does not know, which it forwards to the provider as it is). Responses API
 streaming restore is not implemented yet.
 
-If `block_entities` is configured, a request containing any of those PII types is
-rejected with a 400 before anything is forwarded. The error names the types, never the
-values.
+If `block_entities` is configured, a request with any of those PII types in a scanned
+field is rejected with a 400 before anything is forwarded. The error names the types,
+never the values. The gate also reads the caller's own prompt (Responses `instructions`,
+Anthropic `system`), which is relayed verbatim, and refuses a prompt or input sent as
+token IDs, which it could not check.
 
 There is no detection or masking logic here, it all lives in the `privaite` package,
 which is imported lazily so this module stays importable for the guardrail registry
@@ -41,11 +46,12 @@ from .engine import (
 )
 from .payload import JsonObject, as_array, as_object, read_field, read_list, write_field
 from .request_walk import (
+    agent_prompts,
     aux_field_slots,
-    has_aux_fields,
+    carries_request_text,
     prompt_variable_slots,
-    prompt_variables,
     responses_input_slots,
+    tokenized_fields,
 )
 from .restore import (
     StreamRestorer,
@@ -100,6 +106,20 @@ def _pop_restore_map(request: JsonObject) -> tuple[tuple[str, str], ...]:
     restore_map: Final = as_object(metadata.pop(RESTORE_MAP_KEY, None)) if metadata is not None else None
     pairs: Final = (restore_map or {}).items()
     return tuple((fake, original) for fake, original in pairs if isinstance(original, str))
+
+
+def _refuse_tokenized(data: JsonObject) -> None:
+    """With block_entities set, a prompt or input sent as token IDs is refused: no
+    detector reads token IDs, so the gate could not check it. Without block_entities it
+    passes unscanned, as in the PrivAiTe core."""
+    fields: Final = tokenized_fields(data)
+    if fields:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"block_entities cannot check a tokenized {', '.join(fields)}; send it as text"},
+        )
 
 
 def _pseudo_message(text: str) -> JsonObject:
@@ -194,17 +214,19 @@ class PrivaiteGuardrail(CustomGuardrail):
         # metadata is caller controlled, so an incoming privaite_map is never trusted:
         # the post-call hooks may only restore from a map this pre-call pass produced.
         _drop_restore_map(data)
-        if (
-            not data.get("messages")
-            and not data.get("input")
-            and prompt_variables(data) is None
-            and not has_aux_fields(data)
-        ):
+        prompts: Final = agent_prompts(data) if self.block_entities else ()
+        if not prompts and not carries_request_text(data):
             return data
+        if self.block_entities:
+            _refuse_tokenized(data)
 
         engine: Final = await self._engine_for(self._languages())
         blocked: Final = blocked_error()
         try:
+            # The agent prompt is relayed verbatim, but a blocked type in it still
+            # rejects the request, before the caller's dict is touched.
+            for prompt in prompts:
+                await engine.gate_document(prompt)
             mapping: Final = await self._anonymize_request(data, engine)
         except blocked as exc:
             from fastapi import HTTPException
