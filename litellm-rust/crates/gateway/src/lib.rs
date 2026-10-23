@@ -2,6 +2,7 @@ mod auth;
 mod error;
 mod http;
 mod secrets;
+mod vertex;
 pub use error::Error;
 
 use std::{sync::Arc, time::Instant};
@@ -49,7 +50,10 @@ pub fn build_inference(config: &Config, process: &Env) -> Result<Arc<Gateway>, E
         ocr,
         Arc::new(env),
         secrets,
-        ModelRouter::from_model_list(&config.model_list),
+        ModelRouter::from_model_list(&vertex::with_written_settings(
+            &config.model_list,
+            &config.litellm_settings,
+        )),
     )?))
 }
 

@@ -171,8 +171,19 @@ environment_variables:
 }
 
 #[rstest]
+#[case::project_on_the_deployment(
+    "      vertex_project: test-project\n      vertex_location: us-east5\n",
+    ""
+)]
+#[case::project_only_in_litellm_settings(
+    "",
+    "litellm_settings:\n  vertex_project: test-project\n  vertex_location: us-east5\n"
+)]
 #[tokio::test]
-async fn messages_auth_reads_credentials_from_config_environment_variables() {
+async fn messages_auth_reads_credentials_from_config_environment_variables(
+    #[case] deployment: &str,
+    #[case] litellm_settings: &str,
+) {
     let directory = tempfile::tempdir().unwrap();
     let credentials = directory.path().join("service-account.json");
     std::fs::write(&credentials, "not a service account").unwrap();
@@ -181,13 +192,11 @@ async fn messages_auth_reads_credentials_from_config_environment_variables() {
   - model_name: public/vertex
     litellm_params:
       model: vertex_ai/claude-sonnet-4-5
-      vertex_project: test-project
-      vertex_location: us-east5
-general_settings:
+{deployment}general_settings:
   master_key: gateway-key
 environment_variables:
   GOOGLE_APPLICATION_CREDENTIALS: '{}'
-",
+{litellm_settings}",
         credentials.display()
     ))
     .unwrap();
