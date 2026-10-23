@@ -3334,10 +3334,8 @@ class ProxyLogging:
                 continue
             if isinstance(resolved, CustomGuardrail):
                 has_guardrail = True
-                if _guardrail_affects_streaming(resolved):
-                    has_streaming_guardrail = True
-                if _guardrail_affects_during_call(resolved):
-                    has_during_call_guardrail = True
+                has_streaming_guardrail = has_streaming_guardrail or _guardrail_affects_streaming(resolved)
+                has_during_call_guardrail = has_during_call_guardrail or _guardrail_affects_during_call(resolved)
             elif _overrides_moderation_hook(resolved):
                 has_moderation_override = True
             # Use the same leaf-class ``__dict__`` check as the other hook
