@@ -8111,6 +8111,67 @@ def test_client_anthropic_api_headers_stay_off_openai_compatible_providers():
     assert forwarded == {}
 
 
+def test_client_anthropic_api_headers_stay_off_azure_ai_outside_native_messages():
+    forwarded = _headers_forwarded_to({"anthropic-beta": "thinking-binding-controls-2026-08-01"}, "azure_ai")
+
+    assert forwarded == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_client_thinking_binding_beta_reaches_azure_ai_foundry_claude():
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    data: Final[dict] = {"model": "claude-opus-4-8"}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(
+        data=data,
+        headers={
+            "content-type": "application/json",
+            "anthropic-beta": "thinking-binding-controls-2026-08-01",
+            "anthropic-version": "2026-08-01",
+        },
+    )
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake Foundry endpoint records what the proxy sent
+
+    def foundry_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(
+            status_code=200,
+            json={
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-8",
+                "content": [{"type": "text", "text": "hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 6},
+            },
+            request=request,
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}},
+            model="azure_ai/claude-opus-4-8",
+            api_key="foundry-key",
+            api_base="https://my-resource.services.ai.azure.com/anthropic",
+            client=upstream,
+            provider_specific_header=data["provider_specific_header"],
+        )
+    finally:
+        await upstream.close()
+
+    assert received[0].headers["anthropic-beta"] == "thinking-binding-controls-2026-08-01"
+    assert received[0].headers["anthropic-version"] == "2026-08-01"
+    assert json.loads(received[0].content)["thinking"]["block_binding"] == {"prefix_mismatch_behavior": "drop_block"}
+
+
 TYPESAFE_DANGER_ZONE_HEADERS = {
     "TypeSafe-Danger-Zone-Images": "true",
     "typesafe-danger-zone-long-context": "true",
