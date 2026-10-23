@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
@@ -37,6 +37,10 @@ class _TokenEncoding(Protocol):
     """Tokenizer handle the caller passes in; only `encode` is used, to count completion tokens."""
 
     def encode(self, text: str, /) -> Sequence[object]: ...
+
+
+def _header_value(headers: Mapping[str, str], key: str, default: str) -> str:
+    return headers.get(key, default)
 
 
 tgi_models_cache = None
@@ -485,7 +489,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
         task: Final = litellm_params.get("task", None)
         is_streamed = False
-        if raw_response.__dict__["headers"].get("Content-Type", "") == "text/event-stream":
+        if _header_value(raw_response.headers, "Content-Type", "") == "text/event-stream":
             is_streamed = True
 
         # iterate over the complete streamed response, and return the final answer

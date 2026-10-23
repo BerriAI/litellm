@@ -1,7 +1,6 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date
 from enum import Enum
-from typing import Any
 
 from pydantic import ConfigDict, Field
 from typing_extensions import TypedDict
@@ -22,6 +21,7 @@ class GroupByDimension(str, Enum):
 class SpendMetrics(LiteLLMBaseModel):
     spend: float = Field(default=0.0)
     flat_cost: float = Field(default=0.0)
+    ptu_hours: float = Field(default=0.0)
     prompt_tokens: int = Field(default=0)
     completion_tokens: int = Field(default=0)
     cache_read_input_tokens: int = Field(default=0)
@@ -60,7 +60,7 @@ class KeyMetricWithMetadata(MetricBase):
 
 
 class MetricWithMetadata(MetricBase):
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: Mapping[str, object] = Field(default_factory=dict)
     # API key breakdown for this metric (e.g., which API keys are using this MCP server)
     api_key_breakdown: dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
 
@@ -86,6 +86,7 @@ class DailySpendData(LiteLLMBaseModel):
 class DailySpendMetadata(LiteLLMBaseModel):
     total_spend: float = Field(default=0.0)
     total_flat_cost: float = Field(default=0.0)
+    total_ptu_hours: float = Field(default=0.0)
     total_prompt_tokens: int = Field(default=0)
     total_completion_tokens: int = Field(default=0)
     total_tokens: int = Field(default=0)

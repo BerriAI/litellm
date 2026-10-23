@@ -13,6 +13,8 @@ from pydantic import TypeAdapter
 from litellm.litellm_core_utils.private_json import ensure_private_dir, write_private_json
 
 HIDDEN_COMMANDS_KEY: Final = "hidden_commands"
+CLAUDE_SUBSCRIPTION_KEY: Final = "claude_subscription"
+PKCE_KEY: Final = "pkce"
 
 _config_adapter: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
 
@@ -88,10 +90,46 @@ def _normalize_hidden_commands(value: str) -> str:
     return ",".join(sorted(names))
 
 
+_BOOLEAN_WORDS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "true": "true",
+        "on": "true",
+        "1": "true",
+        "yes": "true",
+        "false": "false",
+        "off": "false",
+        "0": "false",
+        "no": "false",
+    }
+)
+
+
+def _normalize_boolean(key: str) -> Callable[[str], str]:
+    def normalize(value: str) -> str:
+        normalized: Final = _BOOLEAN_WORDS.get(value.strip().lower())
+        if normalized is None:
+            raise click.UsageError(f"{key} must be true or false, e.g. `lite config set {key} true`")
+        return normalized
+
+    return normalize
+
+
+def claude_subscription_default() -> bool:
+    """Whether `lite claude` keeps the claude.ai login unless told otherwise."""
+    return get_config_value(CLAUDE_SUBSCRIPTION_KEY) == "true"
+
+
+def pkce_default() -> bool:
+    """Whether `lite login` signs in with browser PKCE unless told otherwise."""
+    return get_config_value(PKCE_KEY) == "true"
+
+
 _NORMALIZERS: Final[Mapping[str, Callable[[str], str]]] = MappingProxyType(
     {
         "base_url": normalize_base_url,
         HIDDEN_COMMANDS_KEY: _normalize_hidden_commands,
+        CLAUDE_SUBSCRIPTION_KEY: _normalize_boolean(CLAUDE_SUBSCRIPTION_KEY),
+        PKCE_KEY: _normalize_boolean(PKCE_KEY),
     }
 )
 

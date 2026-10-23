@@ -4,6 +4,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 from _azure_storage_support import (
     SINK_HOSTS,
     RecordingDataLakeSink,
@@ -17,6 +19,8 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import Reply, Request, wire_server
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 WORKERS: Final = 2
 FLUSH_SECONDS: Final = "1"

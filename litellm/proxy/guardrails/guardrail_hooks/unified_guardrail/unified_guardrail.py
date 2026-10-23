@@ -83,6 +83,9 @@ class _EndpointTranslation(Protocol):
     def get_streaming_scan_key(self) -> "Callable[[Sequence[object]], StreamingScanKey | None]": ...
 
     @property
+    def needs_ended_stream_scan(self) -> "Callable[[CustomGuardrail, Sequence[object]], bool]": ...
+
+    @property
     def released_stream_as_ended(self) -> "Callable[[Sequence[object]], tuple[object, ...]]": ...
 
     @property
@@ -151,6 +154,21 @@ def _is_redundant_scan(scan_key: "StreamingScanKey | None", last_scan_key: "Stre
     if scan_key is None:
         return False
     return scan_key == last_scan_key or scan_key.has_nothing_to_scan
+
+
+def _owes_ended_scan(
+    endpoint_translation: _EndpointTranslation,
+    guardrail: CustomGuardrail,
+    responses_so_far: Sequence[object],
+    last_scan_key: "StreamingScanKey | None",
+) -> bool:
+    """Whether the end-of-stream round still runs after a sampled round covered every text before the stream ended,
+    because the translation hands ``guardrail`` marks only an ended round carries."""
+    return (
+        last_scan_key is not None
+        and not last_scan_key.stream_ended
+        and endpoint_translation.needs_ended_stream_scan(guardrail, responses_so_far)
+    )
 
 
 class _StreamTerminated(Exception):
@@ -1233,6 +1251,13 @@ class UnifiedLLMGuardrails(CustomLogger):
                 if call_type is None:
                     call_type = infer_call_type(call_type=None, completion_response=item)
 
+                # Provider passthrough routes (e.g. /bedrock/.../converse-stream) map to no call type, and their
+                # frames carry none; the logging object names the passthrough, as on the non-streaming path.
+                if call_type is None:
+                    logging_call_type = getattr(typed_request_data.get("litellm_logging_obj"), "call_type", None)
+                    if logging_call_type == CallTypes.allm_passthrough_route.value:
+                        call_type = logging_call_type
+
                 # If call type not supported, just pass through all chunks
                 if call_type is None or CallTypes(call_type) not in mappings:
                     yield item
@@ -1383,7 +1408,9 @@ class UnifiedLLMGuardrails(CustomLogger):
                 )
                 end_scan_key: Final = endpoint_translation.get_streaming_scan_key(responses_so_far)
                 verdict_settled = True
-                if _is_redundant_scan(end_scan_key, last_scan_key):
+                if _is_redundant_scan(end_scan_key, last_scan_key) and not _owes_ended_scan(
+                    endpoint_translation, guardrail_to_apply, responses_so_far, last_scan_key
+                ):
                     verbose_proxy_logger.debug(
                         "Skipping end-of-stream scan for guardrail %s: the last sampled round already scanned it all",
                         guardrail_to_apply.guardrail_name,
