@@ -14,6 +14,7 @@ strum.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+litellm-error.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

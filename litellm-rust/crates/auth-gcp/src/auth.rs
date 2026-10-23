@@ -234,14 +234,13 @@ enum CredentialCacheKey {
     Adc,
 }
 
-const BASE64_CREDENTIALS: &str = "The `vertex_credentials` value is base64-encoded JSON, not the JSON itself. \
-    Set it to a readable file path, or to the credentials JSON itself.";
-
 fn load_trusted_service_account(configured: &str) -> Result<CustomServiceAccount, Error> {
     if is_base64_encoded_json(configured) {
-        return Err(Error::InvalidConfiguration(ErrorDetail::Message(
-            BASE64_CREDENTIALS.into(),
-        )));
+        return Err(Error::InvalidConfiguration(
+            ErrorDetail::Base64EncodedJson {
+                field: "vertex_credentials",
+            },
+        ));
     }
     if names_a_credentials_file(configured) {
         CustomServiceAccount::from_file(configured)
@@ -299,7 +298,8 @@ mod tests {
         else {
             panic!("{configured:?} should not load");
         };
-        assert!(error.to_string().contains(expected), "{error}");
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(report.contains(expected), "{report}");
     }
 
     #[rstest::rstest]
@@ -321,7 +321,7 @@ mod tests {
             .await
         {
             Ok(_) => panic!("{configured:?} should not load"),
-            Err(error) => error.to_string(),
+            Err(error) => litellm_error::Report::new(&error).to_string(),
         }
     }
 

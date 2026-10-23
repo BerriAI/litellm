@@ -218,6 +218,6 @@ async fn aws_handler_reads_ciphertext_decodes_trims_and_redacts() {
     ));
     assert!(matches!(
         get_secret_from_manager(&manager, "KEY", &settings, &|_: &str| Some("abc".into())).await,
-        Err(Error::InvalidCiphertext)
+        Err(Error::InvalidCiphertext(_))
     ));
 }

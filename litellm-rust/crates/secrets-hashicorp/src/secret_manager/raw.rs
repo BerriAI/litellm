@@ -4,14 +4,17 @@ use vaultrs::api::kv2::requests::{
     DeleteLatestSecretVersionRequest, ReadSecretRequest, SetSecretRequest,
 };
 
-#[derive(veil::Redact)]
+#[derive(thiserror::Error, veil::Redact)]
 pub enum RawOperationError {
+    #[error(transparent)]
     Local(Error),
+    #[error("HashiCorp Vault authentication failed")]
     Authentication {
         source: Error,
         url: String,
         certificate: bool,
     },
+    #[error("HashiCorp Vault {method} request returned HTTP {status}")]
     Http {
         method: String,
         url: String,
@@ -19,11 +22,14 @@ pub enum RawOperationError {
         #[redact]
         body: Vec<u8>,
     },
-    Transport(#[redact] RustifyClientError),
-    Timeout {
-        method: String,
-        elapsed: Duration,
-    },
+    #[error("HashiCorp Vault request failed")]
+    Transport(
+        #[source]
+        #[redact]
+        RustifyClientError,
+    ),
+    #[error("HashiCorp Vault {method} request timed out")]
+    Timeout { method: String, elapsed: Duration },
 }
 
 impl HashicorpVault {

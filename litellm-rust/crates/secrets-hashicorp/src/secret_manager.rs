@@ -178,20 +178,22 @@ fn map_api_error(error: ClientError, context: ErrorContext) -> Error {
             ErrorContext::Login => Error::LoginStatus { status: code },
             ErrorContext::Read | ErrorContext::Secret => Error::Status { status: code },
         },
-        ClientError::JsonParseError { source } => match context {
-            ErrorContext::Login => Error::MalformedLogin,
-            ErrorContext::Read => Error::MalformedPayload,
-            ErrorContext::Secret => Error::Client(ClientError::JsonParseError { source }),
+        error @ ClientError::JsonParseError { .. } => match context {
+            ErrorContext::Login => Error::MalformedLogin(error),
+            ErrorContext::Read => Error::MalformedPayload(error),
+            ErrorContext::Secret => Error::Client(error),
         },
-        ClientError::ResponseEmptyError | ClientError::ResponseDataEmptyError => {
-            malformed_response(context)
+        error @ (ClientError::ResponseEmptyError | ClientError::ResponseDataEmptyError) => {
+            malformed_response(context, error)
         }
         ClientError::RestClientError { source } => match source {
             RustifyClientError::ServerResponseError { code, .. } => match context {
                 ErrorContext::Login => Error::LoginStatus { status: code },
                 ErrorContext::Read | ErrorContext::Secret => Error::Status { status: code },
             },
-            RustifyClientError::ResponseParseError { .. } => malformed_response(context),
+            source @ RustifyClientError::ResponseParseError { .. } => {
+                malformed_response(context, ClientError::RestClientError { source })
+            }
             source => Error::Client(ClientError::RestClientError { source }),
         },
         error => Error::Client(error),
@@ -208,10 +210,10 @@ fn api_status(error: &ClientError) -> Option<u16> {
     }
 }
 
-fn malformed_response(context: ErrorContext) -> Error {
+fn malformed_response(context: ErrorContext, error: ClientError) -> Error {
     match context {
-        ErrorContext::Login => Error::MalformedLogin,
-        ErrorContext::Read => Error::MalformedPayload,
-        ErrorContext::Secret => Error::Client(ClientError::ResponseDataEmptyError),
+        ErrorContext::Login => Error::MalformedLogin(error),
+        ErrorContext::Read => Error::MalformedPayload(error),
+        ErrorContext::Secret => Error::Client(error),
     }
 }

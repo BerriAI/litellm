@@ -14,11 +14,15 @@ impl fmt::Debug for PythonSecretError {
 }
 
 pub(super) fn external_error(py: Python<'_>, error: PyErr) -> Error {
-    Error::ExternalManager(Box::new(PythonSecretError(error.into_value(py))))
+    Error::ExternalManager(litellm_error::Source::new(PythonSecretError(
+        error.into_value(py),
+    )))
 }
 
 pub(super) fn read_error(py: Python<'_>, error: PyErr) -> Error {
-    Error::ExternalRead(Box::new(PythonSecretError(error.into_value(py))))
+    Error::ExternalRead(litellm_error::Source::new(PythonSecretError(
+        error.into_value(py),
+    )))
 }
 
 pub(crate) fn python_error(py: Python<'_>, error: &Error) -> Option<PyErr> {

@@ -16,6 +16,14 @@ impl fmt::Display for Report<'_> {
     }
 }
 
+pub fn find<'a, T: Error + 'static>(error: &'a (dyn Error + 'static)) -> Option<&'a T> {
+    std::iter::successors(Some(error), |&cause| cause.source()).find_map(|cause| {
+        cause
+            .downcast_ref::<T>()
+            .or_else(|| cause.downcast_ref::<Source>()?.downcast_ref::<T>())
+    })
+}
+
 #[derive(Clone, Debug, thiserror::Error)]
 #[error(transparent)]
 pub struct Source(Arc<dyn Error + Send + Sync>);
@@ -23,6 +31,12 @@ pub struct Source(Arc<dyn Error + Send + Sync>);
 impl Source {
     pub fn new(error: impl Error + Send + Sync + 'static) -> Self {
         Self(Arc::new(error))
+    }
+}
+
+impl From<Box<dyn Error + Send + Sync>> for Source {
+    fn from(error: Box<dyn Error + Send + Sync>) -> Self {
+        Self(Arc::from(error))
     }
 }
 
@@ -48,7 +62,7 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::{Report, Source};
+    use super::{Report, Source, find};
 
     #[derive(Debug, thiserror::Error)]
     enum Leaf {
@@ -90,11 +104,23 @@ mod tests {
         assert_eq!(Report::new(&error).to_string(), expected);
     }
 
-    #[test]
-    fn a_source_still_downcasts_to_the_original_cause() {
-        let source = Source::new(denied());
-        let cause = source.downcast_ref::<io::Error>().expect("io cause");
+    #[rstest]
+    #[case::direct_source(Outer::Startup(Leaf::Read(denied())))]
+    #[case::behind_an_erased_source(Outer::Startup(Leaf::Parse(Source::new(Leaf::Read(
+        denied()
+    )))))]
+    #[case::behind_a_boxed_source(Outer::Startup(Leaf::Parse(Source::from(
+        Box::<dyn std::error::Error + Send + Sync>::from(denied())
+    ))))]
+    #[case::behind_a_transparent_layer(Outer::Nested(Leaf::Parse(Source::new(denied()))))]
+    fn find_reaches_the_typed_cause_anywhere_in_the_chain(#[case] error: Outer) {
+        let cause = find::<io::Error>(&error).expect("io cause");
         assert_eq!(cause.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn find_answers_none_when_the_chain_has_no_such_cause() {
+        assert!(find::<io::Error>(&Outer::Nested(Leaf::Empty)).is_none());
     }
 
     #[test]

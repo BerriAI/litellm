@@ -6,7 +6,7 @@ pub enum Error {
     Http(
         #[from]
         #[redact]
-        reqwest::Error,
+        litellm_http::Error,
     ),
     #[error("CyberArk Conjur authentication returned HTTP {0}")]
     AuthStatus(u16),
@@ -17,13 +17,21 @@ pub enum Error {
     )]
     MissingCredentials,
     #[error("CyberArk client certificate could not be loaded")]
-    ClientCertificate,
+    ClientCertificate(
+        #[source]
+        #[redact]
+        litellm_http::Error,
+    ),
     #[error("CyberArk Conjur HTTP client could not be built")]
-    Client(#[redact] litellm_http::Error),
+    Client(
+        #[source]
+        #[redact]
+        litellm_http::Error,
+    ),
     #[error("invalid refresh interval")]
-    RefreshInterval,
+    RefreshInterval(#[source] std::num::ParseIntError),
     #[error("invalid CyberArk Conjur endpoint")]
-    Endpoint,
+    Endpoint(#[source] url::ParseError),
     #[error("CyberArk secret manager requires an enterprise license")]
     EnterpriseRequired,
     #[error(transparent)]

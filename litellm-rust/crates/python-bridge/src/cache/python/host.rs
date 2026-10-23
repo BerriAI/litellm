@@ -105,19 +105,19 @@ impl PythonCache {
         }
         match self.pending.take() {
             Some(Pending::Lookup(reply)) => {
-                let value = result.map_err(|_| Error::Unavailable).and_then(|value| {
+                let value = result.map_err(Error::unavailable).and_then(|value| {
                     if value.bind(py).is_none() {
                         Ok(None)
                     } else {
                         from_py(value.bind(py))
                             .map(Some)
-                            .map_err(|_| Error::InvalidEntry)
+                            .map_err(Error::invalid_entry)
                     }
                 });
                 reply.send(value);
             }
             Some(Pending::Store(reply)) => {
-                reply.send(result.map(|_| ()).map_err(|_| Error::Unavailable));
+                reply.send(result.map(|_| ()).map_err(Error::unavailable));
             }
             None => {
                 return Err(pyo3::exceptions::PyRuntimeError::new_err(

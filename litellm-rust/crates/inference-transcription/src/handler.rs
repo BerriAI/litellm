@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use litellm_http::{
     Client,
-    request::{string_headers, truncate_error_body, with_default_headers},
+    request::{string_headers, with_default_headers},
 };
 use litellm_llms::base_llm::{
     audio_transcription::transformation::BaseAudioTranscriptionConfig,
@@ -55,15 +55,11 @@ pub(super) async fn execute(
                 .unwrap_or(Duration::from_secs(AUDIO_TRANSCRIPTION_TIMEOUT_SECS)),
         ),
     )?;
-    let response = litellm_inference::outbound::send(outbound, http)
-        .await
-        .map_err(litellm_http::Error::from)?;
+    let response = litellm_inference::outbound::send(outbound, http).await?;
     let status = response.status();
     let text = response.text().await.map_err(litellm_http::Error::from)?;
     if !status.is_success() {
-        return Err(
-            litellm_http::Error::upstream(status.as_u16(), truncate_error_body(&text)).into(),
-        );
+        return Err(litellm_http::Error::upstream(status.as_u16(), text).into());
     }
     let response_json = serde_json::from_str(&text).map_err(|error| {
         Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(

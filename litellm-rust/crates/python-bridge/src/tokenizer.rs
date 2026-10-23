@@ -8,6 +8,8 @@ use std::sync::Arc;
 #[cfg(feature = "fast")]
 use std::sync::OnceLock;
 
+#[cfg(any(feature = "tiktoken", feature = "huggingface"))]
+use litellm_error::Report;
 use litellm_host_python::{enter_native, release_gil};
 #[cfg(feature = "fast")]
 use litellm_token_counter::fast::{FastCounter, FastTokenizer};
@@ -199,7 +201,7 @@ impl Tokenizer {
         let tokenizer = self.tiktoken()?;
         let text = self.text(text)?;
         release_gil(py, || tokenizer.encode_special(&text, &allowed))
-            .map_err(PyRuntimeError::new_err)
+            .map_err(|error| PyRuntimeError::new_err(Report::new(&error).to_string()))
     }
 
     /// tiktoken's `encode_with_unstable`: `(stable_tokens, completions)`.
@@ -258,8 +260,8 @@ impl Tokenizer {
     fn decode_bytes<'py>(&self, py: Python<'py>, ids: Vec<u32>) -> PyResult<Bound<'py, PyBytes>> {
         enter_native()?;
         let tokenizer = self.tiktoken()?;
-        let bytes =
-            release_gil(py, || tokenizer.decode_bytes(&ids)).map_err(PyKeyError::new_err)?;
+        let bytes = release_gil(py, || tokenizer.decode_bytes(&ids))
+            .map_err(|error| PyKeyError::new_err(Report::new(&error).to_string()))?;
         Ok(PyBytes::new(py, &bytes))
     }
 
@@ -564,7 +566,7 @@ impl HuggingFaceEncoding {
     fn new(json: Option<&str>) -> PyResult<Self> {
         let inner = match json {
             Some(json) => encoding_from_json(json)
-                .map_err(|error| PyValueError::new_err(error.to_string()))?,
+                .map_err(|error| PyValueError::new_err(Report::new(&error).to_string()))?,
             None => Encoding::default(),
         };
         Ok(Self { inner })
@@ -586,7 +588,7 @@ impl HuggingFaceEncoding {
         py: Python<'py>,
     ) -> PyResult<(Bound<'py, pyo3::types::PyType>, (String,))> {
         let json = encoding_to_json(&self.inner)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+            .map_err(|error| PyValueError::new_err(Report::new(&error).to_string()))?;
         Ok((py.get_type::<Self>(), (json,)))
     }
 

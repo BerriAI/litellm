@@ -13,9 +13,11 @@ litellm-auth-types.workspace = true
 litellm-cache.workspace = true
 percent-encoding.workspace = true
 reqwest.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+litellm-error.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-cache-testing.workspace = true
 rstest.workspace = true

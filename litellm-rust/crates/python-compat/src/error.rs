@@ -10,8 +10,10 @@ pub enum Error {
     Unhashable(&'static str),
     #[error("value nests deeper than {MAX_DEPTH} levels")]
     TooDeep,
-    #[error("invalid pickle: {0}")]
-    InvalidPickle(String),
+    #[error("invalid pickle")]
+    InvalidPickle(#[source] serde_pickle::Error),
+    #[error("could not write pickle")]
+    PickleWrite(#[source] serde_pickle::Error),
     #[error("Object of type {0} is not JSON serializable")]
     NotJsonSerializable(&'static str),
     #[error("keys must be str, int, float, bool or None, not {0}")]

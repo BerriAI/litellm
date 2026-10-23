@@ -185,7 +185,10 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     ) -> Result<String, Error> {
         let endpoint = nonblank(request.connection.api_base.clone())
             .or_else(|| nonblank(request.connection.secret(AZURE_DI_ENDPOINT_ENV)))
-            .ok_or_else(|| Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into())))?;
+            .ok_or(Error::Auth(litellm_auth::Error::MissingApiBase {
+                provider: "Azure Document Intelligence",
+                guidance: "Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base",
+            }))?;
         self.build_ocr_url(
             &endpoint,
             &request.model,
@@ -842,7 +845,7 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            error
+            litellm_error::Report::new(&error)
                 .to_string()
                 .contains("request-controlled Azure endpoint")
         );

@@ -195,11 +195,10 @@ impl CohereParseConfig {
                     .and_then(env_lookup)
                     .filter(|key| !key.trim().is_empty())
             })
-            .ok_or_else(|| {
-                Error::Auth(litellm_auth::Error::ProviderAuthentication(
-                    "Missing COHERE_API_KEY - set it in the environment or pass api_key".into(),
-                ))
-            })?;
+            .ok_or(Error::Auth(litellm_auth::Error::MissingApiKey {
+                provider: "Cohere",
+                environment_variable: COHERE_API_KEY_ENV,
+            }))?;
         Ok(
             std::iter::once(("Authorization".into(), format!("Bearer {key}")))
                 .chain(connection.extra_headers.clone())

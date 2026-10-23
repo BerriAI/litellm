@@ -73,7 +73,13 @@ impl RequestSigner for SigV4Signer {
                 time: (self.clock)(),
             },
         )
-        .map_err(litellm_http::Error::signature)
+        .map_err(|error| match error {
+            Error::NonAsciiHeader { .. } => litellm_http::Error::unsignable_header(error),
+            Error::Credentials { .. }
+            | Error::MissingWebIdentityCredentials
+            | Error::WebIdentityExpiration(_)
+            | Error::Signing { .. } => litellm_http::Error::signature(error),
+        })
     }
 }
 
@@ -185,6 +191,26 @@ mod tests {
 
         assert!(error.is_computed_header());
         assert!(error.to_string().contains("authorization"), "{error}");
+    }
+
+    #[test]
+    fn a_forwarded_header_that_cannot_be_signed_is_the_callers_fault() {
+        let error = signed(
+            json(
+                URL,
+                &[("x-amz-meta-note".into(), "café".into())],
+                &json_value!({}),
+                None,
+            )
+            .unwrap(),
+            &signer("textract"),
+        )
+        .unwrap_err();
+
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(report.contains("x-amz-meta-note"), "{report}");
+        assert!(error.is_request());
+        assert!(!error.dispatched());
     }
 
     #[test]

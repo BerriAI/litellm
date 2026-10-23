@@ -256,21 +256,21 @@ fn certificates(path: &Path, source: TlsSource) -> Result<Vec<CertificateDer<'st
 }
 
 fn read(path: &Path, source: TlsSource) -> Result<Vec<u8>, Error> {
-    std::fs::read(path).map_err(|cause| {
+    std::fs::read(path).map_err(|error| {
         Repr::Read {
             path: path.to_path_buf(),
             tls_source: source,
-            cause,
+            source: error,
         }
         .into()
     })
 }
 
-fn invalid_pem(path: &Path, source: TlsSource, cause: impl Into<PemFault>) -> Error {
+fn invalid_pem(path: &Path, tls_source: TlsSource, fault: impl Into<PemFault>) -> Error {
     Repr::InvalidPem {
         path: path.to_path_buf(),
-        tls_source: source,
-        cause: cause.into(),
+        tls_source,
+        source: fault.into(),
     }
     .into()
 }

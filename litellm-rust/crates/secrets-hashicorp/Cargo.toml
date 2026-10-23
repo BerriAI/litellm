@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-error.workspace = true
 litellm-core-utils.workspace = true
 litellm-secrets-types.workspace = true
 rustify.workspace = true

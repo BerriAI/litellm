@@ -22,10 +22,8 @@ pub fn loads(data: &[u8]) -> Result<Value, Error> {
     let mut deserializer = serde_pickle::Deserializer::new(data, DeOptions::new());
     let value = Seed { depth: 0 }
         .deserialize(&mut deserializer)
-        .map_err(|error| Error::InvalidPickle(error.to_string()))?;
-    deserializer
-        .end()
-        .map_err(|error| Error::InvalidPickle(error.to_string()))?;
+        .map_err(Error::InvalidPickle)?;
+    deserializer.end().map_err(Error::InvalidPickle)?;
     Ok(value)
 }
 
@@ -33,8 +31,7 @@ pub fn loads(data: &[u8]) -> Result<Value, Error> {
 /// default. Sets and complex numbers are rejected rather than silently changing type.
 pub fn dumps(value: &Value) -> Result<Vec<u8>, Error> {
     check_picklable(value, 0)?;
-    serde_pickle::to_vec(&Pickled(value), SerOptions::new())
-        .map_err(|error| Error::InvalidPickle(error.to_string()))
+    serde_pickle::to_vec(&Pickled(value), SerOptions::new()).map_err(Error::PickleWrite)
 }
 
 fn check_picklable(value: &Value, depth: usize) -> Result<(), Error> {

@@ -26,7 +26,7 @@ use serde_json::Value;
 
 use super::{
     Error, MessagesCall, MessagesCallResponse, MessagesRoute,
-    common_utils::{MessagesProvider, string_headers, truncate_error_body},
+    common_utils::{MessagesProvider, string_headers},
     constants::MESSAGES_TIMEOUT_SECS,
     route::Messages,
     types::invalid_request,
@@ -292,9 +292,7 @@ async fn send(
         body,
         Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
     )?;
-    litellm_inference::outbound::send(request, http)
-        .await
-        .map_err(network)
+    Ok(litellm_inference::outbound::send(request, http).await?)
 }
 
 async fn provider_error(response: reqwest::Response) -> Error {
@@ -302,7 +300,7 @@ async fn provider_error(response: reqwest::Response) -> Error {
     match response.text().await {
         Ok(text) => {
             log_error_body(status, &text);
-            litellm_http::Error::upstream(status, truncate_error_body(&text)).into()
+            litellm_http::Error::upstream(status, text).into()
         }
         Err(error) => network(error),
     }

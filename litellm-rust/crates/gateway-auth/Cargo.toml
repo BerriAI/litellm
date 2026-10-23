@@ -20,6 +20,7 @@ veil.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true
+litellm-error.workspace = true
 rstest.workspace = true
 tokio.workspace = true
 tower = { version = "0.5.3", features = ["util"] }

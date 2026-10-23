@@ -138,7 +138,7 @@ async fn read_responses_distinguish_absence_and_malformed_payloads(
         .await;
     match expected {
         ExpectedRead::Missing => assert!(result.unwrap().is_none()),
-        ExpectedRead::Malformed => assert!(matches!(result, Err(Error::MalformedPayload))),
+        ExpectedRead::Malformed => assert!(matches!(result, Err(Error::MalformedPayload(_)))),
         ExpectedRead::NonString => assert!(matches!(result, Err(Error::NonStringValue))),
     }
 }

@@ -11,6 +11,7 @@ test-support = []
 [dependencies]
 http.workspace = true
 litellm-core-utils.workspace = true
+litellm-error.workspace = true
 hyper-util.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

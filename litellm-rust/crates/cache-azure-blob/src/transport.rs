@@ -29,7 +29,7 @@ impl HttpClient for ReqwestTransport {
             } else {
                 ErrorKind::Io
             };
-            azure_core::Error::new(kind, error)
+            azure_core::Error::new(kind, litellm_http::Error::from(error))
         })?;
         let status = response.status().as_u16().into();
         let mut headers = Headers::new();
@@ -41,9 +41,9 @@ impl HttpClient for ReqwestTransport {
                 );
             }
         }
-        let body = response
-            .bytes_stream()
-            .map_err(|error| azure_core::Error::new(ErrorKind::Io, error));
+        let body = response.bytes_stream().map_err(|error| {
+            azure_core::Error::new(ErrorKind::Io, litellm_http::Error::from(error))
+        });
         Ok(AsyncRawResponse::new(status, headers, Box::pin(body)))
     }
 }

@@ -93,7 +93,7 @@ impl CyberArkSecretManager {
         let encoded = utf8_percent_encode(name, SECRET_NAME_SAFE);
         self.endpoint
             .join(&format!("secrets/{}/variable/{}", self.account, encoded))
-            .map_err(|_| Error::Endpoint)
+            .map_err(Error::Endpoint)
     }
 }
 

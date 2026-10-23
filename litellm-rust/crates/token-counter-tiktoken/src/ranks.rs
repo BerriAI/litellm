@@ -1,10 +1,10 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
+use litellm_error::Source;
 use once_cell::sync::OnceCell;
 use rustc_hash::FxHashMap;
-use thiserror::Error;
 use tiktoken_rs::{CoreBPE, O200K_BASE_PAT_STR, Rank};
 
-use crate::UnsupportedTokenizer;
+use crate::error::{Error, RankError};
 
 const CL100K: &str = "9b5ad71b2ce5302211f9c61530b329a4922fc6a4";
 const O200K: &str = "fb374d419588a4632f3f557e76b4b70aebbca790";
@@ -76,21 +76,13 @@ impl Vocabulary {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum LoadError {
-    #[error(transparent)]
-    Unsupported(#[from] UnsupportedTokenizer),
-    #[error("failed to load tiktoken ranks: {0}")]
-    Ranks(String),
-}
-
 /// Loads `name` once per process. The returned name is the one requested (`gpt2` stays
 /// `gpt2`, as `tiktoken.get_encoding("gpt2").name` does), while `gpt2` and `r50k_base` share
 /// one cached encoder.
 pub(super) fn load(
     name: &str,
     load_file: impl FnOnce(&str) -> std::io::Result<String>,
-) -> Result<(&'static Loaded, &'static str), LoadError> {
+) -> Result<(&'static Loaded, &'static str), Error> {
     let (requested, canonical, file, cache) = match name {
         "cl100k_base" => ("cl100k_base", "cl100k_base", CL100K, &CL100K_ENCODER),
         "o200k_base" => ("o200k_base", "o200k_base", O200K, &O200K_ENCODER),
@@ -99,16 +91,16 @@ pub(super) fn load(
         "p50k_edit" => ("p50k_edit", "p50k_edit", P50K, &EDIT_ENCODER),
         "r50k_base" => ("r50k_base", "r50k_base", P50K, &R50K_ENCODER),
         "gpt2" => ("gpt2", "r50k_base", P50K, &R50K_ENCODER),
-        _ => return Err(UnsupportedTokenizer(name.to_owned()).into()),
+        _ => return Err(Error::UnsupportedTokenizer(name.to_owned())),
     };
     let loaded = cache.get_or_try_init(|| {
-        let ranks = load_file(file).map_err(|error| LoadError::Ranks(error.to_string()))?;
+        let ranks = load_file(file).map_err(|source| Error::Read { file, source })?;
         build(canonical, &ranks)
     })?;
     Ok((loaded, requested))
 }
 
-fn build(name: &str, ranks: &str) -> Result<Loaded, LoadError> {
+fn build(name: &str, ranks: &str) -> Result<Loaded, Error> {
     let parsed = ranks
         .lines()
         .map(parse_rank)
@@ -122,9 +114,11 @@ fn build(name: &str, ranks: &str) -> Result<Loaded, LoadError> {
         .collect::<std::collections::HashSet<_>>()
         .len()
         != encoder.len()
-        || (0..=u8::MAX).any(|byte| !encoder.contains_key(&[byte][..]))
     {
-        return Err(LoadError::Ranks("invalid vocabulary ranks".into()));
+        return Err(RankError::DuplicateRank.into());
+    }
+    if let Some(byte) = (0..=u8::MAX).find(|byte| !encoder.contains_key(&[*byte][..])) {
+        return Err(RankError::MissingByte(byte).into());
     }
     let (pattern, specials): (&str, &[(&str, Rank)]) = match name {
         "cl100k_base" => (
@@ -185,9 +179,12 @@ fn build(name: &str, ranks: &str) -> Result<Loaded, LoadError> {
         .chain(special_tokens.values())
         .copied()
         .max()
-        .ok_or_else(|| LoadError::Ranks("empty vocabulary".into()))?;
-    let bpe = CoreBPE::new(encoder.clone(), special_tokens.clone(), pattern)
-        .map_err(|error| LoadError::Ranks(error.to_string()))?;
+        .unwrap_or_default();
+    let bpe = CoreBPE::new(encoder.clone(), special_tokens.clone(), pattern).map_err(|error| {
+        Error::Encoder(Source::from(
+            Box::<dyn std::error::Error + Send + Sync>::from(error),
+        ))
+    })?;
     Ok(Loaded {
         bpe,
         vocabulary: Vocabulary {
@@ -198,16 +195,12 @@ fn build(name: &str, ranks: &str) -> Result<Loaded, LoadError> {
     })
 }
 
-fn parse_rank(line: &str) -> Result<(Vec<u8>, Rank), LoadError> {
+fn parse_rank(line: &str) -> Result<(Vec<u8>, Rank), RankError> {
     let (token, rank) = line
         .split_once(' ')
-        .ok_or_else(|| LoadError::Ranks("missing rank".into()))?;
-    let bytes = STANDARD
-        .decode(token)
-        .map_err(|error| LoadError::Ranks(error.to_string()))?;
-    let rank = rank
-        .parse()
-        .map_err(|error: std::num::ParseIntError| LoadError::Ranks(error.to_string()))?;
+        .ok_or_else(|| RankError::MissingRank(line.to_owned()))?;
+    let bytes = STANDARD.decode(token).map_err(RankError::InvalidToken)?;
+    let rank = rank.parse().map_err(RankError::InvalidRank)?;
     Ok((bytes, rank))
 }
 

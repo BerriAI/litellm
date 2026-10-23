@@ -83,7 +83,9 @@ impl CyberArkSecretManager {
         )
         .send()
         .await
-        .map_err(|source| WriteFailure::request(source.into(), url.clone()))
+        .map_err(|source| {
+            WriteFailure::request(litellm_http::Error::from(source).into(), url.clone())
+        })
     }
 
     pub(super) async fn ensure_variable_exists(

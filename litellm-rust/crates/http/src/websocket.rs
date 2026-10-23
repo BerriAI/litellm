@@ -33,7 +33,7 @@ pub async fn connect(
     match timeout {
         Some(timeout) => tokio::time::timeout(timeout, handshake(client, url, headers))
             .await
-            .map_err(|_| Repr::HandshakeTimeout)?,
+            .map_err(Repr::HandshakeTimeout)?,
         None => handshake(client, url, headers).await,
     }
 }
@@ -117,7 +117,7 @@ fn http_url(url: &str) -> Result<Url, Error> {
         other => return Err(Repr::WebSocketScheme(other.to_owned()).into()),
     };
     url.set_scheme(scheme)
-        .map_err(|()| Repr::WebSocketScheme(url.scheme().to_owned()))?;
+        .map_err(|()| Repr::WebSocketSchemeRewrite(scheme))?;
     Ok(url)
 }
 

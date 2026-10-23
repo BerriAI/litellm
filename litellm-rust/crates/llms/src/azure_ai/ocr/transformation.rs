@@ -302,7 +302,7 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            error
+            litellm_error::Report::new(&error)
                 .to_string()
                 .contains("request-controlled Azure endpoint")
         );

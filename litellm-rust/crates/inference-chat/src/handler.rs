@@ -3,10 +3,7 @@ use std::time::Duration;
 
 use litellm_auth::AuthServices;
 use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
-use litellm_http::{
-    Client,
-    request::{truncate_error_body, with_default_headers},
-};
+use litellm_http::{Client, request::with_default_headers};
 use litellm_llms::base_llm::{
     auth::{Authenticated, ValidatedEnvironment, resolve_auth},
     chat::transformation::BaseConfig,
@@ -103,19 +100,13 @@ pub(super) async fn execute(
                 ),
             )?;
 
-            let response = litellm_inference::outbound::send(outbound, http)
-                .await
-                .map_err(litellm_http::Error::from)?;
+            let response = litellm_inference::outbound::send(outbound, http).await?;
 
             let status = response.status();
             let text = response.text().await.map_err(litellm_http::Error::from)?;
 
             if !status.is_success() {
-                return Err(litellm_http::Error::upstream(
-                    status.as_u16(),
-                    truncate_error_body(&text),
-                )
-                .into());
+                return Err(litellm_http::Error::upstream(status.as_u16(), text).into());
             }
             let raw = RawResponse { body: text.clone() };
             if let Some(observers) = observers {

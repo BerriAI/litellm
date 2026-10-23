@@ -67,15 +67,15 @@ impl CyberArkSecretManager {
         let client = pool
             .client(&config, ClientVariant::Provider)
             .map_err(|error| match error.tls_source() {
-                Some(TlsSource::ClientIdentity) => Error::ClientCertificate,
-                _ => Error::Client(error),
+                Some(TlsSource::ClientIdentity) => Error::ClientCertificate(error),
+                Some(TlsSource::CaBundle) | None => Error::Client(error),
             })?;
         let endpoint = reqwest::Url::parse(
             &environment
                 .get(CYBERARK_API_BASE)
                 .unwrap_or_else(|| DEFAULT_API_BASE.to_owned()),
         )
-        .map_err(|_| Error::Endpoint)?;
+        .map_err(Error::Endpoint)?;
         let account = environment
             .get(CYBERARK_ACCOUNT)
             .unwrap_or_else(|| DEFAULT_ACCOUNT.to_owned());
@@ -88,7 +88,7 @@ impl CyberArkSecretManager {
                 value
                     .parse::<u64>()
                     .map(Duration::from_secs)
-                    .map_err(|_| Error::RefreshInterval)
+                    .map_err(Error::RefreshInterval)
             })
             .transpose()?;
         Ok(Self::with_client(
@@ -108,7 +108,7 @@ impl CyberArkSecretManager {
                 self.account,
                 utf8_percent_encode(&self.username, SECRET_NAME_SAFE)
             ))
-            .map_err(|_| Error::Endpoint)
+            .map_err(Error::Endpoint)
     }
 
     pub(super) async fn authenticate(
@@ -128,11 +128,14 @@ impl CyberArkSecretManager {
             context,
         )
         .send()
-        .await?;
+        .await
+        .map_err(litellm_http::Error::from)?;
         if !response.status().is_success() {
             return Err(Error::AuthStatus(response.status().as_u16()));
         }
-        let token = SecretValue::new(STANDARD.encode(response.text().await?));
+        let token = SecretValue::new(
+            STANDARD.encode(response.text().await.map_err(litellm_http::Error::from)?),
+        );
         self.token.insert((), token.clone()).await;
         Ok(token)
     }

@@ -32,7 +32,9 @@ impl HttpConnector for ReqwestHttpClient {
             let request = reqwest::Request::try_from(request)
                 .map_err(|error| ConnectorError::other(error.into(), None))?;
             let response = client.execute(request).await.map_err(|error| {
-                if error.is_timeout() {
+                let timeout = error.is_timeout();
+                let error = litellm_http::Error::from(error);
+                if timeout {
                     ConnectorError::timeout(error.into())
                 } else {
                     ConnectorError::io(error.into())

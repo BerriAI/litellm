@@ -158,8 +158,8 @@ impl Error {
             | Self::InvalidProvider(_)
             | Self::InvalidModel { .. }
             | Self::Params(_)
-            | Self::Headers(_)
-            | Self::Auth(litellm_auth::Error::MissingParam { .. }) => true,
+            | Self::Headers(_) => true,
+            Self::Auth(error) => error.is_missing_setting(),
             Self::Http(error) => error.is_request(),
             _ => false,
         }

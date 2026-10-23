@@ -26,9 +26,9 @@ impl SecretSource for Secrets {
             match name {
                 "MASTER_KEY" => Ok(Some(SecretValue::new("resolved-key"))),
                 "EMPTY" => Ok(Some(SecretValue::new(""))),
-                "ERROR" => Err(litellm_secrets::Error::ExternalRead(Box::new(
-                    std::io::Error::other("private-backend-detail"),
-                ))),
+                "ERROR" => Err(litellm_secrets::Error::ExternalRead(
+                    litellm_error::Source::new(std::io::Error::other("private-backend-detail")),
+                )),
                 _ => Ok(None),
             }
         })

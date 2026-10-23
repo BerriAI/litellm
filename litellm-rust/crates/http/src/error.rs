@@ -1,6 +1,10 @@
-use std::{fmt, io, path::PathBuf, sync::Arc};
+use std::{io, path::PathBuf, sync::Arc};
 
+use tokio::time::error::Elapsed;
 use tokio_tungstenite::tungstenite;
+
+const UPSTREAM_BODY_MAX_CHARS: usize = 256;
+const TRUNCATION_MARKER: &str = "... (truncated)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TlsSource {
@@ -14,60 +18,64 @@ pub struct Error(Arc<Repr>);
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Repr {
-    #[error("could not read {}: {cause}", path.display())]
+    #[error("could not read {}", path.display())]
     Read {
         path: PathBuf,
         tls_source: TlsSource,
-        cause: io::Error,
+        source: io::Error,
     },
-    #[error("{} is not a PEM file: {cause}", path.display())]
+    #[error("could not load {}", path.display())]
     InvalidPem {
         path: PathBuf,
         tls_source: TlsSource,
-        cause: PemFault,
+        source: PemFault,
     },
-    #[error("could not build the HTTP client: {}", Chain(.0))]
-    Client(reqwest::Error),
-    #[error("could not build the HTTP client: {0}")]
-    TlsConfig(rustls::Error),
+    #[error("could not build the HTTP client")]
+    Client(#[source] reqwest::Error),
+    #[error("could not build the TLS configuration")]
+    TlsConfig(#[source] rustls::Error),
 
-    #[error("request body could not be serialized: {0}")]
-    RequestBody(serde_json::Error),
-    #[error("invalid request: {0}")]
-    Request(http::Error),
-    #[error("invalid request: {}", Chain(.0))]
-    RequestUrl(reqwest::Error),
-    #[error("request forwards a header the signer computes: {0}")]
+    #[error("request body could not be serialized")]
+    RequestBody(#[source] serde_json::Error),
+    #[error("invalid request")]
+    Request(#[source] http::Error),
+    #[error("invalid request")]
+    RequestUrl(#[source] reqwest::Error),
+    #[error("request forwards the header {0:?}, which the signer computes")]
     ComputedHeader(String),
     #[error("request signing failed: a streaming body cannot be signed")]
     UnsignableBody,
-    #[error("request signing failed: {0}")]
-    Signature(Box<dyn std::error::Error + Send + Sync>),
+    #[error("request forwards a header that cannot be signed")]
+    UnsignableHeader(#[source] litellm_error::Source),
+    #[error("request signing failed")]
+    Signature(#[source] litellm_error::Source),
 
-    #[error("could not reach the provider: {}", Chain(.0))]
-    Connect(reqwest::Error),
-    #[error("upstream network error: {}", Chain(.0))]
-    Network(reqwest::Error),
-    #[error("upstream request timed out: {}", Chain(.0))]
-    Timeout(reqwest::Error),
+    #[error("could not reach the provider")]
+    Connect(#[source] reqwest::Error),
+    #[error("upstream network error")]
+    Network(#[source] reqwest::Error),
+    #[error("upstream request timed out")]
+    Timeout(#[source] reqwest::Error),
     #[error("upstream request failed with status {status}: {body}")]
     Status { status: u16, body: String },
 
-    #[error("invalid WebSocket URL: {0}")]
-    WebSocketUrl(url::ParseError),
+    #[error("invalid WebSocket URL")]
+    WebSocketUrl(#[source] url::ParseError),
     #[error("unsupported WebSocket URL scheme {0:?}")]
     WebSocketScheme(String),
+    #[error("could not rewrite the WebSocket URL scheme to {0}")]
+    WebSocketSchemeRewrite(&'static str),
     #[error("WebSocket handshake returned {0}")]
     Handshake(HandshakeFault),
     #[error("WebSocket connection timed out")]
-    HandshakeTimeout,
-    #[error("upstream WebSocket error: {0}")]
-    WebSocket(tungstenite::Error),
+    HandshakeTimeout(#[source] Elapsed),
+    #[error("upstream WebSocket error")]
+    WebSocket(#[source] tungstenite::Error),
 
     #[error("media URL rejected by network policy")]
     BlockedUrl,
-    #[error("could not resolve the media host: {0}")]
-    Resolve(io::Error),
+    #[error("could not resolve the media host")]
+    Resolve(#[source] io::Error),
     #[error("media download is disabled")]
     DownloadDisabled,
     #[error("media download exceeds the maximum size")]
@@ -77,11 +85,13 @@ pub(crate) enum Repr {
     #[error("media redirect is missing a Location header")]
     MissingRedirectLocation,
     #[error("invalid media redirect")]
-    InvalidRedirect,
+    InvalidRedirect(#[source] RedirectFault),
     #[error("media download failed with status {0}")]
     DownloadStatus(u16),
+    #[error("media download failed")]
+    Download(#[source] reqwest::Error),
     #[error("media download timed out")]
-    DownloadTimeout,
+    DownloadTimeout(#[source] Elapsed),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -100,25 +110,33 @@ pub(crate) enum HandshakeFault {
 pub(crate) enum PemFault {
     #[error("no certificates found")]
     NoCertificates,
-    #[error(transparent)]
+    #[error("could not parse PEM")]
     Parse(#[from] rustls::pki_types::pem::Error),
-    #[error(transparent)]
+    #[error("rustls rejected the certificate or key")]
     Rejected(#[from] rustls::Error),
 }
 
-struct Chain<'a>(&'a reqwest::Error);
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RedirectFault {
+    #[error("Location header is not valid text")]
+    Location(#[from] http::header::ToStrError),
+    #[error("Location is not a valid URL")]
+    Url(#[from] url::ParseError),
+}
 
-impl fmt::Display for Chain<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.0)?;
-        std::iter::successors(std::error::Error::source(self.0), |cause| cause.source())
-            .try_for_each(|cause| write!(formatter, ": {cause}"))
+impl Repr {
+    pub(crate) fn download(error: reqwest::Error) -> Self {
+        Self::Download(error.without_url())
     }
 }
 
 impl Error {
     pub fn upstream(status: u16, body: String) -> Self {
-        Repr::Status { status, body }.into()
+        Repr::Status {
+            status,
+            body: bounded(body),
+        }
+        .into()
     }
 
     pub fn computed_header(name: impl Into<String>) -> Self {
@@ -129,75 +147,312 @@ impl Error {
         Repr::UnsignableBody.into()
     }
 
+    pub fn unsignable_header(cause: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Repr::UnsignableHeader(litellm_error::Source::new(cause)).into()
+    }
+
     pub fn signature(cause: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Repr::Signature(Box::new(cause)).into()
+        Repr::Signature(litellm_error::Source::new(cause)).into()
     }
 
     /// The request may have reached the provider, so retrying elsewhere could
     /// repeat a billed call.
     pub fn dispatched(&self) -> bool {
-        matches!(
-            *self.0,
+        match &*self.0 {
             Repr::Network(_)
-                | Repr::Timeout(_)
-                | Repr::Status { .. }
-                | Repr::Handshake(_)
-                | Repr::HandshakeTimeout
-                | Repr::WebSocket(_)
-        )
+            | Repr::Timeout(_)
+            | Repr::Status { .. }
+            | Repr::Handshake(_)
+            | Repr::HandshakeTimeout(_)
+            | Repr::WebSocket(_) => true,
+            Repr::Read { .. }
+            | Repr::InvalidPem { .. }
+            | Repr::Client(_)
+            | Repr::TlsConfig(_)
+            | Repr::RequestBody(_)
+            | Repr::Request(_)
+            | Repr::RequestUrl(_)
+            | Repr::ComputedHeader(_)
+            | Repr::UnsignableBody
+            | Repr::UnsignableHeader(_)
+            | Repr::Signature(_)
+            | Repr::Connect(_)
+            | Repr::WebSocketUrl(_)
+            | Repr::WebSocketScheme(_)
+            | Repr::WebSocketSchemeRewrite(_)
+            | Repr::BlockedUrl
+            | Repr::Resolve(_)
+            | Repr::DownloadDisabled
+            | Repr::DownloadTooLarge
+            | Repr::TooManyRedirects
+            | Repr::MissingRedirectLocation
+            | Repr::InvalidRedirect(_)
+            | Repr::DownloadStatus(_)
+            | Repr::Download(_)
+            | Repr::DownloadTimeout(_) => false,
+        }
     }
 
     pub fn is_request(&self) -> bool {
-        matches!(
-            *self.0,
+        match &*self.0 {
             Repr::Request(_)
-                | Repr::RequestUrl(_)
-                | Repr::ComputedHeader(_)
-                | Repr::WebSocketUrl(_)
-                | Repr::WebSocketScheme(_)
-                | Repr::BlockedUrl
-                | Repr::DownloadDisabled
-                | Repr::DownloadTooLarge
-                | Repr::TooManyRedirects
-        )
+            | Repr::RequestUrl(_)
+            | Repr::ComputedHeader(_)
+            | Repr::UnsignableHeader(_)
+            | Repr::WebSocketUrl(_)
+            | Repr::WebSocketScheme(_)
+            | Repr::WebSocketSchemeRewrite(_)
+            | Repr::BlockedUrl
+            | Repr::DownloadDisabled
+            | Repr::DownloadTooLarge
+            | Repr::TooManyRedirects => true,
+            Repr::Read { .. }
+            | Repr::InvalidPem { .. }
+            | Repr::Client(_)
+            | Repr::TlsConfig(_)
+            | Repr::RequestBody(_)
+            | Repr::UnsignableBody
+            | Repr::Signature(_)
+            | Repr::Connect(_)
+            | Repr::Network(_)
+            | Repr::Timeout(_)
+            | Repr::Status { .. }
+            | Repr::Handshake(_)
+            | Repr::HandshakeTimeout(_)
+            | Repr::WebSocket(_)
+            | Repr::Resolve(_)
+            | Repr::MissingRedirectLocation
+            | Repr::InvalidRedirect(_)
+            | Repr::DownloadStatus(_)
+            | Repr::Download(_)
+            | Repr::DownloadTimeout(_) => false,
+        }
     }
 
     pub fn is_response(&self) -> bool {
-        matches!(
-            *self.0,
-            Repr::MissingRedirectLocation | Repr::InvalidRedirect
-        )
+        match &*self.0 {
+            Repr::MissingRedirectLocation | Repr::InvalidRedirect(_) => true,
+            Repr::Read { .. }
+            | Repr::InvalidPem { .. }
+            | Repr::Client(_)
+            | Repr::TlsConfig(_)
+            | Repr::RequestBody(_)
+            | Repr::Request(_)
+            | Repr::RequestUrl(_)
+            | Repr::ComputedHeader(_)
+            | Repr::UnsignableBody
+            | Repr::UnsignableHeader(_)
+            | Repr::Signature(_)
+            | Repr::Connect(_)
+            | Repr::Network(_)
+            | Repr::Timeout(_)
+            | Repr::Status { .. }
+            | Repr::WebSocketUrl(_)
+            | Repr::WebSocketScheme(_)
+            | Repr::WebSocketSchemeRewrite(_)
+            | Repr::Handshake(_)
+            | Repr::HandshakeTimeout(_)
+            | Repr::WebSocket(_)
+            | Repr::BlockedUrl
+            | Repr::Resolve(_)
+            | Repr::DownloadDisabled
+            | Repr::DownloadTooLarge
+            | Repr::TooManyRedirects
+            | Repr::DownloadStatus(_)
+            | Repr::Download(_)
+            | Repr::DownloadTimeout(_) => false,
+        }
     }
 
     pub fn is_computed_header(&self) -> bool {
-        matches!(*self.0, Repr::ComputedHeader(_))
+        match &*self.0 {
+            Repr::ComputedHeader(_) => true,
+            Repr::Read { .. }
+            | Repr::InvalidPem { .. }
+            | Repr::Client(_)
+            | Repr::TlsConfig(_)
+            | Repr::RequestBody(_)
+            | Repr::Request(_)
+            | Repr::RequestUrl(_)
+            | Repr::UnsignableBody
+            | Repr::UnsignableHeader(_)
+            | Repr::Signature(_)
+            | Repr::Connect(_)
+            | Repr::Network(_)
+            | Repr::Timeout(_)
+            | Repr::Status { .. }
+            | Repr::WebSocketUrl(_)
+            | Repr::WebSocketScheme(_)
+            | Repr::WebSocketSchemeRewrite(_)
+            | Repr::Handshake(_)
+            | Repr::HandshakeTimeout(_)
+            | Repr::WebSocket(_)
+            | Repr::BlockedUrl
+            | Repr::Resolve(_)
+            | Repr::DownloadDisabled
+            | Repr::DownloadTooLarge
+            | Repr::TooManyRedirects
+            | Repr::MissingRedirectLocation
+            | Repr::InvalidRedirect(_)
+            | Repr::DownloadStatus(_)
+            | Repr::Download(_)
+            | Repr::DownloadTimeout(_) => false,
+        }
+    }
+
+    pub fn is_connect(&self) -> bool {
+        match &*self.0 {
+            Repr::Connect(_) => true,
+            Repr::ComputedHeader(_)
+            | Repr::Read { .. }
+            | Repr::InvalidPem { .. }
+            | Repr::Client(_)
+            | Repr::TlsConfig(_)
+            | Repr::RequestBody(_)
+            | Repr::Request(_)
+            | Repr::RequestUrl(_)
+            | Repr::UnsignableBody
+            | Repr::UnsignableHeader(_)
+            | Repr::Signature(_)
+            | Repr::Network(_)
+            | Repr::Timeout(_)
+            | Repr::Status { .. }
+            | Repr::WebSocketUrl(_)
+            | Repr::WebSocketScheme(_)
+            | Repr::WebSocketSchemeRewrite(_)
+            | Repr::Handshake(_)
+            | Repr::HandshakeTimeout(_)
+            | Repr::WebSocket(_)
+            | Repr::BlockedUrl
+            | Repr::Resolve(_)
+            | Repr::DownloadDisabled
+            | Repr::DownloadTooLarge
+            | Repr::TooManyRedirects
+            | Repr::MissingRedirectLocation
+            | Repr::InvalidRedirect(_)
+            | Repr::DownloadStatus(_)
+            | Repr::Download(_)
+            | Repr::DownloadTimeout(_) => false,
+        }
     }
 
     pub fn upstream_response(&self) -> Option<(u16, &str)> {
         match &*self.0 {
             Repr::Status { status, body } => Some((*status, body)),
-            _ => None,
+            Repr::Read { .. }
+            | Repr::InvalidPem { .. }
+            | Repr::Client(_)
+            | Repr::TlsConfig(_)
+            | Repr::RequestBody(_)
+            | Repr::Request(_)
+            | Repr::RequestUrl(_)
+            | Repr::ComputedHeader(_)
+            | Repr::UnsignableBody
+            | Repr::UnsignableHeader(_)
+            | Repr::Signature(_)
+            | Repr::Connect(_)
+            | Repr::Network(_)
+            | Repr::Timeout(_)
+            | Repr::WebSocketUrl(_)
+            | Repr::WebSocketScheme(_)
+            | Repr::WebSocketSchemeRewrite(_)
+            | Repr::Handshake(_)
+            | Repr::HandshakeTimeout(_)
+            | Repr::WebSocket(_)
+            | Repr::BlockedUrl
+            | Repr::Resolve(_)
+            | Repr::DownloadDisabled
+            | Repr::DownloadTooLarge
+            | Repr::TooManyRedirects
+            | Repr::MissingRedirectLocation
+            | Repr::InvalidRedirect(_)
+            | Repr::DownloadStatus(_)
+            | Repr::Download(_)
+            | Repr::DownloadTimeout(_) => None,
         }
     }
 
     pub fn status(&self) -> Option<u16> {
-        match *self.0 {
-            Repr::Status { status, .. } | Repr::DownloadStatus(status) => Some(status),
-            Repr::Timeout(_) | Repr::DownloadTimeout => Some(408),
-            _ => None,
+        match &*self.0 {
+            Repr::Status { status, .. } | Repr::DownloadStatus(status) => Some(*status),
+            Repr::Timeout(_) | Repr::DownloadTimeout(_) => Some(408),
+            Repr::Read { .. }
+            | Repr::InvalidPem { .. }
+            | Repr::Client(_)
+            | Repr::TlsConfig(_)
+            | Repr::RequestBody(_)
+            | Repr::Request(_)
+            | Repr::RequestUrl(_)
+            | Repr::ComputedHeader(_)
+            | Repr::UnsignableBody
+            | Repr::UnsignableHeader(_)
+            | Repr::Signature(_)
+            | Repr::Connect(_)
+            | Repr::Network(_)
+            | Repr::WebSocketUrl(_)
+            | Repr::WebSocketScheme(_)
+            | Repr::WebSocketSchemeRewrite(_)
+            | Repr::Handshake(_)
+            | Repr::HandshakeTimeout(_)
+            | Repr::WebSocket(_)
+            | Repr::BlockedUrl
+            | Repr::Resolve(_)
+            | Repr::DownloadDisabled
+            | Repr::DownloadTooLarge
+            | Repr::TooManyRedirects
+            | Repr::MissingRedirectLocation
+            | Repr::InvalidRedirect(_)
+            | Repr::Download(_) => None,
         }
     }
 
     pub fn tls_source(&self) -> Option<TlsSource> {
-        match *self.0 {
-            Repr::Read { tls_source, .. } | Repr::InvalidPem { tls_source, .. } => Some(tls_source),
-            _ => None,
+        match &*self.0 {
+            Repr::Read { tls_source, .. } | Repr::InvalidPem { tls_source, .. } => {
+                Some(*tls_source)
+            }
+            Repr::Client(_)
+            | Repr::TlsConfig(_)
+            | Repr::RequestBody(_)
+            | Repr::Request(_)
+            | Repr::RequestUrl(_)
+            | Repr::ComputedHeader(_)
+            | Repr::UnsignableBody
+            | Repr::UnsignableHeader(_)
+            | Repr::Signature(_)
+            | Repr::Connect(_)
+            | Repr::Network(_)
+            | Repr::Timeout(_)
+            | Repr::Status { .. }
+            | Repr::WebSocketUrl(_)
+            | Repr::WebSocketScheme(_)
+            | Repr::WebSocketSchemeRewrite(_)
+            | Repr::Handshake(_)
+            | Repr::HandshakeTimeout(_)
+            | Repr::WebSocket(_)
+            | Repr::BlockedUrl
+            | Repr::Resolve(_)
+            | Repr::DownloadDisabled
+            | Repr::DownloadTooLarge
+            | Repr::TooManyRedirects
+            | Repr::MissingRedirectLocation
+            | Repr::InvalidRedirect(_)
+            | Repr::DownloadStatus(_)
+            | Repr::Download(_)
+            | Repr::DownloadTimeout(_) => None,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn repr(&self) -> &Repr {
         &self.0
+    }
+}
+
+fn bounded(body: String) -> String {
+    match body.char_indices().nth(UPSTREAM_BODY_MAX_CHARS) {
+        None => body,
+        Some((cut, _)) => format!("{}{TRUNCATION_MARKER}", &body[..cut]),
     }
 }
 
@@ -236,6 +491,11 @@ impl From<tungstenite::Error> for Error {
 
 #[cfg(test)]
 mod tests {
+    use litellm_error::Report;
+    use rstest::rstest;
+
+    use super::{TRUNCATION_MARKER, UPSTREAM_BODY_MAX_CHARS};
+
     #[tokio::test]
     async fn transport_errors_remove_urls_and_keep_dispatch_context() {
         let error = reqwest::Client::builder()
@@ -247,20 +507,20 @@ mod tests {
             .await
             .expect_err("invalid port");
         let error = crate::Error::from(error);
+        let report = Report::new(&error).to_string();
         assert!(!error.dispatched());
-        assert!(!error.to_string().contains("secret"));
-        assert!(!error.to_string().contains("private"));
+        assert!(!report.contains("secret"), "{report}");
+        assert!(!report.contains("private"), "{report}");
     }
 
-    fn root_cause(error: &dyn std::error::Error) -> Option<String> {
-        match error.source() {
-            Some(cause) => root_cause(cause).or_else(|| Some(cause.to_string())),
-            None => None,
-        }
+    fn root_cause<'a>(
+        error: &'a (dyn std::error::Error + 'static),
+    ) -> &'a (dyn std::error::Error + 'static) {
+        error.source().map_or(error, root_cause)
     }
 
     #[tokio::test]
-    async fn network_error_message_names_the_underlying_cause() {
+    async fn connect_failure_reports_its_root_cause_once() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let address = listener.local_addr().expect("address");
         drop(listener);
@@ -272,10 +532,14 @@ mod tests {
             .send()
             .await
             .expect_err("nothing listens on the port");
-        let root_cause = root_cause(&error).expect("reqwest reports a cause");
-        let message = crate::Error::from(error).to_string();
-        assert!(message.contains(&root_cause), "{message}");
-        assert!(!message.contains("secret"));
+        let error = crate::Error::from(error);
+        let root_cause = root_cause(&error).to_string();
+        let report = Report::new(&error).to_string();
+        assert_eq!(report.matches(&root_cause).count(), 1, "{report}");
+        assert!(!error.to_string().contains(&root_cause));
+        assert!(error.is_connect());
+        assert!(!report.contains("secret"), "{report}");
+        assert!(!report.contains("private"), "{report}");
     }
 
     #[tokio::test]
@@ -303,6 +567,22 @@ mod tests {
         assert!(error.is_timeout());
         let error = crate::Error::from(error);
         assert!(error.dispatched());
+        assert!(!error.is_connect());
         assert_eq!(error.status(), Some(408));
+    }
+
+    #[rstest]
+    #[case::short("slow down".to_owned(), "slow down".to_owned())]
+    #[case::at_the_limit("\u{00e9}".repeat(UPSTREAM_BODY_MAX_CHARS), "\u{00e9}".repeat(UPSTREAM_BODY_MAX_CHARS))]
+    #[case::over_the_limit(
+        "\u{00e9}".repeat(UPSTREAM_BODY_MAX_CHARS + 1),
+        format!("{}{TRUNCATION_MARKER}", "\u{00e9}".repeat(UPSTREAM_BODY_MAX_CHARS))
+    )]
+    fn upstream_bounds_the_provider_body_by_characters(
+        #[case] body: String,
+        #[case] expected: String,
+    ) {
+        let error = crate::Error::upstream(429, body);
+        assert_eq!(error.upstream_response(), Some((429, expected.as_str())));
     }
 }

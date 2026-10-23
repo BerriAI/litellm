@@ -83,17 +83,11 @@ pub(super) async fn execute(
                 &wire.body,
                 Some(call.timeout.unwrap_or(Duration::from_secs(600))),
             )?;
-            let response = litellm_inference::outbound::send(outbound, &route.http)
-                .await
-                .map_err(network)?;
+            let response = litellm_inference::outbound::send(outbound, &route.http).await?;
             let status = response.status().as_u16();
             if !response.status().is_success() {
                 let body = response.text().await.map_err(network)?;
-                return Err(litellm_http::Error::upstream(
-                    status,
-                    litellm_http::request::truncate_error_body(&body),
-                )
-                .into());
+                return Err(litellm_http::Error::upstream(status, body).into());
             }
             if stream {
                 let headers = response

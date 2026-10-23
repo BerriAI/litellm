@@ -20,7 +20,7 @@ In order of preference
 2. A real cause, such as `tungstenite::Error::ConnectionClosed` or a `serde_json::from_str("{")` error, passed through our `From`
 3. A public constructor, such as `Error::upstream(500, "boom".into())`
 
-Inside the owning crate a test may match the private representation through the `#[cfg(test)] fn repr(&self) -> &Repr` accessor in `crates/http/src/error.rs`, as the `media.rs` and `tls.rs` tests do. Anywhere else, walk `source()` and `downcast_ref` to the cause the test expects
+Inside the owning crate a test may match the private representation through the `#[cfg(test)] fn repr(&self) -> &Repr` accessor in `crates/http/src/error.rs`, as the `media.rs` and `tls.rs` tests do. Anywhere else, reach the cause the test expects with `litellm_error::find::<T>(&error)`
 
 ## What to cover
 
@@ -28,7 +28,7 @@ Inside the owning crate a test may match the private representation through the 
 |---|---|
 | classification | one `#[case]` per input class, asserting the predicate |
 | redaction | build from a URL holding `api_key=secret`, assert the message lacks `secret` and the path |
-| cause kept | walk `source()` and `downcast_ref` to the expected type |
+| cause kept | `litellm_error::find::<T>(&error)` returns the expected cause |
 | rendered once | the cause's text appears exactly once in `litellm_error::Report::new(&error).to_string()` and not in `to_string()` |
 | boundary mapping | the gateway status and body, or the Python exception type and its `status` attribute |
 

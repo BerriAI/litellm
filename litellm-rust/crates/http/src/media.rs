@@ -149,7 +149,7 @@ impl MediaFetcher {
         }
         tokio::time::timeout(policy.timeout, self.fetch_before_deadline(url, policy))
             .await
-            .map_err(|_| Repr::DownloadTimeout)?
+            .map_err(Repr::DownloadTimeout)?
     }
 
     async fn fetch_before_deadline(
@@ -159,7 +159,13 @@ impl MediaFetcher {
     ) -> Result<DownloadedMedia, Error> {
         let mut redirects_followed = 0;
         loop {
-            let mut response = self.client_for(&url).await?.get(url.clone()).send().await?;
+            let mut response = self
+                .client_for(&url)
+                .await?
+                .get(url.clone())
+                .send()
+                .await
+                .map_err(Repr::download)?;
             if response.status().is_redirection() {
                 if redirects_followed == policy.max_redirects {
                     return Err(Repr::TooManyRedirects.into());
@@ -167,9 +173,12 @@ impl MediaFetcher {
                 let location = response
                     .headers()
                     .get(reqwest::header::LOCATION)
-                    .and_then(|value| value.to_str().ok())
-                    .ok_or(Repr::MissingRedirectLocation)?;
-                url = url.join(location).map_err(|_| Repr::InvalidRedirect)?;
+                    .ok_or(Repr::MissingRedirectLocation)?
+                    .to_str()
+                    .map_err(|error| Repr::InvalidRedirect(error.into()))?;
+                url = url
+                    .join(location)
+                    .map_err(|error| Repr::InvalidRedirect(error.into()))?;
                 redirects_followed += 1;
                 continue;
             }
@@ -187,7 +196,7 @@ impl MediaFetcher {
                 .unwrap_or("application/octet-stream")
                 .to_string();
             let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await? {
+            while let Some(chunk) = response.chunk().await.map_err(Repr::download)? {
                 enforce_download_size(bytes.len() as u64 + chunk.len() as u64, policy.max_bytes)?;
                 bytes.extend_from_slice(&chunk);
             }
@@ -590,7 +599,27 @@ mod tests {
             .await
             .expect_err("fetch times out");
         server.await.expect("server completes");
-        assert!(matches!(error.repr(), Repr::DownloadTimeout));
+        assert!(matches!(error.repr(), Repr::DownloadTimeout(_)));
+        assert!(!error.dispatched());
+    }
+
+    #[rstest::rstest]
+    #[case::closed_before_answering(b"")]
+    #[case::reset_mid_body(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nab")]
+    #[tokio::test]
+    async fn a_failed_download_never_reached_the_provider(#[case] response: &'static [u8]) {
+        let (url, server) = serve(response).await;
+        let url = url.join("?sig=secret").expect("valid test URL");
+        let error = MediaFetcher::for_test(Client::for_test())
+            .fetch(url, policy(10, 0))
+            .await
+            .expect_err("download fails");
+        server.await.expect("server completes");
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(!error.dispatched());
+        assert!(!error.is_request());
+        assert!(!report.contains("secret"), "{report}");
+        assert!(!report.contains("document"), "{report}");
     }
 
     #[tokio::test]

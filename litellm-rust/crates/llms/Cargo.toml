@@ -37,6 +37,7 @@ tokio = { workspace = true, features = ["sync"] }
 url.workspace = true
 
 [dev-dependencies]
+litellm-error.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 aws-smithy-eventstream = "=0.61.4"
 aws-smithy-types = "1.6.1"
