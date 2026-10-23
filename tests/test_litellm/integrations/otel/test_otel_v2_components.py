@@ -8,8 +8,11 @@ from collections.abc import Iterator
 from contextvars import Context as ContextVarContext
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
+from typing import Final
 
 import pytest
+import requests
+import requests_mock
 
 pytest.importorskip("opentelemetry")
 
@@ -20,11 +23,12 @@ from opentelemetry import baggage  # noqa: E402
 from opentelemetry.context import attach, detach  # noqa: E402
 from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
-from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider  # noqa: E402  # optional SDK checked above
 from opentelemetry.sdk.trace.export import (  # noqa: E402
     BatchSpanProcessor,
     ConsoleSpanExporter,
     SimpleSpanProcessor,
+    SpanExportResult,
 )
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
@@ -36,6 +40,7 @@ from opentelemetry.trace.propagation.tracecontext import (  # noqa: E402
 
 from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
+from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter  # noqa: E402  # optional SDK checked above
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config  # noqa: E402
 from litellm.integrations.otel.mappers.genai import GenAIMapper  # noqa: E402
 from litellm.integrations.otel.mappers.legacy import LegacyMapper  # noqa: E402
@@ -704,7 +709,9 @@ def _export_one_trace_to_local_collector(exporter_kind: str) -> tuple[list[dict]
     class Collector(BaseHTTPRequestHandler):
         def do_POST(self):
             body = self.rfile.read(int(self.headers["Content-Length"]))
-            received.append({"path": self.path, "headers": dict(self.headers), "body": body})
+            received.append(
+                {"path": self.path, "headers": requests.structures.CaseInsensitiveDict(self.headers), "body": body}
+            )
             self.send_response(200)
             self.end_headers()
 
@@ -762,6 +769,86 @@ def test_http_json_exporter_posts_otlp_json_to_traces_endpoint():
     assert child["traceId"] == format(trace_id, "032x")
     assert child["spanId"] == format(child_id, "016x")
     assert child["parentSpanId"] == format(parent_id, "016x")
+
+
+@pytest.mark.parametrize(
+    ("statuses", "expected"),
+    [
+        ((200,), SpanExportResult.SUCCESS),
+        ((400,), SpanExportResult.FAILURE),
+        ((503, 200), SpanExportResult.SUCCESS),
+    ],
+)
+def test_http_json_exporter_preserves_http_failure_and_retry_results(
+    statuses: tuple[int, ...], expected: SpanExportResult
+) -> None:
+    endpoint: Final = "https://collector.test/v1/traces"
+    with requests_mock.Mocker() as collector:
+        collector.register_uri(
+            "POST",
+            endpoint,
+            [{"status_code": status, "headers": {"Retry-After": "0"}} for status in statuses],
+        )
+        exporter: Final = OTLPJsonSpanExporter(
+            endpoint=endpoint,
+            headers={
+                "CONTENT-TYPE": "application/x-protobuf",
+                "x-collector-token": "secret",
+            },
+        )
+        try:
+            assert exporter.export(()) is expected
+        finally:
+            exporter.shutdown()
+    assert len(collector.request_history) == len(statuses)
+    for request in collector.request_history:
+        assert request.headers["Content-Type"] == "application/json"
+        assert request.headers["x-collector-token"] == "secret"
+        assert request.json() == {"resourceSpans": []}
+
+
+@pytest.mark.parametrize(
+    ("size_limit", "expected", "request_count"),
+    [
+        (0, SpanExportResult.SUCCESS, 1),
+        (len(b'{"resourceSpans":[]}'), SpanExportResult.SUCCESS, 1),
+        (len(b'{"resourceSpans":[]}') - 1, SpanExportResult.FAILURE, 0),
+    ],
+)
+def test_http_json_exporter_checks_json_size_before_sending(
+    size_limit: int, expected: SpanExportResult, request_count: int
+) -> None:
+    endpoint: Final = "https://collector.test/v1/traces"
+    with requests_mock.Mocker() as collector:
+        collector.register_uri("POST", endpoint, status_code=200)
+        exporter: Final = OTLPJsonSpanExporter(endpoint, {}, max_request_size=size_limit)
+        try:
+            assert exporter.export(()) is expected
+        finally:
+            exporter.shutdown()
+    assert len(collector.request_history) == request_count
+
+
+def test_http_json_exporter_rejects_export_after_shutdown() -> None:
+    endpoint: Final = "https://collector.test/v1/traces"
+    with requests_mock.Mocker() as collector:
+        collector.register_uri("POST", endpoint, status_code=200)
+        exporter: Final = OTLPJsonSpanExporter(endpoint, {})
+        exporter.shutdown()
+        assert exporter.export(()) is SpanExportResult.FAILURE
+    assert collector.request_history == []
+
+
+def test_http_json_exporter_returns_failure_for_unencodable_spans() -> None:
+    endpoint: Final = "https://collector.test/v1/traces"
+    with requests_mock.Mocker() as collector:
+        collector.register_uri("POST", endpoint, status_code=200)
+        exporter: Final = OTLPJsonSpanExporter(endpoint, {})
+        try:
+            assert exporter.export((ReadableSpan("missing-context"),)) is SpanExportResult.FAILURE
+        finally:
+            exporter.shutdown()
+    assert collector.request_history == []
 
 
 def test_http_protobuf_exporter_still_posts_protobuf():
@@ -1281,6 +1368,50 @@ def test_operation_exception_log_event_always_carries_required_pair():
     assert ExceptionEvent.STACKTRACE not in attributes
 
 
+def test_operation_exception_log_event_records_without_the_events_api():
+    """Recording must not import the Events API modules (removed upstream in 1.44.0);
+    the SDK record path still exports."""
+    import importlib
+    import sys
+    from unittest.mock import patch
+
+    from opentelemetry._logs.severity import SeverityNumber
+    from opentelemetry.sdk._logs.export import InMemoryLogExporter
+    from opentelemetry.trace import INVALID_SPAN_CONTEXT
+
+    from litellm.integrations.otel.model.semconv import ExceptionEvent, GenAIEvent
+
+    plumbing = ("litellm.integrations.otel.plumbing.events", "litellm.integrations.otel.plumbing.providers")
+    without_events_api = {
+        **{name: module for name, module in sys.modules.items() if name not in plumbing},
+        "opentelemetry._events": None,
+        "opentelemetry.sdk._events": None,
+    }
+    with patch.dict(sys.modules, without_events_api, clear=True):
+        events_mod = importlib.import_module(plumbing[0])
+        providers_mod = importlib.import_module(plumbing[1])
+
+        log_exporter = InMemoryLogExporter()
+        cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=True)
+        logger_provider = providers_mod.build_logger_provider(cfg, log_exporter=log_exporter)
+        recorder = events_mod.GenAIEventRecorder(providers_mod.get_event_logger(logger_provider))
+        recorder.record_operation_exception(
+            span_context=INVALID_SPAN_CONTEXT,
+            error_type="RateLimitError",
+            message="rate limited",
+            stack_trace=None,
+            timestamp_ns=None,
+        )
+
+    (log,) = log_exporter.get_finished_logs()
+    record = log.log_record
+    assert record.attributes[GenAIEvent.NAME_KEY] == GenAIEvent.OPERATION_EXCEPTION
+    assert record.attributes[ExceptionEvent.TYPE] == "RateLimitError"
+    assert record.attributes[ExceptionEvent.MESSAGE] == "rate limited"
+    assert record.severity_number == SeverityNumber.WARN
+    assert record.timestamp is not None
+
+
 def test_operation_exception_log_event_not_emitted_on_success():
     engine, span_exporter, log_exporter = _engine_with_event_recorder()
     engine.emit(SpanRole.LLM_CALL, _llm_call_data(None))
@@ -1414,3 +1545,82 @@ def test_genai_mapper_guardrail_cost_in_spend_attr():
     billed = dict(entry)
     del billed["guardrail_cost_in_spend"]
     assert LiteLLM.GUARDRAIL_COST_IN_SPEND not in GenAIMapper().map(GuardrailSpanData.from_logging_entry(billed))
+
+
+def _sampled_span_context():
+    from opentelemetry.trace import SpanContext, TraceFlags, TraceState
+
+    return SpanContext(
+        trace_id=0x0AF7651916CD43DD8448EB211C80319C,
+        span_id=0x00F067AA0BA902B7,
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        trace_state=TraceState(),
+    )
+
+
+def test_operation_exception_log_event_exports_through_console_exporter():
+    """The emitted record serializes through a real SDK exporter: the console
+    exporter only handles SDK-shaped records (``to_json`` plus a resource), so
+    an API-shaped record crashed the export under the repo's pinned OTel."""
+    import io
+    import json as json_mod
+
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import ConsoleLogExporter, SimpleLogRecordProcessor
+    from opentelemetry.sdk.resources import Resource
+
+    from litellm.integrations.otel.model.semconv import ExceptionEvent, GenAIEvent
+    from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
+
+    out = io.StringIO()
+    logger_provider = LoggerProvider(resource=Resource.create({"service.name": "otel-event-test"}))
+    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(ConsoleLogExporter(out=out)))
+    recorder = GenAIEventRecorder(providers.get_event_logger(logger_provider), logger_provider.resource)
+    recorder.record_operation_exception(
+        span_context=_sampled_span_context(),
+        error_type="RateLimitError",
+        message="rate limited",
+        stack_trace=None,
+        timestamp_ns=None,
+    )
+
+    exported = json_mod.loads(out.getvalue())
+    assert exported["attributes"][GenAIEvent.NAME_KEY] == GenAIEvent.OPERATION_EXCEPTION
+    assert exported["attributes"][ExceptionEvent.TYPE] == "RateLimitError"
+    assert exported["attributes"][ExceptionEvent.MESSAGE] == "rate limited"
+    assert exported["body"] == "rate limited"
+    assert exported["resource"]["attributes"]["service.name"] == "otel-event-test"
+
+
+def test_operation_exception_log_event_encodes_for_otlp():
+    """The OTLP log encoder reads ``log_record.resource`` and rejects a None
+    body on the pinned OTel line, so the event must encode into a real
+    ExportLogsServiceRequest, not only land in an in-memory exporter."""
+    from opentelemetry.exporter.otlp.proto.common._log_encoder import encode_logs
+    from opentelemetry.sdk._logs.export import InMemoryLogExporter
+
+    from litellm.integrations.otel.model.semconv import GenAIEvent
+    from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
+
+    log_exporter = InMemoryLogExporter()
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=True)
+    logger_provider = providers.build_logger_provider(cfg, log_exporter=log_exporter)
+    recorder = GenAIEventRecorder(providers.get_event_logger(logger_provider), logger_provider.resource)
+    recorder.record_operation_exception(
+        span_context=_sampled_span_context(),
+        error_type="RateLimitError",
+        message="rate limited",
+        stack_trace=None,
+        timestamp_ns=None,
+    )
+
+    request = encode_logs(log_exporter.get_finished_logs())
+    (resource_logs,) = request.resource_logs
+    (scope_logs,) = resource_logs.scope_logs
+    (encoded,) = scope_logs.log_records
+    encoded_attrs = {a.key: a.value.string_value for a in encoded.attributes}
+    assert encoded_attrs[GenAIEvent.NAME_KEY] == GenAIEvent.OPERATION_EXCEPTION
+    assert encoded.body.string_value == "rate limited"
+    resource_attrs = {a.key: a.value.string_value for a in resource_logs.resource.attributes}
+    assert resource_attrs["service.name"] == logger_provider.resource.attributes["service.name"]

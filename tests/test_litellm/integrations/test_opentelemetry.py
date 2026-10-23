@@ -10,18 +10,19 @@ import unittest
 import weakref
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
+from typing import Final
 from parameterized import parameterized
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 from opentelemetry import trace
-from opentelemetry.sdk._logs import LogData
+from opentelemetry.sdk._logs import ReadableLogRecord
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm
@@ -6170,7 +6171,7 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
             time.sleep(self.POLL_INTERVAL)
         return None
 
-    def _emitted_log_records(self, semconv_opt_in: str) -> tuple[LogData, ...]:
+    def _emitted_log_records(self, semconv_opt_in: str) -> tuple[ReadableLogRecord, ...]:
         log_exporter = InMemoryLogExporter()
         logger_provider = OTLoggerProvider()
         logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
@@ -6244,7 +6245,12 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
     must be bounded and must shut down whatever it drops (LIT-5437: threads accumulated
     until pods were OOMKilled)."""
 
-    BSP_THREAD_NAME = "OtelBatchSpanProcessor"
+    def setUp(self) -> None:
+        processor: Final = BatchSpanProcessor(InMemorySpanExporter())
+        try:
+            self.bsp_thread_name = processor._batch_processor._worker_thread.name
+        finally:
+            processor.shutdown()
 
     def _logger(self, cap=3, exporter="console"):
         logger = OpenTelemetry(
@@ -6261,7 +6267,7 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
         logger._tracer_provider_cache.clear()
 
     def _live_exporter_threads(self):
-        return [t for t in threading.enumerate() if t.name == self.BSP_THREAD_NAME]
+        return [t for t in threading.enumerate() if t.name == self.bsp_thread_name]
 
     def _wait_for_exporter_threads(self, expected, timeout=10.0):
         """Dropped providers are shut down off-thread, so poll instead of sleeping."""
@@ -6282,8 +6288,6 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
             logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
 
         self.assertEqual(len(logger._tracer_provider_cache), 3)
-        # Guards the thread-name constant: a rename upstream would make this read 0 and the
-        # bound assertion below would pass while measuring nothing.
         self.assertGreaterEqual(len(self._live_exporter_threads()), 1)
         self.assertLessEqual(self._wait_for_exporter_threads(before + 3) - before, 3)
 

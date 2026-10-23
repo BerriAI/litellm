@@ -245,6 +245,7 @@ class GenAIEvent:
     details, unlike the deprecated ``error.message`` span attribute.
     """
 
+    NAME_KEY: Final = "event.name"
     OPERATION_EXCEPTION: Final = "gen_ai.client.operation.exception"
 
 
