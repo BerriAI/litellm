@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextlib
 import hashlib
 import json
 import logging
@@ -18,6 +19,7 @@ import tiktoken
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
+    HUGGING_FACE_SOURCE,
     KimiK3Encodings,
     KimiK3TokenizerSource,
     kimi_k3_anthropic_tokens,
@@ -522,3 +524,19 @@ async def test_tokenizer_load_still_running_after_the_wait_is_logged(
 
     assert loaded is None
     assert any("Kimi K3 tokenizer still loading" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("offline_mode", "disable_download", "asks_hub"),
+    [("true", None, False), ("false", True, False), ("false", None, True)],
+)
+def test_offline_mode_and_disabled_downloads_never_ask_hugging_face_for_the_tokenizer(
+    monkeypatch: pytest.MonkeyPatch, offline_mode: str, disable_download: bool | None, asks_hub: bool
+):
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", offline_mode)
+    monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", disable_download)
+    with respx.mock(assert_all_called=False) as router:
+        hub: Final = router.route(host="huggingface.co").mock(return_value=httpx.Response(503))
+        with contextlib.suppress(Exception):
+            HUGGING_FACE_SOURCE.ranks_path()
+    assert hub.called is asks_hub

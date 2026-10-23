@@ -93,6 +93,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.litellm_core_utils.tool_fields import MalformedField, resolve_deployment_tool_fields
@@ -2650,6 +2651,7 @@ _DEEPSEEK_TOKENIZER_MODEL: Final = re.compile(
 _BUNDLED_TOKENIZER_LOAD_LOCKS: Final[Mapping[HuggingFaceTokenizerKind, threading.Lock]] = MappingProxyType(
     {"anthropic": threading.Lock(), "deepseek": threading.Lock()}
 )
+_DOWNLOADED_TOKENIZER_KINDS: Final[frozenset[HuggingFaceTokenizerKind]] = frozenset({"cohere", "llama2", "llama3"})
 
 
 def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
@@ -2683,7 +2685,7 @@ def _warn_huggingface_tokenizer_fallback(model: str, reason: str) -> None:
 
 def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | _HuggingFaceTokenizerLoadFailure | None:
     kind: Final = huggingface_tokenizer_kind(model)
-    if kind is None:
+    if kind is None or (kind in _DOWNLOADED_TOKENIZER_KINDS and is_offline_mode()):
         return None
     backend: Final = _huggingface_tokenizer_backend()
     key: Final = _huggingface_tokenizer_failure_key(kind, backend)
