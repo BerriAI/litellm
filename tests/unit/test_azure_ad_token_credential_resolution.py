@@ -28,9 +28,7 @@ Tests below pin two things:
    ``azure_ad_token`` from a deployment's ``litellm_params``.
 """
 
-from unittest.mock import MagicMock, patch
-
-import pytest
+from typing import Final
 
 
 class TestCredentialLiteLLMParamsAzureAdToken:
@@ -73,9 +71,9 @@ class TestCredentialLiteLLMParamsAzureAdToken:
             "azure_ad_token": "tok-123",
             "api_key": None,  # M2M deployment has no static key
         }
-        rebuilt = CredentialLiteLLMParams(
-            **{k: v for k, v in source.items() if v is not None}
-        ).model_dump(exclude_none=True)
+        rebuilt = CredentialLiteLLMParams(**{k: v for k, v in source.items() if v is not None}).model_dump(
+            exclude_none=True
+        )
         assert rebuilt.get("azure_ad_token") == "tok-123"
         assert rebuilt.get("api_base") == "https://my.openai.azure.com"
         assert "api_key" not in rebuilt
@@ -105,9 +103,7 @@ class TestRouterCredentialResolution:
             ]
         )
 
-        credentials = router.get_deployment_credentials_with_provider(
-            model_id=deployment_id
-        )
+        credentials = router.get_deployment_credentials_with_provider(model_id=deployment_id)
         assert credentials is not None
         assert credentials.get("azure_ad_token") == "tok-azure-m2m-xyz", (
             "Router credential resolution dropped azure_ad_token; the "
@@ -137,9 +133,7 @@ class TestRouterCredentialResolution:
             ]
         )
 
-        credentials = router.get_deployment_credentials_with_provider(
-            model_id=deployment_id
-        )
+        credentials = router.get_deployment_credentials_with_provider(model_id=deployment_id)
         assert credentials is not None
         assert credentials.get("api_key") == "sk-static-key"
         assert "azure_ad_token" not in credentials
@@ -174,9 +168,7 @@ class TestRouterCredentialResolutionS3OutputBucket:
             ]
         )
 
-        credentials = router.get_deployment_credentials_with_provider(
-            model_id=deployment_id
-        )
+        credentials = router.get_deployment_credentials_with_provider(model_id=deployment_id)
         assert credentials is not None
         assert credentials.get("s3_output_bucket_name") == "out-bucket", (
             "Router credential resolution dropped s3_output_bucket_name; "
@@ -205,9 +197,41 @@ class TestRouterCredentialResolutionS3OutputBucket:
             ]
         )
 
-        credentials = router.get_deployment_credentials_with_provider(
-            model_id=deployment_id
-        )
+        credentials = router.get_deployment_credentials_with_provider(model_id=deployment_id)
         assert credentials is not None
         assert credentials.get("s3_bucket_name") == "in-bucket"
         assert "s3_output_bucket_name" not in credentials
+
+
+def test_azure_anthropic_request_body_does_not_include_azure_credentials() -> None:
+    from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
+
+    credential_params: Final[dict[str, str]] = {
+        "api_key": "test-api-key",
+        "azure_ad_token": "test-access-token",
+        "azure_ad_token_provider": "test-token-provider",
+        "client_id": "test-client-id",
+        "client_secret": "test-client-secret",
+        "tenant_id": "test-tenant-id",
+        "azure_scope": "test-scope",
+        "azure_username": "test-username",
+        "azure_password": "test-password",
+    }
+    output_config: Final[dict[str, dict[str, str]]] = {"format": {"type": "json_object"}}
+    extra_body_params: Final[dict[str, str]] = {
+        key: value for key, value in credential_params.items() if key not in {"api_key", "azure_ad_token"}
+    }
+    body: Final[dict[str, object]] = AzureAnthropicConfig().transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "api_key": credential_params["api_key"],
+            "azure_ad_token": credential_params["azure_ad_token"],
+            "extra_body": {**extra_body_params, "output_config": output_config},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert set(credential_params).isdisjoint(body)
+    assert body["output_config"] == output_config
