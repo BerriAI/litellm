@@ -1398,9 +1398,7 @@ class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     cached_tokens: int = 0
     cached_tokens_details: CachedTokensDetails | None = None
     cache_write_tokens: int | None = Field(default=None, exclude_if=_is_none)
-    cache_write_tokens_details: CacheWriteTokensDetails | None = Field(
-        default=None, exclude_if=_is_none
-    )
+    cache_write_tokens_details: CacheWriteTokensDetails | None = Field(default=None, exclude_if=_is_none)
     image_tokens: int | None = None
     text_tokens: int | None = None
     video_tokens: int | None = None
