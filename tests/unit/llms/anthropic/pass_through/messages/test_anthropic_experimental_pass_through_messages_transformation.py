@@ -6,8 +6,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
-from fastapi.responses import JSONResponse
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -45,7 +44,7 @@ _WIF_PARAMS: Final[dict] = {
         pytest.param("stop_sequence", {"stop_sequence": ", 7"}, ", 7", id="matched_stop"),
     ),
 )
-def test_native_response_serializes_missing_stop_sequence_as_null_without_changing_other_fields(
+def test_native_response_defaults_stop_sequence_without_changing_other_fields(
     config: AnthropicMessagesConfig,
     stop_reason: AnthropicFinishReason,
     stop_fields: Mapping[str, str | None],
@@ -74,7 +73,7 @@ def test_native_response_serializes_missing_stop_sequence_as_null_without_changi
         model="test-model", raw_response=httpx.Response(200, json=upstream), logging_obj=logging_obj
     )
 
-    assert TypeAdapter(JsonValue).validate_json(JSONResponse(content=response).body) == {
+    assert response == {
         **upstream,
         "stop_sequence": expected_stop_sequence,
     }

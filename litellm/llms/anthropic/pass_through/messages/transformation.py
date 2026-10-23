@@ -720,7 +720,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         except Exception:
             raise AnthropicError(message=raw_response.text, status_code=raw_response.status_code)
         response: Final = AnthropicMessagesResponse(**raw_response_json)
-        return {"stop_sequence": None, **response}
+        return {**response, "stop_sequence": response.get("stop_sequence")}
 
     def get_async_streaming_response_iterator(
         self,
