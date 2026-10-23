@@ -147,6 +147,7 @@ describe("ClientUsagePanel", () => {
     );
     vi.mocked(userListCall).mockResolvedValue(userPage);
     vi.mocked(uiSpendLogsCall).mockResolvedValue(requestPage);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ results: [] })));
   });
 
   afterEach(() => vi.unstubAllGlobals());
