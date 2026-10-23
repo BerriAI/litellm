@@ -8,6 +8,7 @@ specifically focusing on metadata extraction and passing.
 import json
 import logging
 import os
+import re
 from collections.abc import Callable
 from functools import partial
 from queue import SimpleQueue
@@ -982,19 +983,12 @@ class TestStructuredMessagesInResponse:
         assert guardrailed_inputs["structured_messages"] == [returned_row]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "structured_messages",
-        [[], [{"content": "a row with no role"}], "not a list"],
-        ids=["empty", "no_role", "not_a_list"],
-    )
-    async def test_rows_that_are_not_chat_messages_are_ignored(
-        self, generic_guardrail, mock_request_data_input, structured_messages
-    ):
+    async def test_empty_structured_messages_are_ignored(self, generic_guardrail, mock_request_data_input):
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "action": "GUARDRAIL_INTERVENED",
             "texts": ["[REDACTED]"],
-            "structured_messages": structured_messages,
+            "structured_messages": [],
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -2621,3 +2615,106 @@ class TestNumRetries:
 
         assert sent.qsize() == num_retries + 1
         assert result == {"texts": ["hi"]}
+
+
+def _answering(body: dict[str, object]) -> MagicMock:
+    answer: Final = MagicMock()
+    answer.json.return_value = body
+    answer.raise_for_status = MagicMock()
+    return answer
+
+
+class TestMalformedResponseFieldsFailClosed:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("texts", "x [R] y"),
+            ("texts", ["x [R] y", 5]),
+            ("images", "https://example.com/a.png"),
+            ("images", [5]),
+            ("tools", "lookup"),
+            ("tools", ["lookup"]),
+            ("structured_messages", "x [R] y"),
+            ("structured_messages", [{"content": "x [R] y"}]),
+        ],
+    )
+    async def test_malformed_field_fails_the_call_instead_of_passing_content_through(
+        self, generic_guardrail: GenericGuardrailAPI, field: str, value: object
+    ):
+        response: Final = _answering({"action": "GUARDRAIL_INTERVENED", field: value})
+
+        with patch.object(generic_guardrail.async_handler, "post", return_value=response):
+            with pytest.raises(
+                Exception,
+                match=re.escape(
+                    f"Generic Guardrail API failed: Generic Guardrail API response field '{field}' is malformed"
+                ),
+            ):
+                await generic_guardrail.apply_guardrail(
+                    inputs={"texts": ["x secret y"]}, request_data={}, input_type="request"
+                )
+
+    @pytest.mark.asyncio
+    async def test_malformed_field_passes_content_through_when_fail_on_error_is_false(self):
+        guardrail: Final = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-fail-open-guardrail",
+            event_hook="pre_call",
+            default_on=True,
+            fail_on_error=False,
+        )
+        response: Final = _answering({"action": "GUARDRAIL_INTERVENED", "texts": "x [R] y"})
+
+        with patch.object(guardrail.async_handler, "post", return_value=response):
+            returned: Final = await guardrail.apply_guardrail(
+                inputs={"texts": ["x secret y"]}, request_data={}, input_type="request"
+            )
+
+        assert returned == {"texts": ["x secret y"]}
+
+    @pytest.mark.asyncio
+    async def test_well_formed_fields_are_applied(self, generic_guardrail: GenericGuardrailAPI):
+        rows: Final = [{"role": "user", "content": "x [R] y"}]
+        response: Final = _answering(
+            {"action": "GUARDRAIL_INTERVENED", "texts": ["x [R] y"], "structured_messages": rows}
+        )
+
+        with patch.object(generic_guardrail.async_handler, "post", return_value=response):
+            returned: Final = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["x secret y"], "structured_messages": [{"role": "user", "content": "x secret y"}]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert (returned["texts"], returned.get("structured_messages")) == (["x [R] y"], rows)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["NONE", "GUARDRAIL_INTERVENED"])
+    @pytest.mark.parametrize(
+        "placeholder", [None, "", {}, False, 0], ids=["null", "empty_str", "empty_dict", "false", "zero"]
+    )
+    async def test_empty_placeholder_fields_are_treated_as_absent(
+        self, generic_guardrail: GenericGuardrailAPI, action: str, placeholder: object
+    ):
+        response: Final = _answering(
+            {
+                "action": action,
+                "texts": placeholder,
+                "images": placeholder,
+                "tools": placeholder,
+                "structured_messages": placeholder,
+            }
+        )
+        inputs: Final[GenericGuardrailAPIInputs] = {
+            "texts": ["x secret y"],
+            "images": ["https://example.com/a.png"],
+            "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        }
+
+        with patch.object(generic_guardrail.async_handler, "post", return_value=response):
+            returned: Final = await generic_guardrail.apply_guardrail(
+                inputs=inputs, request_data={}, input_type="request"
+            )
+
+        assert returned == inputs
