@@ -41,11 +41,13 @@ pub fn json(
     } else {
         with_headers.header(CONTENT_TYPE, "application/json")
     };
-    let request = builder.body(body).map_err(Repr::Request)?;
-    let mut request =
-        Request::try_from(request).map_err(|error| Repr::RequestUrl(error.without_url()))?;
+    let mut request = from_http(builder.body(body).map_err(Repr::Request)?)?;
     *request.timeout_mut() = timeout;
     Ok(request)
+}
+
+pub fn from_http<B: Into<reqwest::Body>>(request: http::Request<B>) -> Result<Request, Error> {
+    Request::try_from(request).map_err(|error| Repr::RequestUrl(error.without_url()).into())
 }
 
 pub fn signed(mut request: Request, signer: &dyn RequestSigner) -> Result<Request, Error> {
@@ -170,5 +172,19 @@ mod tests {
             ),
             Err(error) if error.is_request()
         ));
+    }
+
+    #[test]
+    fn a_relative_http_request_is_the_callers_fault_and_never_reached_the_provider() {
+        let request = http::Request::get("/private?api_key=secret")
+            .body(Vec::<u8>::new())
+            .unwrap();
+
+        let error = from_http(request).unwrap_err();
+
+        assert!(error.is_request());
+        assert!(!error.dispatched());
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(!report.contains("secret"), "{report}");
     }
 }

@@ -12,8 +12,12 @@ pub enum Error {
     EmptyCallerCredential { caller: &'static str },
     #[error("provider authentication failed")]
     Provider(#[source] Source),
-    #[error("no credential in the chain succeeded: {}", reports(.0))]
-    CredentialChain(Vec<Error>),
+    #[error("no credential in the chain succeeded{}", earlier_attempts(earlier))]
+    CredentialChain {
+        #[source]
+        last: Box<Error>,
+        earlier: Vec<Error>,
+    },
     #[error(
         "Missing {provider} API Key - Set `api_key` or the {environment_variable} environment variable"
     )]
@@ -35,12 +39,16 @@ pub enum Error {
     InvalidHeader,
 }
 
-fn reports(failures: &[Error]) -> String {
-    failures
+fn earlier_attempts(earlier: &[Error]) -> String {
+    if earlier.is_empty() {
+        return String::new();
+    }
+    let attempts = earlier
         .iter()
         .map(|failure| Report::new(failure).to_string())
         .collect::<Vec<_>>()
-        .join("; ")
+        .join("; ");
+    format!(" (earlier attempts: {attempts})")
 }
 
 impl Error {
@@ -59,7 +67,7 @@ impl Error {
             | Self::CredentialAcquisition(_)
             | Self::EmptyCallerCredential { .. }
             | Self::Provider(_)
-            | Self::CredentialChain(_)
+            | Self::CredentialChain { .. }
             | Self::MissingApiBase { .. }
             | Self::InvalidHeader => false,
         }
@@ -70,7 +78,9 @@ impl Error {
             Self::InvalidConfiguration(_)
             | Self::EmptyCallerCredential { .. }
             | Self::InvalidHeader => true,
-            Self::CredentialAcquisition(_) | Self::Provider(_) | Self::CredentialChain(_) => false,
+            Self::CredentialAcquisition(_) | Self::Provider(_) | Self::CredentialChain { .. } => {
+                false
+            }
             Self::MissingParam { spec, .. } => match spec.kind {
                 ParamKind::Setting => true,
                 ParamKind::Credential => false,
@@ -178,14 +188,6 @@ mod tests {
         Error::EmptyCallerCredential { caller: "token provider" },
         "token provider returned an empty credential"
     )]
-    #[case::chain(
-        Error::CredentialChain(vec![
-            Error::CredentialAcquisition(ErrorDetail::Unresolved { subject: "OIDC reference" }),
-            Error::EmptyCallerCredential { caller: "token provider" },
-        ]),
-        "no credential in the chain succeeded: credential acquisition failed: OIDC reference did not resolve \
-         to a value; token provider returned an empty credential"
-    )]
     fn the_report_names_every_layer_in_order(#[case] error: Error, #[case] expected: &str) {
         assert!(
             Report::new(&error).to_string().contains(expected),
@@ -238,9 +240,42 @@ mod tests {
             litellm_error::find::<io::Error>(&error).map(io::Error::kind),
             Some(io::ErrorKind::PermissionDenied)
         );
+        assert!(!error.to_string().contains("access denied"), "{error}");
+        let report = Report::new(&error).to_string();
+        assert_eq!(report.matches("access denied").count(), 1, "{report}");
+    }
+
+    #[test]
+    fn a_chain_keeps_its_last_failure_as_the_source_and_renders_every_attempt_once() {
+        let error = Error::CredentialChain {
+            last: Box::new(Error::provider(denied())),
+            earlier: vec![
+                Error::CredentialAcquisition(ErrorDetail::Unresolved {
+                    subject: "OIDC reference",
+                }),
+                Error::EmptyCallerCredential {
+                    caller: "token provider",
+                },
+            ],
+        };
+
         assert_eq!(
-            Report::new(&error).to_string(),
-            "provider authentication failed: access denied"
+            litellm_error::find::<io::Error>(&error).map(io::Error::kind),
+            Some(io::ErrorKind::PermissionDenied)
+        );
+        let report = Report::new(&error).to_string();
+        assert_eq!(report.matches("access denied").count(), 1, "{report}");
+        assert_eq!(
+            report.matches("OIDC reference did not resolve").count(),
+            1,
+            "{report}"
+        );
+        assert_eq!(
+            report
+                .matches("token provider returned an empty credential")
+                .count(),
+            1,
+            "{report}"
         );
     }
 

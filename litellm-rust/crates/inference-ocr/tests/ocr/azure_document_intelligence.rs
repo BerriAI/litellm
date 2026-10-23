@@ -393,12 +393,15 @@ async fn malformed_provider_pages_report_the_response_path(
 }
 
 #[rstest]
-#[case::missing(None)]
-#[case::relative(Some("/relative"))]
-#[case::cross_origin(Some("http://example.com/operation"))]
-#[case::with_userinfo(Some("http://user:password@127.0.0.1/operation"))]
+#[case::missing(None, false)]
+#[case::relative(Some("/relative"), true)]
+#[case::cross_origin(Some("http://example.com/operation"), false)]
+#[case::with_userinfo(Some("http://user:password@127.0.0.1/operation"), false)]
 #[tokio::test]
-async fn an_unusable_operation_location_is_rejected(#[case] location: Option<&str>) {
+async fn an_unusable_operation_location_is_rejected(
+    #[case] location: Option<&str>,
+    #[case] unparseable: bool,
+) {
     let response = location
         .into_iter()
         .fold(ResponseTemplate::new(202), |response, location| {
@@ -411,6 +414,11 @@ async fn an_unusable_operation_location_is_rejected(#[case] location: Option<&st
         .unwrap_err();
 
     assert!(error.to_string().contains("operation-location"), "{error}");
+    assert!(error.is_response());
+    assert_eq!(
+        litellm_error::find::<url::ParseError>(&error).is_some(),
+        unparseable
+    );
     assert_eq!(received(&upstream).await.len(), 1);
 }
 

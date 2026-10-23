@@ -21,6 +21,19 @@ pub struct JsonObject(pub Map<String, Value>);
 
 pub struct RequestId(pub Option<String>);
 
+pub(crate) struct Path<T>(pub T);
+
+impl<T: serde::de::DeserializeOwned + Send, S: Send + Sync> FromRequestParts<S> for Path<T> {
+    type Rejection = Error;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        axum::extract::Path::<T>::from_request_parts(parts, state)
+            .await
+            .map(|axum::extract::Path(value)| Self(value))
+            .map_err(Error::InvalidPath)
+    }
+}
+
 impl<S: Send + Sync> FromRequestParts<S> for RequestId {
     type Rejection = std::convert::Infallible;
 

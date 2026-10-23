@@ -128,9 +128,78 @@ impl Error {
         }
     }
 
+    fn upstream(&self) -> Option<&ServiceError> {
+        match self {
+            Self::Upstream(error) => Some(error),
+            Self::MissingField(_)
+            | Self::UpstreamCursor
+            | Self::AmbiguousResourceServer
+            | Self::InvalidServersHeader(_)
+            | Self::Json(_)
+            | Self::Query(_)
+            | Self::Path(_)
+            | Self::BodyTooLarge(_)
+            | Self::Forbidden
+            | Self::HostNotAllowed
+            | Self::OriginNotAllowed
+            | Self::ForeignSession
+            | Self::UnknownSession
+            | Self::SessionBusy
+            | Self::InvalidPagination
+            | Self::UnexpectedResult
+            | Self::AuthorizationUnavailable(_)
+            | Self::Cancelled => None,
+        }
+    }
+
+    pub(crate) fn is_upstream(&self) -> bool {
+        self.upstream().is_some()
+    }
+
+    pub(crate) fn is_timeout(&self) -> bool {
+        self.upstream().is_some_and(|error| match error {
+            ServiceError::Timeout { .. } => true,
+            ServiceError::McpError(_)
+            | ServiceError::TransportSend(_)
+            | ServiceError::TransportClosed
+            | ServiceError::UnexpectedResponse
+            | ServiceError::SubscriptionLagged { .. }
+            | ServiceError::Cancelled { .. }
+            | ServiceError::InputRequiredRoundsExceeded { .. } => false,
+            _ => false,
+        })
+    }
+
+    pub(crate) fn is_unreachable(&self) -> bool {
+        self.upstream().is_some_and(|error| match error {
+            ServiceError::TransportSend(_) | ServiceError::TransportClosed => true,
+            ServiceError::McpError(_)
+            | ServiceError::Timeout { .. }
+            | ServiceError::UnexpectedResponse
+            | ServiceError::SubscriptionLagged { .. }
+            | ServiceError::Cancelled { .. }
+            | ServiceError::InputRequiredRoundsExceeded { .. } => false,
+            _ => false,
+        })
+    }
+
+    pub(crate) fn mcp_error(&self) -> Option<&ErrorData> {
+        self.upstream().and_then(|error| match error {
+            ServiceError::McpError(error) => Some(error),
+            ServiceError::TransportSend(_)
+            | ServiceError::TransportClosed
+            | ServiceError::Timeout { .. }
+            | ServiceError::UnexpectedResponse
+            | ServiceError::SubscriptionLagged { .. }
+            | ServiceError::Cancelled { .. }
+            | ServiceError::InputRequiredRoundsExceeded { .. } => None,
+            _ => None,
+        })
+    }
+
     pub fn into_mcp(self) -> ErrorData {
-        if let Self::Upstream(ServiceError::McpError(error)) = self {
-            return error;
+        if let Some(error) = self.mcp_error() {
+            return error.clone();
         }
         let message = self.detail();
         if self.status() == StatusCode::FORBIDDEN {
@@ -249,9 +318,12 @@ mod tests {
             fault: ConfigFault::ZeroTimeout,
         };
         assert!(format!("{error:?}").contains("ZeroTimeout"));
+        let report = Report::new(&error).to_string();
+        assert!(report.contains("docs"), "{report}");
         assert_eq!(
-            Report::new(&error).to_string(),
-            "MCP server docs is misconfigured: timeout must be positive"
+            report.matches("timeout must be positive").count(),
+            1,
+            "{report}"
         );
     }
 
@@ -270,6 +342,46 @@ mod tests {
     #[case::cancelled(Error::Cancelled, StatusCode::REQUEST_TIMEOUT)]
     fn status_follows_who_is_at_fault(#[case] error: Error, #[case] status: StatusCode) {
         assert_eq!(error.status(), status);
+    }
+
+    fn mcp_failure() -> Error {
+        Error::Upstream(ServiceError::McpError(ErrorData::invalid_params(
+            "bad", None,
+        )))
+    }
+
+    #[rstest]
+    #[case::timeout(
+        Error::Upstream(ServiceError::Timeout { timeout: std::time::Duration::from_secs(1) }),
+        true,
+        false,
+        false
+    )]
+    #[case::closed(Error::Upstream(ServiceError::TransportClosed), false, true, false)]
+    #[case::mcp_error(mcp_failure(), false, false, true)]
+    #[case::unexpected_response(
+        Error::Upstream(ServiceError::UnexpectedResponse),
+        false,
+        false,
+        false
+    )]
+    #[case::gateway_cancelled(Error::Cancelled, false, false, false)]
+    fn upstream_failures_answer_what_went_wrong(
+        #[case] error: Error,
+        #[case] timeout: bool,
+        #[case] unreachable: bool,
+        #[case] mcp_error: bool,
+    ) {
+        assert_eq!(error.is_timeout(), timeout);
+        assert_eq!(error.is_unreachable(), unreachable);
+        assert_eq!(error.mcp_error().is_some(), mcp_error);
+    }
+
+    #[rstest]
+    fn an_upstream_mcp_error_passes_through_unchanged() {
+        let mapped = mcp_failure().into_mcp();
+        assert_eq!(mapped.code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(mapped.message, "bad");
     }
 
     #[rstest]

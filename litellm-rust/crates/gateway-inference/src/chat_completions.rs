@@ -3,13 +3,16 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::State,
     response::{IntoResponse, Response},
 };
 use litellm_inference_chat::types::ChatCompletionsCall;
 use serde_json::{Map, Value};
 
-use crate::{Error, Gateway, JsonObject, request};
+use crate::{
+    Error, Gateway, JsonObject,
+    request::{self, Path},
+};
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,

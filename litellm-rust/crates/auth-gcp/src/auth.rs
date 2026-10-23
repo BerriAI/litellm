@@ -73,13 +73,17 @@ impl VertexAuth {
             .or_else(|| non_empty_env(env_lookup, VERTEXAI_API_KEY_ENV));
         let project_id = get_vertex_ai_project(config, env_lookup);
 
-        if !has_authorization && static_token.is_none() {
-            let access = self.get_access_token(config, env_lookup).await?;
-            return Ok(VertexEnvironment {
-                headers: apply_credential(headers, &access.token, CredentialPlacement::Bearer)?,
-                project_id: project_id.unwrap_or(access.project_id),
-            });
-        }
+        let static_token = match (has_authorization, static_token) {
+            (true, _) => None,
+            (false, Some(token)) => Some(token),
+            (false, None) => {
+                let access = self.get_access_token(config, env_lookup).await?;
+                return Ok(VertexEnvironment {
+                    headers: apply_credential(headers, &access.token, CredentialPlacement::Bearer)?,
+                    project_id: project_id.unwrap_or(access.project_id),
+                });
+            }
+        };
 
         let project_id = match project_id {
             Some(project_id) => project_id,
@@ -90,14 +94,9 @@ impl VertexAuth {
                     .await?
             }
         };
-        let headers = if has_authorization {
-            headers
-        } else {
-            apply_credential(
-                headers,
-                static_token.as_deref().expect("static token was checked"),
-                CredentialPlacement::Bearer,
-            )?
+        let headers = match static_token {
+            Some(token) => apply_credential(headers, &token, CredentialPlacement::Bearer)?,
+            None => headers,
         };
         Ok(VertexEnvironment {
             headers,

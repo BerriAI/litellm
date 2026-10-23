@@ -20,7 +20,7 @@ pub enum Error {
     InvalidJsonKey(&'static str),
     #[error("Out of range float values are not JSON compliant")]
     NonFiniteFloat,
-    #[error("integer does not fit in the JSON number range")]
+    #[error("integer does not fit in 64 bits")]
     IntegerOutOfRange,
     #[error("Object of type {0} cannot be pickled as plain data")]
     NotPicklable(&'static str),

@@ -31,6 +31,12 @@ pub enum Error {
         provider: &'static str,
         guidance: &'static str,
     },
+    #[error("{provider} cannot read this document: {message} - {guidance}")]
+    RejectedDocument {
+        provider: &'static str,
+        message: String,
+        guidance: &'static str,
+    },
     #[error("Invalid `req_format`. Expected 'native' or 'litellm'.")]
     RequestFormat,
     #[error("invalid OCR request field: {path}")]
@@ -71,6 +77,12 @@ pub enum Error {
     NumericRange(&'static str),
     #[error("OCR accepted response is missing a valid operation-location")]
     PollLocation,
+    #[error("OCR {url} is not a valid URL")]
+    InvalidPollUrl {
+        url: PollUrl,
+        #[source]
+        source: url::ParseError,
+    },
     #[error("OCR operation-location must use the submission origin without credentials")]
     PollOrigin,
     #[error("OCR polling timed out")]
@@ -120,6 +132,14 @@ pub enum PagesFault {
     Range,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PollUrl {
+    #[error("submission URL")]
+    Submission,
+    #[error("operation-location")]
+    OperationLocation,
+}
+
 impl From<litellm_host::machine::MachineFault> for Error {
     fn from(fault: litellm_host::machine::MachineFault) -> Self {
         Self::Host(fault)
@@ -162,6 +182,7 @@ impl Error {
             | Self::DocumentTask(_)
             | Self::InvalidMimeType(_)
             | Self::UnsupportedDocument { .. }
+            | Self::RejectedDocument { .. }
             | Self::RequestFormat
             | Self::RequestField { .. }
             | Self::Arguments(_)
@@ -178,6 +199,7 @@ impl Error {
             | Self::OperationStatus(_)
             | Self::NumericRange(_)
             | Self::PollLocation
+            | Self::InvalidPollUrl { .. }
             | Self::PollOrigin
             | Self::PollTimeout
             | Self::Unsupported(_)
@@ -203,6 +225,7 @@ impl Error {
             | Self::DocumentTask(_)
             | Self::InvalidMimeType(_)
             | Self::UnsupportedDocument { .. }
+            | Self::RejectedDocument { .. }
             | Self::RequestFormat
             | Self::RequestField { .. }
             | Self::Arguments(_)
@@ -219,6 +242,7 @@ impl Error {
             | Self::OperationStatus(_)
             | Self::NumericRange(_)
             | Self::PollLocation
+            | Self::InvalidPollUrl { .. }
             | Self::PollOrigin
             | Self::PollTimeout
             | Self::Unsupported(_)
@@ -242,6 +266,7 @@ impl Error {
             | Self::DocumentTask(_)
             | Self::InvalidMimeType(_)
             | Self::UnsupportedDocument { .. }
+            | Self::RejectedDocument { .. }
             | Self::RequestFormat
             | Self::RequestField { .. }
             | Self::Arguments(_)
@@ -258,6 +283,7 @@ impl Error {
             | Self::OperationStatus(_)
             | Self::NumericRange(_)
             | Self::PollLocation
+            | Self::InvalidPollUrl { .. }
             | Self::PollOrigin
             | Self::PollTimeout
             | Self::InvalidProvider(_)
@@ -290,6 +316,7 @@ impl Error {
             Self::EmptyFile
             | Self::InvalidMimeType(_)
             | Self::UnsupportedDocument { .. }
+            | Self::RejectedDocument { .. }
             | Self::RequestFormat
             | Self::RequestField { .. }
             | Self::Arguments(_)
@@ -315,6 +342,7 @@ impl Error {
             | Self::OperationStatus(_)
             | Self::NumericRange(_)
             | Self::PollLocation
+            | Self::InvalidPollUrl { .. }
             | Self::PollOrigin
             | Self::PollTimeout
             | Self::Unsupported(_)
@@ -333,6 +361,7 @@ impl Error {
             | Self::OperationStatus(_)
             | Self::NumericRange(_)
             | Self::PollLocation
+            | Self::InvalidPollUrl { .. }
             | Self::PollOrigin
             | Self::PollTimeout => true,
             Self::Http(error) => error.is_response(),
@@ -342,6 +371,7 @@ impl Error {
             | Self::DocumentTask(_)
             | Self::InvalidMimeType(_)
             | Self::UnsupportedDocument { .. }
+            | Self::RejectedDocument { .. }
             | Self::RequestFormat
             | Self::RequestField { .. }
             | Self::Arguments(_)

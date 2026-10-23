@@ -13,7 +13,7 @@ use tokio::time::Instant;
 
 use crate::base_llm::ocr::{
     document::InlineDocument,
-    error::{Error, PagesFault},
+    error::{Error, PagesFault, PollUrl},
     handler::{CallHooks, OcrClient, read_json_response},
     settings::OcrSettings,
     transformation::{
@@ -457,8 +457,14 @@ async fn read_operation_response(
         .and_then(|value| value.to_str().ok())
         .ok_or(Error::PollLocation)?
         .to_string();
-    let original = Url::parse(original_url).map_err(|_| Error::PollOrigin)?;
-    let operation = Url::parse(&location).map_err(|_| Error::PollOrigin)?;
+    let original = Url::parse(original_url).map_err(|source| Error::InvalidPollUrl {
+        url: PollUrl::Submission,
+        source,
+    })?;
+    let operation = Url::parse(&location).map_err(|source| Error::InvalidPollUrl {
+        url: PollUrl::OperationLocation,
+        source,
+    })?;
     if original.origin() != operation.origin()
         || !operation.username().is_empty()
         || operation.password().is_some()

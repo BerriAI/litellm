@@ -3649,6 +3649,7 @@ name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
  "litellm-auth",
+ "litellm-error",
  "litellm-host",
  "litellm-host-python",
  "proptest",
@@ -3656,6 +3657,7 @@ dependencies = [
  "rstest",
  "serde_json",
  "strum",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -4118,6 +4120,7 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "url",
  "wiremock",
 ]
 
@@ -4476,7 +4479,9 @@ version = "0.1.0"
 dependencies = [
  "litellm-core-utils",
  "litellm-error",
+ "litellm-http",
  "litellm-secrets-types",
+ "reqwest",
  "rstest",
  "rustify",
  "rustify_derive",

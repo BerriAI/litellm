@@ -24,12 +24,13 @@ impl HttpClient for ReqwestTransport {
             Body::SeekableStream(stream) => outgoing.body(reqwest::Body::wrap_stream(stream)),
         };
         let response = outgoing.send().await.map_err(|error| {
+            let error = litellm_http::Error::from(error);
             let kind = if error.is_connect() {
                 ErrorKind::Connection
             } else {
                 ErrorKind::Io
             };
-            azure_core::Error::new(kind, litellm_http::Error::from(error))
+            azure_core::Error::new(kind, error)
         })?;
         let status = response.status().as_u16().into();
         let mut headers = Headers::new();

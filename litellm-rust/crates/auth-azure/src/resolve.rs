@@ -140,7 +140,13 @@ impl AzureAuthService {
                         Err(error) => failures.push(error),
                     }
                 }
-                Err(Error::CredentialChain(failures))
+                match failures.pop() {
+                    Some(last) => Err(Error::CredentialChain {
+                        last: Box::new(last),
+                        earlier: failures,
+                    }),
+                    None => Ok(None),
+                }
             }
             AzureCredentialPlan::Missing => Ok(None),
         }
@@ -723,7 +729,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(&error, Error::CredentialChain(errors) if errors.len() == 2));
+        assert!(matches!(&error, Error::CredentialChain { earlier, .. } if earlier.len() == 1));
         let report = litellm_error::Report::new(&error).to_string();
         assert!(
             report.contains("managed-identity did not resolve"),

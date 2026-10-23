@@ -63,7 +63,7 @@ impl Serialize for Pickled<'_> {
             Value::Bool(value) => serializer.serialize_bool(*value),
             Value::Int(value) => {
                 let value = i64::try_from(value)
-                    .map_err(|_| serde::ser::Error::custom("integer out of i64 range"))?;
+                    .map_err(|_| serde::ser::Error::custom(Error::IntegerOutOfRange))?;
                 serializer.serialize_i64(value)
             }
             Value::Float(value) => serializer.serialize_f64(*value),
@@ -91,7 +91,7 @@ impl Serialize for Pickled<'_> {
                 map.end()
             }
             value @ (Value::Set(_) | Value::Complex { .. }) => Err(serde::ser::Error::custom(
-                format!("{} cannot be pickled as plain data", value.type_name()),
+                Error::NotPicklable(value.type_name()),
             )),
         }
     }

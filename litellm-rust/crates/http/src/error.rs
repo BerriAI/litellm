@@ -347,6 +347,41 @@ impl Error {
         }
     }
 
+    pub fn is_timeout(&self) -> bool {
+        match &*self.0 {
+            Repr::Timeout(_) | Repr::HandshakeTimeout(_) | Repr::DownloadTimeout(_) => true,
+            Repr::Read { .. }
+            | Repr::InvalidPem { .. }
+            | Repr::Client(_)
+            | Repr::TlsConfig(_)
+            | Repr::RequestBody(_)
+            | Repr::Request(_)
+            | Repr::RequestUrl(_)
+            | Repr::ComputedHeader(_)
+            | Repr::UnsignableBody
+            | Repr::UnsignableHeader(_)
+            | Repr::Signature(_)
+            | Repr::Connect(_)
+            | Repr::Network(_)
+            | Repr::Status { .. }
+            | Repr::WebSocketUrl(_)
+            | Repr::WebSocketScheme(_)
+            | Repr::WebSocketSchemeRewrite(_)
+            | Repr::Handshake(_)
+            | Repr::WebSocket(_)
+            | Repr::WebSocketClosed
+            | Repr::BlockedUrl
+            | Repr::Resolve(_)
+            | Repr::DownloadDisabled
+            | Repr::DownloadTooLarge
+            | Repr::TooManyRedirects
+            | Repr::MissingRedirectLocation
+            | Repr::InvalidRedirect(_)
+            | Repr::DownloadStatus(_)
+            | Repr::Download(_) => false,
+        }
+    }
+
     pub fn upstream_response(&self) -> Option<(u16, &str)> {
         match &*self.0 {
             Repr::Status { status, body } => Some((*status, body)),
@@ -552,6 +587,7 @@ mod tests {
         assert_eq!(report.matches(&root_cause).count(), 1, "{report}");
         assert!(!error.to_string().contains(&root_cause));
         assert!(error.is_connect());
+        assert!(!error.is_timeout());
         assert!(!report.contains("secret"), "{report}");
         assert!(!report.contains("private"), "{report}");
     }
@@ -581,6 +617,7 @@ mod tests {
         assert!(error.is_timeout());
         let error = crate::Error::from(error);
         assert!(error.dispatched());
+        assert!(error.is_timeout());
         assert!(!error.is_connect());
         assert_eq!(error.status(), Some(408));
     }

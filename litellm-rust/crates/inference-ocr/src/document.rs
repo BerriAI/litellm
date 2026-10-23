@@ -243,15 +243,16 @@ mod tests {
     }
 
     #[test]
-    fn file_encoding_rejects_empty_bytes_and_invalid_explicit_mime() {
+    fn file_encoding_rejects_empty_bytes() {
         assert!(encode_file_document(b"", None, None).is_err());
-        for mime in [
-            "text/plain;bad",
-            "text/plain/extra",
-            " text/plain",
-            "text/plain\n",
-        ] {
-            assert!(encode_file_document(b"abc", None, Some(mime)).is_err());
-        }
+    }
+
+    #[rstest]
+    #[case::bad_parameter("text/plain;bad")]
+    #[case::extra_segment("text/plain/extra")]
+    #[case::leading_space(" text/plain")]
+    #[case::trailing_newline("text/plain\n")]
+    fn file_encoding_rejects_an_invalid_explicit_mime(#[case] mime: &str) {
+        assert!(encode_file_document(b"abc", None, Some(mime)).is_err());
     }
 }

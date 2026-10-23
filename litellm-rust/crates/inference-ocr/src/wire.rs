@@ -190,16 +190,13 @@ mod tests {
         assert!(is_supported_request("deepseek-ocr", Some("vertex_ai")));
     }
 
-    #[test]
-    fn missing_document_source_has_a_typed_public_error() {
-        for document in [
-            serde_json::json!({"type": "document_url"}),
-            serde_json::json!({"type": "image_url"}),
-        ] {
-            assert!(matches!(
-                decode_document(document),
-                Err(Error::MissingDocumentUrl)
-            ));
-        }
+    #[rstest]
+    #[case::document_url(serde_json::json!({"type": "document_url"}))]
+    #[case::image_url(serde_json::json!({"type": "image_url"}))]
+    fn missing_document_source_has_a_typed_public_error(#[case] document: serde_json::Value) {
+        assert!(matches!(
+            decode_document(document),
+            Err(Error::MissingDocumentUrl)
+        ));
     }
 }

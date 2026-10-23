@@ -563,6 +563,8 @@ async fn upload_bytes_async(
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     #[tokio::test]
@@ -635,15 +637,16 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::fractional_pages(json!({"num_pages":1.5}))]
+    #[case::non_numeric_pages(json!({"num_pages":[]}))]
+    #[case::non_numeric_credits(json!({"credits":{}}))]
+    fn invalid_usage_is_rejected(#[case] usage: Value) {
+        assert!(serde_json::from_value::<ReductoResponse>(json!({"usage":usage})).is_err());
+    }
+
     #[test]
-    fn usage_uses_shared_validation_while_block_page_numbers_are_best_effort() {
-        for usage in [
-            json!({"num_pages":1.5}),
-            json!({"num_pages":[]}),
-            json!({"credits":{}}),
-        ] {
-            assert!(serde_json::from_value::<ReductoResponse>(json!({"usage":usage})).is_err());
-        }
+    fn block_page_numbers_are_best_effort() {
         let response = serde_json::from_value(json!({"result":{"chunks":[{"blocks":[
             {"content":"ignored", "bbox":{"page":"invalid"}},
             {"content":"kept", "bbox":{"page":2.5}, "extra":null}

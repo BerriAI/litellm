@@ -13,6 +13,8 @@ pub enum Error {
     Auth(#[from] litellm_gateway_auth::Error),
     #[error("invalid request body")]
     InvalidBody(#[from] BodyError),
+    #[error("invalid path parameter")]
+    InvalidPath(#[source] axum::extract::rejection::PathRejection),
     #[error(
         "{route}: Invalid model name passed in model={model}. Call `/v1/models` to view available models for your key."
     )]
@@ -70,6 +72,7 @@ impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::Auth(error) => error.status(),
+            Self::InvalidPath(rejection) => rejection.status(),
             Self::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
@@ -89,7 +92,7 @@ impl Error {
         let event = json!({
             "type": "error",
             "code": self.status().as_u16().to_string(),
-            "message": litellm_error::Report::new(self).to_string(),
+            "message": self.message(),
             "param": null,
         });
         format!("event: error\ndata: {event}\n\n")
@@ -98,7 +101,7 @@ impl Error {
     fn openai_body(&self) -> Value {
         let status = self.status();
         json!({"error": {
-            "message": litellm_error::Report::new(self).to_string(),
+            "message": self.message(),
             "type": error_type(status),
             "param": null,
             "code": status.as_u16(),
@@ -112,7 +115,7 @@ impl Error {
             Self::Route(error) if let Some((_, body)) = error.upstream_response() => {
                 body.to_owned()
             }
-            other => litellm_error::Report::new(other).to_string(),
+            other => other.message(),
         };
         let parsed = serde_json::from_str::<Value>(&raw).ok();
         let envelope = match parsed {
@@ -128,6 +131,20 @@ impl Error {
     /// An `event: error` frame, for a stream that fails after its headers went out.
     pub fn sse_frame(&self) -> String {
         format!("event: error\ndata: {}\n\n", self.body(None))
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::Auth(error) => error.to_string(),
+            Self::InvalidBody(_)
+            | Self::InvalidPath(_)
+            | Self::UnknownModel { .. }
+            | Self::Route(_)
+            | Self::Ocr(_)
+            | Self::Unsupported(_)
+            | Self::BodyTooLarge
+            | Self::Internal => litellm_error::Report::new(self).to_string(),
+        }
     }
 }
 
@@ -177,13 +194,13 @@ fn error_type(status: StatusCode) -> &'static str {
 }
 
 fn envelope(status: StatusCode, message: &str) -> Map<String, Value> {
-    let Value::Object(envelope) = json!({
-        "type": "error",
-        "error": {"type": error_type(status), "message": message},
-    }) else {
-        unreachable!("a json object literal is an object")
-    };
-    envelope
+    Map::from_iter([
+        ("type".to_owned(), Value::from("error")),
+        (
+            "error".to_owned(),
+            json!({"type": error_type(status), "message": message}),
+        ),
+    ])
 }
 
 fn is_anthropic_error(object: &Map<String, Value>) -> bool {
@@ -348,6 +365,24 @@ mod tests {
         assert_eq!(message.matches(&cause).count(), 1, "{message}");
         assert_eq!(body["error"]["type"], "invalid_request_error");
         assert_eq!(body["error"]["code"], 400);
+    }
+
+    fn auth_outage() -> Error {
+        Error::Auth(litellm_gateway_auth::Error::Unavailable(
+            litellm_error::Source::new(std::io::Error::other("private-backend-detail")),
+        ))
+    }
+
+    #[rstest]
+    #[case::openai(auth_outage().openai_body()["error"]["message"].clone())]
+    #[case::anthropic(auth_outage().body(None)["error"]["message"].clone())]
+    #[case::responses_sse(Value::from(auth_outage().responses_sse_frame()))]
+    #[case::anthropic_sse(Value::from(auth_outage().sse_frame()))]
+    fn an_auth_failure_hides_its_backend_cause(#[case] rendered: Value) {
+        let top = auth_outage().to_string();
+        let rendered = rendered.to_string();
+        assert!(rendered.contains(&top), "{rendered}");
+        assert!(!rendered.contains("private-backend-detail"), "{rendered}");
     }
 
     #[rstest]

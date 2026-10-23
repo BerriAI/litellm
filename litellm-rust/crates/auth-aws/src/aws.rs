@@ -1123,10 +1123,12 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(
-            litellm_error::Report::new(&error).to_string(),
-            "provider authentication failed: could not load AWS profile credentials: profile not found"
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(
+            report.contains("could not load AWS profile credentials"),
+            "{report}"
         );
+        assert_eq!(report.matches("profile not found").count(), 1, "{report}");
     }
 
     #[ignore]
