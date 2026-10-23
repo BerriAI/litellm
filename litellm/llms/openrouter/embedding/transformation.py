@@ -7,10 +7,12 @@ OpenRouter is OpenAI-compatible and supports embeddings via the /v1/embeddings e
 Docs: https://openrouter.ai/docs
 """
 
+import math
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
@@ -131,11 +133,20 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         # OpenRouter returns standard OpenAI-compatible embedding response
         response_json: Final = raw_response.json()
 
-        return convert_to_model_response_object(
+        convert_to_model_response_object(
             response_object=response_json,
             model_response_object=model_response,
             response_type="embedding",
         )
+        response_cost: Final[object] = (response_json.get("usage") or {}).get("cost")
+        if (
+            isinstance(response_cost, int | float)
+            and not isinstance(response_cost, bool)
+            and response_cost >= 0
+            and math.isfinite(response_cost)
+        ):
+            set_response_cost_in_hidden_params(model_response, response_cost)
+        return model_response
 
     def get_supported_openai_params(self, model: str) -> list:
         """
