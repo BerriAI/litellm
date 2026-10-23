@@ -3266,8 +3266,8 @@ class _SessionHeadWalk:
             self.prisma_client,
             query,
             *params,
-            [row["session_key"] for row in candidates],  # mutable-ok: prisma serializes array params from a list
-            [row["api_key"] for row in candidates],  # mutable-ok: prisma serializes array params from a list
+            [row["session_key"] for row in candidates],
+            [row["api_key"] for row in candidates],
         )
         return frozenset((row["session_key"], row["api_key"]) for row in shown)
 
@@ -3321,9 +3321,9 @@ class _SessionHeadWalk:
                    FROM unnest($1::text[], $2::text[], $3::text[]) AS heads(session_key, api_key, last_activity)
                    ORDER BY last_activity::timestamp DESC, session_key DESC, api_key DESC
                    LIMIT $4""",
-                [row["session_key"] for row in all_heads],  # mutable-ok: prisma serializes array params from a list
-                [row["api_key"] for row in all_heads],  # mutable-ok: prisma serializes array params from a list
-                [row["last_activity"] for row in all_heads],  # mutable-ok: prisma serializes array params from a list
+                [row["session_key"] for row in all_heads],
+                [row["api_key"] for row in all_heads],
+                [row["last_activity"] for row in all_heads],
                 self.page_limit + 1,
             )
             return tuple(page_rows)
@@ -5031,9 +5031,13 @@ async def _build_ui_spend_logs_response(
                            COALESCE(SUM(prompt_tokens), 0)::bigint AS session_total_prompt_tokens,
                            COALESCE(SUM(completion_tokens), 0)::bigint AS session_total_completion_tokens,
                            COALESCE(SUM(total_tokens), 0)::bigint AS session_total_tokens
-                    FROM "LiteLLM_SpendLogs"
-                    WHERE session_id = ANY($1::text[])
-                      AND api_key = ANY($2::text[])
+                    FROM unnest($1::text[]) AS requested(session_key)
+                    CROSS JOIN LATERAL (
+                        SELECT * FROM "LiteLLM_SpendLogs"
+                        WHERE session_id = requested.session_key
+                          AND api_key = ANY($2::text[])
+                        OFFSET 0
+                    ) AS session_rows
                     GROUP BY session_id, api_key
                 ) s
                 LEFT JOIN LATERAL (

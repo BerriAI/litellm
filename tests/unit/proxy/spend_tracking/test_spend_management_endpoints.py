@@ -7212,7 +7212,7 @@ def _session_grouped_mock_prisma(session_page_rows, session_total, representativ
             return _session_count_walk(session_total)
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": session_total}]
-        if "CROSS JOIN LATERAL" in sql_query or "DISTINCT ON" in sql_query:
+        if "AS rep" in sql_query or "DISTINCT ON" in sql_query:
             return representative_rows
         if "COALESCE(SUM(spend)" in sql_query:
             return [
@@ -7270,7 +7270,7 @@ def _session_grouped_paginating_prisma(sessions, counted_total=None):
             return _session_count_walk(len(sessions) if counted_total is None else counted_total)
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": min(len(sessions) if counted_total is None else counted_total, params[-1])}]
-        if "CROSS JOIN LATERAL" in sql_query or "DISTINCT ON" in sql_query:
+        if "AS rep" in sql_query or "DISTINCT ON" in sql_query:
             return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
         if "COALESCE(SUM(spend)" in sql_query:
             return []
@@ -7400,7 +7400,7 @@ def _session_walk_mock_prisma(walked_rows, window_rows_per_batch, grouped_rows):
             return _session_count_walk(3)
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": 3}]
-        if "CROSS JOIN LATERAL" in sql_query:
+        if "AS rep" in sql_query:
             return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
         if "COALESCE(SUM(spend)" in sql_query:
             return []
@@ -7488,7 +7488,7 @@ async def test_ui_view_spend_logs_group_by_session_walk_finishes_a_tied_timestam
             return _session_count_walk(3)
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": 3}]
-        if "CROSS JOIN LATERAL" in sql_query:
+        if "AS rep" in sql_query:
             return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
         return []
 

@@ -539,7 +539,7 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
             return [{"rows_read": 0, "sessions": 60}]
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": 60}]
-        if "CROSS JOIN LATERAL" in sql_query or "DISTINCT ON" in sql_query:
+        if "AS rep" in sql_query or "DISTINCT ON" in sql_query:
             return representative_rows
         return session_rows
 
