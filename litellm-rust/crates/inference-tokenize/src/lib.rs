@@ -1,8 +1,9 @@
+mod error;
 mod handler;
 mod route;
 mod types;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use litellm_auth::AuthServices;
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
@@ -16,16 +17,21 @@ use litellm_llms::{
 };
 use litellm_llms_types::formats::tokenize::TokenizeResponse;
 use litellm_secrets::source::SecretSource;
+mod local;
 
 pub use litellm_inference::Error;
+pub use local::LocalTokenizerRegistry;
 pub use route::{Tokenize, TokenizeCall, TokenizeMachine};
-pub use types::TokenizeRequest;
+pub use types::{TokenizeBackend, TokenizeRequest};
+
+static DEFAULT_LOCAL_REGISTRY: OnceLock<Arc<LocalTokenizerRegistry>> = OnceLock::new();
 
 #[derive(Clone)]
 pub struct TokenizeRoute {
     http: Client,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
+    local_registry: Arc<LocalTokenizerRegistry>,
 }
 
 impl TokenizeRoute {
@@ -34,7 +40,15 @@ impl TokenizeRoute {
             http,
             auth,
             secrets,
+            local_registry: Arc::clone(
+                DEFAULT_LOCAL_REGISTRY.get_or_init(|| Arc::new(LocalTokenizerRegistry::new())),
+            ),
         }
+    }
+
+    pub fn with_local_registry(mut self, registry: Arc<LocalTokenizerRegistry>) -> Self {
+        self.local_registry = registry;
+        self
     }
 
     pub async fn execute(
@@ -61,6 +75,9 @@ impl TokenizeRoute {
         observers: Option<&ObservationSender>,
     ) -> Result<TokenizeResponse, Error> {
         litellm_inference::diagnostic::unary(async {
+            if matches!(&call.backend, TokenizeBackend::Local { .. }) {
+                return handler::execute_local(self, call, interceptors, observers).await;
+            }
             let provider =
                 resolve_llm_provider(&call.model, call.custom_llm_provider.as_deref(), "tokenize")?;
             let config: &dyn BaseTokenizeConfig = match provider.provider {
@@ -68,6 +85,9 @@ impl TokenizeRoute {
                 LlmProviders::Watsonx => &WatsonxTokenizeConfig,
                 _ => return Err(Error::Unsupported("tokenize provider")),
             };
+            if !config.tokenize_capabilities().supports(call.output) {
+                return Err(Error::Unsupported("requested tokenize output"));
+            }
             litellm_inference::diagnostic::provider(provider.model, provider.provider.into());
             let secrets = self.secrets.resolve(&config.secret_names()).await?;
             let execute: futures_util::future::BoxFuture<'_, Result<TokenizeResponse, Error>> =

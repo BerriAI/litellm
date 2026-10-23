@@ -32,6 +32,18 @@ impl HuggingFaceTokenizer {
             .map_err(Error::Load)
     }
 
+    pub fn from_json_with_policy(
+        json: &str,
+        recognize_special_tokens: bool,
+    ) -> Result<Self, Error> {
+        json.parse::<tokenizers::Tokenizer>()
+            .map(|mut tokenizer| {
+                tokenizer.set_encode_special_tokens(!recognize_special_tokens);
+                Self::new(tokenizer)
+            })
+            .map_err(Error::Load)
+    }
+
     fn new(tokenizer: tokenizers::Tokenizer) -> Self {
         let special_token_ids: HashSet<u32> = tokenizer
             .get_added_tokens_decoder()
@@ -47,6 +59,16 @@ impl HuggingFaceTokenizer {
     /// The parsed model, for a count-only counter to share instead of parsing it again.
     pub fn shared(&self) -> Arc<tokenizers::Tokenizer> {
         Arc::clone(&self.tokenizer)
+    }
+
+    pub fn is_deterministic(&self) -> bool {
+        match self.tokenizer.get_model() {
+            tokenizers::models::ModelWrapper::BPE(model) => match model.dropout {
+                None => true,
+                Some(dropout) => dropout == 0.0,
+            },
+            _ => true,
+        }
     }
 
     pub fn count_tokens(&self, text: &str) -> Result<usize, Error> {

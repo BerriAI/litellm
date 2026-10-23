@@ -75,7 +75,10 @@ pub(crate) fn token_count_error_to_pyerr(error: Error) -> PyErr {
         Error::Load(_)
         | Error::Ranks(_)
         | Error::UnicodeClasses
-        | Error::UnsupportedTokenizer(_) => PyValueError::new_err(message),
+        | Error::UnsupportedTokenizer(_)
+        | Error::RawTextConfig(_)
+        | Error::ArtifactRead(_)
+        | Error::ArtifactHashMismatch => PyValueError::new_err(message),
         Error::RequestParse(_)
         | Error::MissingInput
         | Error::FloatText

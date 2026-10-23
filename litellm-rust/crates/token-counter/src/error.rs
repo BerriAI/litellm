@@ -1,3 +1,4 @@
+use std::io;
 use std::string::FromUtf8Error;
 
 use thiserror::Error as ThisError;
@@ -36,4 +37,10 @@ pub enum Error {
     Decode(String),
     #[error("token counting task failed: {0}")]
     Task(String),
+    #[error("invalid raw-text tokenizer configuration at {0}")]
+    RawTextConfig(&'static str),
+    #[error("failed to read tokenizer artifact")]
+    ArtifactRead(#[source] io::Error),
+    #[error("tokenizer artifact SHA-256 did not match configured digest")]
+    ArtifactHashMismatch,
 }
