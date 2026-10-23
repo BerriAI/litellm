@@ -947,6 +947,68 @@ class TestOllamaToolCallTransformation:
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
 
+    def test_streaming_preserves_existing_tool_call_id(self):
+        """Streaming: if a tool_call in a chunk already has an id, OllamaChatCompletionResponseIterator
+        must preserve that id instead of generating a new uuid.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        tool_chunk = {
+            "model": "qwen3:8b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_pre_existing_id_123",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"city": "San Francisco"},
+                        },
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(tool_chunk)
+        assert result.choices[0].delta.tool_calls is not None
+        assert result.choices[0].delta.tool_calls[0]["id"] == "call_pre_existing_id_123"
+
+    def test_streaming_generates_id_when_missing(self):
+        """Streaming: if a tool_call in a chunk lacks an id, OllamaChatCompletionResponseIterator
+        generates an id when function arguments are complete.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        tool_chunk = {
+            "model": "qwen3:8b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"city": "San Francisco"},
+                        },
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(tool_chunk)
+        assert result.choices[0].delta.tool_calls is not None
+        assert "id" in result.choices[0].delta.tool_calls[0]
+        assert result.choices[0].delta.tool_calls[0]["id"] is not None
+
 
 class TestOllamaStreamingUsage:
     @staticmethod
