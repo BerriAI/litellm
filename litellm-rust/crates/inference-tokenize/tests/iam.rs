@@ -8,6 +8,7 @@ use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, Wire
 use litellm_http::{Client, transport::Error as TransportError};
 use litellm_inference_testing::RecordingSecrets;
 use litellm_inference_tokenize::{Error, TokenizeRequest, TokenizeRoute};
+use litellm_llms_types::formats::tokenize::TokenizeInclude;
 use rstest::{fixture, rstest};
 use serde_json::json;
 use wiremock::{
@@ -69,6 +70,7 @@ async fn watsonx_iam_credentials_are_resolved_once_across_routes(
     let request = TokenizeRequest {
         model: "watsonx/ibm/model".into(),
         prompt: "hello world".into(),
+        include: TokenizeInclude::new(false, true),
         ..Default::default()
     };
     let first_response = first.execute(request.clone(), &(), None).await.unwrap();
@@ -102,6 +104,7 @@ fn request() -> TokenizeRequest {
     TokenizeRequest {
         model: "watsonx/ibm/model".into(),
         prompt: "hello".into(),
+        include: TokenizeInclude::new(false, true),
         ..Default::default()
     }
 }

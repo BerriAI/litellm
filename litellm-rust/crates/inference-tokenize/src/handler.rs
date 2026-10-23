@@ -42,13 +42,16 @@ pub(crate) async fn execute(
     );
     config.validate_tokenize_input(&input, &env_lookup)?;
     let supported_params = config.get_supported_tokenize_params();
-    let params: Map<String, Value> = call
+    let mut params: Map<String, Value> = call
         .deployment_params
         .iter()
         .filter(|(key, _)| supported_params.contains(&key.as_str()))
         .chain(call.optional_params.iter())
         .map(|(key, value)| (key.clone(), value.value().clone()))
         .collect();
+    if let Some(value) = call.add_special_tokens {
+        params.insert("add_special_tokens".into(), Value::Bool(value));
+    }
     let params = config.map_tokenize_params(provider.model, &params)?;
     let headers = input.string_headers()?;
     let environment = config.validate_environment(
@@ -136,7 +139,7 @@ pub(crate) async fn execute(
     })?;
     let response = project_response(
         config.transform_tokenize_response(provider.model, json)?,
-        call.output,
+        call.include.output(),
     )?;
     context
         .result_ready(ExecutionFacts {
@@ -220,17 +223,24 @@ pub(crate) async fn execute_local(
         ));
     }
     let configured = config.value();
+    let configured = call.add_special_tokens.map_or_else(
+        || Arc::clone(configured),
+        |add_special_tokens| {
+            let mut overridden = (**configured).clone();
+            overridden.add_special_tokens = Some(add_special_tokens);
+            Arc::new(overridden)
+        },
+    );
     let capabilities = litellm_llms::base_llm::tokenize::transformation::TokenizeCapabilities {
         token_ids: true,
         tokens: matches!(&configured.engine, RawTextEngine::HuggingFace),
     };
-    if !capabilities.supports(call.output) {
+    let output = call.include.output();
+    if !capabilities.supports(output) {
         return Err(Error::Unsupported("requested tokenize output"));
     }
     let prompt = call.prompt;
-    let output = call.output;
-    let model = call.model;
-    let tokenizer = route.local_registry.preload(Arc::clone(configured)).await?;
+    let tokenizer = route.local_registry.preload(configured).await?;
     let result = if output == TokenizeOutput::Count {
         let count = route
             .local_registry
@@ -247,18 +257,14 @@ pub(crate) async fn execute_local(
             .encode(
                 Arc::clone(&tokenizer),
                 prompt,
-                matches!(
-                    output,
-                    TokenizeOutput::Ids | TokenizeOutput::Both | TokenizeOutput::Available
-                ),
-                matches!(output, TokenizeOutput::Tokens | TokenizeOutput::Both)
-                    || (output == TokenizeOutput::Available && tokenizer.supports_tokens()),
+                matches!(output, TokenizeOutput::Ids | TokenizeOutput::Both),
+                matches!(output, TokenizeOutput::Tokens | TokenizeOutput::Both),
             )
             .await?
     };
     let identity: &RawTextIdentity = tokenizer.identity();
     let response = TokenizeResponse {
-        model,
+        model: identity.id.clone(),
         count: result.count as u64,
         token_ids: result
             .token_ids

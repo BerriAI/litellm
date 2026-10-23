@@ -11,6 +11,7 @@ use litellm_host_native::in_process::{Host, run_hosted};
 use litellm_http::Client;
 use litellm_inference_testing::no_secrets;
 use litellm_inference_tokenize::{TokenizeRequest, TokenizeRoute};
+use litellm_llms_types::formats::tokenize::TokenizeInclude;
 use rstest::{fixture, rstest};
 use serde_json::json;
 use tokio::sync::Notify;
@@ -46,6 +47,7 @@ async fn observers_receive_result_facts_before_one_terminal_event(
     let request = TokenizeRequest {
         model: "hosted_vllm/org/model".into(),
         prompt: "hello".into(),
+        include: TokenizeInclude::new(true, false),
         api_base: Some(request_api_base(server.uri())),
         ..Default::default()
     };
@@ -115,6 +117,7 @@ async fn cancellation_emits_one_cancelled_terminal_event(route: TokenizeRoute) {
     let request = TokenizeRequest {
         model: "hosted_vllm/org/model".into(),
         prompt: "hello".into(),
+        include: TokenizeInclude::new(true, false),
         api_base: Some(request_api_base(server.uri())),
         ..Default::default()
     };

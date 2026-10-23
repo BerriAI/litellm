@@ -16,7 +16,7 @@ use litellm_inference_testing::{RecordingSecrets, no_secrets};
 use litellm_inference_tokenize::{
     Error, LocalTokenizerRegistry, TokenizeBackend, TokenizeRequest, TokenizeRoute,
 };
-use litellm_llms_types::formats::tokenize::TokenizeOutput;
+use litellm_llms_types::formats::tokenize::TokenizeInclude;
 use litellm_token_counter::raw_text::{LocalTokenizerConfig, RawTextArtifact, RawTextEngine};
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
@@ -76,6 +76,26 @@ fn local_config(engine: RawTextEngine, artifact: RawTextArtifact) -> Arc<LocalTo
     })
 }
 
+fn local_hugging_face_postprocessor_artifact() -> String {
+    let mut artifact: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../litellm/litellm_core_utils/tokenizers/anthropic_tokenizer.json"
+    )))
+    .unwrap();
+    artifact["post_processor"] = json!({
+        "type": "TemplateProcessing",
+        "single": [
+            {"SpecialToken": {"id": "<EOT>", "type_id": 0}},
+            {"Sequence": {"id": "A", "type_id": 0}}
+        ],
+        "pair": [],
+        "special_tokens": {
+            "<EOT>": {"id": "<EOT>", "ids": [0], "tokens": ["<EOT>"]}
+        }
+    });
+    serde_json::to_string(&artifact).unwrap()
+}
+
 fn local_call(config: Arc<LocalTokenizerConfig>, source: InputSource) -> TokenizeRequest {
     TokenizeRequest {
         model: "local-test".into(),
@@ -88,25 +108,34 @@ fn local_call(config: Arc<LocalTokenizerConfig>, source: InputSource) -> Tokeniz
 }
 
 #[rstest]
-#[case::vllm("hosted_vllm/org/model", "/tokenize", json!({}),
-    json!({"model":"org/model","prompt":"hello","add_special_tokens":true,"return_token_strs":true}),
-    json!({"count":1,"max_model_len":4096,"tokens":[42],"token_strs":["hello"]}),
-    json!([42]))]
-#[case::watsonx("watsonx/org/model", "/ml/v1/text/tokenization",
-    json!({"project_id":"project","token":"test-key"}),
-    json!({"model_id":"org/model","input":"hello","project_id":"project","parameters":{"return_tokens":true}}),
-    json!({"model_id":"org/model","result":{"token_count":1,"tokens":["hello"]}}),
-    Value::Null)]
+#[case::vllm(false)]
+#[case::watsonx(true)]
 #[tokio::test]
-async fn providers_share_a_typed_response(
-    route: TokenizeRoute,
-    #[case] model: &str,
-    #[case] endpoint: &str,
-    #[case] params: Value,
-    #[case] request: Value,
-    #[case] response: Value,
-    #[case] token_ids: Value,
-) {
+async fn providers_share_a_typed_response(route: TokenizeRoute, #[case] watsonx: bool) {
+    let (model, endpoint, params, request, response, token_ids, include_ids, include_tokens) =
+        if watsonx {
+            (
+                "watsonx/org/model",
+                "/ml/v1/text/tokenization",
+                json!({"project_id":"project","token":"test-key"}),
+                json!({"model_id":"org/model","input":"hello","project_id":"project","parameters":{"return_tokens":true}}),
+                json!({"model_id":"org/model","result":{"token_count":1,"tokens":["hello"]}}),
+                Value::Null,
+                false,
+                true,
+            )
+        } else {
+            (
+                "hosted_vllm/org/model",
+                "/tokenize",
+                json!({}),
+                json!({"model":"org/model","prompt":"hello","add_special_tokens":true,"return_token_strs":true}),
+                json!({"count":1,"max_model_len":4096,"tokens":[42],"token_strs":["hello"]}),
+                json!([42]),
+                true,
+                true,
+            )
+        };
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path(endpoint))
@@ -121,6 +150,7 @@ async fn providers_share_a_typed_response(
             TokenizeRequest {
                 model: model.into(),
                 prompt: "hello".into(),
+                include: TokenizeInclude::new(include_ids, include_tokens),
                 api_base: Some(sourced(server.uri())),
                 api_key: Some(sourced(SecretValue::new("test-key"))),
                 optional_params: sourced_map(&params),
@@ -203,7 +233,10 @@ async fn hosted_execution_is_lazy_and_applies_hooks_before_dispatch() {
         .and(body_json(json!({
             "model":"org/model", "prompt":"rewritten", "add_special_tokens":true, "return_token_strs":true
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"count":1,"tokens":[7]})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"count":1,"tokens":[7],"token_strs":["hello"]})),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -218,6 +251,7 @@ async fn hosted_execution_is_lazy_and_applies_hooks_before_dispatch() {
             model: "org/model".into(),
             custom_llm_provider: Some("hosted_vllm".into()),
             prompt: "original".into(),
+            include: TokenizeInclude::new(true, true),
             api_base: Some(sourced(server.uri())),
             ..Default::default()
         },
@@ -259,7 +293,7 @@ async fn hosted_execution_is_lazy_and_applies_hooks_before_dispatch() {
     let raw = hooks.raw.lock().unwrap().clone().unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&raw.body).unwrap(),
-        json!({"count":1,"tokens":[7]})
+        json!({"count":1,"tokens":[7],"token_strs":["hello"]})
     );
 }
 
@@ -764,15 +798,33 @@ async fn unsupported_calls_fail_before_dispatch(
 }
 
 #[rstest]
-#[case::count(TokenizeOutput::Count, false, false)]
-#[case::ids(TokenizeOutput::Ids, true, false)]
-#[case::tokens(TokenizeOutput::Tokens, false, true)]
-#[case::both(TokenizeOutput::Both, true, true)]
-#[case::available(TokenizeOutput::Available, true, true)]
+#[tokio::test]
+async fn directly_constructed_empty_model_is_rejected_before_dispatch(route: TokenizeRoute) {
+    let error = route
+        .execute(
+            TokenizeRequest {
+                model: String::new(),
+                ..Default::default()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(error, Error::InvalidRequest(message) if message.to_string() == "model must not be empty")
+    );
+}
+
+#[rstest]
+#[case::count(false, false)]
+#[case::ids(true, false)]
+#[case::tokens(false, true)]
+#[case::both(true, true)]
 #[tokio::test]
 async fn local_output_modes_return_only_requested_representations(
     route: TokenizeRoute,
-    #[case] output: TokenizeOutput,
     #[case] ids: bool,
     #[case] tokens: bool,
 ) {
@@ -781,16 +833,12 @@ async fn local_output_modes_return_only_requested_representations(
         local_config(
             RawTextEngine::HuggingFace,
             RawTextArtifact::Inline {
-                content: include_str!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../../litellm/litellm_core_utils/tokenizers/anthropic_tokenizer.json"
-                ))
-                .into(),
+                content: local_hugging_face_postprocessor_artifact(),
             },
         ),
         InputSource::Deployment,
     );
-    call.output = output;
+    call.include = TokenizeInclude::new(ids, tokens);
     let response = route.execute(call, &(), None).await.unwrap();
 
     assert!(response.count > 0);
@@ -840,7 +888,7 @@ async fn unsupported_local_pieces_are_rejected_before_file_access(route: Tokeniz
         ),
         InputSource::Deployment,
     );
-    request.output = TokenizeOutput::Tokens;
+    request.include = TokenizeInclude::new(false, true);
     let error = route.execute(request, &(), None).await.unwrap_err();
 
     assert!(matches!(
@@ -899,7 +947,7 @@ async fn local_success_reports_identity_and_zero_cost_without_provider_hooks(rou
     request.model = "public-alias".into();
     let response = route.execute(request.clone(), &hooks, None).await.unwrap();
 
-    assert_eq!(response.model, "public-alias");
+    assert_eq!(response.model, "local-test");
     assert!(hooks.context.lock().unwrap().is_none());
     assert!(hooks.raw.lock().unwrap().is_none());
     let facts = hooks.facts.lock().unwrap().clone().unwrap();
@@ -918,7 +966,7 @@ async fn local_success_reports_identity_and_zero_cost_without_provider_hooks(rou
 
     let warm_hooks = Hooks::default();
     let warm_response = route.execute(request, &warm_hooks, None).await.unwrap();
-    assert_eq!(warm_response.model, "public-alias");
+    assert_eq!(warm_response.model, "local-test");
     let warm_facts = warm_hooks.facts.lock().unwrap().clone().unwrap();
     assert_eq!(
         warm_facts.source,
@@ -951,7 +999,7 @@ async fn unsupported_provider_representation_fails_before_secret_resolution() {
             TokenizeRequest {
                 model: "watsonx/org/model".into(),
                 prompt: "hello".into(),
-                output: TokenizeOutput::Ids,
+                include: TokenizeInclude::new(true, false),
                 api_base: Some(sourced("https://example.invalid".to_string())),
                 ..Default::default()
             },
@@ -966,6 +1014,172 @@ async fn unsupported_provider_representation_fails_before_secret_resolution() {
         Error::Unsupported("requested tokenize output")
     ));
     assert!(secrets.requested().is_empty());
+}
+
+#[rstest]
+#[case::enabled(true)]
+#[case::disabled(false)]
+#[tokio::test]
+async fn top_level_special_token_policy_reaches_vllm_wire(
+    route: TokenizeRoute,
+    #[case] add_special_tokens: bool,
+) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/tokenize"))
+        .and(body_json(json!({
+            "model":"org/model",
+            "prompt":"hello",
+            "add_special_tokens":add_special_tokens,
+            "return_token_strs":true
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "count": 1,
+            "tokens": [42],
+            "token_strs": ["hello"]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    route
+        .execute(
+            TokenizeRequest {
+                model: "hosted_vllm/org/model".into(),
+                prompt: "hello".into(),
+                add_special_tokens: Some(add_special_tokens),
+                api_base: Some(sourced(server.uri())),
+                deployment_params: sourced_map_at(
+                    &json!({"add_special_tokens": !add_special_tokens}),
+                    InputSource::Deployment,
+                ),
+                ..Default::default()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap();
+}
+
+#[rstest]
+#[case::enabled(true)]
+#[case::disabled(false)]
+#[tokio::test]
+async fn watsonx_special_token_policy_is_rejected_before_secret_resolution(
+    #[case] add_special_tokens: bool,
+) {
+    let secrets = Arc::new(RecordingSecrets::new([(
+        "WATSONX_APIKEY",
+        "must-not-be-requested",
+    )]));
+    let route = TokenizeRoute::new(
+        Client::plain_for_test(),
+        Arc::new(AuthServices::default()),
+        secrets.clone(),
+    );
+    let error = route
+        .execute(
+            TokenizeRequest {
+                model: "watsonx/org/model".into(),
+                add_special_tokens: Some(add_special_tokens),
+                ..Default::default()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, Error::Unsupported("add_special_tokens")));
+    assert!(secrets.requested().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn duplicate_special_token_policy_is_rejected_before_provider_io(route: TokenizeRoute) {
+    let server = MockServer::start().await;
+    let error = route
+        .execute(
+            TokenizeRequest {
+                model: "hosted_vllm/org/model".into(),
+                add_special_tokens: Some(true),
+                api_base: Some(sourced(server.uri())),
+                optional_params: BTreeMap::from([(
+                    "add_special_tokens".into(),
+                    sourced(json!(false)),
+                )]),
+                ..Default::default()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("both"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn local_hugging_face_special_token_override_is_policy_scoped(route: TokenizeRoute) {
+    let route = route.with_local_registry(Arc::new(LocalTokenizerRegistry::with_capacity(4)));
+    let configured = {
+        let mut config = (*local_config(
+            RawTextEngine::HuggingFace,
+            RawTextArtifact::Inline {
+                content: local_hugging_face_postprocessor_artifact(),
+            },
+        ))
+        .clone();
+        config.add_special_tokens = Some(false);
+        Arc::new(config)
+    };
+
+    let omitted = route
+        .execute(
+            local_call(Arc::clone(&configured), InputSource::Deployment),
+            &(),
+            None,
+        )
+        .await
+        .unwrap()
+        .count;
+    let mut explicit_true = local_call(Arc::clone(&configured), InputSource::Deployment);
+    explicit_true.add_special_tokens = Some(true);
+    let enabled = route.execute(explicit_true, &(), None).await.unwrap().count;
+    let mut explicit_false = local_call(configured, InputSource::Deployment);
+    explicit_false.add_special_tokens = Some(false);
+    let disabled = route
+        .execute(explicit_false, &(), None)
+        .await
+        .unwrap()
+        .count;
+
+    assert!(enabled > omitted);
+    assert_eq!(disabled, omitted);
+}
+
+#[rstest]
+#[tokio::test]
+async fn local_tiktoken_special_token_insertion_is_rejected(route: TokenizeRoute) {
+    let mut request = local_call(
+        local_config(
+            RawTextEngine::Tiktoken {
+                encoding: "cl100k_base".into(),
+            },
+            RawTextArtifact::Inline {
+                content: String::new(),
+            },
+        ),
+        InputSource::Deployment,
+    );
+    request.add_special_tokens = Some(true);
+
+    let error = route.execute(request, &(), None).await.unwrap_err();
+
+    assert!(error.to_string().contains("add_special_tokens"));
 }
 
 #[rstest]
@@ -994,7 +1208,6 @@ async fn count_output_is_projected_without_becoming_a_provider_parameter(route: 
             TokenizeRequest {
                 model: "hosted_vllm/org/model".into(),
                 prompt: "hello".into(),
-                output: TokenizeOutput::Count,
                 api_base: Some(sourced(server.uri())),
                 ..Default::default()
             },
@@ -1031,7 +1244,7 @@ async fn strict_provider_output_rejects_missing_but_preserves_empty_representati
             TokenizeRequest {
                 model: "hosted_vllm/org/model".into(),
                 prompt: "".into(),
-                output: TokenizeOutput::Both,
+                include: TokenizeInclude::new(true, true),
                 api_base: Some(sourced(server.uri())),
                 ..Default::default()
             },
@@ -1060,7 +1273,7 @@ async fn strict_provider_output_rejects_missing_but_preserves_empty_representati
             TokenizeRequest {
                 model: "hosted_vllm/org/model".into(),
                 prompt: "hello".into(),
-                output: TokenizeOutput::Tokens,
+                include: TokenizeInclude::new(false, true),
                 api_base: Some(sourced(missing.uri())),
                 ..Default::default()
             },
