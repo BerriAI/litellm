@@ -249,5 +249,10 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "rapidrouter": {
+    "base_url": "https://rapidrouter.ai/api/v1",
+    "api_key_env": "RAPIDROUTER_API_KEY",
+    "api_base_env": "RAPIDROUTER_API_BASE"
   }
 }
