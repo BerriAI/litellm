@@ -1656,7 +1656,7 @@ def test_ProxyConfig__init_cache_sets_litellm_cache(monkeypatch):
 
 def test_ProxyConfig__init_cache_invalid_params_raises():
     pc = ProxyConfig()
-    with pytest.raises(AttributeError):
+    with pytest.raises(ValueError, match="Unsupported cache type 'this-cache-type-does-not-exist'"):
         pc._init_cache(cache_params={"type": "this-cache-type-does-not-exist"})
 
 
