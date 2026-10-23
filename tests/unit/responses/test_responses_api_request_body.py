@@ -22,7 +22,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
     UPSTREAM_FIRST_BYTE_SECONDS,
@@ -1250,17 +1249,12 @@ async def _invoke_responses(sync_mode: bool, model: str, pricing: Mapping[str, f
 @pytest.mark.parametrize("sync_mode", (True, False))
 @pytest.mark.parametrize("model", ("openai/gpt-5.4-nano", "openai/custom-priced-model-not-in-cost-map"))
 async def test_responses_bills_per_call_custom_pricing_from_usage(
-    request: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
-    respx_mock: respx.MockRouter,
-    sync_mode: bool,
-    model: str,
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, sync_mode: bool, model: str
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     model_cost: dict[str, object] = getattr(litellm, "model_cost")
     monkeypatch.setattr(litellm, "model_cost", dict(model_cost))
-    request.addfinalizer(_invalidate_model_cost_lowercase_map)
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post("https://api.openai.com/v1/responses").mock(
         return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_custom_price", model.split("/")[1]))

@@ -40,7 +40,7 @@ from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_h
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
-from litellm.main import _register_custom_pricing_for_request
+from litellm.main import register_custom_pricing_for_request
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     with_compaction_items_as_summaries,
 )
@@ -1705,8 +1705,11 @@ def responses(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
         if _registers_custom_pricing(per_call_pricing):
-            _register_custom_pricing_for_request(
-                model=model, custom_llm_provider=custom_llm_provider, kwargs=kwargs, model_info=kwargs.get("model_info")
+            register_custom_pricing_for_request(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=kwargs,
+                model_info=litellm_params.model_info,
             )
 
         fake_stream: Final = responses_api_provider_config.should_fake_stream(
