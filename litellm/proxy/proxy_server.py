@@ -11257,7 +11257,7 @@ class ProxyStartupEvent:
         ### TOOL DISCOVERY (own lock, same interval, never rides the spend commit) ###
         from litellm.proxy.utils import commit_tool_discoveries
 
-        scheduler.add_job(
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
             commit_tool_discoveries,
             "interval",
             seconds=batch_writing_interval,
