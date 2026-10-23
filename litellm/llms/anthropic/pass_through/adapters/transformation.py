@@ -45,6 +45,13 @@ def _thought_signature(provider_specific_fields: object) -> str | None:
     return signature if isinstance(signature, str) else None
 
 
+def _matched_stop_sequence(provider_specific_fields: object) -> str | None:
+    """The stop string vLLM reports in a choice's ``stop_reason``; an int there is a stop token id, not a sequence."""
+    fields: Final = _as_string_mapping(provider_specific_fields)
+    stop_reason: Final = fields.get("stop_reason") if fields is not None else None
+    return stop_reason if isinstance(stop_reason, str) and stop_reason else None
+
+
 def _compaction_blocks(provider_specific_fields: object) -> tuple[Mapping[str, object], ...]:
     fields: Final = _as_string_mapping(provider_specific_fields)
     raw_blocks: Final = fields.get("compaction_blocks") if fields is not None else None
@@ -1592,11 +1599,18 @@ class LiteLLMAnthropicMessagesAdapter:
         translated_finish_reason: Final = self._translate_openai_finish_reason_to_anthropic(
             openai_finish_reason=openai_finish_reason
         )
+        matched_stop_sequence: Final = (
+            _matched_stop_sequence(_optional_attr(response.choices[0], "provider_specific_fields"))
+            if response.choices and openai_finish_reason == "stop"
+            else None
+        )
         anthropic_finish_reason: Final = (
             "compaction"
             if len(anthropic_content) == 1 and anthropic_content[0].get("type") == "compaction"
             else "refusal"
             if refusal_text is not None and translated_finish_reason != "max_tokens"
+            else "stop_sequence"
+            if matched_stop_sequence is not None
             else translated_finish_reason
         )
         # extract usage
@@ -1628,7 +1642,7 @@ class LiteLLMAnthropicMessagesAdapter:
             type="message",
             role="assistant",
             model=response.model or "unknown-model",
-            stop_sequence=None,
+            stop_sequence=matched_stop_sequence if anthropic_finish_reason == "stop_sequence" else None,
             usage=anthropic_usage,
             content=anthropic_content,
             stop_reason=anthropic_finish_reason,
