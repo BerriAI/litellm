@@ -106,6 +106,13 @@ class TestGetMetadataVariableName:
         request = self._make_request("/v1/files")
         assert get_metadata_variable_name(request) == "litellm_metadata"
 
+    @pytest.mark.parametrize(
+        "path", ["/v1beta/interactions", "/interactions", "/v1beta/interactions/v1_abc123", "/interactions/v1_abc123/cancel"]
+    )
+    def test_returns_litellm_metadata_for_interactions_routes(self, path):
+        request = self._make_request(path)
+        assert get_metadata_variable_name(request) == "litellm_metadata"
+
     def test_returns_metadata_for_chat_completions(self):
         request = self._make_request("/chat/completions")
         assert get_metadata_variable_name(request) == "metadata"
@@ -706,6 +713,46 @@ async def test_add_litellm_data_to_request_parses_json_object_string_litellm_met
     )
 
     assert updated["litellm_metadata"]["cost_centre"] == "research"
+
+
+@pytest.mark.asyncio
+async def test_interactions_spend_logs_metadata_survives_the_router_metadata_bucket():
+    """GH#47841: on /v1beta/interactions the router plants its deployment fields in
+    `litellm_metadata`. The proxy must put the request's metadata there too: otherwise the
+    spend log reads only the router's bucket and `spend_logs_metadata` from the
+    `x-litellm-spend-logs-metadata` header never reaches LiteLLM_SpendLogs."""
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1beta/interactions"
+    request_mock.url.path = "/v1beta/interactions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "x-litellm-spend-logs-metadata": '{"cost_centre": "research"}',
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state.parent_otel_span = None
+
+    data = await add_litellm_data_to_request(
+        data={"model": "gemini-3.1-flash-lite", "input": "Reply OK.", "store": True},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert data["litellm_metadata"]["spend_logs_metadata"] == {"cost_centre": "research"}
+
+    # The router then adds its deployment fields to the same bucket, and the spend log
+    # resolves that bucket.
+    data["litellm_metadata"].update({"model_group": "gemini-3.1-flash-lite", "deployment": "gemini/gemini-3.1-flash-lite"})
+    resolved = get_litellm_metadata_from_kwargs(
+        {"litellm_params": {"metadata": data.get("metadata") or {}, "litellm_metadata": data["litellm_metadata"]}}
+    )
+    assert resolved["spend_logs_metadata"] == {"cost_centre": "research"}
+    assert resolved["model_group"] == "gemini-3.1-flash-lite"
 
 
 @pytest.mark.asyncio
