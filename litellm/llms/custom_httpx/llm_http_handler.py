@@ -52,8 +52,9 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
-from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header, is_opencode_api_base
+from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.realtime_errors import (
     close_after_upstream_handshake_refusal,
     realtime_error_event,
@@ -2453,13 +2454,14 @@ class BaseLLMHTTPHandler:
             and anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
         ):
             await aload_beta_headers_config()
+        default_affinity_header: Final = get_provider_affinity_header(api_base)
         (
             headers,
             api_base,
         ) = await anthropic_messages_provider_config.avalidate_anthropic_messages_environment(
             headers=(
-                add_provider_affinity_header(merged_headers, litellm_params, api_base)
-                if is_opencode_api_base(api_base)
+                add_provider_affinity_header(merged_headers, litellm_params, default_affinity_header)
+                if default_affinity_header is not None
                 else dict(merged_headers)
             ),
             model=model,
