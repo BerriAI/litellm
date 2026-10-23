@@ -439,6 +439,7 @@ class TestResponseAPILoggingUtils:
         assert usage.prompt_tokens_details.cache_write_tokens == 5_000
         assert usage.prompt_tokens_details.cache_creation_token_details is not None
         assert usage.prompt_tokens_details.cache_creation_token_details.ephemeral_12h_input_tokens == 2_000
+        assert usage.prompt_tokens_details.cache_creation_token_details.ephemeral_30m_input_tokens == 3_000
         cost: Final = generic_cost_per_token(
             model="test-12h-cache-write",
             usage=usage,

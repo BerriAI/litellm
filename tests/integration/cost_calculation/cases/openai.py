@@ -6985,6 +6985,56 @@ GPT_5_6_RESPONSES_CACHE_READ: Final = CostTrackingTestCase(
     ),
 )
 
+GPT_5_6_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
+    name="gpt-5.6-responses_cache_write_12h",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    endpoint="/v1/responses",
+    request={
+        "model": "$MODEL",
+        "input": "summarize this text",
+        "prompt_cache_options": {"mode": "implicit", "ttl": "12h"},
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_$REQUEST_ID",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 12928,
+                "output_tokens": 380,
+                "total_tokens": 13308,
+                "input_tokens_details": {
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 5000,
+                    "cache_write_tokens_details": {"ttl_30m_tokens": 3000, "ttl_12h_tokens": 2000},
+                },
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0344865,
+        input_cost=0.0291865,
+        output_cost=0.00532,
+        prompt_tokens=12928,
+        completion_tokens=380,
+        cache_creation_cost=0.0153125,
+    ),
+)
+
 GPT_5_6_RESPONSES_REASONING: Final = CostTrackingTestCase(
     name="gpt-5.6-responses_reasoning",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -11913,6 +11963,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OMNI_MODERATIONS_NEXT_SINGLE,
     OMNI_MODERATIONS_NEXT_LIST,
     GPT_5_6_RESPONSES_CACHE_READ,
+    GPT_5_6_RESPONSES_CACHE_WRITE_12H,
     GPT_5_6_RESPONSES_REASONING,
     GPT_5_6_RESPONSES_STREAM,
     GPT_5_6_RESPONSES_STREAM_CACHE_READ,

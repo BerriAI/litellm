@@ -41529,9 +41529,9 @@ export interface components {
             mode?: "implicit" | "explicit";
             /**
              * Ttl
-             * @constant
+             * @enum {string}
              */
-            ttl?: "30m";
+            ttl?: "30m" | "12h";
         };
         /** PromptCachingRequest */
         PromptCachingRequest: {

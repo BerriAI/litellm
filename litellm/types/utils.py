@@ -1810,6 +1810,7 @@ class CompletionTokensDetailsWrapper(CompletionTokensDetails):  # wrapper for ol
 
 class CacheCreationTokenDetails(LiteLLMBaseModel):
     ephemeral_5m_input_tokens: int | None = None
+    ephemeral_30m_input_tokens: int | None = None
     ephemeral_1h_input_tokens: int | None = None
     ephemeral_12h_input_tokens: int | None = None
 

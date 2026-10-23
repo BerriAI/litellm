@@ -713,7 +713,7 @@ def _get_token_base_cost(
     explicit 0.0 stays a real price for all of them.
 
     Returns:
-        (prompt_cost, completion_cost, cache_creation_cost, cache_creation_1h_cost, cache_creation_12h_cost, cache_read_cost)
+        (prompt_cost, completion_cost, cache_creation_cost, cache_creation_1h_cost, cache_read_cost, cache_creation_12h_cost)
     """
     tiered_base_costs: Final = _get_tiered_base_costs(model_info=model_info, usage=usage)
     if tiered_base_costs is not None:
@@ -726,7 +726,7 @@ def _get_token_base_cost(
         resolved_cache_creation_12hr_rate: Final = (
             tiered_rates[2] if cache_creation_12hr_rate is None else cache_creation_12hr_rate
         )
-        return (*tiered_rates[:4], resolved_cache_creation_12hr_rate, tiered_rates[4])
+        return (*tiered_rates, resolved_cache_creation_12hr_rate)
 
     # Get service tier aware cost keys
     input_cost_key: Final = get_service_tier_cost_key("input_cost_per_token", service_tier)
@@ -893,7 +893,7 @@ def _get_token_base_cost(
             resolved_cache_read_cost,
         ),
     )
-    return (*resolved_rates[:4], resolved_cache_creation_cost_above_12hr, resolved_rates[4])
+    return (*resolved_rates, resolved_cache_creation_cost_above_12hr)
 
 
 def calculate_cost_component(model_info: ModelInfo, cost_key: str, usage_value: float | None) -> float:
@@ -1013,27 +1013,20 @@ def calculate_cache_writing_cost(
     cache_creation_cost_12hr: float | None = None,
 ) -> float:
     """
-    Adjust cost of cache creation tokens based on the cache creation token details.
+    Bill cache writes per lifetime: Anthropic reports 5m and 1h counts, OpenAI reports 30m and 12h counts.
     """
     if cache_creation_token_details is None:
         return cache_creation_tokens * cache_creation_cost
-    cache_creation_tokens_5m_detail: Final = cache_creation_token_details.ephemeral_5m_input_tokens
-    cache_creation_tokens_1h: Final = cache_creation_token_details.ephemeral_1h_input_tokens
-    cache_creation_tokens_12h: Final = cache_creation_token_details.ephemeral_12h_input_tokens
-    cache_creation_tokens_5m: Final = (
-        max(cache_creation_tokens - (cache_creation_tokens_1h or 0) - cache_creation_tokens_12h, 0)
-        if cache_creation_tokens_12h is not None and cache_creation_tokens_5m_detail is None
-        else cache_creation_tokens_5m_detail
+    default_rate_tokens: Final = (cache_creation_token_details.ephemeral_5m_input_tokens or 0) + (
+        cache_creation_token_details.ephemeral_30m_input_tokens or 0
     )
+    cache_creation_tokens_1h: Final = cache_creation_token_details.ephemeral_1h_input_tokens or 0
+    cache_creation_tokens_12h: Final = cache_creation_token_details.ephemeral_12h_input_tokens or 0
+    rate_12hr: Final = cache_creation_cost if cache_creation_cost_12hr is None else cache_creation_cost_12hr
     return (
-        (cache_creation_tokens_5m * cache_creation_cost if cache_creation_tokens_5m is not None else 0.0)
-        + (cache_creation_tokens_1h * cache_creation_cost_above_1hr if cache_creation_tokens_1h is not None else 0.0)
-        + (
-            cache_creation_tokens_12h
-            * (cache_creation_cost if cache_creation_cost_12hr is None else cache_creation_cost_12hr)
-            if cache_creation_tokens_12h is not None
-            else 0.0
-        )
+        default_rate_tokens * cache_creation_cost
+        + cache_creation_tokens_1h * cache_creation_cost_above_1hr
+        + cache_creation_tokens_12h * rate_12hr
     )
 
 
@@ -1558,8 +1551,8 @@ def generic_cost_per_token(
         completion_base_cost,
         cache_creation_cost,
         cache_creation_cost_above_1hr,
-        cache_creation_cost_above_12hr,
         cache_read_cost,
+        cache_creation_cost_above_12hr,
     ) = _get_token_base_cost(
         model_info=resolved_model_info,
         usage=usage,
@@ -1770,8 +1763,8 @@ def _cost_map_billed_rates(
         completion_base_cost,
         cache_creation_cost_rate,
         cache_creation_cost_above_1hr_rate,
-        cache_creation_cost_above_12hr_rate,
         cache_read_cost_rate,
+        cache_creation_cost_above_12hr_rate,
     ) = _get_token_base_cost(
         model_info=model_info,
         usage=usage,
@@ -1942,8 +1935,8 @@ def calculate_prompt_caching_savings(
         _,
         cache_creation_cost,
         cache_creation_cost_above_1hr,
-        cache_creation_cost_above_12hr,
         cache_read_cost,
+        cache_creation_cost_above_12hr,
     ) = _get_token_base_cost(
         model_info=model_info_with_cache_read_default,
         usage=usage,
@@ -1968,6 +1961,7 @@ def calculate_prompt_caching_savings(
     cache_creation_details: Final = (
         CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=max(details.ephemeral_5m_input_tokens or 0, 0),
+            ephemeral_30m_input_tokens=max(details.ephemeral_30m_input_tokens or 0, 0),
             ephemeral_1h_input_tokens=max(details.ephemeral_1h_input_tokens or 0, 0),
             ephemeral_12h_input_tokens=max(details.ephemeral_12h_input_tokens or 0, 0),
         )
