@@ -135,7 +135,7 @@ async def image_generation(
             data["model"] = litellm.model_alias_map[data["model"]]
 
         ### LOGGING OBJECT SETUP ### - ensures router rejected requests are dispatched to failure callbacks
-        logging_obj, data = litellm.utils.function_setup(
+        logging_obj, data = litellm.utils.function_setup(  # rebind-ok: function_setup returns updated data dict
             original_function="aimage_generation",
             rules_obj=litellm.utils.Rules(),
             start_time=start_time,
