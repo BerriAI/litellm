@@ -79,7 +79,7 @@ impl PythonBinding for ChatCompletionsPythonHost {
         self.0.error(py, error)
     }
     fn host_error(_: &PyErr) -> Error {
-        Error::InvalidRequest(litellm_llms::ErrorDetail::HostCall)
+        Error::invalid_request(litellm_llms::ErrorDetail::HostCall)
     }
 }
 

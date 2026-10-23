@@ -576,12 +576,11 @@ async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credent
                 Some("private-frame-sentinel")
             );
             connection.close().await.unwrap();
-            assert!(
-                connection
-                    .send_text("private-frame-sentinel".into())
-                    .await
-                    .is_err()
-            );
+            let error = connection
+                .send_text("private-frame-sentinel".into())
+                .await
+                .expect_err("a closed connection sends nothing");
+            assert!(!error.dispatched(), "{error:?}");
         })
         .await;
     server.await.unwrap();

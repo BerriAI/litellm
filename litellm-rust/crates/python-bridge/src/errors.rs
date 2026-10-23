@@ -45,7 +45,7 @@ mod tests {
     #[case::unsupported(Error::Unsupported("test capability"), true)]
     #[case::invalid_provider(Error::InvalidProvider("unknown".into()), true)]
     #[case::invalid_request(
-        Error::InvalidRequest(litellm_llms::ErrorDetail::Expected {
+        Error::invalid_request(litellm_llms::ErrorDetail::Expected {
             subject: "messages",
             expected: "non-empty",
         }),
@@ -56,7 +56,7 @@ mod tests {
         false
     )]
     #[case::invalid_response(
-        Error::InvalidResponse(litellm_llms::ErrorDetail::MissingField {
+        Error::invalid_response(litellm_llms::ErrorDetail::MissingField {
             subject: "response",
             field: "usage",
         }),

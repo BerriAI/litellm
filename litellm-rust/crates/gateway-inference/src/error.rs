@@ -236,7 +236,7 @@ mod tests {
     #[rstest]
     #[case::upstream_status(upstream(429, ""), StatusCode::TOO_MANY_REQUESTS)]
     #[case::rejected_request(
-        Error::Route(InferenceError::InvalidRequest(litellm_llms::ErrorDetail::Expected {
+        Error::Route(InferenceError::invalid_request(litellm_llms::ErrorDetail::Expected {
             subject: "top_k",
             expected: "an integer",
         })),

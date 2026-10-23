@@ -188,7 +188,7 @@ async fn provider_call(
         None | Some(Value::Null) => false,
         Some(Value::Bool(stream)) => *stream,
         Some(value) => {
-            return Err(Error::InvalidRequest(
+            return Err(Error::invalid_request(
                 litellm_llms::ErrorDetail::InvalidValue {
                     field: "stream",
                     expected: "a boolean",
@@ -261,7 +261,7 @@ async fn call_provider(
             provider_name,
         ));
     }
-    let text = response.text().await.map_err(network)?;
+    let text = response.text().await.map_err(litellm_http::Error::from)?;
     log_response_body(&text);
     context.response_received(&text).await?;
     decode_response(config, &identity.model, &text)
@@ -269,14 +269,10 @@ async fn call_provider(
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(litellm_llms::ErrorDetail::failed(
+    Error::invalid_request(litellm_llms::ErrorDetail::failed(
         "Anthropic messages request serialization",
         err,
     ))
-}
-
-fn network(error: reqwest::Error) -> Error {
-    litellm_http::Error::from(error).into()
 }
 
 async fn send(
@@ -302,7 +298,7 @@ async fn provider_error(response: reqwest::Response) -> Error {
             log_error_body(status, &text);
             litellm_http::Error::upstream(status, text).into()
         }
-        Err(error) => network(error),
+        Err(error) => litellm_http::Error::from(error).into(),
     }
 }
 
@@ -312,7 +308,7 @@ fn decode_response(
     text: &str,
 ) -> Result<MessagesResponse, Error> {
     let response = serde_json::from_str(text).map_err(|err| {
-        Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+        Error::invalid_response(litellm_llms::ErrorDetail::invalid(
             "messages response JSON",
             err,
         ))
@@ -334,7 +330,7 @@ fn streaming_response(
         .collect();
     let chunks = match decoder {
         None => futures_util::stream::try_unfold(response, move |mut response| async move {
-            let chunk = response.chunk().await.map_err(network)?;
+            let chunk = response.chunk().await.map_err(litellm_http::Error::from)?;
             Ok(chunk.map(|chunk| {
                 log_chunk(provider, "provider_response", &chunk);
                 (chunk, response)
@@ -536,14 +532,10 @@ mod tests {
             shaping,
         })
         .await;
-        assert!(
-            matches!(
-                result,
-                Err(Error::Auth(litellm_auth::Error::MissingApiKey { .. }))
-            ),
-            "{:?}",
-            result.err()
-        );
+        let Err(error) = result else {
+            panic!("a call without credentials fails");
+        };
+        assert!(error.is_missing_credential(), "{error:?}");
     }
 
     #[rstest]
@@ -766,19 +758,18 @@ mod tests {
             },
             ..shaping
         };
-        assert!(matches!(
-            wire_body(
-                json!({
-                    "model": "claude-test",
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 16,
-                    "metadata": {"user_id": 123}
-                }),
-                shaping,
-            )
-            .await,
-            Err(Error::InvalidRequest(_))
-        ));
+        let error = wire_body(
+            json!({
+                "model": "claude-test",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 16,
+                "metadata": {"user_id": 123}
+            }),
+            shaping,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.is_request(), "{error:?}");
     }
 
     #[rstest]
@@ -795,7 +786,7 @@ mod tests {
                 shaping,
             )
             .await,
-            Err(Error::InvalidRequest(
+            Err(Error::invalid_request(
                 litellm_llms::ErrorDetail::InvalidValue {
                     field: "metadata.user_id",
                     expected: "a string",
@@ -897,7 +888,7 @@ mod tests {
         let chunk = chunks.next().await.unwrap();
         match expected {
             Some(expected) => assert_eq!(chunk.unwrap().as_ref(), expected.as_bytes()),
-            None => assert!(matches!(chunk, Err(Error::InvalidResponse(_))), "{chunk:?}"),
+            None => assert!(chunk.unwrap_err().is_response()),
         }
         assert!(chunks.next().await.is_none());
     }

@@ -211,7 +211,7 @@ async fn rejects_empty_messages_before_resolving_credentials() {
     })
     .await
     .expect_err("empty messages are rejected");
-    assert!(matches!(error, Error::InvalidRequest(_)));
+    assert!(error.is_request(), "{error:?}");
 }
 
 #[rstest]
@@ -233,32 +233,27 @@ async fn rejects_an_unknown_provider() {
 #[rstest]
 #[tokio::test]
 async fn rejects_a_model_with_no_resolvable_provider() {
-    assert!(matches!(
-        complete(request(
-            "claude-sonnet-4-5",
-            None,
-            json!([{"role": "user", "content": "hi"}]),
-            json!({}),
-        ))
-        .await,
-        Err(Error::InvalidProvider(_))
-    ));
+    let error = complete(request(
+        "claude-sonnet-4-5",
+        None,
+        json!([{"role": "user", "content": "hi"}]),
+        json!({}),
+    ))
+    .await
+    .unwrap_err();
+    assert!(error.is_request(), "{error:?}");
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(
+        report.contains("unable to resolve custom_llm_provider"),
+        "{report}"
+    );
 }
 
 #[rstest]
-#[case::empty(
-    json!([]),
-    Some(litellm_llms::ErrorDetail::Expected {
-        subject: "chat completions messages",
-        expected: "non-empty",
-    })
-)]
-#[case::malformed(json!("not a list"), None)]
+#[case::empty(json!([]), "chat completions messages must be non-empty")]
+#[case::malformed(json!("not a list"), "invalid chat completions messages")]
 #[tokio::test]
-async fn rejects_an_empty_or_malformed_message_list(
-    #[case] messages: Value,
-    #[case] expected: Option<litellm_llms::ErrorDetail>,
-) {
+async fn rejects_an_empty_or_malformed_message_list(#[case] messages: Value, #[case] reason: &str) {
     let error = complete(request(
         "anthropic/claude-sonnet-4-5",
         None,
@@ -267,11 +262,9 @@ async fn rejects_an_empty_or_malformed_message_list(
     ))
     .await
     .unwrap_err();
-    if let Some(expected) = expected {
-        assert_eq!(error, Error::InvalidRequest(expected));
-    } else {
-        assert!(matches!(error, Error::InvalidRequest(_)));
-    }
+    assert!(error.is_request(), "{error:?}");
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(report.contains(reason), "{report}");
 }
 
 #[rstest]

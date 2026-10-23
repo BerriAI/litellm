@@ -71,6 +71,8 @@ pub(crate) enum Repr {
     HandshakeTimeout(#[source] Elapsed),
     #[error("upstream WebSocket error")]
     WebSocket(#[source] tungstenite::Error),
+    #[error("the WebSocket connection is closed")]
+    WebSocketClosed,
 
     #[error("media URL rejected by network policy")]
     BlockedUrl,
@@ -151,6 +153,10 @@ impl Error {
         Repr::UnsignableHeader(litellm_error::Source::new(cause)).into()
     }
 
+    pub fn websocket_closed() -> Self {
+        Repr::WebSocketClosed.into()
+    }
+
     pub fn signature(cause: impl std::error::Error + Send + Sync + 'static) -> Self {
         Repr::Signature(litellm_error::Source::new(cause)).into()
     }
@@ -165,7 +171,8 @@ impl Error {
             | Repr::Handshake(_)
             | Repr::HandshakeTimeout(_)
             | Repr::WebSocket(_) => true,
-            Repr::Read { .. }
+            Repr::WebSocketClosed
+            | Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
             | Repr::TlsConfig(_)
@@ -220,6 +227,7 @@ impl Error {
             | Repr::Handshake(_)
             | Repr::HandshakeTimeout(_)
             | Repr::WebSocket(_)
+            | Repr::WebSocketClosed
             | Repr::Resolve(_)
             | Repr::MissingRedirectLocation
             | Repr::InvalidRedirect(_)
@@ -253,6 +261,7 @@ impl Error {
             | Repr::Handshake(_)
             | Repr::HandshakeTimeout(_)
             | Repr::WebSocket(_)
+            | Repr::WebSocketClosed
             | Repr::BlockedUrl
             | Repr::Resolve(_)
             | Repr::DownloadDisabled
@@ -287,6 +296,7 @@ impl Error {
             | Repr::Handshake(_)
             | Repr::HandshakeTimeout(_)
             | Repr::WebSocket(_)
+            | Repr::WebSocketClosed
             | Repr::BlockedUrl
             | Repr::Resolve(_)
             | Repr::DownloadDisabled
@@ -323,6 +333,7 @@ impl Error {
             | Repr::Handshake(_)
             | Repr::HandshakeTimeout(_)
             | Repr::WebSocket(_)
+            | Repr::WebSocketClosed
             | Repr::BlockedUrl
             | Repr::Resolve(_)
             | Repr::DownloadDisabled
@@ -359,6 +370,7 @@ impl Error {
             | Repr::Handshake(_)
             | Repr::HandshakeTimeout(_)
             | Repr::WebSocket(_)
+            | Repr::WebSocketClosed
             | Repr::BlockedUrl
             | Repr::Resolve(_)
             | Repr::DownloadDisabled
@@ -395,6 +407,7 @@ impl Error {
             | Repr::Handshake(_)
             | Repr::HandshakeTimeout(_)
             | Repr::WebSocket(_)
+            | Repr::WebSocketClosed
             | Repr::BlockedUrl
             | Repr::Resolve(_)
             | Repr::DownloadDisabled
@@ -430,6 +443,7 @@ impl Error {
             | Repr::Handshake(_)
             | Repr::HandshakeTimeout(_)
             | Repr::WebSocket(_)
+            | Repr::WebSocketClosed
             | Repr::BlockedUrl
             | Repr::Resolve(_)
             | Repr::DownloadDisabled

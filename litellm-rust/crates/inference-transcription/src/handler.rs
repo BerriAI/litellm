@@ -62,7 +62,7 @@ pub(super) async fn execute(
         return Err(litellm_http::Error::upstream(status.as_u16(), text).into());
     }
     let response_json = serde_json::from_str(&text).map_err(|error| {
-        Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+        Error::invalid_response(litellm_llms::ErrorDetail::invalid(
             "audio response JSON",
             error,
         ))

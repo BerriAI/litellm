@@ -108,13 +108,7 @@ async fn a_call_without_credentials_fails_before_sending(
     .await
     .expect_err("a call without credentials fails");
 
-    assert!(
-        matches!(
-            error,
-            Error::Auth(litellm_auth::Error::MissingApiKey { .. })
-        ),
-        "{error:?}"
-    );
+    assert!(error.is_missing_credential(), "{error:?}");
     assert!(received(&upstream).await.is_empty());
 }
 
@@ -185,7 +179,9 @@ async fn unsupported_providers_are_rejected_before_sending(
     .await
     .expect_err("unsupported provider errors");
 
-    assert_eq!(error, Error::InvalidProvider(reported.into()));
+    assert!(error.is_request(), "{error:?}");
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(report.contains(reported), "{report}");
 }
 
 #[rstest]
@@ -513,10 +509,9 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
     let error = run(shaped(false))
         .await
         .expect_err("an unsupported param is rejected without drop_params");
-    assert!(
-        matches!(&error, Error::InvalidRequest(message) if message.to_string().contains(rejected_as)),
-        "{error:?}"
-    );
+    assert!(error.is_request(), "{error:?}");
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(report.contains(rejected_as), "{report}");
     assert!(received(&upstream).await.is_empty());
 
     run_message(shaped(true)).await;

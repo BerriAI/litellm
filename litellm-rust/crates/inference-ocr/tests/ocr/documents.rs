@@ -216,10 +216,8 @@ async fn configured_client_preserves_document_url_policy(#[case] allowed: bool) 
     .await;
 
     if !allowed {
-        assert!(
-            matches!(&result, Err(Error::Http(error)) if error.is_request()),
-            "{result:?}"
-        );
+        let error = result.unwrap_err();
+        assert!(error.is_request(), "{error:?}");
         assert!(received(&documents).await.is_empty());
         assert!(received(&upstream).await.is_empty());
         return;

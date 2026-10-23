@@ -73,10 +73,12 @@ pub(super) async fn execute(
                 None => false,
                 Some(serde_json::Value::Bool(value)) => *value,
                 Some(_) => {
-                    return Err(Error::InvalidRequest(litellm_llms::ErrorDetail::Expected {
-                        subject: "stream",
-                        expected: "a boolean",
-                    }));
+                    return Err(Error::invalid_request(
+                        litellm_llms::ErrorDetail::Expected {
+                            subject: "stream",
+                            expected: "a boolean",
+                        },
+                    ));
                 }
             };
             let outbound = litellm_inference::outbound::outbound_request(
@@ -91,7 +93,7 @@ pub(super) async fn execute(
             let response = litellm_inference::outbound::send(outbound, &route.http).await?;
             let status = response.status().as_u16();
             if !response.status().is_success() {
-                let body = response.text().await.map_err(network)?;
+                let body = response.text().await.map_err(litellm_http::Error::from)?;
                 return Err(litellm_http::Error::upstream(status, body).into());
             }
             if stream {
@@ -104,14 +106,14 @@ pub(super) async fn execute(
                     .collect();
                 let chunks = response
                     .bytes_stream()
-                    .map(|chunk| chunk.map_err(network))
+                    .map(|chunk| chunk.map_err(|error| litellm_http::Error::from(error).into()))
                     .boxed();
                 return Ok(ResponsesOutput::Stream {
                     head: ResponsesStreamHead { headers },
                     chunks,
                 });
             }
-            let body = response.text().await.map_err(network)?;
+            let body = response.text().await.map_err(litellm_http::Error::from)?;
             let raw = RawResponse { body: body.clone() };
             if let Some(observers) = observers {
                 observers.emit(litellm_host::lifecycle::CallEvent::Execution(
@@ -123,7 +125,7 @@ pub(super) async fn execute(
                 .await
                 .map_err(Error::post_call)?;
             let value = serde_json::from_str(&body).map_err(|error| {
-                Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+                Error::invalid_response(litellm_llms::ErrorDetail::invalid(
                     "Responses API response JSON",
                     error,
                 ))
@@ -135,8 +137,4 @@ pub(super) async fn execute(
         },
     )
     .await
-}
-
-fn network(error: reqwest::Error) -> Error {
-    litellm_http::Error::from(error).into()
 }

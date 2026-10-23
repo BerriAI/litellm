@@ -7,7 +7,7 @@ use litellm_http::{
 };
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::{
-    self, Message,
+    Message,
     http::{HeaderMap, HeaderName, HeaderValue},
 };
 
@@ -39,13 +39,13 @@ impl ResponsesWebSocketConnection {
                 .map(|(name, value)| {
                     Ok((
                         name.parse::<HeaderName>().map_err(|error| {
-                            Error::InvalidRequest(ErrorDetail::invalid(
+                            Error::invalid_request(ErrorDetail::invalid(
                                 "WebSocket header name",
                                 error,
                             ))
                         })?,
                         HeaderValue::from_str(value).map_err(|error| {
-                            Error::InvalidRequest(ErrorDetail::invalid(
+                            Error::invalid_request(ErrorDetail::invalid(
                                 "WebSocket header value",
                                 error,
                             ))
@@ -71,7 +71,7 @@ impl ResponsesWebSocketConnection {
         litellm_inference::diagnostic::operation("litellm.websocket.send_text", async {
             let mut socket = self.socket.lock().await;
             let Some(socket) = socket.as_mut() else {
-                return Err(litellm_http::Error::from(tungstenite::Error::AlreadyClosed).into());
+                return Err(litellm_http::Error::websocket_closed().into());
             };
             socket
                 .send(Message::Text(text))
@@ -98,7 +98,7 @@ impl ResponsesWebSocketConnection {
                 Some(Ok(Message::Binary(bytes))) => String::from_utf8(bytes.to_vec())
                     .map(Some)
                     .map_err(|error| {
-                        Error::InvalidResponse(ErrorDetail::invalid("WebSocket text frame", error))
+                        Error::invalid_response(ErrorDetail::invalid("WebSocket text frame", error))
                     }),
                 Some(Ok(Message::Close(_))) | None => Ok(None),
                 Some(Ok(_)) => Ok(None),

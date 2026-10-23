@@ -20,7 +20,7 @@ In order of preference
 2. A real cause, such as `tungstenite::Error::ConnectionClosed` or a `serde_json::from_str("{")` error, passed through our `From`
 3. A public constructor, such as `Error::upstream(500, "boom".into())`
 
-Inside the owning crate a test may match the private representation through the `#[cfg(test)] fn repr(&self) -> &Repr` accessor in `crates/http/src/error.rs`, as the `media.rs` and `tls.rs` tests do. Anywhere else, reach the cause the test expects with `litellm_error::find::<T>(&error)`
+Inside the owning crate a test may match the private representation through the `#[cfg(test)] fn repr(&self) -> &Repr` accessor in `crates/http/src/error.rs`, as the `media.rs` and `tls.rs` tests do. Anywhere else, reach the cause the test expects with `litellm_error::find::<T>(&error)`. A transparent layer is no node of the chain, so `find` reaches foreign causes underneath it but never the nested error of ours itself. Ask that error's predicates through the outer type instead, which is what callers do too
 
 ## What to cover
 

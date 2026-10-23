@@ -120,7 +120,7 @@ pub(super) async fn execute(
                 .map_err(Error::post_call)?;
 
             let body: Value = serde_json::from_str(&text).map_err(|err| {
-                Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+                Error::invalid_response(litellm_llms::ErrorDetail::invalid(
                     "chat completions response JSON",
                     err,
                 ))
@@ -144,14 +144,13 @@ pub(super) async fn execute(
 /// implementation must not retry those, so collapse them to one variant that
 /// can only mean the provider was already called.
 pub(super) fn as_response_error(err: Error) -> Error {
-    match err {
-        already @ Error::InvalidResponse(_) => already,
-        upstream if upstream.upstream_response().is_some() => upstream,
-        other => Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
-            "chat completions response",
-            other,
-        )),
+    if err.is_response() {
+        return err;
     }
+    Error::invalid_response(litellm_llms::ErrorDetail::invalid(
+        "chat completions response",
+        err,
+    ))
 }
 
 #[cfg(test)]
@@ -307,30 +306,38 @@ mod tests {
         .expect_err("the upstream failure fails the call");
 
         assert!(
-            matches!(&error, Error::Http(http) if http.upstream_response().is_some_and(|(status, _)| status == 500)),
+            error
+                .upstream_response()
+                .is_some_and(|(status, _)| status == 500),
             "{error:?}"
         );
         assert!(interceptors.raw.into_inner().unwrap().is_empty());
     }
 
     #[rstest::rstest]
-    fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
-        for original in [
-            Error::MissingField("usage"),
-            Error::Unsupported("non-text response content block"),
-            Error::InvalidRequest(litellm_llms::ErrorDetail::Expected {
-                subject: "whatever",
-                expected: "anything else",
-            }),
-            Error::Auth(litellm_auth::Error::InvalidHeader),
-        ] {
-            let label = format!("{original:?}");
-            assert!(
-                matches!(as_response_error(original), Error::InvalidResponse(_)),
-                "{label} must not stay retryable once the provider has answered"
-            );
-        }
-        let upstream = Error::from(litellm_http::Error::upstream(500, "boom".into()));
-        assert_eq!(as_response_error(upstream.clone()), upstream);
+    #[case::missing_field(litellm_llms::Error::MissingField("usage").into())]
+    #[case::unsupported(Error::Unsupported("non-text response content block"))]
+    #[case::invalid_request(Error::invalid_request(litellm_llms::ErrorDetail::Expected {
+        subject: "whatever",
+        expected: "anything else",
+    }))]
+    #[case::auth(Error::Auth(litellm_auth::Error::InvalidHeader))]
+    fn response_errors_collapse_to_a_fault_that_can_only_mean_already_sent(
+        #[case] original: Error,
+    ) {
+        let collapsed = as_response_error(original);
+        assert!(collapsed.is_response(), "{collapsed:?}");
+        assert!(!collapsed.is_request(), "{collapsed:?}");
+        assert!(!collapsed.is_unsupported(), "{collapsed:?}");
+    }
+
+    #[rstest::rstest]
+    fn a_response_fault_is_not_wrapped_twice() {
+        let original = Error::invalid_response(litellm_llms::ErrorDetail::MissingField {
+            subject: "response",
+            field: "usage",
+        });
+        let report = litellm_error::Report::new(&as_response_error(original)).to_string();
+        assert!(!report.contains("chat completions response"), "{report}");
     }
 }

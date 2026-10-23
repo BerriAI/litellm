@@ -76,12 +76,12 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
         return Ok(error);
     }
     match error {
-        Error::InvalidRequest(message) => {
+        Error::Llm(litellm_llms::Error::InvalidRequest(message)) => {
             let error = PyValueError::new_err(litellm_error::Report::new(&message).to_string());
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
             Ok(error)
         }
-        Error::MissingField(field) => {
+        Error::Llm(litellm_llms::Error::MissingField(field)) => {
             let error = PyValueError::new_err(format!("missing required field: {field}"));
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
             Ok(error)
@@ -284,7 +284,7 @@ impl PythonBinding for MessagesPythonHost {
     }
 
     fn host_error(_: &PyErr) -> Error {
-        Error::InvalidRequest(litellm_llms::ErrorDetail::HostCall)
+        Error::invalid_request(litellm_llms::ErrorDetail::HostCall)
     }
 }
 
@@ -458,7 +458,7 @@ mod tests {
                     projected,
                     litellm_params(serde_json::from_value(fields).unwrap()).unwrap()
                 ),
-                (Err(error), Err(())) => assert!(matches!(error, Error::InvalidRequest(_))),
+                (Err(error), Err(())) => assert!(error.is_request(), "{error:?}"),
                 (projected, expected) => panic!("got {projected:?}, expected {expected:?}"),
             }
         });
@@ -466,7 +466,7 @@ mod tests {
 
     #[rstest]
     #[case::rejected_request(
-        Error::InvalidRequest(litellm_llms::ErrorDetail::UnsupportedParameter {
+        Error::invalid_request(litellm_llms::ErrorDetail::UnsupportedParameter {
             model: "claude".into(),
             param: "top_k".into(),
             value: "5".into(),
@@ -474,7 +474,7 @@ mod tests {
         }),
         true
     )]
-    #[case::missing_field(Error::MissingField("max_tokens"), true)]
+    #[case::missing_field(litellm_llms::Error::MissingField("max_tokens").into(), true)]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(
         litellm_http::Error::upstream(400, "bad".into()).into(),

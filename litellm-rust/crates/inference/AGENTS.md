@@ -53,10 +53,10 @@
 
 ## Error placement
 
-- The workspace `Error definitions` rules shape each crate's error. This section decides which crate and module a failure belongs to
+- The [rust-error skill](../../.agents/skills/rust-error/SKILL.md) shapes each crate's error. This section decides which crate and module a failure belongs to
 - A failure is declared once, by the lowest crate that raises it
-  - every crate above nests it unchanged (`#[error(transparent)] Auth(#[from] litellm_auth::Error)`) or maps it once at its boundary, as `src/error.rs` does for `litellm_llms::Error`
-  - `Error` collects route failures for every format crate and never re-declares a variant a lower crate raises
+  - every crate above nests it in one variant and delegates its predicates, as `Error::Llm`, `Error::Auth` and `Error::Http` do, or translates it once in the shared `From` when its meaning changes, as `From<litellm_llms::Error>` does for `Unsupported` and a header the signer computes
+  - `Error` collects route failures for every format crate and never re-declares a variant a lower crate raises. Routes build transformation failures with `Error::invalid_request` and `Error::invalid_response`, and callers ask `is_request()`, `is_response()`, `is_missing_credential()`, `dispatched()` and `upstream_response()` instead of matching nested variants
 - Scope follows the concept, not the first caller
   - an error type under `litellm-llms`'s `<provider>/` is private to that provider: no other provider and nothing in `base_llm` may import it
   - a failure two providers or two routes can hit (wire framing, stream event decoding, a malformed provider response) belongs to the crate that owns the concept: `litellm-framer` for framing, `litellm_llms::Error` for the transformation layer

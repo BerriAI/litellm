@@ -179,7 +179,7 @@ async fn a_response_it_cannot_normalize_is_reported_as_already_sent(
     .await
     .expect_err("response cannot be normalized");
 
-    assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+    assert!(error.is_response(), "{error:?}");
 }
 
 #[rstest]
@@ -215,10 +215,7 @@ async fn a_connection_that_is_never_established_returns_a_connect_error(
     .await
     .expect_err("nothing is listening");
 
-    assert!(
-        matches!(&error, Error::Http(http) if !http.dispatched()),
-        "{error:?}"
-    );
+    assert!(!error.dispatched(), "{error:?}");
 }
 
 #[rstest]
@@ -235,7 +232,8 @@ async fn a_transport_error_does_not_echo_the_provider_url(
     .await
     .expect_err("nothing is listening");
 
-    assert!(!error.to_string().contains("tenant-token-1234"), "{error}");
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(!report.contains("tenant-token-1234"), "{report}");
 }
 
 #[rstest]
@@ -253,10 +251,8 @@ async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletion
     .await
     .expect_err("the call times out");
 
-    assert!(
-        matches!(&error, Error::Http(http) if http.dispatched()),
-        "{error:?}"
-    );
+    assert!(error.dispatched(), "{error:?}");
+    assert!(!error.is_request(), "{error:?}");
 }
 
 #[rstest]
@@ -352,7 +348,7 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
             Ok(wire)
         }
         async fn after_provider_response(&self, _: RawResponse) -> Result<(), Error> {
-            Err(Error::MissingField("callback rejected"))
+            Err(litellm_llms::Error::MissingField("callback rejected").into())
         }
     }
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
@@ -368,10 +364,10 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
         )
         .await
         .unwrap_err();
-    let Error::PostCallHook(source) = error else {
-        panic!("expected retained callback error")
-    };
-    assert_eq!(*source, Error::MissingField("callback rejected"));
+    assert!(error.dispatched(), "{error:?}");
+    assert!(!error.is_request(), "{error:?}");
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(report.contains("callback rejected"), "{report}");
     assert_eq!(received(&upstream).await.len(), 1);
 }
 

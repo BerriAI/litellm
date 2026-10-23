@@ -21,6 +21,70 @@ pub enum Error {
     Http(#[from] litellm_http::Error),
 }
 
+impl Error {
+    pub fn is_request(&self) -> bool {
+        match self {
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::Unsupported(_) => true,
+            Self::Auth(error) => !error.is_missing_credential(),
+            Self::Http(error) => error.is_request(),
+            Self::InvalidResponse(_) => false,
+        }
+    }
+
+    pub fn is_response(&self) -> bool {
+        match self {
+            Self::InvalidResponse(_) => true,
+            Self::Http(error) => error.is_response(),
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::Unsupported(_)
+            | Self::Auth(_) => false,
+        }
+    }
+
+    pub fn is_missing_credential(&self) -> bool {
+        match self {
+            Self::Auth(error) => error.is_missing_credential(),
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::InvalidResponse(_)
+            | Self::Unsupported(_)
+            | Self::Http(_) => false,
+        }
+    }
+
+    /// A transformation runs on both sides of the send, so only the transport and credential
+    /// resolution, which always runs before it, can tell whether the request reached the provider.
+    pub fn dispatched(&self) -> bool {
+        match self {
+            Self::Http(error) => error.dispatched(),
+            Self::Auth(_) => false,
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::InvalidResponse(_)
+            | Self::Unsupported(_) => true,
+        }
+    }
+
+    pub fn upstream_response(&self) -> Option<(u16, &str)> {
+        match self {
+            Self::Http(error) => error.upstream_response(),
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::InvalidResponse(_)
+            | Self::Unsupported(_)
+            | Self::Auth(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ErrorDetail {
     #[error("invalid {subject}")]

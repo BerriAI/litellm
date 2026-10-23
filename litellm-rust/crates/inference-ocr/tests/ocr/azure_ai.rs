@@ -222,10 +222,8 @@ async fn credential_precedence(
     false,
     json!({}),
     numbered_token,
-    |error: &Error| matches!(error, Error::Auth(litellm_auth::Error::MissingApiBase {
-        provider: "Azure AI",
-        guidance: "Set AZURE_AI_API_BASE environment variable or pass api_base parameter",
-    })),
+    |error: &Error| litellm_error::Report::new(error).to_string()
+        == "Missing Azure AI API Base - Set AZURE_AI_API_BASE environment variable or pass api_base parameter",
     0
 )]
 #[case::unsupported_oidc_reference(
@@ -239,7 +237,8 @@ async fn credential_precedence(
     true,
     json!({"azure_ad_token": "static-token"}),
     |_| String::new(),
-    |error: &Error| error.is_missing_credential() && error.to_string().contains("Azure AI credentials"),
+    |error: &Error| error.is_missing_credential()
+        && litellm_error::Report::new(error).to_string().contains("Azure AI credentials"),
     1
 )]
 #[tokio::test]

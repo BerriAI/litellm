@@ -144,7 +144,7 @@ impl LocalMessagesHost {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take()
-            .ok_or(Error::MissingField("messages request"))
+            .ok_or(litellm_llms::Error::MissingField("messages request").into())
     }
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, ()> {
         litellm_host_native::in_process::Host {

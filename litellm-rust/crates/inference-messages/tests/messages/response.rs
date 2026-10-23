@@ -235,7 +235,7 @@ async fn an_unreadable_success_body_is_an_invalid_response(
     .await
     .expect_err("an unreadable body fails");
 
-    assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+    assert!(error.is_response(), "{error:?}");
 }
 
 #[rstest]
@@ -252,7 +252,9 @@ async fn a_provider_slower_than_the_timeout_fails_the_call(call: MessagesCall) {
     .await
     .expect_err("the call times out");
 
-    assert!(matches!(error, Error::Http(_)), "{error:?}");
+    assert!(error.dispatched(), "{error:?}");
+    assert!(!error.is_request(), "{error:?}");
+    assert_eq!(error.upstream_response(), None);
 }
 
 #[rstest]
@@ -312,7 +314,7 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
 fn a_body_that_does_not_parse_is_an_invalid_request(#[case] raw: Value) {
     let error = messages_body(object(raw)).expect_err("the body is rejected");
 
-    assert!(matches!(error, Error::InvalidRequest(_)), "{error:?}");
+    assert!(error.is_request(), "{error:?}");
     assert!(
         litellm_error::Report::new(&error)
             .to_string()
