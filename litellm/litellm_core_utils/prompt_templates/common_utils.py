@@ -293,15 +293,36 @@ def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObjec
     return {"type": "image_url", "image_url": {"url": url}} if url else None
 
 
-def request_contains_image_content(messages: Sequence[Mapping[str, object]]) -> bool:
-    """Whether any message carries an image content part, across the dialects that reach
-    pre-routing hooks untranslated: chat-completions ``image_url``, Responses ``input_image``,
-    and Anthropic Messages ``image``, including images nested inside ``tool_result`` blocks."""
-    return any(
+def request_contains_image_content(
+    messages: Sequence[Mapping[str, object]] | None = None,
+    input: Sequence[object] | str | None = None,
+) -> bool:
+    """Whether a request carries image input, across both API surfaces.
+
+    Chat Completions carry images in ``messages[*].content`` (``image_url``, Responses
+    ``input_image``, Anthropic Messages ``image``, including images nested inside
+    ``tool_result`` blocks); the Responses API carries them in ``input`` items, either as
+    ``input_image`` blocks or as messages holding such blocks.
+    """
+    if messages is not None and any(
         isinstance(content, list) and _content_parts_contain_image(content)
         for message in messages
         for content in (message.get("content"),)
-    )
+    ):
+        return True
+    return isinstance(input, list) and any(_responses_input_item_contains_image(item) for item in input)
+
+
+def _responses_input_item_contains_image(item: object) -> bool:
+    if not isinstance(item, Mapping):
+        return False
+    mapping: Final = cast(Mapping[str, object], item)  # cast-ok: Responses input items are string-keyed mappings
+    if mapping.get("type") in _IMAGE_CONTENT_PART_TYPES:
+        return True
+    content: Final = mapping.get("content")
+    if not isinstance(content, list):
+        return False
+    return _content_parts_contain_image(cast(Sequence[object], content))  # cast-ok: content verified as list above
 
 
 def audio_or_image_in_message_content(message: AllMessageValues) -> bool:
