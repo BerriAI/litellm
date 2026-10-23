@@ -4277,6 +4277,9 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
         LlmProviders.VERTEX_AI.value,
     )
 )
+_NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
+    (LlmProviders.AZURE_AI.value, LlmProviders.DATABRICKS.value)
+)
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
 
 
@@ -4305,7 +4308,7 @@ def add_provider_specific_headers_to_request(
                 custom_llm_provider=_ANTHROPIC_API_HEADER_PROVIDERS, extra_headers=anthropic_api_headers
             ),
             ProviderSpecificHeader(
-                custom_llm_provider=LlmProviders.DATABRICKS.value,
+                custom_llm_provider=_NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS,
                 extra_headers=anthropic_api_headers,
                 native_anthropic_messages_only=True,
             ),
