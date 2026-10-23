@@ -351,7 +351,7 @@ exclude-newer = "3 days"
 # TODO: ryan, remove after 2026-10-23, once certifi 2026.10.19 (drops the compromised eMudhra root) clears the 3-day window
 # TODO(shrey): remove after 2026-10-25, once grpcio 1.84.1 (drops the compromised eMudhra roots from roots.pem) clears the 3-day window
 # TODO(shrey): remove after 2026-10-24, once boto3/botocore 1.43.117 (drops the compromised eMudhra roots from cacert.pem) clear the 3-day window
-exclude-newer-package = { certifi = "2026-10-20T03:00:00Z", grpcio = "2026-10-22T15:00:00Z", boto3 = "2026-10-21T19:31:00Z", botocore = "2026-10-21T19:31:00Z", brotli = "2026-10-22T14:01:00Z" }
+exclude-newer-package = { certifi = "2026-10-20T03:00:00Z", grpcio = "2026-10-22T15:00:00Z", boto3 = "2026-10-21T19:31:00Z", botocore = "2026-10-21T19:31:00Z", brotli = "2026-10-22T14:01:00Z", mlflow = "2026-10-21T03:00:00Z", mlflow-skinny = "2026-10-21T03:00:00Z", mlflow-tracing = "2026-10-21T03:00:00Z", pypdf = "2026-10-21T17:00:00Z" }
 
 [tool.uv.sources]
 litellm-proxy-extras = { workspace = true }
