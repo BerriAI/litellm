@@ -57,6 +57,20 @@ def test_get_requester_metadata_returns_none_for_empty():
     assert get_requester_metadata(metadata) is None
 
 
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"user_api_key_hash": "h", "requester_metadata": {"headers": {"host": "proxy"}}}, None),
+        ({"user_api_key_hash": "h", "requester_metadata": {"team": "a"}}, {"team": "a"}),
+        ({"team": "a"}, {"team": "a"}),
+    ],
+)
+def test_get_requester_metadata_forwards_only_caller_metadata(
+    metadata: dict[str, object], expected: dict[str, str] | None
+) -> None:
+    assert get_requester_metadata(metadata) == expected
+
+
 @patch("litellm.main.openai_chat_completions.completion")
 def test_requester_metadata_forwarded_to_openai(mock_completion):
     mock_completion.return_value = MagicMock()
