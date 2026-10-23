@@ -9,6 +9,7 @@ import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from functools import reduce
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import TypeAdapter
@@ -604,7 +605,7 @@ class RedisUpdateBuffer:
         if not entries:
             return ()
         batches: Final = tuple(_TOOL_DISCOVERY_ITEMS.validate_json(entry) for entry in entries)
-        return aggregate_tool_discoveries(item for batch in batches for item in batch)
+        return aggregate_tool_discoveries(chain.from_iterable(batches))
 
     @with_service_target(SPEND_QUEUE_TARGET)
     async def store_spend_logs_in_redis(

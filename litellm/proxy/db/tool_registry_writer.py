@@ -8,6 +8,7 @@ Admins use the management endpoints to read and update input_policy / output_pol
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -159,7 +160,7 @@ def build_tool_bulk_upsert(items: Sequence[ToolDiscoveryQueueItem]) -> tuple[str
         '  "last_used_at" = EXCLUDED."last_used_at",\n'
         '  "updated_at" = EXCLUDED."updated_at"'
     )
-    return sql, tuple(value for item in items for value in _tool_row_params(item))
+    return sql, tuple(chain.from_iterable(map(_tool_row_params, items)))
 
 
 async def batch_upsert_tools(
