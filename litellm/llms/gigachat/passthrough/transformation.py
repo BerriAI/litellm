@@ -40,7 +40,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         if base_target_url is None:
             raise Exception("GigaChat api base not found")
 
-        complete_url: Final = f"{base_target_url}/{endpoint.lstrip('/')}"
+        complete_url: Final = f"{base_target_url.rstrip('/')}/{endpoint.lstrip('/')}"
 
         return (
             httpx.URL(complete_url),
@@ -146,11 +146,11 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         3. Return the model_response
         """
 
+        from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
         from litellm.litellm_core_utils.streaming_handler import (
             convert_generic_chunk_to_model_response_stream,
             generic_chunk_has_all_required_fields,
         )
-        from litellm.main import stream_chunk_builder
         from litellm.types.utils import ModelResponseStream
 
         all_translated_chunks: Final[list[object]] = []  # mutable-ok: accumulator

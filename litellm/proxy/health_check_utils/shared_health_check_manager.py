@@ -192,12 +192,12 @@ class SharedHealthCheckManager:
     @with_service_target(HEALTH_CHECKS_TARGET)
     async def perform_shared_health_check(
         self,
-        model_list: list[dict[str, Any]],
+        model_list: list[Mapping[str, object]],
         details: bool = True,
         max_concurrency: int | None = None,
         health_check_skip_disabled_background_models: bool = False,
         router: "Router | None" = None,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    ) -> tuple[list[Mapping[str, object]], list[Mapping[str, object]], dict[str, object]]:
         """
         Perform health check with shared state coordination.
 

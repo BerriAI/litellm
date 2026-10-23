@@ -1,4 +1,5 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
+use litellm_auth::AwsParams;
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer, resolve_aws_region};
 use litellm_http::outbound::RequestSigner;
 use serde::{Deserialize, Serialize};
@@ -23,9 +24,11 @@ const HEALTH_CHECK_IMAGE_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAA
 /// Textract has operations rather than models; the model slot of
 /// `aws_textract/<model>` names the one to call.
 #[derive(Clone, Copy, Debug, EnumString, IntoStaticStr, VariantNames, PartialEq, Eq)]
-#[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
+#[strum(ascii_case_insensitive)]
 pub enum TextractOperation {
+    #[strum(serialize = "detect-document-text")]
     DetectDocumentText,
+    #[strum(serialize = "analyze-document")]
     AnalyzeDocument,
 }
 
@@ -235,18 +238,14 @@ pub(super) async fn environment(
     operation: TextractOperation,
 ) -> Result<TextractEnvironment, Error> {
     let env_lookup = |name: &str| request.connection.secret(name);
-    let region =
-        resolve_aws_region(None, &request.optional_params, &env_lookup).ok_or_else(|| {
-            Error::InvalidRequest(
-                "Missing AWS region - pass aws_region_name or set AWS_REGION_NAME or AWS_REGION"
-                    .into(),
-            )
-        })?;
+    let params = AwsParams::from_optional_params(&request.optional_params);
+    let region = resolve_aws_region(None, &params, &env_lookup)
+        .ok_or_else(|| Error::Auth(AwsParams::REGION.missing("AWS")))?;
     let signer = SigV4Signer::resolve(
         auth,
         region.clone(),
         TEXTRACT_SERVICE,
-        AwsCredentialSource::from_params(&request.optional_params, &env_lookup),
+        AwsCredentialSource::from_params(&params, &env_lookup),
         &env_lookup,
     )
     .await

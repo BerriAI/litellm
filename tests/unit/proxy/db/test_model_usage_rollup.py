@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock
@@ -6,6 +7,8 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.proxy.db import rollup_lock_timeout
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.model_usage_rollup import (
     ModelUsageKey,
@@ -14,11 +17,14 @@ from litellm.proxy.db.model_usage_rollup import (
     flush_model_usage_transactions,
     model_usage_task_type,
 )
+from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 
 class _FakeBatcher:
     def __init__(self) -> None:
         self.litellm_dailymodelusage = MagicMock()
+        self.execute_raw = MagicMock()
 
     async def __aenter__(self) -> "_FakeBatcher":
         return self
@@ -153,6 +159,27 @@ async def test_flush_aggregates_each_rollup_row_into_one_upsert() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_background_response_billing_row_adds_spend_but_no_request() -> None:
+    """A background response is billed by a later event, not by the create the client sent, so
+    model insights counts its spend and tokens once and its request once, from the create."""
+    batcher = _FakeBatcher()
+    prisma = _prisma(MagicMock(return_value=batcher))
+    create = build_model_usage_transaction(_payload(spend=0.0))
+    billing = build_model_usage_transaction(
+        _payload(spend=0.5, metadata=json.dumps({INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}))
+    )
+    assert create is not None and billing is not None
+
+    await flush_model_usage_transactions(prisma_client=prisma, transactions=[create, billing])
+
+    (upsert,) = batcher.litellm_dailymodelusage.upsert.call_args_list
+    created = upsert.kwargs["data"]["create"]
+    assert created["spend"] == 0.5
+    assert created["prompt_tokens"] == 20
+    assert (created["request_count"], created["successful_requests"], created["failed_requests"]) == (1, 1, 0)
+
+
+@pytest.mark.asyncio
 async def test_flush_with_no_transactions_touches_nothing() -> None:
     prisma = _prisma(MagicMock())
     await flush_model_usage_transactions(prisma_client=prisma, transactions=[])
@@ -201,3 +228,26 @@ async def test_request_time_path_queues_usage_instead_of_writing_to_the_db() -> 
 
     assert [transaction.key.model for transaction in prisma.model_usage_transactions] == ["openai/gpt-5.4-mini"]
     prisma.db.litellm_dailymodelusage.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rollup_transaction_sets_the_lock_timeout_before_its_first_upsert(monkeypatch) -> None:
+    """The DailyModelUsage rollup shares the DailyToolSpend write shape, so it runs
+    under the same per-transaction lock budget, issued before any upsert queues."""
+    monkeypatch.setattr(rollup_lock_timeout, "SPEND_ROLLUP_LOCK_TIMEOUT_MS", 250)
+    batcher = _FakeBatcher()
+    prisma = _prisma(MagicMock(return_value=batcher))
+    order: list[str] = []
+    batcher.execute_raw.side_effect = lambda *_: order.append("lock_timeout")
+    batcher.litellm_dailymodelusage.upsert.side_effect = lambda **_: order.append("upsert")
+
+    await flush_model_usage_transactions(
+        prisma_client=prisma,
+        transactions=[
+            build_model_usage_transaction(_payload()),
+            build_model_usage_transaction(_payload(model="other")),
+        ],
+    )
+
+    assert batcher.execute_raw.call_args_list == [((ROLLUP_LOCK_TIMEOUT_SQL, "250ms"),)]
+    assert order == ["lock_timeout", "upsert", "upsert"]

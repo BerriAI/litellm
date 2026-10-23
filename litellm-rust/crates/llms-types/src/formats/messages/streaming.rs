@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesStreamUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -17,7 +17,7 @@ pub struct MessagesStreamUsage {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MessagesStreamMessage {
     pub id: String,
     #[serde(rename = "type")]
@@ -32,7 +32,7 @@ pub struct MessagesStreamMessage {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessagesContentBlockDelta {
     TextDelta {
@@ -56,7 +56,7 @@ pub enum MessagesContentBlockDelta {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MessagesContentBlock {
     #[serde(rename = "type")]
     pub block_type: String,
@@ -82,7 +82,7 @@ pub struct MessagesContentBlock {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesDelta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,7 +97,7 @@ pub struct MessagesDelta {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MessagesStreamError {
     #[serde(rename = "type")]
     pub error_type: String,
@@ -108,8 +108,10 @@ pub struct MessagesStreamError {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(strum::AsRefStr)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum MessagesStreamEvent {
     MessageStart {
         message: MessagesStreamMessage,
@@ -140,4 +142,63 @@ pub enum MessagesStreamEvent {
     Error {
         error: MessagesStreamError,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::formats::messages::streaming::MessagesStreamEvent;
+
+    use rstest::rstest;
+    use serde_json::{Value, json};
+
+    #[rstest]
+    #[case::start(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg", "type": "message", "role": "assistant", "model": "test-model",
+            "content": [], "stop_reason": null, "stop_sequence": null,
+            "usage": {"input_tokens": 3, "future_usage": {"count": 9}},
+            "future_message": [1, 2]
+        }
+    }))]
+    #[case::block(json!({
+        "type": "content_block_start", "index": 0,
+        "content_block": {"type": "future", "payload": {"keep": true}}
+    }))]
+    #[case::delta(json!({
+        "type": "message_delta", "delta": {"stop_reason": "end_turn", "future_delta": 42},
+        "usage": {"output_tokens": 7, "future_usage": true}
+    }))]
+    #[case::error(json!({
+        "type": "error", "error": {"type": "future_error", "message": "failed", "future": 42}
+    }))]
+    fn stream_events_preserve_extensible_fields(#[case] wire: Value) {
+        let event: MessagesStreamEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(event).unwrap(), wire);
+    }
+
+    #[rstest]
+    #[case::start(json!({"type": "message_start", "message": {"id": "m", "type": "message", "role": "assistant", "model": "x", "content": [], "stop_reason": null, "stop_sequence": null, "usage": {}}}))]
+    #[case::block_start(json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}))]
+    #[case::block_delta(json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "a"}}))]
+    #[case::block_stop(json!({"type": "content_block_stop", "index": 0}))]
+    #[case::delta(json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}}))]
+    #[case::stop(json!({"type": "message_stop"}))]
+    #[case::ping(json!({"type": "ping"}))]
+    #[case::error(json!({"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}))]
+    fn the_event_name_is_the_serialized_type_tag(#[case] wire: Value) {
+        let event: MessagesStreamEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            Some(event.as_ref()),
+            wire.get("type").and_then(Value::as_str)
+        );
+    }
+
+    #[rstest]
+    #[case::invalid_index(json!({"type": "content_block_stop", "index": "zero"}))]
+    #[case::missing_delta(json!({"type": "content_block_delta", "index": 0}))]
+    #[case::unknown_event(json!({"type": "future_event"}))]
+    fn malformed_or_unrecognized_events_remain_rejected(#[case] wire: Value) {
+        assert!(serde_json::from_value::<MessagesStreamEvent>(wire).is_err());
+    }
 }

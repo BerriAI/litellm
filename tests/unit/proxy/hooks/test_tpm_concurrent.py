@@ -15,8 +15,9 @@ Redis.
 """
 
 import asyncio
+import json
 from datetime import datetime, timedelta
-from typing import Any, Dict
+from typing import Any, Dict, Final
 
 import pytest
 
@@ -27,7 +28,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_OTPM_DESCRIPTOR_KEY,
     RateLimitedModel,
     _AUDIO_BYTES_PER_TOKEN,
-    _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
+    PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _call_id_from_callback_kwargs,
@@ -3006,6 +3007,23 @@ def test_zero_usage_keeps_reservations_unless_measured_fallback_exists(
     assert tuple(operation["increment_value"] for operation in operations) == expected_increments
 
 
+def test_a_responses_reply_reporting_no_tokens_keeps_the_reservations(rate_limiter):
+    handler, _cache = rate_limiter
+    stash = get_or_create_request_stash()
+    stash.itpm_reserved_tokens = 100
+    stash.itpm_reserved_scopes = frozenset({(PROJECT_ITPM_DESCRIPTOR_KEY, "project:model")})
+    stash.otpm_reserved_tokens = 60
+    stash.otpm_reserved_scopes = frozenset({(PROJECT_OTPM_DESCRIPTOR_KEY, "project:model")})
+    response_obj = ResponsesAPIResponse(
+        id="resp_zero",
+        created_at=int(datetime.now().timestamp()),
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+    )
+
+    assert tuple(handler._build_io_token_reservation_ops({}, response_obj)) == ()
+
+
 @pytest.mark.parametrize(
     ("usage", "expected_increments"),
     [
@@ -3710,3 +3728,50 @@ async def test_the_project_itpm_reservation_counts_the_request_off_the_event_loo
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
+
+
+_COMPACTION_SUMMARY: Final = "The user planned a Tokyo trip."
+_NEXT_TURN: Final = {"type": "message", "role": "user", "content": "And Osaka?"}
+_COMPACTED_INPUT: Final = [
+    {"type": "message", "role": "user", "content": "Plan a Tokyo trip. " * 200},
+    {"type": "message", "role": "assistant", "content": "Day one, Asakusa. " * 200},
+    {
+        "type": "compaction",
+        "id": "cmp_1",
+        "encrypted_content": json.dumps({"type": "compaction", "content": _COMPACTION_SUMMARY}),
+    },
+    _NEXT_TURN,
+]
+_SUMMARY_INPUT: Final = [{"type": "message", "role": "user", "content": _COMPACTION_SUMMARY}, _NEXT_TURN]
+
+
+def test_reservation_skips_the_history_a_compaction_item_replaces(rate_limiter):
+    handler, _cache = rate_limiter
+    compacted_request: Final = {"model": "gpt-4o", "input": _COMPACTED_INPUT, "max_output_tokens": 1}
+
+    assert handler._estimate_input_and_output_tokens(
+        data=compacted_request, call_type="aresponses"
+    ) == handler._estimate_input_and_output_tokens(
+        data={**compacted_request, "input": _COMPACTED_INPUT[2:]}, call_type="aresponses"
+    )
+    assert handler._estimate_precise_input_tokens(
+        compacted_request, model="gpt-4o", call_type="aresponses"
+    ) == handler._estimate_precise_input_tokens(
+        {**compacted_request, "input": _SUMMARY_INPUT}, model="gpt-4o", call_type="aresponses"
+    )
+
+
+def test_reservation_counts_a_compaction_item_by_its_summary(rate_limiter):
+    handler, _cache = rate_limiter
+    padded_item: Final = {
+        **_COMPACTED_INPUT[2],
+        "encrypted_content": json.dumps(
+            {"type": "compaction", "content": _COMPACTION_SUMMARY, "opaque_state": "x" * 4000}
+        ),
+    }
+
+    assert handler._estimate_input_and_output_tokens(
+        data={"model": "gpt-4o", "input": [padded_item, _NEXT_TURN], "max_output_tokens": 1}, call_type="aresponses"
+    ) == handler._estimate_input_and_output_tokens(
+        data={"model": "gpt-4o", "input": _COMPACTED_INPUT[2:], "max_output_tokens": 1}, call_type="aresponses"
+    )

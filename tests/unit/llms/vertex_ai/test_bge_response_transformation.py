@@ -18,7 +18,7 @@ def test_is_bge_model_detection():
     Test BGE model detection for post-provider-split patterns.
 
     After main.py splits the provider, model strings are passed without the provider prefix.
-    Model name transformation (bge/ -> numeric ID) is handled in common_utils._get_vertex_url().
+    Model name transformation (bge/ -> numeric ID) is handled in common_utils.get_vertex_url().
     """
     # Should detect BGE models (after provider split)
     assert VertexBGEConfig.is_bge_model("bge-small-en-v1.5") is True

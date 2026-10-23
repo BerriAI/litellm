@@ -47,9 +47,7 @@ class TestBedrockAsyncInvokeEmbedding:
         )
 
         config = TwelveLabsMarengoEmbeddingConfig()
-        response = config._transform_async_invoke_response(
-            async_invoke_response, "test-model"
-        )
+        response = config.transform_async_invoke_response(async_invoke_response, "test-model")
 
         # Verify response structure
         assert isinstance(response, litellm.EmbeddingResponse)
@@ -121,18 +119,14 @@ class TestBedrockAsyncInvokeEmbedding:
         elif input_type == "image":
             input_data = test_image_base64
         elif input_type in ["video", "audio"]:
-            input_data = (
-                "s3://test-bucket/test-file.mp4"
-                if input_type == "video"
-                else "s3://test-bucket/test-file.wav"
-            )
+            input_data = "s3://test-bucket/test-file.mp4" if input_type == "video" else "s3://test-bucket/test-file.wav"
 
         inference_params = {
             "inputType": input_type,  # This will be set by the parameter mapping
             "output_s3_uri": "s3://test-bucket/async-invoke-output/",
         }
 
-        transformed_request = config._transform_request(
+        transformed_request = config.transform_request(
             input=input_data,
             inference_params=inference_params,
             async_invoke_route=True,
@@ -274,7 +268,7 @@ class TestBedrockAsyncInvokeEmbedding:
             mock_status.return_value = async_invoke_status_response
 
             # This would be called internally, but we can test the method directly
-            status_response = await bedrock_embedding._get_async_invoke_status(
+            status_response = await bedrock_embedding.get_async_invoke_status(
                 invocation_arn="arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456",
                 aws_region_name="us-east-1",
             )
@@ -290,10 +284,8 @@ class TestBedrockAsyncInvokeEmbedding:
 
         config = TwelveLabsMarengoEmbeddingConfig()
 
-        with pytest.raises(
-            ValueError, match="output_s3_uri cannot be empty for async invoke requests"
-        ):
-            config._transform_request(
+        with pytest.raises(ValueError, match="output_s3_uri cannot be empty for async invoke requests"):
+            config.transform_request(
                 input=test_input,
                 inference_params={"inputType": "text"},
                 async_invoke_route=True,
@@ -309,10 +301,8 @@ class TestBedrockAsyncInvokeEmbedding:
 
         config = TwelveLabsMarengoEmbeddingConfig()
 
-        with pytest.raises(
-            ValueError, match="Input type 'video' requires async_invoke route"
-        ):
-            config._transform_request(
+        with pytest.raises(ValueError, match="Input type 'video' requires async_invoke route"):
+            config.transform_request(
                 input="s3://test-bucket/test-video.mp4",
                 inference_params={"inputType": "video"},
                 async_invoke_route=False,  # Should fail for video without async route
@@ -338,9 +328,7 @@ class TestBedrockAsyncInvokeEmbedding:
 
         for arn in test_cases:
             mock_response = {"invocationArn": arn}
-            response = config._transform_async_invoke_response(
-                mock_response, "test-model"
-            )
+            response = config.transform_async_invoke_response(mock_response, "test-model")
 
             assert response._hidden_params._invocation_arn == arn
 
@@ -351,9 +339,7 @@ class TestBedrockAsyncInvokeEmbedding:
         )
 
         config = TwelveLabsMarengoEmbeddingConfig()
-        response = config._transform_async_invoke_response(
-            async_invoke_response, "test-model"
-        )
+        response = config.transform_async_invoke_response(async_invoke_response, "test-model")
 
         # Test that hidden params can be accessed like a dictionary
         assert (
@@ -449,7 +435,7 @@ async def test_async_invoke_status_signs_off_the_event_loop(monkeypatch):
             return_value=httpx.Response(200, json=async_invoke_status_response)
         )
         release = asyncio.create_task(probe.release_refresh_from_the_loop())
-        status = await embedder._get_async_invoke_status(
+        status = await embedder.get_async_invoke_status(
             invocation_arn=async_invoke_status_response["invocationArn"], aws_region_name="us-east-1"
         )
         await release

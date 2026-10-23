@@ -35,13 +35,14 @@ import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
-from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
 import litellm
 import litellm.proxy.batches_endpoints.endpoints as endpoints
@@ -57,7 +58,8 @@ from litellm.types.llms.openai import BatchJobStatus
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.types.utils import CredentialItem, LiteLLMBatch, SpecialEnums
 
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
+from starlette.datastructures import Headers, QueryParams
 
 # --------------------------------------------------------------------------- #
 # Fixtures: distinguishable credentials per model so a wrong/hardcoded model_id
@@ -123,8 +125,8 @@ class FakeRequest:
         headers: Optional[Dict[str, str]] = None,
         query: Optional[Dict[str, str]] = None,
     ):
-        self.headers = headers or {}
-        self.query_params = query or {}
+        self.headers = Headers(headers=headers or {})
+        self.query_params = QueryParams(query or {})
 
 
 @pytest.fixture
@@ -206,7 +208,7 @@ def harness(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     with ExitStack() as stack:
-        stack.enter_context(patch.object(endpoints, "_read_request_body", read_body))
+        stack.enter_context(patch.object(endpoints, "read_request_body", read_body))
         stack.enter_context(
             patch.object(
                 ProxyBaseLLMRequestProcessing,
@@ -522,6 +524,29 @@ async def test_create__fallback_explicit_provider_bypasses_not_found_gate(harnes
 
 
 @pytest.mark.asyncio
+async def test_create__fallback_workload_identity_alone_forwards(
+    harness: Harness, no_openai_creds: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    token_file = tmp_path / "subject_token.jwt"
+    token_file.write_text("subject-token-from-file")
+    monkeypatch.setenv("OPENAI_IDENTITY_PROVIDER_ID", "idp_test123")
+    monkeypatch.setenv("OPENAI_SERVICE_ACCOUNT_ID", "user-test456")
+    monkeypatch.setenv("OPENAI_IDENTITY_TOKEN_FILE", str(token_file))
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    await call_create(harness)
+
+    assert harness.acreate_kwargs()["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
 async def test_create__fallback_env_key_alone_forwards(harness, monkeypatch):
     monkeypatch.setattr(litellm, "api_key", None)
     monkeypatch.setattr(litellm, "openai_key", None)
@@ -593,7 +618,7 @@ async def test_create__unified_file_id_single_model_disables_cross_model_fallbac
         },
     )
     with (
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value="unified-xyz"),
         patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gpt-4o-mini"]),
     ):
         resp = await call_create(harness)
@@ -620,7 +645,7 @@ async def test_create__unified_file_id_not_exactly_one_model_400(harness, models
         },
     )
     with (
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value="unified-xyz"),
         patch.object(endpoints, "get_models_from_unified_file_id", return_value=models),
     ):
         with pytest.raises(ProxyException) as exc:
@@ -662,7 +687,7 @@ async def test_create__unified_file_id_resolves_real_storage_url(harness):
     fake_repo_cls = MagicMock(return_value=fake_repo_instance)
 
     with (
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value="unified-xyz"),
         patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gemini-2.0"]),
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
@@ -696,7 +721,7 @@ async def test_create__unified_file_id_db_error_falls_back_to_raw_id(harness):
     fake_repo_cls = MagicMock(return_value=fake_repo_instance)
 
     with (
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value="unified-xyz"),
         patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gemini-2.0"]),
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
@@ -728,7 +753,7 @@ async def test_create__multi_model_unified_file_with_loadbalancing_keeps_router_
 
     with (
         patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", True),
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value="unified-xyz"),
         patch.object(endpoints, "get_models_from_unified_file_id", return_value=["model-a", "model-b"]),
     ):
         await call_create(harness)
@@ -759,7 +784,7 @@ async def test_create__unified_file_id_missing_row_falls_back_to_raw_id(harness)
     fake_repo_cls = MagicMock(return_value=fake_repo_instance)
 
     with (
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value="unified-xyz"),
         patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gemini-2.0"]),
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
@@ -792,7 +817,7 @@ async def test_create__unified_file_id_legacy_row_without_storage_url_dispatches
     fake_repo_cls = MagicMock(return_value=fake_repo_instance)
 
     with (
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value="unified-xyz"),
         patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gemini-2.0"]),
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
@@ -913,6 +938,42 @@ async def test_create__raw_file_with_executed_model_400_with_upload_guidance(har
     harness.router_acreate.assert_not_called()
 
 
+async def _create_with_model_headers(harness: Harness, *models: str):
+    harness.upstream_files_route.mock(return_value=httpx.Response(200, json={"object": "list", "data": []}))
+    set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/batches",
+            "query_string": b"",
+            "headers": [(b"x-litellm-model", model.encode()) for model in models],
+        }
+    )
+    return await endpoints.create_batch(
+        request=request, fastapi_response=Response(), provider=None, user_api_key_dict=UserAPIKeyAuth(api_key="sk-test")
+    )
+
+
+@pytest.mark.asyncio
+async def test_create__model_headers_naming_different_models_are_rejected_before_anything_runs(harness):
+    with pytest.raises(ProxyException) as exc:
+        await _create_with_model_headers(harness, "vertex-model", "my-vllm")
+
+    assert exc.value.code == "400"
+    assert "x-litellm-model" in exc.value.message
+    harness.pre_call.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__the_same_model_header_twice_still_routes_to_that_model(harness):
+    await _create_with_model_headers(harness, "my-vllm", "my-vllm")
+
+    assert harness.acreate_kwargs()["api_base"] == CREDS["my-vllm"]["api_base"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "upstream_answer",
@@ -946,7 +1007,7 @@ async def test_create__model_encoded_beats_unified(harness):
         },
     )
     with (
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value="unified-xyz"),
         patch.object(endpoints, "get_models_from_unified_file_id", return_value=["something-else"]),
     ):
         await call_create(harness)
@@ -1035,8 +1096,8 @@ def _raw_batches_request(body: Dict[str, Any]) -> MagicMock:
     request.url.path = "/v1/batches"
     request.method = "POST"
     request.scope = {"type": "http", "method": "POST", "path": "/v1/batches"}
-    request.query_params = {}
-    request.headers = {"Content-Type": "application/json"}
+    request.query_params = QueryParams({})
+    request.headers = Headers(headers={"Content-Type": "application/json"})
     request.client = MagicMock()
     request.client.host = "127.0.0.1"
     request.body = AsyncMock(return_value=json.dumps(body).encode())
@@ -1164,9 +1225,37 @@ async def test_create__uses_acreate_batch_route_type(harness, openai_env_creds):
     assert harness.pre_call.call_args.kwargs["route_type"] == "acreate_batch"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loadbalancing", [True, False], ids=["load_balanced", "unified_branch"])
+async def test_create__pre_call_ownership_denial_stops_every_dispatch_branch(harness, loadbalancing: bool):
+    set_body(
+        harness,
+        {
+            "input_file_id": "litellm_proxy_unified_id",
+            "model": "vertex-model",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.is_known_model.return_value = True
+    harness.pre_call.side_effect = HTTPException(status_code=403, detail="does not have access to the file")
+
+    with (
+        patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", loadbalancing),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "get_models_from_unified_file_id", return_value=["vertex-model"]),
+        pytest.raises(ProxyException) as exc,
+    ):
+        await call_create(harness)
+
+    assert exc.value.code == "403", exc.value
+    harness.router_acreate.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
+
+
 def install_managed_files_hook(harness: Harness) -> AsyncMock:
     prisma_client = AsyncMock()
-    managed_files = _PROXY_LiteLLMManagedFiles(MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client)
+    managed_files = PROXY_LiteLLMManagedFiles(MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client)
     harness.logging.post_call_success_hook = AsyncMock(side_effect=managed_files.async_post_call_success_hook)
     harness.router.model_list = []
     return prisma_client
@@ -1596,7 +1685,7 @@ async def test_retrieve__model_encoded_beats_loadbalancing(retrieve_harness):
 
 @pytest.mark.asyncio
 async def test_retrieve__unified_batch_id_routes_to_router(retrieve_harness):
-    with patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
         resp = await call_retrieve(retrieve_harness, "batch-unified-blob")
 
     # DISPATCH - router fired, direct litellm did not.
@@ -1762,7 +1851,7 @@ async def test_retrieve__db_terminal_unified_resolves_file_ids(retrieve_harness)
     db_batch_object = MagicMock()
     retrieve_harness.get_batch_from_db.return_value = (db_batch_object, db_response)
 
-    with patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
         await call_retrieve(retrieve_harness, "batch-unified-blob")
 
     # Terminal short-circuit still registers/normalizes raw provider file ids.
@@ -1960,7 +2049,7 @@ def list_harness():
     litellm_alist = AsyncMock(return_value=FakeListPage([]))
 
     with ExitStack() as stack:
-        stack.enter_context(patch.object(endpoints, "_read_request_body", read_body))
+        stack.enter_context(patch.object(endpoints, "read_request_body", read_body))
         stack.enter_context(
             patch.object(
                 ProxyBaseLLMRequestProcessing,
@@ -2495,7 +2584,7 @@ async def test_cancel__model_encoded_id_forwards_deployment_model(cancel_harness
 
 @pytest.mark.asyncio
 async def test_cancel__model_encoded_beats_unified(cancel_harness):
-    with patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
         await call_cancel(cancel_harness, AZURE_BATCH_ID)
 
     assert cancel_harness.litellm_acancel.call_count == 1
@@ -2511,7 +2600,7 @@ async def test_cancel__model_encoded_beats_unified(cancel_harness):
 
 @pytest.mark.asyncio
 async def test_cancel__unified_batch_id_routes_to_router(cancel_harness):
-    with patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
         resp = await call_cancel(cancel_harness, "batch-unified-blob")
 
     # DISPATCH - router fired, litellm did not, no creds lookup.
@@ -2537,7 +2626,7 @@ async def test_cancel__db_write_receives_caller_auth(cancel_harness):
     """update_batch_in_database can only mint managed IDs for a cancelled batch's
     output files when it has an auth context, so cancel must forward the caller's."""
     caller = UserAPIKeyAuth(api_key="sk-test", user_id="user-cancel-1")
-    with patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
         await call_cancel(cancel_harness, "batch-unified-blob", user=caller)
 
     assert cancel_harness.update_batch_in_db.call_args.kwargs["user_api_key_dict"] is caller
@@ -2548,7 +2637,7 @@ async def test_cancel__unified_missing_model_id_400(cancel_harness):
     # unified id with no model_id segment -> get_model_id returns None -> 400.
     with patch.object(
         endpoints,
-        "_is_base64_encoded_unified_file_id",
+        "is_base64_encoded_unified_file_id",
         return_value="litellm_proxy;llm_batch_id:batch-xyz",
     ):
         with pytest.raises(ProxyException) as exc:
@@ -2563,7 +2652,7 @@ async def test_cancel__unified_missing_model_id_400(cancel_harness):
 async def test_cancel__unified_no_router_500(cancel_harness):
     with (
         patch.object(proxy_server, "llm_router", None),
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID),
     ):
         with pytest.raises(ProxyException) as exc:
             await call_cancel(cancel_harness, "batch-unified-blob")
@@ -2769,7 +2858,7 @@ async def test_create__unified_no_router_500(harness):
         },
     )
     with (
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value="unified-xyz"),
         patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gpt-4o-mini"]),
         patch.object(proxy_server, "llm_router", None),
     ):
@@ -2782,7 +2871,7 @@ async def test_create__unified_no_router_500(harness):
 @pytest.mark.asyncio
 async def test_retrieve__unified_no_router_500(retrieve_harness):
     with (
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID),
         patch.object(proxy_server, "llm_router", None),
     ):
         with pytest.raises(ProxyException) as exc:
@@ -3257,6 +3346,129 @@ async def test_cancel__unified_batch_id_rejects_key_without_model_grant(cancel_h
 
     assert exc_info.value.code == "403"
     cancel_harness.router_acancel.assert_not_called()
+
+
+TEAM_INTERNAL_MODEL_NAME: Final = "model_name_team-a_00000000-0000-0000-0000-000000000000"
+TEAM_PUBLIC_MODEL_NAME: Final = "team-gpt4o-mini"
+
+
+def _team_scoped_deployment() -> Deployment:
+    return Deployment(
+        model_name=TEAM_INTERNAL_MODEL_NAME,
+        litellm_params=LiteLLM_Params(model="gpt-4o-mini"),
+        model_info=ModelInfo(id="dep-team-a-1", team_id="team-a", team_public_model_name=TEAM_PUBLIC_MODEL_NAME),
+    )
+
+
+def _route_unified_batch_to_team_deployment(
+    harness: RetrieveHarness | CancelHarness, deployment: Deployment | None = None
+) -> None:
+    target: Final = deployment or _team_scoped_deployment()
+    harness.router.resolve_model_name_from_model_id = MagicMock(return_value=target.model_name)
+    harness.router.get_deployment_by_model_group_name = MagicMock(return_value=target)
+
+
+@pytest.mark.asyncio
+async def test_retrieve__team_scoped_deployment_authorizes_owning_team_by_public_name(
+    retrieve_harness: RetrieveHarness,
+) -> None:
+    _route_unified_batch_to_team_deployment(retrieve_harness)
+
+    resp: Final = await call_retrieve(
+        retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to(TEAM_PUBLIC_MODEL_NAME)
+    )
+
+    assert retrieve_harness.router_aretrieve.call_count == 1
+    assert resp._hidden_params["model_id"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_cancel__team_scoped_deployment_authorizes_owning_team_by_public_name(
+    cancel_harness: CancelHarness,
+) -> None:
+    _route_unified_batch_to_team_deployment(cancel_harness)
+
+    await call_cancel(cancel_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to(TEAM_PUBLIC_MODEL_NAME))
+
+    assert cancel_harness.router_acancel.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment, user",
+    [
+        pytest.param(
+            _team_scoped_deployment(), _key_restricted_to("some-other-model"), id="owning-team-key-without-the-model"
+        ),
+        pytest.param(
+            _team_scoped_deployment(),
+            UserAPIKeyAuth(
+                api_key="sk-team-b",
+                team_id="team-b",
+                team_models=[TEAM_PUBLIC_MODEL_NAME],
+                models=[TEAM_PUBLIC_MODEL_NAME],
+            ),
+            id="other-team-key-granted-the-same-public-name",
+        ),
+        pytest.param(
+            Deployment(
+                model_name="model_name_team-a_ml_00000000-0000-0000-0000-000000000000",
+                litellm_params=LiteLLM_Params(model="gpt-4o-mini"),
+                model_info=ModelInfo(
+                    id="dep-team-a-ml-1", team_id="team-a_ml", team_public_model_name=TEAM_PUBLIC_MODEL_NAME
+                ),
+            ),
+            _key_restricted_to(TEAM_PUBLIC_MODEL_NAME),
+            id="team-whose-id-prefixes-the-owning-team-id",
+        ),
+    ],
+)
+async def test_retrieve__team_scoped_deployment_rejects_keys_outside_its_grant(
+    retrieve_harness: RetrieveHarness, deployment: Deployment, user: UserAPIKeyAuth
+) -> None:
+    _route_unified_batch_to_team_deployment(retrieve_harness, deployment)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await call_retrieve(retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=user)
+
+    assert exc_info.value.code == "403"
+    retrieve_harness.router_aretrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment, user",
+    [
+        pytest.param(
+            _team_scoped_deployment(),
+            _key_restricted_to(TEAM_INTERNAL_MODEL_NAME),
+            id="owning-team-key-granted-the-internal-name",
+        ),
+        pytest.param(
+            Deployment(
+                model_name=TEAM_INTERNAL_MODEL_NAME,
+                litellm_params=LiteLLM_Params(model="gpt-4o-mini"),
+                model_info=ModelInfo(id="dep-team-a-1", team_id="team-a"),
+            ),
+            UserAPIKeyAuth(
+                api_key="sk-legacy",
+                team_id="team-a",
+                team_models=["legacy-team-model"],
+                models=["legacy-team-model"],
+                team_model_aliases={"legacy-team-model": TEAM_INTERNAL_MODEL_NAME},
+            ),
+            id="legacy-team-model-reached-through-a-team-alias",
+        ),
+    ],
+)
+async def test_retrieve__team_scoped_deployment_authorizes_internal_name_and_legacy_alias_grants(
+    retrieve_harness: RetrieveHarness, deployment: Deployment, user: UserAPIKeyAuth
+) -> None:
+    _route_unified_batch_to_team_deployment(retrieve_harness, deployment)
+
+    await call_retrieve(retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=user)
+
+    assert retrieve_harness.router_aretrieve.call_count == 1
 
 
 @pytest.mark.asyncio

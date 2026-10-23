@@ -11,14 +11,14 @@ import contextlib
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, runtime_checkable
 
 import anyio
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.cost_calculator import _infer_call_type
+from litellm.cost_calculator import infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
@@ -53,6 +53,22 @@ GUARDRAIL_NAME: Final = "unified_llm_guardrails"
 _RequestData: TypeAlias = dict[str, object]
 
 
+@runtime_checkable
+class RequestAttachmentScanner(Protocol):
+    async def async_scan_request_attachments(
+        self,
+        data: _RequestData,
+        call_type: CallTypesLiteral,
+    ) -> None: ...
+
+
+async def _scan_request_attachments(
+    guardrail: CustomGuardrail, data: _RequestData, call_type: CallTypesLiteral
+) -> None:
+    if isinstance(guardrail, RequestAttachmentScanner) and hasattr(type(guardrail), "async_scan_request_attachments"):
+        await guardrail.async_scan_request_attachments(data=data, call_type=call_type)
+
+
 class _EndpointTranslation(Protocol):
     @property
     def process_input_messages(self) -> "Callable[..., Awaitable[dict[str, object]]]": ...
@@ -65,6 +81,9 @@ class _EndpointTranslation(Protocol):
 
     @property
     def get_streaming_scan_key(self) -> "Callable[[Sequence[object]], StreamingScanKey | None]": ...
+
+    @property
+    def needs_ended_stream_scan(self) -> "Callable[[CustomGuardrail, Sequence[object]], bool]": ...
 
     @property
     def released_stream_as_ended(self) -> "Callable[[Sequence[object]], tuple[object, ...]]": ...
@@ -96,7 +115,7 @@ def resolve_endpoint_translation(
         route_call_types[0].value
         if route_call_types
         else (
-            _infer_call_type(call_type=None, completion_response=first_response_item)
+            infer_call_type(call_type=None, completion_response=first_response_item)
             if first_response_item is not None
             else None
         )
@@ -135,6 +154,21 @@ def _is_redundant_scan(scan_key: "StreamingScanKey | None", last_scan_key: "Stre
     if scan_key is None:
         return False
     return scan_key == last_scan_key or scan_key.has_nothing_to_scan
+
+
+def _owes_ended_scan(
+    endpoint_translation: _EndpointTranslation,
+    guardrail: CustomGuardrail,
+    responses_so_far: Sequence[object],
+    last_scan_key: "StreamingScanKey | None",
+) -> bool:
+    """Whether the end-of-stream round still runs after a sampled round covered every text before the stream ended,
+    because the translation hands ``guardrail`` marks only an ended round carries."""
+    return (
+        last_scan_key is not None
+        and not last_scan_key.stream_ended
+        and endpoint_translation.needs_ended_stream_scan(guardrail, responses_so_far)
+    )
 
 
 class _StreamTerminated(Exception):
@@ -251,6 +285,8 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
+        await _scan_request_attachments(guardrail_to_apply, data, call_type)  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
+
         data = await endpoint_translation.process_input_messages(
             data=data,
             guardrail_to_apply=guardrail_to_apply,
@@ -340,7 +376,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             if call_types is not None and len(call_types) > 0:
                 call_type = call_types[0]
         if call_type is None:
-            call_type = _infer_call_type(call_type=None, completion_response=response)
+            call_type = infer_call_type(call_type=None, completion_response=response)
 
         if call_type is None:
             litellm_logging_obj: Final = data.get("litellm_logging_obj")
@@ -1213,7 +1249,14 @@ class UnifiedLLMGuardrails(CustomLogger):
                         call_type = call_types[0].value
 
                 if call_type is None:
-                    call_type = _infer_call_type(call_type=None, completion_response=item)
+                    call_type = infer_call_type(call_type=None, completion_response=item)
+
+                # Provider passthrough routes (e.g. /bedrock/.../converse-stream) map to no call type, and their
+                # frames carry none; the logging object names the passthrough, as on the non-streaming path.
+                if call_type is None:
+                    logging_call_type = getattr(typed_request_data.get("litellm_logging_obj"), "call_type", None)
+                    if logging_call_type == CallTypes.allm_passthrough_route.value:
+                        call_type = logging_call_type
 
                 # If call type not supported, just pass through all chunks
                 if call_type is None or CallTypes(call_type) not in mappings:
@@ -1365,7 +1408,9 @@ class UnifiedLLMGuardrails(CustomLogger):
                 )
                 end_scan_key: Final = endpoint_translation.get_streaming_scan_key(responses_so_far)
                 verdict_settled = True
-                if _is_redundant_scan(end_scan_key, last_scan_key):
+                if _is_redundant_scan(end_scan_key, last_scan_key) and not _owes_ended_scan(
+                    endpoint_translation, guardrail_to_apply, responses_so_far, last_scan_key
+                ):
                     verbose_proxy_logger.debug(
                         "Skipping end-of-stream scan for guardrail %s: the last sampled round already scanned it all",
                         guardrail_to_apply.guardrail_name,
