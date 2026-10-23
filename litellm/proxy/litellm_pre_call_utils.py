@@ -2360,6 +2360,7 @@ def refresh_proxy_server_request_body_snapshot(
     has already stamped ``data["litellm_logging_obj"]`` with a live (non-serializable)
     ``Logging`` instance, so it must be excluded here the same way ``secret_fields``
     and ``proxy_server_request`` are.
+    The live WebSocket also references the ASGI app/router graph, not request body data.
     """
     from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -2376,6 +2377,7 @@ def refresh_proxy_server_request_body_snapshot(
                 "secret_fields",
                 "proxy_server_request",
                 "litellm_logging_obj",
+                "websocket",
                 VECTOR_STORE_CALLER_METADATA_KWARG,
                 STREAM_USAGE_INJECTED_FIELD,
             }
