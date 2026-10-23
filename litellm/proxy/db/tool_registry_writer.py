@@ -8,7 +8,6 @@ Admins use the management endpoints to read and update input_policy / output_pol
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -18,6 +17,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
 from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import aggregate_tool_discoveries
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
+from litellm.proxy.db.tool_table_bulk_upsert import build_tool_bulk_upsert
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ToolRepository
@@ -103,64 +103,6 @@ def _row_to_model(row: object) -> LiteLLM_ToolTableRow:
         created_by=row.get("created_by"),
         updated_by=row.get("updated_by"),
     )
-
-
-_TOOL_ROW_COLUMNS: Final[tuple[str, ...]] = (
-    "tool_id",
-    "tool_name",
-    "origin",
-    "call_count",
-    "created_by",
-    "updated_by",
-    "key_hash",
-    "team_id",
-    "key_alias",
-    "user_agent",
-)
-_TOOL_ROW_CASTS: Final[Mapping[str, str]] = MappingProxyType({"call_count": "integer"})
-
-
-def _tool_row_params(item: ToolDiscoveryQueueItem) -> tuple[str | int | None, ...]:
-    created_by: Final = item.get("created_by") or "system"
-    return (
-        str(uuid.uuid4()),
-        item.get("tool_name", ""),
-        item.get("origin") or "user_defined",
-        item.get("call_count", 1),
-        created_by,
-        created_by,
-        item.get("key_hash"),
-        item.get("team_id"),
-        item.get("key_alias"),
-        item.get("user_agent"),
-    )
-
-
-def build_tool_bulk_upsert(items: Sequence[ToolDiscoveryQueueItem]) -> tuple[str, tuple[str | int | None, ...]]:
-    """One INSERT ... ON CONFLICT statement for a batch of distinct tool_names, plus its positional arguments.
-
-    A new tool_name starts at the batch's call_count with the untrusted policies the table defaults to. An
-    existing row keeps its policies and caller fields and only adds the batch's call_count."""
-    width: Final = len(_TOOL_ROW_COLUMNS)
-    rows: Final = ", ".join(
-        "("
-        + ", ".join(
-            f"${row_index * width + offset + 1}::{_TOOL_ROW_CASTS.get(column, 'text')}"
-            for offset, column in enumerate(_TOOL_ROW_COLUMNS)
-        )
-        + ", (NOW() AT TIME ZONE 'UTC'), (NOW() AT TIME ZONE 'UTC'))"
-        for row_index in range(len(items))
-    )
-    columns: Final = ", ".join(f'"{column}"' for column in _TOOL_ROW_COLUMNS)
-    sql: Final = (
-        f'INSERT INTO "LiteLLM_ToolTable" ({columns}, "last_used_at", "updated_at")\n'
-        f"VALUES {rows}\n"
-        'ON CONFLICT ("tool_name") DO UPDATE SET\n'
-        '  "call_count" = "LiteLLM_ToolTable"."call_count" + EXCLUDED."call_count",\n'
-        '  "last_used_at" = EXCLUDED."last_used_at",\n'
-        '  "updated_at" = EXCLUDED."updated_at"'
-    )
-    return sql, tuple(chain.from_iterable(map(_tool_row_params, items)))
 
 
 async def batch_upsert_tools(
