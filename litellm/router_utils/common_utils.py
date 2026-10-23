@@ -23,13 +23,34 @@ from litellm.types.router import (
     LiteLLM_Params,
     SkippedFallbackTarget,
 )
-from litellm.types.utils import LlmProviders, ProviderSpecificModelInfo
+from litellm.types.utils import (
+    AdminApiKeySecretReference,
+    LlmProviders,
+    ProviderSpecificModelInfo,
+    admin_api_key_secret_reference,
+)
 
 _V = TypeVar("_V")
 
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+_DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
+
+
+def with_admin_api_key_secret_reference(deployment: Deployment) -> Deployment:
+    if deployment.model_info.get("team_id") is not None or isinstance(
+        deployment.litellm_params.api_key, AdminApiKeySecretReference
+    ):
+        return deployment
+    params: Final = admin_api_key_secret_reference(deployment.litellm_params.model_dump(exclude_none=True))
+    if not isinstance(params.get("api_key"), AdminApiKeySecretReference):
+        return deployment
+    return deployment.model_copy(
+        update={"litellm_params": deployment.litellm_params.model_copy(update={"api_key": params["api_key"]})}
+    )
 
 
 def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
@@ -307,6 +328,20 @@ def filter_team_based_models(
         for deployment in healthy_deployments
         if deployment.get("model_info", {}).get("id") not in ids_to_remove
     ]
+
+
+def deployments_the_caller_may_use(
+    deployments: Sequence[Mapping[str, object]], request_kwargs: Mapping[str, object] | None
+) -> tuple[Mapping[str, object], ...]:
+    try:
+        return _DEPLOYMENT_ROWS_ADAPTER.validate_python(
+            filter_team_based_models(
+                [dict(deployment) for deployment in deployments],
+                None if request_kwargs is None else dict(request_kwargs),
+            )
+        )
+    except BadRequestError:
+        return ()
 
 
 _WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})

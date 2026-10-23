@@ -54,6 +54,8 @@ class NativeVertexBatchCostCalculator(Protocol):
         model: str,
         custom_llm_provider: str | None = None,
         model_info: ModelInfo | None = None,
+        *,
+        vertex_location: str | None = None,
     ) -> tuple[float, float]: ...
 
 
@@ -90,6 +92,7 @@ def native_vertex_batch_row_stats(
     model_info: ModelInfo | None,
     calculate_usage: Callable[[GenerateContentResponseBody], Usage],
     cost_calculator: NativeVertexBatchCostCalculator,
+    vertex_location: str | None = None,
 ) -> NativeVertexBatchRowStats | None:
     """
     Usage and cost of one native Vertex predictions.jsonl row, a
@@ -121,7 +124,11 @@ def native_vertex_batch_row_stats(
         )
     try:
         prompt_cost, completion_cost = cost_calculator(
-            usage=usage, model=model, custom_llm_provider="vertex_ai", model_info=model_info
+            usage=usage,
+            model=model,
+            custom_llm_provider="vertex_ai",
+            model_info=model_info,
+            vertex_location=vertex_location,
         )
     except Exception as e:  # noqa: BLE001  # one unpriceable row must not abort the batch's cost accounting
         verbose_logger.warning(

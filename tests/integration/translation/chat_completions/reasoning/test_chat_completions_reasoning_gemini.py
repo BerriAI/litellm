@@ -8,11 +8,11 @@ from unittest.mock import ANY
 from uuid import uuid4
 
 import pytest
-from integration._support.client import Gateway, eventually, list_value, object_value, string_value
+from integration._support.client import Gateway, list_value, object_value, string_value
 from integration._support.process import graceful_stop_seconds
 from integration._support.provider import SharedProvider
 from integration._support.wire import Reply
-from integration.caching.response_cache_case import CACHE_KEY, redis_store
+from integration.caching.response_cache_case import await_entry, redis_store
 from integration.translation.case import SSEFrame, TranslationTestCase
 from integration.translation.chat_completions.bases.gemini import GEMINI_3_8_FLASH_TEST_CASE
 from integration.translation.chat_completions.bases.vertex_ai import (
@@ -41,7 +41,7 @@ from pydantic import JsonValue
 
 __all__ = ("thoughts_off",)
 
-pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 GEMINI_3_8_FLASH_THINKING_SHOWN_THOUGHT: Final = "**My Inspection Strategy: Validation First**\n\nOkay, here's how I'm approaching this project review. The instruction specifically mentions considering zero, negative, and non-integer quantities. To efficiently address that, I'm going to start with `shop/validation.py`. My reasoning is simple: the validation logic is the first line of defense. Understanding how the system *expects* to handle these edge cases will inform everything else. It's the logical place to begin my investigation to understand the code. I'll use the `read_file` tool to examine that file. I am **not** changing any files. I will call the `chat_completions` client for this project review. I am now proceeding with reading `shop/validation.py`.\n\n\n"
 
@@ -840,7 +840,7 @@ def without_closed_schema(tool: JsonValue) -> JsonValue:
     return {**object_value(tool), "function": {**function, "parameters": open_parameters}}
 
 
-def cacheable_run(case: TranslationTestCase, marker: str) -> TranslationTestCase:
+def cacheable_run(case: TranslationTestCase, marker: str, reply_id: str) -> TranslationTestCase:
     messages: Final = list_value(case.litellm_request["messages"])
     system: Final = object_value(messages[0])
     instruction: Final = object_value(case.expected_provider_request["system_instruction"])
@@ -853,6 +853,7 @@ def cacheable_run(case: TranslationTestCase, marker: str) -> TranslationTestCase
             "messages": [{**system, "content": text}, messages[1]],
             "tools": [without_closed_schema(tool) for tool in list_value(case.litellm_request["tools"])],
         },
+        mock_provider_response={**case.mock_provider_response, "responseId": reply_id},
         expected_provider_request={
             **case.expected_provider_request,
             "contents": [list_value(case.expected_provider_request["contents"])[0]],
@@ -861,14 +862,10 @@ def cacheable_run(case: TranslationTestCase, marker: str) -> TranslationTestCase
     )
 
 
-def response_cache_keys() -> frozenset[str]:
-    keys: Final = (raw.decode() for raw in redis_store().scan_iter())
-    return frozenset(key for key in keys if CACHE_KEY.match(key))
-
-
-def stored_reply_key(before: frozenset[str]) -> str:
-    (key,) = eventually(lambda: response_cache_keys() - before, lambda added: len(added) == 1)
-    return key
+def stored_reply_key(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> str:
+    reply: Final = assert_translation(case, gateway, provider)
+    with redis_store() as store:
+        return await_entry(store, string_value(reply["id"]))
 
 
 GEMINI_3_8_FLASH_SUMMARY_ALIAS_TEST_CASE: Final = with_request(
@@ -888,12 +885,11 @@ def test_a_summary_alias_ask_and_a_plain_request_never_share_a_cached_reply(
     first: TranslationTestCase, second: TranslationTestCase, thoughts_off: Gateway, provider: SharedProvider
 ) -> None:
     marker: Final = uuid4().hex
-    before: Final = response_cache_keys()
-    assert_translation(cacheable_run(first, marker), thoughts_off, provider)
-    first_key: Final = stored_reply_key(before)
-    assert_translation(cacheable_run(second, marker), thoughts_off, provider)
-    second_key: Final = stored_reply_key(before | {first_key})
-    repeat: Final = thoughts_off.request("POST", second.litellm_endpoint, cacheable_run(second, marker).litellm_request)
+    second_run: Final = cacheable_run(second, marker, uuid4().hex)
+    first_key: Final = stored_reply_key(cacheable_run(first, marker, uuid4().hex), thoughts_off, provider)
+    second_key: Final = stored_reply_key(second_run, thoughts_off, provider)
+    assert second_key != first_key
+    repeat: Final = thoughts_off.request("POST", second.litellm_endpoint, second_run.litellm_request)
     assert repeat.status_code == 200, repeat.text
     assert repeat.headers.get("x-litellm-cache-key") == second_key, sorted(repeat.headers)
     assert provider.received() == ()
