@@ -73330,6 +73330,7 @@
         ]
     },
     "vertex_ai/veo-2.0-generate-001": {
+        "deprecation_date": "2026-06-30",
         "litellm_provider": "vertex_ai-video-models",
         "max_input_tokens": 1024,
         "max_tokens": 1024,
