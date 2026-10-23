@@ -2083,15 +2083,18 @@ def test_calculate_cache_writing_cost():
 
 
 @pytest.mark.parametrize(
-    ("service_tier", "write_rate", "twelve_hour_rate"),
+    ("prompt_tokens", "service_tier", "write_rate", "twelve_hour_rate"),
     [
-        ("default", 4e-6, 8e-6),
-        ("flex", 2e-6, 4e-6),
-        ("priority", 6e-6, 12e-6),
+        (10_000, "default", 2e-6, 4e-6),
+        (10_000, "flex", 1e-6, 2e-6),
+        (10_000, "priority", 3e-6, 6e-6),
+        (300_000, "default", 4e-6, 8e-6),
+        (300_000, "flex", 2e-6, 4e-6),
+        (300_000, "priority", 6e-6, 12e-6),
     ],
 )
 def test_generic_cost_per_token_prices_12h_cache_writes_at_prompt_threshold(
-    service_tier: str, write_rate: float, twelve_hour_rate: float
+    prompt_tokens: int, service_tier: str, write_rate: float, twelve_hour_rate: float
 ) -> None:
     model_info: Final[ModelInfo] = {
         "input_cost_per_token": 1e-6,
@@ -2110,9 +2113,9 @@ def test_generic_cost_per_token_prices_12h_cache_writes_at_prompt_threshold(
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority": 12e-6,
     }
     usage: Final = Usage(
-        prompt_tokens=300_000,
+        prompt_tokens=prompt_tokens,
         completion_tokens=0,
-        total_tokens=300_000,
+        total_tokens=prompt_tokens,
         prompt_tokens_details=PromptTokensDetailsWrapper(
             cache_creation_tokens=5_000,
             cache_creation_token_details=CacheCreationTokenDetails(

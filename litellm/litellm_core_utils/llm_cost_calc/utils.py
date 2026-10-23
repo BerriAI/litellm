@@ -751,7 +751,7 @@ def _get_token_base_cost(
     cache_creation_cost_above_1hr = get_cost_per_unit(
         model_info, "cache_creation_input_token_cost_above_1hr", default_value=None
     )
-    cache_creation_cost_above_12hr_base: Final = get_cost_per_unit(
+    cache_creation_cost_above_12hr = get_cost_per_unit(
         model_info,
         get_service_tier_cost_key("cache_creation_input_token_cost_above_12hr", service_tier),
         default_value=None,
@@ -847,28 +847,19 @@ def _get_token_base_cost(
                     cache_creation_cost_above_1hr = get_cost_per_unit(
                         model_info, cache_creation_1hr_tiered_key, cache_creation_cost_above_1hr
                     )
+                    cache_creation_cost_above_12hr = get_cost_per_unit(
+                        model_info,
+                        get_service_tier_cost_key(
+                            f"cache_creation_input_token_cost_above_12hr_above_{threshold_str}_tokens", service_tier
+                        ),
+                        cache_creation_cost_above_12hr,
+                    )
                     cache_read_cost = get_cost_per_unit(model_info, cache_read_tiered_key, cache_read_cost)
             except (IndexError, ValueError):
                 continue
             except Exception:
                 continue
 
-    cache_creation_threshold_suffix: Final = (
-        f"{int(threshold / 1000)}k" if threshold is not None and threshold >= 1000 else str(int(threshold or 0))
-    )
-    cache_creation_12hr_tiered_key: Final = (
-        get_service_tier_cost_key(
-            f"cache_creation_input_token_cost_above_12hr_above_{cache_creation_threshold_suffix}_tokens",
-            service_tier,
-        )
-        if threshold is not None
-        else get_service_tier_cost_key("cache_creation_input_token_cost_above_12hr", service_tier)
-    )
-    cache_creation_cost_above_12hr: Final = get_cost_per_unit(
-        model_info,
-        cache_creation_12hr_tiered_key,
-        default_value=cache_creation_cost_above_12hr_base,
-    )
     input_rate_for_missing_cache_rates: Final = _off_peak_rate(
         _open_off_peak_block(model_info, current_time) or MappingProxyType({}),
         "input_cost_per_token",
