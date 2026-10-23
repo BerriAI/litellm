@@ -2,11 +2,6 @@
 Unit tests for the Obscurify.ai OpenAI-like provider.
 """
 
-import os
-import sys
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
-
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.openai_like.dynamic_config import create_config_class
