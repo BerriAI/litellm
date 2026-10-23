@@ -183,7 +183,10 @@ async def test_load_team_member_default_budget_zero_treated_as_no_cap():
 
     with (
         patch("litellm.proxy.auth.user_api_key_auth.get_team_membership", new=AsyncMock(return_value=None)),
-        patch("litellm.proxy.auth.user_api_key_auth.get_team_member_default_budget", new=AsyncMock(return_value=mock_default_budget)),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.get_team_member_default_budget",
+            new=AsyncMock(return_value=mock_default_budget),
+        ),
     ):
         await _load_team_member_default_model_budget(
             user_api_key_auth_obj=token,
@@ -591,9 +594,7 @@ async def test_router_skips_the_paid_fallback_target_when_over_budget():
         is False
     )
     assert (
-        await _is_fallback_target_within_budget(
-            router, "paid-model", "free-model", under, attempted=under_attempted
-        )
+        await _is_fallback_target_within_budget(router, "paid-model", "free-model", under, attempted=under_attempted)
         is True
     )
     assert over_attempted.skipped == (SkippedFallbackTarget("paid-model", FallbackSkipReason.OVER_BUDGET),)
@@ -608,8 +609,7 @@ async def test_router_without_a_budget_check_attempts_every_fallback():
     attempted: Final = AttemptedFallbackTargets()
 
     assert (
-        await _is_fallback_target_within_budget(router, "paid-model", "free-model", over, attempted=attempted)
-        is True
+        await _is_fallback_target_within_budget(router, "paid-model", "free-model", over, attempted=attempted) is True
     )
 
 
