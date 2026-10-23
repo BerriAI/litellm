@@ -898,19 +898,19 @@ class BaseAzureLLM(BaseOpenAILLM):
         )
         base_path: Final = original_url.path.rstrip("/")
 
-        # Add the path to the base URL
-        if route in api_base or (v1_endpoint is not None and base_path.endswith(f"/openai/v1{v1_endpoint}")):
-            new_url = api_base
-        elif v1_endpoint is not None and base_path.endswith("/openai/v1"):
-            new_url = join_api_base(str(original_url.copy_with(params={})), v1_endpoint)
-        else:
-            new_url = add_path_to_api_base(api_base=api_base, ending_path=route)
-
-        if BaseAzureLLM._is_azure_v1_api_version(api_version):
-            # ensure the request go to /openai/v1 and not just /openai
-            if "/openai/v1" not in new_url:
-                parsed_url: Final = httpx.URL(new_url)
-                new_url = str(parsed_url.copy_with(path=_LAST_OPENAI_PATH_SEGMENT.sub(r"\1/v1", parsed_url.path, 1)))
+        url_with_route: Final = (
+            api_base
+            if route in api_base or (v1_endpoint is not None and base_path.endswith(f"/openai/v1{v1_endpoint}"))
+            else join_api_base(str(original_url.copy_with(params={})), v1_endpoint)
+            if v1_endpoint is not None and base_path.endswith("/openai/v1")
+            else add_path_to_api_base(api_base=api_base, ending_path=route)
+        )
+        parsed_url: Final = httpx.URL(url_with_route)
+        new_url: Final = (
+            str(parsed_url.copy_with(path=_LAST_OPENAI_PATH_SEGMENT.sub(r"\1/v1", parsed_url.path, 1)))
+            if BaseAzureLLM._is_azure_v1_api_version(api_version) and "/openai/v1" not in url_with_route
+            else url_with_route
+        )
 
         # Use the new query_params dictionary
         final_url: Final = httpx.URL(new_url).copy_with(params=query_params)
