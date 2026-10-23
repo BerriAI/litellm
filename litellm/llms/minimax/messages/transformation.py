@@ -2,9 +2,8 @@
 MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's Anthropic-compatible API
 """
 
-from typing import Final
-
 import litellm
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -82,15 +81,4 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
         Get the complete URL for MiniMax API.
         Override to ensure we use MiniMax's endpoint, not Anthropic's.
         """
-        # Get the base URL (either provided or default MiniMax endpoint)
-        base_url: Final = self.get_api_base(api_base=api_base)
-
-        # If the base URL already includes the full path, return it
-        if base_url.endswith("/v1/messages"):
-            return base_url
-
-        # Otherwise append the messages endpoint
-        if base_url.endswith("/"):
-            return f"{base_url}v1/messages"
-        else:
-            return f"{base_url}/v1/messages"
+        return ensure_api_route(self.get_api_base(api_base=api_base), "v1/messages")

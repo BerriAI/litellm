@@ -15,6 +15,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
@@ -129,8 +130,7 @@ def upload_file_sync(
         access_token: Final = get_access_token(credentials=credentials, litellm_params=litellm_params)
 
         # Upload to GigaChat
-        base_url: Final = get_api_base(api_base)
-        upload_url: Final = f"{base_url}/files"
+        upload_url: Final = join_api_base(get_api_base(api_base), "files")
 
         client: Final = get_httpx_client(params={"ssl_verify": False})
         response: Final = client.post(
@@ -195,8 +195,7 @@ async def upload_file_async(
         access_token: Final = await get_access_token_async(credentials=credentials, litellm_params=litellm_params)
 
         # Upload to GigaChat
-        base_url: Final = get_api_base(api_base)
-        upload_url: Final = f"{base_url}/files"
+        upload_url: Final = join_api_base(get_api_base(api_base), "files")
 
         client: Final = get_async_httpx_client(
             llm_provider=LlmProviders.GIGACHAT,

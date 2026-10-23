@@ -9,6 +9,7 @@ from litellm.anthropic_beta_headers_manager import get_unsupported_headers, is_b
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.pass_through.convertible_blocks import drop_non_string_tool_result_texts
 from litellm.llms.anthropic.pass_through.safeguards import proxy_serves_safeguards
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -287,10 +288,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base = AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com"
-        if not api_base.endswith("/v1/messages"):
-            api_base = f"{api_base}/v1/messages"
-        return api_base
+        return ensure_api_route(AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com", "v1/messages")
 
     def validate_anthropic_messages_environment(
         self,
