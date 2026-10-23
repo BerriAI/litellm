@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -100,13 +100,16 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         for _key in ("thinking", "output_config", "temperature"):
             if _key in params:
                 stashed[_key] = params.pop(_key)
-        # base returns an unparameterized dict; annotate at the boundary
-        base_request: Final = super().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # base signature is unparameterized
-            model=model,
-            messages=messages,
-            anthropic_messages_optional_request_params=params,
-            litellm_params=litellm_params,
-            headers=headers,
+        # base signature is unparameterized; cast at the boundary
+        base_request: Final[dict[str, object]] = cast(
+            dict[str, object],
+            super().transform_anthropic_messages_request(
+                model=model,
+                messages=messages,
+                anthropic_messages_optional_request_params=params,
+                litellm_params=litellm_params,
+                headers=headers,
+            ),
         )
         request: Final[dict[str, object]] = base_request  # mutable-ok: stash restored into it before returning
         if self.supports_cache_control_ttl():
