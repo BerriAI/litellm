@@ -12,6 +12,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 import litellm
 from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
+    ELEVENLABS_API_BASE,
     REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
     REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
     request_timeout,
@@ -42,6 +43,7 @@ from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
+from ..llms.elevenlabs.realtime.handler import ElevenLabsRealtime
 from ..llms.openai.live.handler import OpenAILiveSessions
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
@@ -61,8 +63,9 @@ openai_realtime: Final = OpenAIRealtime()
 openai_live_sessions: Final = OpenAILiveSessions()
 bedrock_realtime: Final = BedrockRealtime()
 xai_realtime: Final = XAIRealtime()
+elevenlabs_realtime: Final = ElevenLabsRealtime()
 vertex_llm_base: Final = VertexBase()
-base_llm_http_handler = BaseLLMHTTPHandler()
+base_llm_http_handler: Final = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_AUTH_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
@@ -336,6 +339,14 @@ async def arealtime_calls(
     )
 
 
+def _elevenlabs_api_base(api_base: str | None) -> str:
+    return api_base or get_secret_str("ELEVENLABS_API_BASE") or ELEVENLABS_API_BASE
+
+
+def _elevenlabs_api_key(api_key: str | None) -> str | None:
+    return api_key or get_secret_str("ELEVENLABS_API_KEY")
+
+
 async def vertex_access_token_resolver(
     credentials: VERTEX_CREDENTIALS_TYPES | None,
     project_id: str | None,
@@ -481,6 +492,9 @@ async def _arealtime(
         headers.update(extra_headers)
     litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
     user: Final = kwargs.get("user", None)
+    user_api_key_dict: Final = cast(  # cast-ok: the proxy hands UserAPIKeyAuth through untyped kwargs
+        object | None, kwargs.get("user_api_key_dict")
+    )
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     litellm_params_dict: Final = {**get_litellm_params(**kwargs), CallTypes.arealtime.value: True}
@@ -542,7 +556,7 @@ async def _arealtime(
             client=client,
             timeout=timeout,
             headers=headers,
-            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            user_api_key_dict=user_api_key_dict,
             litellm_metadata=_build_litellm_metadata(kwargs),
             query_params=query_params,
         )
@@ -581,7 +595,7 @@ async def _arealtime(
             logging_obj=litellm_logging_obj,
             realtime_protocol=realtime_protocol,
             query_params=query_params,
-            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            user_api_key_dict=user_api_key_dict,
             litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "openai":
@@ -599,7 +613,7 @@ async def _arealtime(
             client=None,
             timeout=timeout,
             query_params=query_params,
-            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            user_api_key_dict=user_api_key_dict,
             litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "bedrock":
@@ -654,7 +668,20 @@ async def _arealtime(
             client=None,
             timeout=timeout,
             query_params=query_params,
-            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            user_api_key_dict=user_api_key_dict,
+            litellm_metadata=_build_litellm_metadata(kwargs),
+        )
+    elif _custom_llm_provider == "elevenlabs":
+        await elevenlabs_realtime.async_realtime(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            api_base=_elevenlabs_api_base(dynamic_api_base or litellm_params.api_base),
+            api_key=_elevenlabs_api_key(dynamic_api_key),
+            client=None,
+            timeout=timeout,
+            query_params=query_params,
+            user_api_key_dict=user_api_key_dict,
             litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "vertex_ai":
@@ -714,7 +741,7 @@ async def _arealtime(
             client=client,
             timeout=timeout,
             headers=headers,
-            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            user_api_key_dict=user_api_key_dict,
             litellm_metadata=_build_litellm_metadata(kwargs),
             query_params=query_params,
         )
@@ -766,6 +793,8 @@ async def _realtime_health_check_auth_headers(
         )
     if api_key is None:
         return _EMPTY_AUTH_HEADERS
+    if custom_llm_provider == LlmProviders.ELEVENLABS.value:
+        return MappingProxyType({"xi-api-key": api_key})
     return MappingProxyType({"Authorization": f"Bearer {api_key}"})
 
 
@@ -849,6 +878,10 @@ async def realtime_health_check(
     elif custom_llm_provider == "xai":
         url = xai_realtime.construct_url(
             api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}
+        )
+    elif custom_llm_provider == "elevenlabs":
+        url = elevenlabs_realtime.construct_url(
+            api_base=_elevenlabs_api_base(resolved_api_base), query_params={"model": model}
         )
     elif custom_llm_provider == "vertex_ai":
         if is_vertex_speech_to_text_model(model):
