@@ -7,7 +7,7 @@ import { toast } from "@/lib/toast";
 import { getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity } from "@/utils/jwtUtils";
 import { runLiteAdmin } from "./agent";
-import type { ActionResult, LiteAdminAction } from "./operations";
+import type { ActionResult, AriaAccess, LiteAdminAction } from "./operations";
 
 type ActionState = { status: "review" | "applying" | "cancelled" } | ActionResult;
 export type ActionEntry = { kind: "action"; id: string; action: LiteAdminAction } & ActionState;
@@ -16,6 +16,7 @@ export type ConversationEntry =
   | ActionEntry
   | { kind: "error"; id: string; text: string };
 export interface LiteAdminSession {
+  access: AriaAccess;
   token: string;
   accessToken: string;
   managementBaseUrl: string;
