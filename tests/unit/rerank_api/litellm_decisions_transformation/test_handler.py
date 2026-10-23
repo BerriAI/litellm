@@ -68,13 +68,13 @@ def setup_model(monkeypatch: pytest.MonkeyPatch):
     )
 
 
-def response(probability=0.8, *, tokens=10):
+def response(probability=0.8, *, tokens=10, output_tokens=0):
     return httpx.Response(
         200,
         json={
             "model": "jevrank-unit-test",
             "answers": {"relevance": {"type": "noul", "noul": probability}},
-            "usage": {"input_tokens": tokens, "output_tokens": 0},
+            "usage": {"input_tokens": tokens, "output_tokens": output_tokens},
         },
     )
 
@@ -305,7 +305,7 @@ async def test_success_is_billed_once_and_failed_request_retains_completed_usage
 
     def score(request):
         passage = json.loads(json.loads(request.content)["state"])["passage"]
-        return httpx.Response(503, json={"error": "unavailable"}) if passage == "failed" else response()
+        return httpx.Response(503, json={"error": "unavailable"}) if passage == "failed" else response(output_tokens=3)
 
     respx_mock.post(URL).mock(side_effect=score)
     await rerank(False, documents=["one", "two"])
@@ -317,6 +317,10 @@ async def test_success_is_billed_once_and_failed_request_retains_completed_usage
     await flush_logging()
     assert len(logger.events) == 2
     assert logger.events[1]["response_cost"] == pytest.approx(10 * RATE)
+    assert [(event["prompt_tokens"], event["completion_tokens"], event["total_tokens"]) for event in logger.events] == [
+        (20, 6, 26),
+        (10, 3, 13),
+    ]
 
 
 async def test_custom_token_prices_apply_to_decision_usage(respx_mock):

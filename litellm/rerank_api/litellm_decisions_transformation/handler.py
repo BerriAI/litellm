@@ -2,8 +2,10 @@
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, wait
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import partial
 from queue import Empty, SimpleQueue
@@ -29,6 +31,29 @@ from litellm.types.utils import Usage
 
 _CHILD_OMIT: Final = frozenset({"litellm_logging_obj", "litellm_call_id"})
 _MAX_CONCURRENCY: Final = 8
+
+
+class DecisionRerankLoggingCapture:
+    def __init__(self, call_id: str) -> None:
+        self.call_id: Final = call_id
+        self.logging_obj: Logging | None = None
+
+    @contextmanager
+    def capture(self) -> Generator[None]:
+        token: Final = _LOGGING_CAPTURE.set(self)
+        try:
+            yield
+        finally:
+            _LOGGING_CAPTURE.reset(token)
+
+    def record(self, logging_obj: Logging) -> None:
+        if logging_obj.litellm_call_id == self.call_id:
+            self.logging_obj = logging_obj
+
+
+_LOGGING_CAPTURE: Final[ContextVar[DecisionRerankLoggingCapture | None]] = ContextVar(
+    "decision_rerank_logging_capture", default=None
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,15 +139,21 @@ def _invalid_response(document: _DocumentCall, reason: str) -> litellm.InternalS
     )
 
 
+def _aggregate_usage(response: DecisionRerankResponse) -> Usage:
+    prompt_tokens: Final = sum(item.usage.input_tokens for item in response.decision_responses)
+    completion_tokens: Final = sum(item.usage.output_tokens for item in response.decision_responses)
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+
+
 def _record_partial(response: DecisionRerankResponse, logging_obj: Logging) -> None:
-    responses: Final = response.decision_responses
-    if not responses:
+    if not response.decision_responses:
         return
     logging_obj.record_partial_usage_for_failure(
-        Usage(
-            prompt_tokens=sum(item.usage.input_tokens for item in responses),
-            completion_tokens=sum(item.usage.output_tokens for item in responses),
-        ),
+        _aggregate_usage(response),
         logging_obj.response_cost_calculator(result=response) or 0.0,
     )
 
@@ -142,10 +173,8 @@ def _finish(
     if failure is not None:
         _record_partial(response, logging_obj)
         raise failure
-    logging_obj.model_call_details["combined_usage_object"] = Usage(  # rebind-ok: log aggregate usage
-        prompt_tokens=sum(item.usage.input_tokens for item in response.decision_responses),
-        completion_tokens=sum(item.usage.output_tokens for item in response.decision_responses),
-    )
+    usage: Final = _aggregate_usage(response)
+    logging_obj.model_call_details["combined_usage_object"] = usage  # rebind-ok: log aggregate usage
     return response
 
 
@@ -275,6 +304,9 @@ def rerank_with_decisions(
     params: Mapping[str, object],
     kwargs: Mapping[str, object],
 ) -> DecisionRerankResponse | Awaitable[DecisionRerankResponse]:
+    logging_capture: Final = _LOGGING_CAPTURE.get()
+    if logging_capture is not None:
+        logging_capture.record(logging_obj)
     request: Final = LiteLLMDecisionsRerankConfig.validate_request(params, model, provider, strategy)
     deadline: Final = time.monotonic() + request.timeout
     logging_obj.update_from_kwargs(  # pyright: ignore[reportUnknownMemberType]  # Logging accepts legacy provider kwargs
