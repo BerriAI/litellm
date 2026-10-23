@@ -12,8 +12,8 @@ use crate::{
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         tokenize::transformation::{
-            BaseTokenizeConfig, TokenizeContext, decode_params, validate_common_tokenize_input,
-            validate_token_count,
+            BaseTokenizeConfig, TokenizeCapabilities, TokenizeContext, decode_params,
+            validate_common_tokenize_input, validate_token_count,
         },
     },
 };
@@ -80,6 +80,13 @@ impl BaseTokenizeConfig for WatsonxTokenizeConfig {
             "token",
             "zen_api_key",
         ]
+    }
+
+    fn tokenize_capabilities(&self) -> TokenizeCapabilities {
+        TokenizeCapabilities {
+            token_ids: false,
+            tokens: true,
+        }
     }
 
     fn validate_environment(

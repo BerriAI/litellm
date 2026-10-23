@@ -15,13 +15,18 @@ litellm-inference.workspace = true
 litellm-llms.workspace = true
 litellm-llms-types.workspace = true
 litellm-secrets.workspace = true
+litellm-token-counter = { path = "../token-counter", default-features = false, features = ["huggingface", "tiktoken"] }
 serde_json.workspace = true
 tracing.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-inference-testing.workspace = true
 litellm-host-native.workspace = true
 rstest.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
 wiremock.workspace = true

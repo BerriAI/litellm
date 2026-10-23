@@ -10,8 +10,8 @@ use crate::{
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         tokenize::transformation::{
-            BaseTokenizeConfig, TokenizeContext, decode_params, validate_common_tokenize_input,
-            validate_token_count,
+            BaseTokenizeConfig, TokenizeCapabilities, TokenizeContext, decode_params,
+            validate_common_tokenize_input, validate_token_count,
         },
     },
 };
@@ -42,6 +42,13 @@ pub struct HostedVllmTokenizeConfig;
 impl BaseTokenizeConfig for HostedVllmTokenizeConfig {
     fn get_supported_tokenize_params(&self) -> &'static [&'static str] {
         &["add_special_tokens"]
+    }
+
+    fn tokenize_capabilities(&self) -> TokenizeCapabilities {
+        TokenizeCapabilities {
+            token_ids: true,
+            tokens: true,
+        }
     }
 
     fn validate_environment(

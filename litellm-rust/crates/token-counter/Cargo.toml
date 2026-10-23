@@ -19,12 +19,16 @@ litellm-token-counter-huggingface = { workspace = true, optional = true }
 litellm-token-counter-tiktoken = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+strum.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 criterion.workspace = true
 rand.workspace = true
 rstest.workspace = true
+tempfile.workspace = true
 tokenizers.workspace = true
 
 [[bench]]

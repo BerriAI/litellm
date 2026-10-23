@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use litellm_auth::{InputSource, SecretValue, Sourced};
-use litellm_llms_types::formats::tokenize::TokenizeResponse;
+use litellm_llms_types::formats::tokenize::{TokenizeOutput, TokenizeResponse};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
@@ -10,6 +10,23 @@ use crate::{Error, ErrorDetail};
 use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 
 pub type TokenizeMap = BTreeMap<String, Sourced<Value>>;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TokenizeCapabilities {
+    pub token_ids: bool,
+    pub tokens: bool,
+}
+
+impl TokenizeCapabilities {
+    pub fn supports(self, output: TokenizeOutput) -> bool {
+        match output {
+            TokenizeOutput::Count | TokenizeOutput::Available => true,
+            TokenizeOutput::Ids => self.token_ids,
+            TokenizeOutput::Tokens => self.tokens,
+            TokenizeOutput::Both => self.token_ids && self.tokens,
+        }
+    }
+}
 
 pub struct TokenizeContext<'a> {
     pub api_key: Option<&'a Sourced<SecretValue>>,
@@ -55,6 +72,10 @@ impl<'a> TokenizeContext<'a> {
 
 pub trait BaseTokenizeConfig: Sync {
     fn get_supported_tokenize_params(&self) -> &'static [&'static str];
+
+    fn tokenize_capabilities(&self) -> TokenizeCapabilities {
+        TokenizeCapabilities::default()
+    }
 
     fn map_tokenize_params(
         &self,

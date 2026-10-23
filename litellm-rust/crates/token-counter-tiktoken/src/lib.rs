@@ -4,16 +4,38 @@ mod error;
 mod ranks;
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 pub use error::UnsupportedTokenizer;
 pub use ranks::{LoadError, Vocabulary};
 
+enum Encoder {
+    Embedded(&'static tiktoken_rs::CoreBPE),
+    Cached(&'static ranks::Loaded),
+    Owned(Arc<ranks::Loaded>),
+}
+
+impl Encoder {
+    fn bpe(&self) -> &tiktoken_rs::CoreBPE {
+        match self {
+            Self::Embedded(encoder) => encoder,
+            Self::Cached(loaded) => &loaded.bpe,
+            Self::Owned(loaded) => &loaded.bpe,
+        }
+    }
+
+    fn vocabulary(&self) -> Option<&Vocabulary> {
+        match self {
+            Self::Embedded(_) => None,
+            Self::Cached(loaded) => Some(&loaded.vocabulary),
+            Self::Owned(loaded) => Some(&loaded.vocabulary),
+        }
+    }
+}
+
 pub struct TiktokenTokenizer {
-    encoder: &'static tiktoken_rs::CoreBPE,
-    /// Present for encodings built from a rank file; the embedded tiktoken-rs singletons
-    /// behind [`from_name`](Self::from_name) keep their ranks private.
-    vocabulary: Option<&'static Vocabulary>,
-    name: &'static str,
+    encoder: Encoder,
+    name: String,
 }
 
 impl TiktokenTokenizer {
@@ -25,9 +47,23 @@ impl TiktokenTokenizer {
     ) -> Result<Self, LoadError> {
         let (loaded, name) = ranks::load(name, load)?;
         Ok(Self {
-            encoder: &loaded.bpe,
-            vocabulary: Some(&loaded.vocabulary),
-            name,
+            encoder: Encoder::Cached(loaded),
+            name: name.to_owned(),
+        })
+    }
+
+    pub fn from_ranks(name: &str, rank_content: &str) -> Result<Self, LoadError> {
+        let canonical = match name {
+            "cl100k_base" => "cl100k_base",
+            "o200k_base" | "o200k_harmony" => name,
+            "p50k_base" | "p50k_edit" => name,
+            "r50k_base" | "gpt2" => "r50k_base",
+            _ => return Err(UnsupportedTokenizer(name.to_owned()).into()),
+        };
+        let loaded = Arc::new(ranks::build(canonical, rank_content)?);
+        Ok(Self {
+            encoder: Encoder::Owned(loaded),
+            name: name.to_owned(),
         })
     }
 
@@ -44,27 +80,27 @@ impl TiktokenTokenizer {
             _ => return Err(UnsupportedTokenizer(name.to_owned())),
         };
         Ok(Self {
-            encoder,
-            vocabulary: None,
-            name,
+            encoder: Encoder::Embedded(encoder),
+            name: name.to_owned(),
         })
     }
 
     pub fn vocabulary(&self) -> Option<&Vocabulary> {
-        self.vocabulary
+        self.encoder.vocabulary()
     }
 
     pub fn count_tokens(&self, text: &str) -> usize {
-        self.encoder.count_ordinary(text)
+        self.encoder.bpe().count_ordinary(text)
     }
 
     pub fn encode(&self, text: &str) -> Vec<u32> {
-        self.encoder.encode_ordinary(text)
+        self.encoder.bpe().encode_ordinary(text)
     }
 
     pub fn encode_special(&self, text: &str, allowed: &[String]) -> Result<Vec<u32>, String> {
         let allowed = allowed.iter().map(String::as_str).collect();
         self.encoder
+            .bpe()
             .encode(text, &allowed)
             .map(|(ids, _)| ids)
             .map_err(|error| error.to_string())
@@ -72,6 +108,7 @@ impl TiktokenTokenizer {
 
     pub fn special_tokens(&self) -> HashSet<String> {
         self.encoder
+            .bpe()
             .special_tokens()
             .into_iter()
             .map(str::to_owned)
@@ -86,7 +123,7 @@ impl TiktokenTokenizer {
         allowed: &[String],
     ) -> (Vec<u32>, Vec<Vec<u32>>) {
         let allowed = allowed.iter().map(String::as_str).collect();
-        let (stable, completions) = self.encoder._encode_unstable_native(text, &allowed);
+        let (stable, completions) = self.encoder.bpe()._encode_unstable_native(text, &allowed);
         let mut completions: Vec<Vec<u32>> = completions.into_iter().collect();
         completions.sort_unstable();
         (stable, completions)
@@ -94,19 +131,21 @@ impl TiktokenTokenizer {
 
     pub fn decode_bytes(&self, ids: &[u32]) -> Result<Vec<u8>, String> {
         self.encoder
+            .bpe()
             .decode_bytes(ids)
             .map_err(|error| error.to_string())
     }
 
     pub fn decode(&self, ids: &[u32]) -> Result<String, String> {
         self.encoder
+            .bpe()
             .decode_bytes(ids)
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .map_err(|error| error.to_string())
     }
 
     pub fn name(&self) -> &str {
-        self.name
+        &self.name
     }
 }
 

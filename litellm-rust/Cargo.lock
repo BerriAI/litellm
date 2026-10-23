@@ -4153,8 +4153,12 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
+ "litellm-token-counter",
  "rstest",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.19",
  "tokio",
  "tracing",
  "wiremock",
@@ -4555,6 +4559,7 @@ dependencies = [
 name = "litellm-token-counter"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "criterion",
  "indexmap 2.14.0",
  "itoa",
@@ -4565,6 +4570,9 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "strum",
+ "tempfile",
  "thiserror 2.0.19",
  "tokenizers",
 ]
