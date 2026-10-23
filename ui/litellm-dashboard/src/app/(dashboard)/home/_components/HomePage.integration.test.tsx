@@ -141,7 +141,7 @@ describe("HomePage", () => {
     expect(screen.queryByRole("link", { name: /create new virtual key/i })).not.toBeInTheDocument();
   });
 
-  it("offers LiteAdmin on Home inside the dashboard frame", async () => {
+  it("should offer Aria Agent on Home inside the dashboard frame", async () => {
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <LiteAdminFrame>
@@ -149,7 +149,7 @@ describe("HomePage", () => {
         </LiteAdminFrame>
       </QueryClientProvider>,
     );
-    const entry = screen.getByRole("region", { name: "Ask LiteAdmin" });
+    const entry = screen.getByRole("region", { name: "Ask Aria Agent" });
     expect(await within(entry).findByPlaceholderText("What would you like to do?")).toBeInTheDocument();
     expect(within(entry).getByRole("button", { name: "Send message" })).toBeDisabled();
     expect(await screen.findByText("$501.74")).toBeInTheDocument();

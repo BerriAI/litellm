@@ -143,6 +143,70 @@ describe("model result privacy", () => {
     });
   });
 
+  it("should aggregate usage across the full date range before ranking and sanitize names and metadata", () => {
+    const metrics = { spend: 10, api_requests: 3, total_tokens: 50 };
+    const raw = {
+      metadata: { total_spend: 20, total_api_requests: 6, total_tokens: 100, secret: "private" },
+      results: ["2031-05-01", "2031-05-02"].map((date) => ({
+        date,
+        metrics,
+        breakdown: {
+          providers: { "provider captured-token": { metrics, messages: ["private prompt"] } },
+          entities: {
+            "tag sk-secret": { metrics, metadata: { team_alias: "Team captured-token", secret: "private" } },
+          },
+          api_keys: { "sk-private-key": { metrics, metadata: { key_alias: "worker", raw_key: "private" } } },
+        },
+      })),
+    };
+    const expected = {
+      totals: { total_spend: 20, total_api_requests: 6, total_tokens: 100 },
+      daily: ["2031-05-01", "2031-05-02"].map((date) => ({ date, ...metrics })),
+      breakdown_limit: 20,
+      top_models: [],
+      top_providers: [{ name: "provider [redacted]", spend: 20, api_requests: 6, total_tokens: 100 }],
+      top_entities: [
+        { name: "tag [redacted]", alias: "Team [redacted]", spend: 20, api_requests: 6, total_tokens: 100 },
+      ],
+      top_api_keys: [{ name: "[redacted]", alias: "worker", spend: 20, api_requests: 6, total_tokens: 100 }],
+    };
+    expect(projectToolResult("usage", raw, ["captured-token"])).toEqual(expected);
+  });
+
+  it("should bound usage breakdowns after ranking while keeping complete totals", () => {
+    const metrics = { spend: 300, api_requests: 30, total_tokens: 900 };
+    const result = projectToolResult(
+      "usage",
+      {
+        metadata: { total_spend: metrics.spend },
+        results: [
+          {
+            date: "2031-05-01",
+            metrics,
+            breakdown: {
+              providers: Object.fromEntries(
+                Array.from({ length: 30 }, (_, index) => [
+                  `provider-${index}`,
+                  { metrics: { ...metrics, spend: index } },
+                ]),
+              ),
+            },
+          },
+        ],
+      },
+      [],
+    );
+    expect(result).toMatchObject({ totals: { total_spend: 300 }, daily: [{ ...metrics }], breakdown_limit: 20 });
+    expect(result).toHaveProperty(
+      "top_providers",
+      Array.from({ length: 20 }, (_, index) => ({
+        name: `provider-${29 - index}`,
+        ...metrics,
+        spend: 29 - index,
+      })),
+    );
+  });
+
   it("bounds list and string sizes and rejects results that exceed the overall output budget", () => {
     const raw = {
       users: Array.from({ length: 80 }, (_, index) => ({ user_id: String(index), user_alias: "x".repeat(800) })),
