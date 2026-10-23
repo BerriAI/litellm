@@ -129,7 +129,8 @@ const PRINT_CSS = `
   table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 10pt; }
   thead { display: table-header-group; }
   th, td { padding: 8px; border-bottom: 1px solid #d1d5db; text-align: left; overflow-wrap: anywhere; }
-  th { background: #f3f4f6; } tr, figure, svg { break-inside: avoid; }
+  th { background: #f3f4f6; } tr, svg { break-inside: avoid; }
+  figcaption { break-after: avoid; }
   blockquote { margin-left: 0; padding-left: 16px; border-left: 3px solid #d1d5db; }
   pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #f3f4f6; }
   code { font-family: ui-monospace, monospace; font-size: 0.9em; }

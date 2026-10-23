@@ -51,7 +51,7 @@ export function UsageAnswerChart({ chart }: { chart: UsageChart }) {
           className="h-40"
         />
       )}
-      <table className="sr-only" data-export-exclude aria-label={`${chart.title} values`}>
+      <table className="sr-only" aria-label={`${chart.title} values`}>
         <thead>
           <tr>
             <th scope="col">Category</th>

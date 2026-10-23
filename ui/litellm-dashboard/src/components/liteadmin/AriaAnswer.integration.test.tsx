@@ -3,10 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "@/components/chat/types";
 import { toast } from "@/lib/toast";
 import { AriaAnswer } from "./AriaAnswer";
-import { exportAriaAnswer } from "./answerExport";
+import { createAriaAnswerDocument, exportAriaAnswer } from "./answerExport";
 import type { UsageChart } from "./usageChart";
 
-vi.mock("./answerExport", () => ({ exportAriaAnswer: vi.fn(() => true) }));
+vi.mock("./answerExport", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./answerExport")>()),
+  exportAriaAnswer: vi.fn(() => true),
+}));
 
 const message: ChatMessage = {
   id: "answer-1",
@@ -83,6 +86,36 @@ describe("AriaAnswer", () => {
 
     expect(exportAriaAnswer).toHaveBeenCalledWith("", expect.any(HTMLElement));
     expect(toast.error).toHaveBeenCalledWith("Could not open the PDF print dialog. Please try again.");
+  });
+
+  it("should preserve full chart labels and exact values in the exported answer", () => {
+    const question = "Which deployment costs the most?";
+    const detailedChart: UsageChart = {
+      ...chart,
+      total: null,
+      data: [
+        { label: "provider/long-deployment-primary", value: 0.000123 },
+        { label: "provider/long-deployment-secondary", value: null },
+        { label: "Unused deployment", value: 0 },
+      ],
+    };
+    render(<AriaAnswer message={message} question={question} chart={detailedChart} />);
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Export answer" })));
+    const [exportedQuestion, exportedAnswer] = vi.mocked(exportAriaAnswer).mock.calls[0];
+
+    const report = createAriaAnswerDocument(exportedQuestion, exportedAnswer);
+    render(<iframe title="Exported answer preview" />);
+    const preview = screen.getByTitle<HTMLIFrameElement>("Exported answer preview").contentDocument!;
+    preview.replaceChild(preview.importNode(report.documentElement, true), preview.documentElement);
+
+    const table = within(preview.body).getByRole("table");
+    expect(within(table).getByRole("row", { name: "provider/long-deployment-primary $0.000123" })).toBeInTheDocument();
+    expect(
+      within(table).getByRole("row", { name: "provider/long-deployment-secondary Unavailable" }),
+    ).toBeInTheDocument();
+    expect(within(table).getByRole("row", { name: "Unused deployment $0.00" })).toBeInTheDocument();
+    expect(preview.body).toHaveTextContent(question);
+    expect(within(preview.body).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("should distinguish missing token counts from zero in charts and their accessible data", () => {
