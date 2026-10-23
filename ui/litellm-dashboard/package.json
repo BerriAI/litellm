@@ -71,7 +71,7 @@
     "tailwind-merge": "3.4.0",
     "usehooks-ts": "3.1.1",
     "uuid": "14.0.0",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@eslint/js": "9.39.2",
@@ -107,6 +107,10 @@
     "vitest": "4.1.11"
   },
   "overrides": {
+    "@litellm/lens-ui": {
+      "next": "$next"
+    },
+    "zod": "$zod",
     "prismjs": "1.30.0",
     "js-yaml": "4.3.2",
     "brace-expansion": "5.0.12",
