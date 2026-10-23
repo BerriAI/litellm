@@ -867,6 +867,31 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         return credentials, aws_region_name
 
+    @staticmethod
+    def _request_api_key_is_a_bedrock_credential(request_data: Mapping[str, object] | None) -> bool:
+        """Whether ``request_data["api_key"]`` can be a Bedrock credential at all.
+
+        That field holds the key for the **LLM** call, not for this guardrail's own
+        ApplyGuardrail request. Credential-override routing
+        (``_apply_credential_overrides_from_model_config``) writes the caller's BYOK
+        provider key into it, so on a non-Bedrock deployment it is someone else's
+        secret: signing with it fails, and it would be sent to AWS as a bearer token.
+
+        Only a request that is itself Bedrock-routed can carry a key that is also
+        valid here. When the provider cannot be determined the old behaviour is kept,
+        so a clientside Bedrock key keeps working.
+        """
+        if not request_data:
+            return False
+        litellm_params: Final = as_str_mapping(request_data.get("litellm_params"))
+        nested_provider: Final = litellm_params.get("custom_llm_provider") if litellm_params else None
+        provider: Final = request_data.get("custom_llm_provider") or nested_provider
+        if provider:
+            return provider == "bedrock"
+        model: Final = request_data.get("model") or ""
+        # A bare name gives nothing to route on, so leave it to the caller's config.
+        return not (isinstance(model, str) and "/" in model and not model.startswith("bedrock/"))
+
     def _prepare_request(
         self,
         credentials,
@@ -1009,7 +1034,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST
                 }
             )
-            if request_data.get("api_key") is not None:
+            if request_data.get("api_key") is not None and self._request_api_key_is_a_bedrock_credential(
+                cast(Mapping[str, object], request_data)  # cast-ok: the request body is an untyped dict
+            ):
                 api_key = request_data["api_key"]
 
         event_type: Final = (
@@ -1987,7 +2014,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Nothing to scan (e.g. tool-only turn) -> allow, like ApplyGuardrail does.
             return BedrockGuardrailResponse()
 
-        api_key: Final[str | None] = request_data.get("api_key") if request_data else None
+        api_key: Final[str | None] = (
+            request_data.get("api_key")
+            if request_data
+            and self._request_api_key_is_a_bedrock_credential(
+                cast(Mapping[str, object], request_data)  # cast-ok: the request body is an untyped dict
+            )
+            else None
+        )
         credentials, aws_region_name = await run_aws_signing(self._load_credentials, api_key=api_key)
         body: Final[dict[str, object]] = {"messages": checks_messages, "checks": self.checks}
 
