@@ -70,14 +70,18 @@ function MarkdownCodeRenderer({
 const markdownComponents: Components = {
   code: MarkdownCodeRenderer,
   pre: ({ node, ...props }) => <pre className="max-w-full overflow-x-auto" {...props} />,
+  h1: ({ node, ...props }) => <h1 className="mt-6 mb-2 text-xl font-semibold tracking-tight first:mt-0" {...props} />,
+  h2: ({ node, ...props }) => <h2 className="mt-6 mb-2 text-lg font-semibold tracking-tight first:mt-0" {...props} />,
+  h3: ({ node, ...props }) => <h3 className="mt-5 mb-2 text-base font-semibold tracking-tight first:mt-0" {...props} />,
   p: ({ node, ...props }) => <p className="my-3 first:mt-0 last:mb-0" {...props} />,
+  blockquote: ({ node, ...props }) => <blockquote className="my-3 border-l-2 pl-4 text-muted-foreground" {...props} />,
   ul: ({ node, ...props }) => <ul className="my-3 list-disc space-y-1 pl-5" {...props} />,
   ol: ({ node, ...props }) => <ol className="my-3 list-decimal space-y-1 pl-5" {...props} />,
   table: ({ node, ...props }) => <Table {...props} />,
   thead: ({ node, ...props }) => <TableHeader {...props} />,
   tbody: ({ node, ...props }) => <TableBody {...props} />,
   tr: ({ node, ...props }) => <TableRow {...props} />,
-  th: ({ node, ...props }) => <TableHead {...props} />,
+  th: ({ node, ...props }) => <TableHead className="whitespace-normal py-2" {...props} />,
   td: ({ node, ...props }) => <TableCell {...props} />,
 };
 
@@ -212,6 +216,7 @@ interface AssistantBubbleProps {
   isStreaming: boolean;
   isTypingIndicator: boolean;
   mcpEvents?: ChatMessage["mcpEvents"];
+  actions?: React.ReactNode;
 }
 
 function AssistantBubble({
@@ -221,6 +226,7 @@ function AssistantBubble({
   isStreaming,
   isTypingIndicator,
   mcpEvents,
+  actions,
 }: AssistantBubbleProps) {
   const [reasoningKey, setReasoningKey] = useState(0);
   const prevStreamingRef = useRef<boolean>(isStreaming);
@@ -271,7 +277,7 @@ function AssistantBubble({
         {stoppedSuffix && <span className="text-muted-foreground italic"> [stopped]</span>}
       </BubbleContent>
 
-      <CopyButton text={mainContent} />
+      {actions ?? <CopyButton text={mainContent} />}
       {mcpEvents && mcpEvents.length > 0 && (
         <div className="mt-2 max-w-full">
           <MCPEventsDisplay events={mcpEvents} />
@@ -421,6 +427,7 @@ interface Props {
 
 interface ChatMessageContentProps {
   message: ChatMessage;
+  actions?: React.ReactNode;
   allowImages?: boolean;
   isStreaming?: boolean;
   isLastMessage?: boolean;
@@ -433,6 +440,7 @@ export function ChatMessageContent({
   isStreaming = false,
   isLastMessage = true,
   onEditMessage,
+  actions,
 }: ChatMessageContentProps) {
   if (message.role === "user") {
     return <UserBubble message={message} onEdit={onEditMessage} isStreaming={isStreaming} />;
@@ -450,6 +458,7 @@ export function ChatMessageContent({
       isStreaming={isStreaming}
       isTypingIndicator={isLastMessage && isStreaming && message.content === ""}
       mcpEvents={message.mcpEvents}
+      actions={actions}
     />
   );
 }
