@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { useRef, useState } from "react";
 import { ChevronDown, PanelRight, RotateCcw, SquarePen } from "lucide-react";
 import useCan from "@/app/(dashboard)/hooks/useCan";
@@ -129,6 +130,7 @@ export function PlaygroundChat({
   disabledPersonalKeyCreation: boolean;
   proxySettings: ProxySettings | undefined;
 }) {
+  const term = useTerminology();
   const { settings: stored, update, reset } = usePlaygroundSettings(disabledPersonalKeyCreation);
   const canViewPolicies = useCan("viewPolicies");
   const apiKey = (stored.keySource === "session" ? accessToken : stored.virtualKey.trim()) || null;
@@ -402,7 +404,7 @@ export function PlaygroundChat({
 
   const suggestions =
     settings.endpoint === EndpointType.RESPONSES && codeInterpreter.enabled
-      ? CODE_INTERPRETER_SUGGESTIONS
+      ? CODE_INTERPRETER_SUGGESTIONS.map(term)
       : SUGGESTIONS[settings.endpoint] ?? [];
 
   const inspector = <InspectorPanel message={inspectedMessage} code={code} />;

@@ -48033,6 +48033,11 @@ export interface components {
             /** Sso Configured */
             sso_configured: boolean;
             /**
+             * Use Si Terminology
+             * @default false
+             */
+            use_si_terminology: boolean;
+            /**
              * Workers
              * @default []
              */

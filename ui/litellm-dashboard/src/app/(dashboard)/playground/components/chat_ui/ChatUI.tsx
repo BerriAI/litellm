@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import {
   ArrowDown,
   Bot,
@@ -130,6 +131,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   simplified = false,
   fixedModel,
 }) => {
+  const term = useTerminology();
   const syntaxTheme = useSyntaxTheme(coy);
   const canViewPolicies = useCan("viewPolicies");
   const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
@@ -2039,7 +2041,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         <div className="flex flex-wrap gap-2">
                           {[
                             "Generate sample sales data CSV and create a chart",
-                            "Create a PNG bar chart comparing AI gateway providers including LiteLLM",
+                            term("Create a PNG bar chart comparing AI gateway providers including LiteLLM"),
                             "Generate a CSV of LLM pricing data and visualize it as a line chart",
                           ].map((prompt, idx) => (
                             <button

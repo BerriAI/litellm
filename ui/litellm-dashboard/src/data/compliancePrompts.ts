@@ -1,3 +1,4 @@
+import { keepTerminology, type Term } from "@/lib/terminology";
 import { insultsCompliancePrompts } from "./insultsCompliancePrompts";
 import { financialCompliancePrompts } from "./financialCompliancePrompts";
 import { codeExecutionCompliancePrompts } from "./codeExecutionCompliancePrompts";
@@ -563,14 +564,19 @@ const frameworkMeta: Record<string, { icon: string; description: string }> = {
 };
 
 /** Flat list of all compliance prompts for pipeline testing (EU AI Act, GDPR, topic blocking, airline, etc.). */
-export function getComplianceDatasetPrompts(): CompliancePrompt[] {
-  return getFrameworks().flatMap((fw) => fw.categories.flatMap((cat) => cat.prompts));
+export function getComplianceDatasetPrompts(term: Term = keepTerminology): CompliancePrompt[] {
+  return getFrameworks(term).flatMap((fw) => fw.categories.flatMap((cat) => cat.prompts));
 }
 
-export function getFrameworks(): ComplianceFramework[] {
+export function getFrameworks(term: Term = keepTerminology): ComplianceFramework[] {
   const frameworkMap = new Map<string, { categories: Map<string, ComplianceCategory> }>();
+  const prompts = allCompliancePrompts.map((prompt) => ({
+    ...prompt,
+    categoryDescription: term(prompt.categoryDescription),
+    prompt: term(prompt.prompt),
+  }));
 
-  for (const prompt of allCompliancePrompts) {
+  for (const prompt of prompts) {
     if (!frameworkMap.has(prompt.framework)) {
       frameworkMap.set(prompt.framework, { categories: new Map() });
     }
@@ -589,7 +595,7 @@ export function getFrameworks(): ComplianceFramework[] {
   return Array.from(frameworkMap.entries()).map(([name, data]) => ({
     name,
     icon: frameworkMeta[name]?.icon || "file-text",
-    description: frameworkMeta[name]?.description || "",
+    description: term(frameworkMeta[name]?.description || ""),
     categories: Array.from(data.categories.values()),
   }));
 }
