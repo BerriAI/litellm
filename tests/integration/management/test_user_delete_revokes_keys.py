@@ -1,0 +1,430 @@
+import os
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
+from typing import Final
+
+import httpx
+import psycopg
+import pytest
+from integration._support.client import Gateway, eventually, object_value, string_value
+from integration._support.database import read_rows
+from pydantic import JsonValue
+
+from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
+
+TAKE_TEAM_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext(%s))"
+SESSIONS_BLOCKED_BY_SQL: Final = (
+    "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE %s::int = ANY(pg_blocking_pids(pid))"
+)
+
+
+def _observed(upstream: httpx.Client) -> list[dict[str, JsonValue]]:
+    response: Final = upstream.get("/__observations")
+    response.raise_for_status()
+    requests: Final = response.json()["requests"]
+    assert isinstance(requests, list)
+    return requests
+
+
+def _chat(proxy: Gateway, model: str, key: str, text: str) -> httpx.Response:
+    return proxy.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": text}]},
+        key=key,
+    )
+
+
+def _observation(text: str) -> dict[str, JsonValue]:
+    return {
+        "path": "/v1/chat/completions",
+        "authorization": "Bearer integration-provider-key",
+        "body": {"messages": [{"role": "user", "content": text}], "model": "gpt-4o-mini"},
+        "method": "POST",
+        "api_key": "",
+    }
+
+
+def _token_not_found_error() -> dict[str, JsonValue]:
+    return {
+        "error": {
+            "message": "Authentication Error, Invalid API key provided.",
+            "type": "token_not_found_in_db",
+            "param": "key",
+            "code": "401",
+        }
+    }
+
+
+def _blocked_key_error() -> dict[str, JsonValue]:
+    return {
+        "error": {
+            "message": "Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
+            "type": "auth_error",
+            "param": "None",
+            "code": "401",
+        }
+    }
+
+
+def _user_rows(user_id: str) -> dict[str, list[dict[str, JsonValue]]]:
+    return {
+        "user": read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id=%s', (user_id,)),
+        "keys": read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE user_id=%s', (user_id,)),
+        "team_memberships": read_rows('SELECT user_id FROM "LiteLLM_TeamMembership" WHERE user_id=%s', (user_id,)),
+        "org_memberships": read_rows(
+            'SELECT user_id FROM "LiteLLM_OrganizationMembership" WHERE user_id=%s', (user_id,)
+        ),
+        "invitations": read_rows('SELECT id FROM "LiteLLM_InvitationLink" WHERE user_id=%s', (user_id,)),
+    }
+
+
+def _new_user(gateway: Gateway, **fields: JsonValue) -> str:
+    created: Final = gateway.post(
+        "/user/new", {"user_id": f"integration-{uuid.uuid4().hex}", "auto_create_key": False, **fields}
+    )
+    return string_value(created["user_id"])
+
+
+def _new_key(gateway: Gateway, **fields: JsonValue) -> str:
+    created: Final = gateway.post("/key/generate", fields)
+    return string_value(created["key"])
+
+
+def test_user_delete_revokes_keys_and_memberships(gateway: Gateway, peer: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model()
+        team_id: Final = scenario.team()
+        organization_id: Final = scenario.organization()
+        user_id: Final = _new_user(gateway)
+        gateway.post("/team/member_add", {"team_id": team_id, "member": {"role": "user", "user_id": user_id}})
+        gateway.post(
+            "/organization/member_add",
+            {"organization_id": organization_id, "member": {"role": "internal_user", "user_id": user_id}},
+        )
+        keys: Final = (
+            _new_key(gateway, user_id=user_id, models=[model]),
+            _new_key(gateway, user_id=user_id, models=[model]),
+        )
+        invitation: Final = gateway.post("/invitation/new", {"user_id": user_id})
+        assert string_value(object_value(invitation)["user_id"]) == user_id
+
+        assert _observed(upstream) == []
+        expected: Final = []
+        for proxy in (gateway, peer):
+            for key in keys:
+                text: Final = f"warm {uuid.uuid4().hex}"
+                assert _chat(proxy, model, key, text).status_code == 200
+                expected.append(_observation(text))
+        assert _observed(upstream) == expected
+        upstream.delete("/__observations").raise_for_status()
+
+        deleted: Final = gateway.request("POST", "/user/delete", {"user_ids": [user_id]})
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json() == 1
+
+        for key in keys:
+            denied: Final = _chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
+            assert denied.status_code == 401, denied.text
+            assert denied.json() == _token_not_found_error(), denied.text
+        for key in keys:
+            denied_peer: Final = eventually(
+                lambda k=key: _chat(peer, model, k, f"denied {uuid.uuid4().hex}"),
+                lambda response: response.status_code == 401,
+                seconds=10,
+            )
+            assert denied_peer.json() == _token_not_found_error(), denied_peer.text
+
+        denied_observations: Final = _observed(upstream)
+        assert denied_observations == [], denied_observations
+        for proxy in (gateway, peer):
+            for key in keys:
+                denied_again: Final = _chat(proxy, model, key, f"denied {uuid.uuid4().hex}")
+                assert denied_again.status_code == 401, denied_again.text
+        assert _observed(upstream) == []
+
+        assert _user_rows(user_id) == {
+            "user": [],
+            "keys": [],
+            "team_memberships": [],
+            "org_memberships": [],
+            "invitations": [],
+        }
+        team_row: Final = read_rows('SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id=%s', (team_id,))
+        assert team_row == [
+            {"members_with_roles": [{"role": "admin", "user_email": None, "user_id": "default_user_id"}]}
+        ]
+        team_info: Final = object_value(object_value(gateway.get("/team/info", {"team_id": team_id}))["team_info"])
+        assert team_info["members_with_roles"] == [
+            {"role": "admin", "user_alias": None, "user_id": "default_user_id", "user_email": None}
+        ]
+
+        info: Final = gateway.request("GET", "/user/info", params={"user_id": user_id})
+        assert info.status_code == 404, info.text
+        assert info.json() == {
+            "error": {
+                "message": f"User {user_id} not found",
+                "type": "internal_server_error",
+                "param": None,
+                "code": "404",
+            }
+        }, info.text
+
+
+def test_org_admin_can_only_delete_users_inside_their_orgs(
+    gateway: Gateway,
+) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model()
+        org_a: Final = scenario.organization()
+        org_b: Final = scenario.organization()
+        admin: Final = scenario.org_member(org_a, "org_admin")
+        admin_key: Final = scenario.key(user_id=admin)
+
+        victim_b: Final = scenario.org_member(org_b, "internal_user")
+        victim_b_key: Final = scenario.key(user_id=victim_b, models=[model])
+        victim_overlap: Final = scenario.org_member(org_a, "internal_user")
+        gateway.post(
+            "/organization/member_add",
+            {"organization_id": org_b, "member": {"role": "internal_user", "user_id": victim_overlap}},
+        )
+        victim_no_org: Final = scenario.user(user_role="internal_user")
+        victim_a: Final = _new_user(gateway)
+        gateway.post(
+            "/organization/member_add",
+            {"organization_id": org_a, "member": {"role": "internal_user", "user_id": victim_a}},
+        )
+
+        assert _observed(upstream) == []
+        refused: Final = gateway.request(
+            "POST",
+            "/user/delete",
+            {"user_ids": [victim_b], "organization_id": org_a},
+            key=admin_key,
+        )
+        assert refused.status_code == 403, refused.text
+        assert refused.json() == {
+            "detail": {
+                "error": (
+                    f"User {victim_b} is not within your admin scope. "
+                    "Only PROXY_ADMIN may delete users outside your administered organizations."
+                )
+            }
+        }, refused.text
+        assert _user_rows(victim_b)["user"] != []
+
+        refused_overlap: Final = gateway.request(
+            "POST",
+            "/user/delete",
+            {"user_ids": [victim_overlap], "organization_id": org_a},
+            key=admin_key,
+        )
+        assert refused_overlap.status_code == 403, refused_overlap.text
+        assert refused_overlap.json() == {
+            "detail": {
+                "error": (
+                    f"User {victim_overlap} is not within your admin scope. "
+                    "Only PROXY_ADMIN may delete users outside your administered organizations."
+                )
+            }
+        }, refused_overlap.text
+        assert _user_rows(victim_overlap)["user"] != []
+
+        refused_no_org: Final = gateway.request(
+            "POST",
+            "/user/delete",
+            {"user_ids": [victim_no_org], "organization_id": org_a},
+            key=admin_key,
+        )
+        assert refused_no_org.status_code == 403, refused_no_org.text
+        assert refused_no_org.json() == {
+            "detail": {
+                "error": (
+                    f"User {victim_no_org} is not within your admin scope. "
+                    "Only PROXY_ADMIN may delete users outside your administered organizations."
+                )
+            }
+        }, refused_no_org.text
+        assert _user_rows(victim_no_org)["user"] != []
+
+        alive: Final = f"still alive {uuid.uuid4().hex}"
+        served: Final = _chat(gateway, model, victim_b_key, alive)
+        assert served.status_code == 200, served.text
+        assert _observed(upstream) == [_observation(alive)]
+
+        deleted: Final = gateway.request(
+            "POST",
+            "/user/delete",
+            {"user_ids": [victim_a], "organization_id": org_a},
+            key=admin_key,
+        )
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json() == 1
+        assert _user_rows(victim_a)["user"] == []
+
+
+def test_scim_user_delete_revokes_keys(gateway: Gateway, peer: Gateway, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"))
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model()
+        user_id: Final = _new_user(gateway)
+        remaining_user_id: Final = _new_user(gateway)
+        scenario.cleanups.callback(gateway.request, "POST", "/user/delete", {"user_ids": [remaining_user_id]})
+        ui_token: Final = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+            LiteLLM_UserTable(user_id=user_id, user_role="internal_user", models=[])
+        )
+        team_id: Final = scenario.team(
+            members_with_roles=[
+                {"role": "user", "user_id": user_id},
+                {"role": "user", "user_id": remaining_user_id},
+            ]
+        )
+        initial_team_rows: Final = read_rows(
+            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id=%s',
+            (team_id,),
+        )
+        assert len(initial_team_rows) == 1, initial_team_rows
+        initial_members: Final = initial_team_rows[0]["members_with_roles"]
+        assert isinstance(initial_members, list), initial_team_rows
+        initial_member_id_roles: Final = tuple(
+            (
+                string_value(object_value(member)["user_id"]),
+                string_value(object_value(member)["role"]),
+            )
+            for member in initial_members
+        )
+        assert (user_id, "user") in initial_member_id_roles, initial_team_rows
+        assert (remaining_user_id, "user") in initial_member_id_roles, initial_team_rows
+        expected_remaining_members: Final = tuple(member for member in initial_member_id_roles if member[0] != user_id)
+        organization_id: Final = scenario.organization()
+        membership: Final = gateway.request(
+            "POST",
+            "/organization/member_add",
+            {"organization_id": organization_id, "member": {"role": "internal_user", "user_id": user_id}},
+        )
+        assert membership.status_code == 200, membership.text
+        invitation: Final = gateway.post("/invitation/new", {"user_id": user_id})
+        assert string_value(object_value(invitation)["user_id"]) == user_id
+        key: Final = _new_key(gateway, user_id=user_id, models=[model])
+        scenario.cleanups.callback(gateway.request, "POST", "/key/delete", {"keys": [key]})
+        hashed: Final = sha256(key.encode()).hexdigest()
+
+        gateway_info: Final = gateway.request("GET", "/user/info", params={"user_id": user_id})
+        assert gateway_info.status_code == 200, gateway_info.text
+        peer_info: Final = peer.request("GET", "/user/info", params={"user_id": user_id})
+        assert peer_info.status_code == 200, peer_info.text
+        for proxy in (gateway, peer):
+            session_info: Final = proxy.request("GET", "/user/info", params={"user_id": user_id}, key=ui_token)
+            assert session_info.status_code == 200, session_info.text
+            assert object_value(object_value(session_info.json())["user_info"])["user_id"] == user_id, session_info.text
+        assert _observed(upstream) == []
+
+        deleted: Final = gateway.request("DELETE", f"/scim/v2/Users/{user_id}")
+        assert deleted.status_code == 204, deleted.text
+
+        expected_info: Final = {
+            "error": {
+                "message": f"User {user_id} not found",
+                "type": "internal_server_error",
+                "param": None,
+                "code": "404",
+            }
+        }
+        denied_info: Final = gateway.request("GET", "/user/info", params={"user_id": user_id})
+        assert denied_info.status_code == 404, denied_info.text
+        assert denied_info.json() == expected_info, denied_info.text
+        denied_peer_info: Final = eventually(
+            lambda: peer.request("GET", "/user/info", params={"user_id": user_id}),
+            lambda response: response.status_code == 404,
+            seconds=10,
+        )
+        assert denied_peer_info.json() == expected_info, denied_peer_info.text
+        for proxy in (gateway, peer):
+            expired_session: Final = proxy.request("GET", "/user/info", params={"user_id": user_id}, key=ui_token)
+            assert expired_session.status_code == 404, expired_session.text
+            assert expired_session.json() == expected_info, expired_session.text
+
+        rows: Final = _user_rows(user_id)
+        assert rows["user"] == []
+        assert rows["team_memberships"] == []
+        assert rows["org_memberships"] == []
+        assert rows["invitations"] == []
+        assert rows["keys"] == [{"token": hashed}]
+        team_rows: Final = read_rows(
+            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id=%s',
+            (team_id,),
+        )
+        assert len(team_rows) == 1, team_rows
+        members: Final = team_rows[0]["members_with_roles"]
+        assert isinstance(members, list), team_rows
+        member_id_roles: Final = tuple(
+            (
+                string_value(object_value(member)["user_id"]),
+                string_value(object_value(member)["role"]),
+            )
+            for member in members
+        )
+        assert member_id_roles == expected_remaining_members, team_rows
+        assert (
+            read_rows(
+                'SELECT user_id FROM "LiteLLM_OrganizationMembership" WHERE organization_id=%s',
+                (organization_id,),
+            )
+            == []
+        )
+        assert read_rows('SELECT blocked FROM "LiteLLM_VerificationToken" WHERE token=%s', (hashed,)) == [
+            {"blocked": True}
+        ]
+
+        denied: Final = _chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
+        assert denied.status_code == 401, denied.text
+        assert denied.json() == _blocked_key_error(), denied.text
+        denied_peer: Final = _chat(peer, model, key, f"denied {uuid.uuid4().hex}")
+        assert denied_peer.status_code == 401, denied_peer.text
+        assert denied_peer.json() == _blocked_key_error(), denied_peer.text
+        assert _observed(upstream) == []
+        assert _observed(upstream) == []
+
+
+def _sessions_blocked_by(backend_pid: int) -> int:
+    waiting: Final = read_rows(SESSIONS_BLOCKED_BY_SQL, (str(backend_pid),))[0]["waiting"]
+    assert isinstance(waiting, int)
+    return waiting
+
+
+def test_user_delete_deletes_a_user_whose_team_is_deleted_while_it_waits_on_the_team_lock(gateway: Gateway) -> None:
+    team_id: Final = string_value(
+        gateway.post("/team/new", {"team_alias": f"integration-{uuid.uuid4().hex}"})["team_id"]
+    )
+    user_id: Final = _new_user(gateway)
+    gateway.post("/team/member_add", {"team_id": team_id, "member": {"role": "user", "user_id": user_id}})
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
+            _ = holder.execute(TAKE_TEAM_LOCK_SQL, (team_id,))
+            deletion: Final = pool.submit(gateway.request, "POST", "/user/delete", {"user_ids": [user_id]})
+            _ = eventually(
+                lambda: _sessions_blocked_by(holder.info.backend_pid), lambda waiting: waiting >= 1, seconds=30
+            )
+            _ = holder.execute('DELETE FROM "LiteLLM_TeamMembership" WHERE team_id = %s', (team_id,))
+            _ = holder.execute(
+                'UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, %s) WHERE %s = ANY(teams)',
+                (team_id, team_id),
+            )
+            _ = holder.execute('DELETE FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team_id,))
+            assert not deletion.done(), deletion.result().text
+        deleted: Final = deletion.result()
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json() == 1
+    assert _user_rows(user_id)["user"] == []

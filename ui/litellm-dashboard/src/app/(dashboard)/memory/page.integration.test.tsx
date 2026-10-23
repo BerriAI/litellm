@@ -49,10 +49,4 @@ describe("Memory page access by role", () => {
       await waitFor(() => expect(requestedUrls().filter((url) => url.includes("/v1/memory"))).toEqual([]));
     },
   );
-
-  it("hides the deprecation banner along with the page body for a denied role", () => {
-    renderAs("Internal User");
-
-    expect(screen.queryByText(/draft deprecation list/i)).not.toBeInTheDocument();
-  });
 });

@@ -1,6 +1,7 @@
 #### What this does ####
 #    On success, logs events to Langsmith
 import asyncio
+import json
 import os
 import random
 import traceback
@@ -9,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Final
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -26,6 +27,8 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.integrations.langsmith import *
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
+
+_RUN_RESPONSE: Final = TypeAdapter(object)
 
 
 def is_serializable(value):
@@ -77,9 +80,9 @@ class LangsmithLogger(CustomBatchLogger):
         if _batch_size:
             self.batch_size = int(_batch_size)
         self.log_queue: list[LangsmithQueueObject] = []
-        self._flush_task: asyncio.Task[Any] | None = self._start_periodic_flush_task()
+        self._flush_task: asyncio.Task[None] | None = self._start_periodic_flush_task()
 
-    def _start_periodic_flush_task(self) -> asyncio.Task[Any] | None:
+    def _start_periodic_flush_task(self) -> asyncio.Task[None] | None:
         """Start the periodic flush task only when an event loop is already running."""
         try:
             loop: Final = asyncio.get_running_loop()
@@ -154,9 +157,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         return self._redact_metadata(extra_metadata)
 
-    def _build_outputs_with_usage(self, payload: StandardLoggingPayload) -> dict[str, Any]:
+    def _build_outputs_with_usage(self, payload: StandardLoggingPayload) -> dict[str, object]:
         response: Final = payload["response"]
-        outputs: dict[str, Any]
+        outputs: dict[str, object]
         if isinstance(response, dict):
             outputs = {**response}
         else:
@@ -415,7 +418,7 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_api_key: Final = credentials["LANGSMITH_API_KEY"]
         langsmith_tenant_id: Final = credentials.get("LANGSMITH_TENANT_ID")
         url: Final = self._add_endpoint_to_url(langsmith_api_base, "runs/batch")
-        headers: Final = {"x-api-key": langsmith_api_key}
+        headers: Final = {"x-api-key": langsmith_api_key, "Content-Type": "application/json"}
         if langsmith_tenant_id:
             headers["x-tenant-id"] = langsmith_tenant_id
         elements_to_log: Final = [queue_object["data"] for queue_object in queue_objects]
@@ -426,7 +429,7 @@ class LangsmithLogger(CustomBatchLogger):
                 verbose_logger.debug("[LANGSMITH MOCK] Mock mode enabled - API calls will be intercepted")
             response: Final = await self.async_httpx_client.post(
                 url=url,
-                json={"post": elements_to_log},
+                content=json.dumps({"post": elements_to_log}, default=str, allow_nan=False),
                 headers=headers,
             )
             response.raise_for_status()
@@ -523,7 +526,7 @@ class LangsmithLogger(CustomBatchLogger):
             # If we can't get an event loop, create a new one
             asyncio.run(self.async_send_batch())
 
-    def get_run_by_id(self, run_id):
+    def get_run_by_id(self, run_id) -> object:
         langsmith_api_key: Final = self.default_credentials["LANGSMITH_API_KEY"]
         langsmith_api_base: Final = self.default_credentials["LANGSMITH_BASE_URL"]
         langsmith_tenant_id: Final = self.default_credentials.get("LANGSMITH_TENANT_ID")
@@ -537,7 +540,7 @@ class LangsmithLogger(CustomBatchLogger):
             headers=headers,
         )
 
-        return response.json()
+        return _RUN_RESPONSE.validate_python(response.json())
 
     def make_dot_order(self, run_id: str):
         st: Final = datetime.now(timezone.utc)

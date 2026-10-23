@@ -1,16 +1,17 @@
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.proxy._types import (
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
+from litellm.types.proxy.management_endpoints.user_requests import (
     LiteLLM_UserTableWithKeyCount,
     NewUserRequest,
     UpdateUserRequest,
     UpdateUserRequestNoUserIDorEmail,
 )
-from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
 MAX_BULK_DELETE_USERS: Final = 500
 
@@ -34,7 +35,7 @@ class UserAliasWhere(TypedDict):
     user_alias: ReadOnly[InsensitiveContains]
 
 
-class UserListResponse(BaseModel):
+class UserListResponse(LiteLLMBaseModel):
     """
     Response model for the user list endpoint
     """
@@ -46,7 +47,7 @@ class UserListResponse(BaseModel):
     total_pages: int
 
 
-class BulkUpdateUserRequest(BaseModel):
+class BulkUpdateUserRequest(LiteLLMBaseModel):
     """Request for bulk user updates"""
 
     users: list[UpdateUserRequest] | None = None  # List of specific user update requests
@@ -78,17 +79,17 @@ class BulkUpdateUserRequest(BaseModel):
         return v
 
 
-class UserUpdateResult(BaseModel):
+class UserUpdateResult(LiteLLMBaseModel):
     """Result of a single user update operation"""
 
     user_id: str | None = None
     user_email: str | None = None
     success: bool
     error: str | None = None
-    updated_user: dict[str, Any] | None = None
+    updated_user: dict[str, object] | None = None
 
 
-class BulkUpdateUserResponse(BaseModel):
+class BulkUpdateUserResponse(LiteLLMBaseModel):
     """Response for bulk user update operations"""
 
     results: list[UserUpdateResult]
@@ -97,7 +98,7 @@ class BulkUpdateUserResponse(BaseModel):
     failed_updates: int
 
 
-class BulkDeleteUserRequest(BaseModel):
+class BulkDeleteUserRequest(LiteLLMBaseModel):
     """Body of `POST /management/v1/users/bulk_delete`."""
 
     model_config = ConfigDict(extra="forbid")
@@ -105,7 +106,7 @@ class BulkDeleteUserRequest(BaseModel):
     user_ids: tuple[str, ...] = Field(min_length=1, max_length=MAX_BULK_DELETE_USERS)
 
 
-class UserDeleteResult(BaseModel):
+class UserDeleteResult(LiteLLMBaseModel):
     """Outcome for one requested user, in request order. `teams_removed` lists the teams the user left."""
 
     user_id: str
@@ -135,13 +136,13 @@ class BulkNewUserItem(NewUserRequest):
         return value
 
 
-class BulkNewUserRequest(BaseModel):
+class BulkNewUserRequest(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     users: Sequence[BulkNewUserItem] = Field(min_length=1, max_length=MAX_BULK_NEW_USERS)
 
 
-class UserCreateResult(BaseModel):
+class UserCreateResult(LiteLLMBaseModel):
     """Outcome for one row of `POST /management/v1/users/bulk`. `teams` lists the teams the user was actually
     added to."""
 
@@ -153,13 +154,13 @@ class UserCreateResult(BaseModel):
     error: str | None = None
 
 
-class BulkNewUserMeta(BaseModel):
+class BulkNewUserMeta(LiteLLMBaseModel):
     total_requested: int
     created: int
     failed: int
 
 
-class BulkNewUserResponse(BaseModel):
+class BulkNewUserResponse(LiteLLMBaseModel):
     """`data` holds one result per input row, in input order."""
 
     data: tuple[UserCreateResult, ...]

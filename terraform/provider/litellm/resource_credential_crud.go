@@ -1,6 +1,7 @@
 package litellm
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -61,28 +62,58 @@ func retryCredentialRead(d *schema.ResourceData, m interface{}, maxRetries int) 
 	return err
 }
 
-func credentialRequestFromResource(d *schema.ResourceData, credentialName string) CredentialRequest {
+func credentialRequestFromResource(d *schema.ResourceData, credentialName string) (CredentialRequest, error) {
 	credInfoMap := make(map[string]interface{})
 	for k, v := range d.Get("credential_info").(map[string]interface{}) {
 		credInfoMap[k] = v
 	}
-	credValuesMap := make(map[string]interface{})
-	for k, v := range d.Get("credential_values").(map[string]interface{}) {
-		credValuesMap[k] = v
+	credValuesMap, err := credentialValuesFromResource(d)
+	if err != nil {
+		return CredentialRequest{}, err
 	}
 	return CredentialRequest{
 		CredentialName:   credentialName,
 		ModelID:          d.Get("model_id").(string),
 		CredentialInfo:   credInfoMap,
 		CredentialValues: credValuesMap,
+	}, nil
+}
+
+// credentialValuesFromResource prefers the write-only JSON object over the
+// in-state map, so a configuration that moved to credential_values_wo never
+// sends the stale map it used to carry.
+func credentialValuesFromResource(d *schema.ResourceData) (map[string]interface{}, error) {
+	if raw := writeOnlyString(d, "credential_values_wo"); raw != "" {
+		var values map[string]interface{}
+		if err := json.Unmarshal([]byte(raw), &values); err != nil {
+			return nil, fmt.Errorf("credential_values_wo must be a JSON object: %w", err)
+		}
+		if values == nil {
+			return nil, fmt.Errorf("credential_values_wo must be a JSON object, got null")
+		}
+		for key, value := range values {
+			if _, ok := value.(string); !ok {
+				return nil, fmt.Errorf("credential_values_wo[%q] must be a string, the proxy only encrypts string values at rest", key)
+			}
+		}
+		return values, nil
 	}
+	credValuesMap := make(map[string]interface{})
+	for k, v := range d.Get("credential_values").(map[string]interface{}) {
+		credValuesMap[k] = v
+	}
+	return credValuesMap, nil
 }
 
 func resourceLiteLLMCredentialCreate(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 	credentialName := d.Get("credential_name").(string)
 
-	resp, err := MakeRequest(client, "POST", "/credentials", credentialRequestFromResource(d, credentialName))
+	req, err := credentialRequestFromResource(d, credentialName)
+	if err != nil {
+		return err
+	}
+	resp, err := MakeRequest(client, "POST", "/credentials", req)
 	if err != nil {
 		return fmt.Errorf("failed to create credential: %w", err)
 	}
@@ -167,7 +198,11 @@ func resourceLiteLLMCredentialRead(d *schema.ResourceData, m interface{}) error 
 }
 
 func patchCredential(client *Client, d *schema.ResourceData, credentialName string) error {
-	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointCredential, url.PathEscape(credentialName)), credentialRequestFromResource(d, credentialName))
+	req, err := credentialRequestFromResource(d, credentialName)
+	if err != nil {
+		return err
+	}
+	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointCredential, url.PathEscape(credentialName)), req)
 	if err != nil {
 		return fmt.Errorf("failed to update credential: %w", err)
 	}

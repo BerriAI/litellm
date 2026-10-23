@@ -11,6 +11,12 @@ every text fragment.
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, Final
 
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    compaction_summary,
+    input_items,
+    with_visited_compaction_summary,
+)
+
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
 # detection, …) should inspect. The proxy ingress passes ``route_type``
@@ -95,26 +101,26 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
     """Coerce a Responses-API ``data["input"]`` value into chat-style messages."""
     if isinstance(input_value, str):
         return [{"role": "user", "content": input_value}]
-    if not isinstance(input_value, list):
-        return []
     messages: Final[list[dict[str, object]]] = []
-    for item in input_value:
+    for item in input_items(input_value):
         if isinstance(item, str):
             messages.append({"role": "user", "content": item})
+        elif (summary := compaction_summary(item)) is not None:
+            messages.append({"role": "user", "content": summary})
         elif isinstance(item, dict):
             if _part_text(item) is not None:
                 messages.append({"role": item.get("role") or "user", "content": [item]})
             elif item.get("type") == "reasoning":
                 if "content" in item:
                     messages.append(
-                        {  # mutable-ok: append reasoning content
+                        {
                             "role": item.get("role") or "assistant",
                             "content": item["content"],
                         }
                     )
                 if isinstance(item.get("summary"), list):
                     messages.append(
-                        {  # mutable-ok: append reasoning summary
+                        {
                             "role": item.get("role") or "assistant",
                             "content": item["summary"],
                         }
@@ -146,7 +152,7 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
         yield from _iter_text_parts_in_content(message.get("content"))
 
 
-def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
+def walk_user_text(data: dict[str, object], visit: Callable[[str], str]) -> int:
     """Rewrite every text fragment in place via ``visit``.
 
     Mutates ``data["messages"]`` and ``data["input"]``. Returns the number
@@ -189,15 +195,18 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
             data["input"] = visit(input_value)
         return visited
     if isinstance(input_value, list):
-        for idx, item in enumerate(input_value):
+        for idx, item in enumerate(input_items(input_value)):
             if isinstance(item, str):
                 if item:
                     visited += 1
                     input_value[idx] = visit(item)
+            elif (compaction := with_visited_compaction_summary(item, visit)) is not None:
+                visited += 1
+                input_value[idx] = compaction
             elif isinstance(item, dict):
                 if _part_text(item) is not None:
                     visited += 1
-                    input_value[idx] = {**item, "text": visit(item["text"])}  # mutable-ok: rewrite text part in place
+                    input_value[idx] = {**item, "text": visit(item["text"])}
                 elif item.get("type") == "reasoning":
                     if "content" in item:
                         item["content"] = _rewrite_content(item["content"])
@@ -286,7 +295,7 @@ def has_non_string_content(data: Mapping[str, object]) -> bool:
     return False
 
 
-def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:
+def build_inspection_messages(data: dict[str, object]) -> list[dict[str, str]]:
     """Synthesize a chat-style messages list for posting to a guardrail API.
 
     Each returned message has a plain-string ``content`` — multimodal text

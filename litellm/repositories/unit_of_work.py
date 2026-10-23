@@ -25,8 +25,8 @@ from litellm.repositories.prisma_protocols import BatchTable, PrismaBatch
 
 
 def _spend_reset_data(budget_reset_at: datetime | None, spend_decrement: float) -> Mapping[str, object]:
-    spend: Final[object] = {"decrement": spend_decrement}  # mutable-ok: prisma update payload must be a dict
-    return {"spend": spend, "budget_reset_at": budget_reset_at}  # mutable-ok: prisma update payload must be a dict
+    spend: Final[object] = {"decrement": spend_decrement}
+    return {"spend": spend, "budget_reset_at": budget_reset_at}
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +35,7 @@ class KeySpendResetWrites:
 
     def queue_spend_reset(self, token: str, budget_reset_at: datetime | None, spend_decrement: float) -> None:
         self.table.update(
-            where={"token": token},  # mutable-ok: prisma where filter must be a dict
+            where={"token": token},
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
@@ -46,7 +46,7 @@ class UserSpendResetWrites:
 
     def queue_spend_reset(self, user_id: str, budget_reset_at: datetime | None, spend_decrement: float) -> None:
         self.table.update(
-            where={"user_id": user_id},  # mutable-ok: prisma where filter must be a dict
+            where={"user_id": user_id},
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
@@ -57,7 +57,7 @@ class TeamSpendResetWrites:
 
     def queue_spend_reset(self, team_id: str, budget_reset_at: datetime | None, spend_decrement: float) -> None:
         self.table.update(
-            where={"team_id": team_id},  # mutable-ok: prisma where filter must be a dict
+            where={"team_id": team_id},
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
@@ -74,7 +74,7 @@ class LinkedSpendResetWrites:
         cascade's read and its commit survives the reset instead of being erased."""
         self.table.update_many(
             where=where,
-            data={"spend": {"decrement": amount}},  # mutable-ok: prisma update payload must be a dict
+            data={"spend": {"decrement": amount}},
         )
 
 
@@ -97,11 +97,13 @@ class SpendResetUnitOfWork:
 
 @dataclass(frozen=True, slots=True)
 class BudgetCascadeUnitOfWork:
-    """Every write a budget-tier reset performs, bound to one batch.
+    """Every write a budget-tier reset performs in its final batch.
 
     The dependent spend rows and the budget rows' ``budget_reset_at`` advance
     must land together: advancing the window without zeroing the spend it
     gates leaves the dependents pinned at their cap until the next window.
+    End users are the exception, paged and committed ahead of this batch by
+    ``enduser_spend_reset_unit_of_work`` because one tier can gate millions.
     """
 
     team_memberships: LinkedSpendResetWrites
@@ -109,7 +111,7 @@ class BudgetCascadeUnitOfWork:
     organizations: LinkedSpendResetWrites
     tags: LinkedSpendResetWrites
     model_access_groups: LinkedSpendResetWrites
-    endusers: LinkedSpendResetWrites
+    projects: LinkedSpendResetWrites
     budgets: BudgetWindowWrites
 
 
@@ -135,7 +137,18 @@ async def budget_cascade_unit_of_work(
         organizations=LinkedSpendResetWrites(table=batch.litellm_organizationtable),
         tags=LinkedSpendResetWrites(table=batch.litellm_tagtable),
         model_access_groups=LinkedSpendResetWrites(table=batch.litellm_modelaccessgroupbudgettable),
-        endusers=LinkedSpendResetWrites(table=batch.litellm_endusertable),
+        projects=LinkedSpendResetWrites(table=batch.litellm_projecttable),
         budgets=BudgetWindowWrites(table=batch.litellm_budgettable),
     )
+    await batch.commit()
+
+
+@asynccontextmanager
+async def enduser_spend_reset_unit_of_work(
+    new_batch: Callable[[], PrismaBatch],
+) -> AsyncGenerator[LinkedSpendResetWrites, None]:
+    """One page of end-user spend resets, committed on its own so a statement
+    never grows with the end-user population."""
+    batch: Final = new_batch()
+    yield LinkedSpendResetWrites(table=batch.litellm_endusertable)
     await batch.commit()
