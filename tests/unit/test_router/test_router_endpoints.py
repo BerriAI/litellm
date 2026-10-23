@@ -1305,3 +1305,33 @@ def test_sync_text_completion_falls_back_like_async():
     response = router.text_completion(model="primary", prompt="hi")
 
     assert response.choices[0].text == "from backup", response
+
+
+def test_sync_text_completion_deployment_call_updates_call_counters():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ok-group",
+                "litellm_params": {"model": "gpt-3.5-turbo-instruct", "api_key": "fake-key", "mock_response": "ok"},
+            },
+            {
+                "model_name": "failing-group",
+                "litellm_params": {
+                    "model": "openai/davinci-002",
+                    "api_key": "fake-key",
+                    "mock_response": "litellm.RateLimitError",
+                },
+            },
+        ],
+        num_retries=0,
+    )
+
+    response = router._text_completion(model="ok-group", prompt="hi")
+    with pytest.raises(litellm.RateLimitError):
+        router._text_completion(model="failing-group", prompt="hi")
+
+    assert response.choices[0].text == "ok", response
+    assert router.total_calls["gpt-3.5-turbo-instruct"] == 1, router.total_calls
+    assert router.success_calls["gpt-3.5-turbo-instruct"] == 1, router.success_calls
+    assert router.total_calls["openai/davinci-002"] == 1, router.total_calls
+    assert router.fail_calls["openai/davinci-002"] == 1, router.fail_calls

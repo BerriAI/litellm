@@ -438,6 +438,7 @@ from litellm.utils import (
     ModelResponse,
     Rules,
     TextCompletionResponse,
+    TextCompletionStreamWrapper,
     function_setup,
     get_llm_provider,
     get_non_default_completion_params,
@@ -5724,23 +5725,25 @@ class Router:
         is_async: bool | None = False,
         **kwargs,
     ):
-        try:
-            kwargs["model"] = model
-            kwargs["prompt"] = prompt
-            kwargs["original_function"] = self._text_completion
-            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            return self.function_with_fallbacks(**kwargs)
-        except Exception as e:
-            raise e
+        kwargs["model"] = model
+        kwargs["prompt"] = prompt
+        kwargs["original_function"] = self._text_completion
+        self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
+        return self.function_with_fallbacks(**kwargs)
 
-    def _text_completion(self, model: str, prompt: str, **kwargs):
-        model_name = None
+    def _text_completion(
+        self,
+        model: str,
+        prompt: str,
+        **kwargs: object,  # kwargs-ok: forwarded verbatim to litellm.text_completion, like _completion
+    ) -> TextCompletionResponse | TextCompletionStreamWrapper | ModelResponse | CustomStreamWrapper:
+        model_name: str | None = None
         try:
             verbose_router_logger.debug("Inside _text_completion()- model: %s; kwargs: %s", model, kwargs)
             deployment: Final = self.get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
+                specific_deployment=kwargs.pop("specific_deployment", None) is True,
                 request_kwargs=kwargs,
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
@@ -5756,15 +5759,15 @@ class Router:
             response: Final = litellm.text_completion(
                 **{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs}
             )
-            self.success_calls[model_name] += 1
-            verbose_router_logger.info("litellm.text_completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
-            return response
         except Exception as e:
             verbose_router_logger.info("litellm.text_completion(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
-            raise e
+            raise
+        self.success_calls[model_name] += 1
+        verbose_router_logger.info("litellm.text_completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
+        return response
 
     async def atext_completion(
         self,
