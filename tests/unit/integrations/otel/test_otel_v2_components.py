@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 import pytest
 import requests
+from requests_mock import Adapter
 
 pytest.importorskip("opentelemetry")
 
@@ -21,16 +22,18 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: 
 )
 from opentelemetry import baggage  # noqa: E402
 from opentelemetry.context import attach, detach  # noqa: E402
-from opentelemetry._logs.severity import SeverityNumber  # noqa: E402
-from opentelemetry.sdk._logs import LogData, LogRecord  # noqa: E402
-from opentelemetry.sdk._logs.export import LogExportResult  # noqa: E402
+from opentelemetry._logs import LogRecord, SeverityNumber  # noqa: E402  # optional SDK checked above
+from opentelemetry.sdk._logs import ReadableLogRecord  # noqa: E402  # optional SDK checked above
+from opentelemetry.sdk._logs.export import LogRecordExportResult  # noqa: E402  # optional SDK checked above
+from opentelemetry.sdk.resources import Resource  # noqa: E402  # optional SDK checked above
 from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
-from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider  # noqa: E402  # optional SDK checked above
 from opentelemetry.sdk.trace.export import (  # noqa: E402
     BatchSpanProcessor,
     ConsoleSpanExporter,
     SimpleSpanProcessor,
+    SpanExportResult,
 )
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
@@ -45,6 +48,7 @@ import litellm  # noqa: E402
 from tests.unit.integrations.conftest import TlsSink  # noqa: E402
 from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
+from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter  # noqa: E402  # optional SDK checked above
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config  # noqa: E402
 from litellm.integrations.otel.mappers.genai import GenAIMapper  # noqa: E402
 from litellm.integrations.otel.mappers.legacy import LegacyMapper  # noqa: E402
@@ -720,7 +724,9 @@ def _export_one_trace_to_local_collector(exporter_kind: str) -> tuple[list[dict]
     class Collector(BaseHTTPRequestHandler):
         def do_POST(self):
             body = self.rfile.read(int(self.headers["Content-Length"]))
-            received.append({"path": self.path, "headers": dict(self.headers), "body": body})
+            received.append(
+                {"path": self.path, "headers": requests.structures.CaseInsensitiveDict(self.headers), "body": body}
+            )
             self.send_response(200)
             self.end_headers()
 
@@ -778,6 +784,95 @@ def test_http_json_exporter_posts_otlp_json_to_traces_endpoint():
     assert child["traceId"] == format(trace_id, "032x")
     assert child["spanId"] == format(child_id, "016x")
     assert child["parentSpanId"] == format(parent_id, "016x")
+
+
+@pytest.mark.parametrize(
+    ("statuses", "expected"),
+    [
+        ((200,), SpanExportResult.SUCCESS),
+        ((400,), SpanExportResult.FAILURE),
+        ((503, 200), SpanExportResult.SUCCESS),
+    ],
+)
+def test_http_json_exporter_preserves_http_failure_and_retry_results(
+    statuses: tuple[int, ...], expected: SpanExportResult
+) -> None:
+    adapter: Final = Adapter()
+    endpoint: Final = "https://collector.test/v1/traces"
+    adapter.register_uri(
+        "POST",
+        endpoint,
+        [{"status_code": status, "headers": {"Retry-After": "0"}} for status in statuses],
+    )
+    with requests.Session() as session:
+        session.mount("https://", adapter)
+        exporter: Final = OTLPJsonSpanExporter(
+            endpoint=endpoint,
+            headers={
+                "CONTENT-TYPE": "application/x-protobuf",
+                "x-collector-token": "secret",
+            },
+            session=session,
+        )
+        try:
+            assert exporter.export(()) is expected
+        finally:
+            exporter.shutdown()
+    assert len(adapter.request_history) == len(statuses)
+    for request in adapter.request_history:
+        assert request.headers["Content-Type"] == "application/json"
+        assert request.headers["x-collector-token"] == "secret"
+        assert request.json() == {"resourceSpans": []}
+
+
+@pytest.mark.parametrize(
+    ("size_limit", "expected", "request_count"),
+    [
+        (0, SpanExportResult.SUCCESS, 1),
+        (len(b'{"resourceSpans":[]}'), SpanExportResult.SUCCESS, 1),
+        (len(b'{"resourceSpans":[]}') - 1, SpanExportResult.FAILURE, 0),
+    ],
+)
+def test_http_json_exporter_checks_json_size_before_sending(
+    size_limit: int, expected: SpanExportResult, request_count: int
+) -> None:
+    adapter: Final = Adapter()
+    endpoint: Final = "https://collector.test/v1/traces"
+    adapter.register_uri("POST", endpoint, status_code=200)
+    with requests.Session() as session:
+        session.mount("https://", adapter)
+        exporter: Final = OTLPJsonSpanExporter(endpoint, {}, session=session, max_request_size=size_limit)
+        try:
+            assert exporter.export(()) is expected
+        finally:
+            exporter.shutdown()
+    assert len(adapter.request_history) == request_count
+
+
+def test_http_json_exporter_rejects_export_after_shutdown() -> None:
+    adapter: Final = Adapter()
+    endpoint: Final = "https://collector.test/v1/traces"
+    adapter.register_uri("POST", endpoint, status_code=200)
+    with requests.Session() as session:
+        session.mount("https://", adapter)
+        exporter: Final = OTLPJsonSpanExporter(endpoint, {}, session=session)
+        exporter.shutdown()
+        assert exporter.export(()) is SpanExportResult.FAILURE
+    assert adapter.request_history == []
+
+
+def test_http_json_exporter_returns_failure_for_unencodable_spans() -> None:
+    adapter: Final = Adapter()
+    endpoint: Final = "https://collector.test/v1/traces"
+    adapter.register_uri("POST", endpoint, status_code=200)
+    with requests.Session() as session:
+        session.mount("https://", adapter)
+        exporter: Final = OTLPJsonSpanExporter(endpoint, {}, session=session)
+        try:
+            assert exporter.export((ReadableSpan("missing-context"),)) is SpanExportResult.FAILURE
+        finally:
+            exporter.shutdown()
+    assert adapter.request_history == []
 
 
 def test_http_protobuf_exporter_still_posts_protobuf():
@@ -1617,9 +1712,13 @@ def test_v2_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.Monkey
             severity_number=SeverityNumber.INFO,
             body="v2-tls-test",
         )
-        log_data = LogData(log_record=record, instrumentation_scope=InstrumentationScope("v2-tls-test"))
+        log_data: Final = ReadableLogRecord(
+            log_record=record,
+            resource=Resource({}),
+            instrumentation_scope=InstrumentationScope("v2-tls-test"),
+        )
         result = exporter.export([log_data])
-        assert result is LogExportResult.SUCCESS, f"log export failed: {result}"
+        assert result is LogRecordExportResult.SUCCESS, f"log export failed: {result}"
         assert tls_sink.received.get(timeout=5) == "/v1/logs"
     finally:
         exporter.shutdown()
