@@ -7303,6 +7303,8 @@ async def test_ui_view_spend_logs_group_by_session_walk_finishes_a_tied_timestam
     tied = "2026-08-29 10:00:00"
 
     async def mock_query_raw(sql_query, *params):
+        if "AS heads(session_key, api_key, last_activity)" in sql_query:
+            return [_session_page_row(key, tied) for key in ("c", "b")]
         if "WITH batch AS MATERIALIZED" in sql_query:
             if '("startTime", request_id) <' not in sql_query:
                 return [

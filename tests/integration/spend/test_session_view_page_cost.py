@@ -17,7 +17,7 @@ from typing import Final
 import psycopg
 import pytest
 from integration._support.client import Gateway, string_value
-from integration._support.database import ROWS
+from integration._support.database import ROWS, read_rows
 from pydantic import JsonValue
 
 from litellm.proxy.spend_tracking.spend_management_endpoints import SPEND_LOGS_PAGINATION_COUNT_CAP
@@ -469,3 +469,44 @@ def test_session_view_filtered_page_only_lists_matching_sessions(gateway: Gatewa
         (f"{small_seed}-shared-b", f"{small_seed}-key-b"),
     ]
     assert page["total"] == 2
+
+
+@pytest.mark.parametrize("identities", ((("a", "K"), ("B", "K")), (("shared", "a"), ("shared", "B"))))
+def test_session_view_cursor_pages_preserve_database_order_for_tied_sessions(
+    gateway: Gateway, identities: tuple[tuple[str, str], tuple[str, str]]
+) -> None:
+    marker: Final = f"intg-sesscollation-{uuid.uuid4().hex}"
+    rows: Final = tuple(
+        _SeedRow(f"{marker}-{index}", f"{marker}-{session}", SMALL_WINDOW_START, api_key=key)
+        for index, (session, key) in enumerate(identities)
+    )
+
+    with gateway.scenario() as scenario:
+        scenario.cleanups.callback(_delete_small_rows, marker)
+        _insert_rows(rows)
+        expected: Final = tuple(
+            (string_value(row["request_id"]), string_value(row["api_key"]))
+            for row in read_rows(
+                'SELECT request_id, api_key FROM "LiteLLM_SpendLogs" WHERE request_id LIKE %s '
+                'ORDER BY "startTime" DESC, session_id DESC, api_key DESC',
+                (f"{marker}-%",),
+            )
+        )
+
+        first: Final = _small_page(gateway, session_id=marker, page_size="1", page="1")
+        second: Final = _small_page(
+            gateway,
+            session_id=marker,
+            page_size="1",
+            page="2",
+            session_cursor=string_value(first["next_session_cursor"]),
+        )
+        walked: Final = tuple(
+            (string_value(row["request_id"]), string_value(row["api_key"]))
+            for row in _data_rows(first) + _data_rows(second)
+        )
+
+        assert walked == expected, "cursor pages must match database ordering without omissions or duplicates"
+        assert first["total"] == second["total"] == len(rows)
+        assert first["has_more"] is True
+        assert second["has_more"] is False

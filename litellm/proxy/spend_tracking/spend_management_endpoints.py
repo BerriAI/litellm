@@ -3276,6 +3276,19 @@ class _SessionHeadWalk:
                 rows_read=total_read,
                 size=next_size,
             )
+        if len(frozenset(row["sort_time"] for row in all_heads)) < len(all_heads):
+            page_rows: Final[Sequence[_SessionPageRow]] = await _query_raw(
+                self.prisma_client,
+                """SELECT session_key, api_key, last_activity
+                   FROM unnest($1::text[], $2::text[], $3::text[]) AS heads(session_key, api_key, last_activity)
+                   ORDER BY last_activity::timestamp DESC, session_key DESC, api_key DESC
+                   LIMIT $4""",
+                [row["session_key"] for row in all_heads],  # mutable-ok: prisma serializes array params from a list
+                [row["api_key"] for row in all_heads],  # mutable-ok: prisma serializes array params from a list
+                [row["last_activity"] for row in all_heads],  # mutable-ok: prisma serializes array params from a list
+                self.page_limit + 1,
+            )
+            return tuple(page_rows)
         in_page_order: Final = sorted(
             all_heads, key=lambda row: (row["sort_time"], row["session_key"], row["api_key"]), reverse=True
         )
