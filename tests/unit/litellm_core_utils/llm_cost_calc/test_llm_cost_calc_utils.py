@@ -65,8 +65,8 @@ def test_missing_cache_read_rate_resolves_to_input_rate(prompt_tokens, read_rate
     prompt_cost, _ = generic_cost_per_token(
         "policy-fixture", usage, "openai", service_tier=service_tier, model_info=info
     )
-    assert billed[4] == pytest.approx(read_rate if read_rate is not None else billed[0])
-    assert prompt_cost == pytest.approx((prompt_tokens - 100) * billed[0] + 100 * billed[4])
+    assert billed[5] == pytest.approx(read_rate if read_rate is not None else billed[0])
+    assert prompt_cost == pytest.approx((prompt_tokens - 100) * billed[0] + 100 * billed[5])
 
 
 def test_generic_cost_per_token_bills_cache_reads_at_input_rate_when_no_cache_read_rate() -> None:
@@ -248,7 +248,7 @@ def test_missing_cache_read_uses_off_peak_input_rate():
     }
     when = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
     billed = _get_token_base_cost(info, Usage(prompt_tokens=100), current_time=when)
-    assert billed[0] == billed[4] == 5e-6
+    assert billed[0] == billed[5] == 5e-6
 
 
 def test_reasoning_tokens_no_price_set(_local_model_cost_map):
@@ -812,12 +812,12 @@ def test_get_token_base_cost_applies_off_peak_pricing():
     off_peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
     assert off_peak[0] == 5e-7
     assert off_peak[1] == 1e-6
-    assert off_peak[4] == 5e-8
+    assert off_peak[5] == 5e-8
 
     peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
     assert peak[0] == 1e-6
     assert peak[1] == 2e-6
-    assert peak[4] == 1e-7
+    assert peak[5] == 1e-7
 
 
 def test_get_token_base_cost_non_mapping_off_peak_block_bills_standard_rates():
@@ -2082,6 +2082,84 @@ def test_calculate_cache_writing_cost():
     assert result_zero == 0.0
 
 
+@pytest.mark.parametrize(
+    ("service_tier", "write_rate", "twelve_hour_rate"),
+    [
+        ("default", 4e-6, 8e-6),
+        ("flex", 2e-6, 4e-6),
+        ("priority", 6e-6, 12e-6),
+    ],
+)
+def test_generic_cost_per_token_prices_12h_cache_writes_at_prompt_threshold(
+    service_tier: str, write_rate: float, twelve_hour_rate: float
+) -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "cache_creation_input_token_cost": 2e-6,
+        "cache_creation_input_token_cost_flex": 1e-6,
+        "cache_creation_input_token_cost_priority": 3e-6,
+        "cache_creation_input_token_cost_above_272k_tokens": 4e-6,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 2e-6,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 6e-6,
+        "cache_creation_input_token_cost_above_12hr": 4e-6,
+        "cache_creation_input_token_cost_above_12hr_flex": 2e-6,
+        "cache_creation_input_token_cost_above_12hr_priority": 6e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens": 8e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex": 4e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority": 12e-6,
+    }
+    usage: Final = Usage(
+        prompt_tokens=300_000,
+        completion_tokens=0,
+        total_tokens=300_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cache_creation_tokens=5_000,
+            cache_creation_token_details=CacheCreationTokenDetails(ephemeral_12h_input_tokens=2_000),
+        ),
+    )
+
+    result: Final = generic_cost_per_token(
+        model="test-12h-cache-write",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=None if service_tier == "default" else service_tier,
+        model_info=model_info,
+    )
+
+    assert result[0] == pytest.approx(
+        (usage.prompt_tokens - usage.prompt_tokens_details.cache_creation_tokens) * model_info["input_cost_per_token"]
+        + 3_000 * write_rate
+        + 2_000 * twelve_hour_rate
+    )
+
+
+def test_generic_cost_per_token_falls_back_to_default_for_missing_12h_rate() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "cache_creation_input_token_cost": 3e-6,
+    }
+    usage: Final = Usage(
+        prompt_tokens=100,
+        completion_tokens=0,
+        total_tokens=100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cache_creation_tokens=100,
+            cache_creation_token_details=CacheCreationTokenDetails(ephemeral_12h_input_tokens=100),
+        ),
+    )
+
+    result: Final = generic_cost_per_token(
+        model="test-12h-cache-write-fallback",
+        usage=usage,
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+
+    assert result[0] == pytest.approx(100 * model_info["cache_creation_input_token_cost"])
+
+
 def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
     """
     Regression test: when cache_creation_tokens is 0 but cache_creation_token_details
@@ -2572,7 +2650,7 @@ def test_flat_input_price_keeps_other_token_thresholds(field: str) -> None:
     assert rates[0] == 0.001
     assert rates[1] == (0.005 if field == "output_cost_per_token" else 0.002)
     assert rates[2] == (0.005 if field == "cache_creation_input_token_cost" else 0.004)
-    assert rates[4] == (0.005 if field == "cache_read_input_token_cost" else 0.003)
+    assert rates[5] == (0.005 if field == "cache_read_input_token_cost" else 0.003)
 
 
 @pytest.mark.parametrize("prompt_tokens", (200_000, 200_001, 512_000, 512_001))
@@ -2602,7 +2680,7 @@ def test_mixed_token_thresholds_preserve_each_crossed_rate(prompt_tokens: int, h
     assert rates[0] == (0.005 if prompt_tokens > 200_000 else 0.001)
     assert rates[1] == (higher_rate if prompt_tokens > 512_000 else 0.006 if prompt_tokens > 200_000 else 0.002)
     assert rates[2] == (0.007 if prompt_tokens > 200_000 else 0.004)
-    assert rates[4] == (higher_rate if prompt_tokens > 512_000 else 0.003)
+    assert rates[5] == (higher_rate if prompt_tokens > 512_000 else 0.003)
 
 
 def test_threshold_keys_exclude_service_tier_variants():
@@ -2898,6 +2976,7 @@ def test_billed_token_rates_follow_the_token_tier_the_breakdown_bills_at(monkeyp
         cache_read_input_audio_token_cost=6e-7,
         cache_creation_input_token_cost=7.5e-6,
         cache_creation_input_token_cost_above_1hr=7.5e-6,
+        cache_creation_input_token_cost_above_12hr=7.5e-6,
         output_cost_per_reasoning_token=3e-5,
     )
     assert breakdown.cache_read_cost == pytest.approx(200_000 * rates.cache_read_input_token_cost)
@@ -3724,7 +3803,7 @@ def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_
     model_info = {"input_cost_per_token": 2e-7, "output_cost_per_token": 1.25e-6, **cache_rates}
     usage = Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11)
 
-    _, _, creation, creation_1h, _ = _get_token_base_cost(model_info, usage, current_time=current_time)
+    _, _, creation, creation_1h, _, _ = _get_token_base_cost(model_info, usage, current_time=current_time)
 
     assert creation == pytest.approx(expected_creation)
     assert creation_1h == pytest.approx(expected_creation_1h)

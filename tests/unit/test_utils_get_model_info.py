@@ -61,6 +61,31 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     assert model_info["input_cost_per_token"] == 0.0
 
 
+def test_get_model_info_passes_through_12h_cache_creation_rates() -> None:
+    model: Final = "test-12h-cache-write"
+    rates: Final = {
+        "cache_creation_input_token_cost_above_12hr": 5e-6,
+        "cache_creation_input_token_cost_above_12hr_flex": 2.5e-6,
+        "cache_creation_input_token_cost_above_12hr_priority": 10e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens": 10e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex": 5e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority": 20e-6,
+    }
+    litellm.register_model(
+        {
+            f"openai/{model}": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                **rates,
+            }
+        }
+    )
+
+    model_info: Final = get_model_info(model, custom_llm_provider="openai")
+
+    assert {key: model_info[key] for key in rates} == rates
+
+
 def test_get_model_info_ollama_chat():
     from litellm.llms.ollama.completion.transformation import OllamaConfig
 

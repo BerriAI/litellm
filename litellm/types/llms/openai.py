@@ -1382,10 +1382,19 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     model_config = {"extra": "allow"}
 
 
+class CacheWriteTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    ttl_30m_tokens: int
+    ttl_12h_tokens: int
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
     cached_tokens_details: CachedTokensDetails | None = None
+    cache_write_tokens: int | None = None
+    cache_write_tokens_details: CacheWriteTokensDetails | None = None
     image_tokens: int | None = None
     text_tokens: int | None = None
     video_tokens: int | None = None

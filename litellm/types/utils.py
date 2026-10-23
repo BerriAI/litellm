@@ -322,6 +322,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None
     cache_creation_input_token_cost_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_creation_input_token_cost_above_1hr: float | None
+    cache_creation_input_token_cost_above_12hr: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_flex: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_priority: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: ReadOnly[float | None]
     cache_creation_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -1805,6 +1811,7 @@ class CompletionTokensDetailsWrapper(CompletionTokensDetails):  # wrapper for ol
 class CacheCreationTokenDetails(LiteLLMBaseModel):
     ephemeral_5m_input_tokens: int | None = None
     ephemeral_1h_input_tokens: int | None = None
+    ephemeral_12h_input_tokens: int | None = None
 
 
 class PromptTokensDetailsWrapper(
@@ -3954,6 +3961,12 @@ class MirroredPricingParams(LiteLLMBaseModel):
     explicit_cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_creation_input_token_cost_above_12hr: float | None = None
+    cache_creation_input_token_cost_above_12hr_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: float | None = None
     tiered_pricing: list[dict[str, Any]] | None = None
 
 
