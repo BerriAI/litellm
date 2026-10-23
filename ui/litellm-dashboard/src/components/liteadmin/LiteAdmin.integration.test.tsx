@@ -2,11 +2,12 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { setGlobalLitellmHeaderName, switchToWorkerUrl } from "@/components/networking";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "@/lib/toast";
 import userEvent from "@testing-library/user-event";
-import { useEffect, type ComponentType } from "react";
+import { Fragment, useEffect, type ComponentType } from "react";
 import SidebarAccountMenu from "@/components/SidebarAccountMenu/SidebarAccountMenu";
 import UserDropdown from "@/components/Navbar/UserDropdown/UserDropdown";
 import LiteAdmin, { AriaUsageComposer, AriaUsageTrigger, LiteAdminFrame, LiteAdminHome } from "./LiteAdmin";
@@ -102,26 +103,34 @@ function Page() {
   return null;
 }
 
-function renderWidget(Menu?: ComponentType<{ onLogout: () => void }>, showHome = false, showUsage = false) {
+function renderWidget(
+  Menu?: ComponentType<{ onLogout: () => void }>,
+  showHome = false,
+  showUsage = false,
+  withTerminology = false,
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const Terminology = withTerminology ? TerminologyProvider : Fragment;
   const tree = (home = showHome, usage = showUsage) => (
     <QueryClientProvider client={client}>
       <Toaster />
-      <AuthProvider>
-        <SessionReady />
-        {Menu && <Menu onLogout={() => undefined} />}
-        <LiteAdminFrame>
-          <Page />
-          {home && <LiteAdminHome />}
-          <LiteAdmin />
-          {usage && (
-            <>
-              <AriaUsageComposer />
-              <AriaUsageTrigger />
-            </>
-          )}
-        </LiteAdminFrame>
-      </AuthProvider>
+      <Terminology>
+        <AuthProvider>
+          <SessionReady />
+          {Menu && <Menu onLogout={() => undefined} />}
+          <LiteAdminFrame>
+            <Page />
+            {home && <LiteAdminHome />}
+            <LiteAdmin />
+            {usage && (
+              <>
+                <AriaUsageComposer />
+                <AriaUsageTrigger />
+              </>
+            )}
+          </LiteAdminFrame>
+        </AuthProvider>
+      </Terminology>
     </QueryClientProvider>
   );
   const view = render(tree());
@@ -133,6 +142,7 @@ interface GatewayOptions {
   write?: () => Promise<Response>;
   read?: () => Promise<Response>;
   settings?: { target: string; status: number } | ((request: Request) => Promise<Response>);
+  useSiTerminology?: boolean;
 }
 
 function completionResponse(message: ModelReply | undefined) {
@@ -159,7 +169,12 @@ function gateway(replies: (ModelReply | Promise<ModelReply>)[], options: Gateway
     if (path.endsWith("/management/v1/users/me")) return json({ ...signedInUser, user_email: null });
     requests.push(recorded);
     if (path.endsWith("/litellm-ui-config"))
-      return json({ proxy_base_url: MANAGEMENT, server_root_path: "", admin_ui_disabled: false });
+      return json({
+        proxy_base_url: MANAGEMENT,
+        server_root_path: "",
+        admin_ui_disabled: false,
+        use_si_terminology: options.useSiTerminology,
+      });
     if (path.endsWith("/health/readiness/details")) return json({ status: "healthy" });
     if (path.endsWith("/sso/get/ui_settings")) {
       if (typeof settings === "function") return settings(request);
@@ -320,6 +335,20 @@ describe("Aria Agent in the gateway", () => {
     act(() => fireEvent.click(screen.getByRole("button", { name: "Launch Aria Agent" })));
     const popup = await screen.findByRole("dialog", { name: "Aria Agent" });
     expect(within(popup).getByRole("heading", { name: "Aria Agent" })).toHaveTextContent("Aria Agent");
+  });
+
+  it.each([
+    [true, "SI"],
+    [false, "AI"],
+  ])("should describe usage help in the configured terminology when SI terminology is %s", async (useSi, shownTerm) => {
+    session("internal_user");
+    gateway([], { useSiTerminology: useSi });
+    renderWidget(undefined, false, true, true);
+    const usage = await screen.findByRole("region", { name: "Ask Aria about usage" });
+    expect(await within(usage).findByText(`Your ${shownTerm} usage assistant`)).toBeInTheDocument();
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Open Aria Agent" })));
+    const popup = await screen.findByRole("dialog", { name: "Aria Agent" });
+    expect(within(popup).getByText(`Your ${shownTerm} assistant for usage and spend.`)).toBeInTheDocument();
   });
 
   it("should keep the same scoped conversation when leaving Usage and reopening the launcher", async () => {
