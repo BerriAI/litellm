@@ -5,6 +5,10 @@ export type ResultKind = "key" | "team" | "user" | "budget" | "spend" | "usage" 
 const limitedList = <Schema extends z.ZodType<unknown>>(schema: Schema, limit = 50) =>
   z.preprocess((value) => (Array.isArray(value) ? value.slice(0, limit) : value), z.array(schema));
 
+function sumKnownTokenCounts(left: number | null | undefined, right: number | null | undefined): number | undefined {
+  return left == null || right == null ? undefined : left + right;
+}
+
 export function generatedKey(value: unknown): string | undefined {
   const result = z.object({ key: z.string().min(1) }).safeParse(value);
   return result.success ? result.data.key : undefined;
@@ -133,11 +137,16 @@ export function projectToolResult(kind: ResultKind, value: unknown, secrets: rea
     cache_hit: z.union([text, z.boolean()]),
   };
   const log = z.object(logFields);
-  const usageMetrics = z.object({
+  const usageMetricFields = {
     spend: z.number().finite(),
     api_requests: z.number().finite(),
     total_tokens: z.number().finite(),
-  });
+    prompt_tokens: number,
+    completion_tokens: number,
+    cache_read_input_tokens: number,
+    cache_creation_input_tokens: number,
+  };
+  const usageMetrics = z.object(usageMetricFields);
   const usageEntry = z.object({
     metrics: usageMetrics,
     metadata: z.object({ key_alias: text, team_alias: text }).optional(),
@@ -155,6 +164,8 @@ export function projectToolResult(kind: ResultKind, value: unknown, secrets: rea
     total_tokens: number,
     total_prompt_tokens: number,
     total_completion_tokens: number,
+    total_cache_read_input_tokens: number,
+    total_cache_creation_input_tokens: number,
     total_successful_requests: number,
     total_failed_requests: number,
     total_api_keys: number,
@@ -181,11 +192,23 @@ export function projectToolResult(kind: ResultKind, value: unknown, secrets: rea
             const previous = totals.get(name)?.metrics;
             totals.set(name, {
               metadata: entry.metadata,
-              metrics: {
-                spend: (previous?.spend ?? 0) + entry.metrics.spend,
-                api_requests: (previous?.api_requests ?? 0) + entry.metrics.api_requests,
-                total_tokens: (previous?.total_tokens ?? 0) + entry.metrics.total_tokens,
-              },
+              metrics: previous
+                ? {
+                    spend: previous.spend + entry.metrics.spend,
+                    api_requests: previous.api_requests + entry.metrics.api_requests,
+                    total_tokens: previous.total_tokens + entry.metrics.total_tokens,
+                    prompt_tokens: sumKnownTokenCounts(previous.prompt_tokens, entry.metrics.prompt_tokens),
+                    completion_tokens: sumKnownTokenCounts(previous.completion_tokens, entry.metrics.completion_tokens),
+                    cache_read_input_tokens: sumKnownTokenCounts(
+                      previous.cache_read_input_tokens,
+                      entry.metrics.cache_read_input_tokens,
+                    ),
+                    cache_creation_input_tokens: sumKnownTokenCounts(
+                      previous.cache_creation_input_tokens,
+                      entry.metrics.cache_creation_input_tokens,
+                    ),
+                  }
+                : entry.metrics,
             });
           }
         }

@@ -49,6 +49,9 @@ const requestUrl = (input: RequestInfo | URL): string => {
 };
 
 const fakeFetch = (input: RequestInfo | URL) => {
+  if (requestUrl(input).endsWith("/models")) {
+    return Promise.resolve(Response.json({ data: [{ id: "claude-sonnet-5-5" }] }));
+  }
   if (requestUrl(input).includes("/model_group/info")) {
     return Promise.resolve(Response.json({ data: [{ model_group: "claude-sonnet-5-5", mode: "chat" }] }));
   }

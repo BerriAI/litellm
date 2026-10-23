@@ -130,6 +130,7 @@ function renderWidget(Menu?: ComponentType<{ onLogout: () => void }>, showHome =
 
 interface GatewayOptions {
   models?: ModelGroup[];
+  callableModels?: string[] | (() => Promise<Response>);
   write?: () => Promise<Response>;
   read?: () => Promise<Response>;
   settings?: { target: string; status: number } | ((request: Request) => Promise<Response>);
@@ -172,6 +173,12 @@ function gateway(replies: (ModelReply | Promise<ModelReply>)[], options: Gateway
           { model_group: "chat-model", mode: "chat" },
         ],
       });
+    if (path.endsWith("/models")) {
+      if (typeof options.callableModels === "function") return options.callableModels();
+      const names = options.callableModels ??
+        options.models?.map((model) => model.model_group) ?? ["a-embedding", "chat-model"];
+      return json({ data: names.map((id) => ({ id })) });
+    }
     if (path.endsWith("/chat/completions")) return completionResponse(await replies.shift());
     if (path.endsWith("/team/info"))
       return options.read ? options.read() : json({ team_info: { team_id: "team-1", max_budget: 40 } });
@@ -253,7 +260,7 @@ describe("Aria Agent in the gateway", () => {
     const requests = gateway([], { models: [] });
     renderWidget();
     await userEvent.setup().click(await screen.findByRole("button", { name: "Launch Aria Agent" }));
-    await screen.findByText("Add a chat model to your gateway to use Aria.");
+    await screen.findByText("No chat models are available for your account.");
     for (const question of [
       "How much have I spent this week?",
       "Which models are costing the most?",
@@ -897,7 +904,7 @@ describe("Aria Agent in the gateway", () => {
     const requests = gateway([], options);
     const { client } = renderWidget(undefined, true);
     const home = await screen.findByRole("region", { name: "Ask Aria Agent" });
-    expect(await within(home).findByText("Add a chat model to your gateway to use Aria.")).toBeInTheDocument();
+    expect(await within(home).findByText("No chat models are available for your account.")).toBeInTheDocument();
     expect(within(home).getByPlaceholderText("What would you like to do?")).toBeDisabled();
     expect(within(home).getByRole("button", { name: "Send message" })).toBeDisabled();
     options.models = [{ model_group: "chat-model", mode: "chat" }];
@@ -1200,6 +1207,39 @@ describe("Aria Agent in the gateway", () => {
     expect(within(screen.getByLabelText("Aria Agent conversation")).queryByRole("img")).not.toBeInTheDocument();
   });
 
+  it("should render a usage-only assistant's Markdown table as accessible headers and cells", async () => {
+    session("internal_user");
+    const markdown = [
+      "Usage by model:",
+      "",
+      "| Model | Requests | Spend |",
+      "| :--- | ---: | ---: |",
+      "| primary-model | 12 | $3.40 |",
+      "| fallback-model | 5 | $0.60 |",
+    ].join("\n");
+    gateway([answer(markdown)]);
+    renderWidget(undefined, false, true);
+    const input = await screen.findByRole("textbox", { name: "Message Aria Agent" });
+    await waitFor(() => expect(input).toBeEnabled());
+    act(() => send("Show my usage by model as a table"));
+    const conversation = screen.getByLabelText("Aria Agent conversation");
+    const table = await within(conversation).findByRole("table");
+    for (const header of ["Model", "Requests", "Spend"]) {
+      expect(within(table).getByRole("columnheader", { name: header })).toBeInTheDocument();
+    }
+    expect(within(table).getAllByRole("row")).toHaveLength(3);
+    for (const values of [
+      ["primary-model", "12", "$3.40"],
+      ["fallback-model", "5", "$0.60"],
+    ]) {
+      const row = within(table).getByRole("row", { name: values.join(" ") });
+      for (const value of values) {
+        expect(within(row).getByRole("cell", { name: value })).toBeInTheDocument();
+      }
+    }
+    expect(within(conversation).queryByText(/\|.*Model.*\|/)).not.toBeInTheDocument();
+  });
+
   it("defaults to eligible Sonnet and preserves a manual choice across catalog refresh", async () => {
     const requests = gateway([answer("Default selected."), answer("Manual choice retained.")], {
       models: [
@@ -1223,6 +1263,80 @@ describe("Aria Agent in the gateway", () => {
     expect(requests.filter((request) => request.url.endsWith("/chat/completions")).at(-1)?.body.model).toBe(
       "chat-model",
     );
+  });
+
+  it("should let an admin viewer select only models their inference session can call", async () => {
+    session("proxy_admin_viewer");
+    const options: GatewayOptions = {
+      models: [
+        { model_group: "claude-sonnet-5-5", mode: "chat", providers: ["anthropic"] },
+        { model_group: "allowed-chat", mode: "chat" },
+        { model_group: "allowed-embedding", mode: "embedding" },
+      ],
+      callableModels: ["allowed-chat", "allowed-embedding"],
+    };
+    const requests = gateway([answer("Your usage is available.")], options);
+    const { client } = renderWidget(undefined, false, true);
+    const user = userEvent.setup();
+    const input = await screen.findByRole("textbox", { name: "Message Aria Agent" });
+    await waitFor(() => expect(input).toBeEnabled());
+    const picker = screen.getByRole("combobox", { name: "Aria Agent model" });
+    expect(picker).toHaveValue("allowed-chat");
+    await user.click(picker);
+    expect(screen.getByRole("option", { name: "allowed-chat" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "claude-sonnet-5-5" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "allowed-embedding" })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    act(() => send("Show our usage"));
+    await screen.findByText("Your usage is available.");
+    expect(requests.find((request) => request.url.endsWith("/chat/completions"))?.body.model).toBe("allowed-chat");
+    const discovery = requests.find((request) => request.url === `${INFERENCE}/models`);
+    expect(discovery?.headers.get("X-Gateway-Session")).toBe("Bearer sk-session-first-admin");
+    options.callableModels = [];
+    await act(async () => client.invalidateQueries({ queryKey: ["liteadmin-models"] }));
+    expect(await screen.findByText("No chat models are available for your account.")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Ask Aria…")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(1);
+  });
+
+  it("should keep viewer prompts disabled when inference model discovery fails", async () => {
+    session("proxy_admin_viewer");
+    const requests = gateway([], { callableModels: async () => json({ error: { message: "Forbidden" } }, 403) });
+    renderWidget(undefined, false, true);
+    expect(await screen.findByText(/Could not load models/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Message Aria Agent" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(0);
+  });
+
+  it("should send a callable team model's public name and respect its inference mode", async () => {
+    const requests = gateway([answer("The team model answered.")], {
+      models: [
+        { model_group: "model_name_team1_def", mode: "chat" },
+        { model_group: "renamed-model", mode: "chat" },
+      ],
+      callableModels: async () =>
+        json({
+          data: [
+            { id: "team-chat", mode: "chat" },
+            { id: "renamed-model", mode: "embedding" },
+          ],
+        }),
+    });
+    renderWidget(undefined, false, true);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Message Aria Agent" })).toBeEnabled());
+    const picker = screen.getByRole("combobox", { name: "Aria Agent model" });
+    expect(picker).toHaveValue("team-chat");
+    const user = userEvent.setup();
+    await user.click(picker);
+    expect(screen.getByRole("option", { name: "team-chat" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "model_name_team1_def" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "renamed-model" })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    act(() => send("Show our usage"));
+    await screen.findByText("The team model answered.");
+    expect(requests.find((request) => request.url.endsWith("/chat/completions"))?.body.model).toBe("team-chat");
   });
 
   it("reviews the explicit team removal, sends nothing on cancel and detaches on confirmation", async () => {

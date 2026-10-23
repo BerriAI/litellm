@@ -193,7 +193,7 @@ export function createLiteAdminOperations(context: OperationContext) {
     return [
       operation("read", "usage")(
         "get_usage_data",
-        "View your dated usage totals, daily trends, and top models, providers and keys",
+        "View your dated usage totals, daily trends, and top models, providers and keys with prompt, completion, cache-read and cache-creation token counts when available. Do not add cache counts to total_tokens",
         dated({}),
         (a) => {
           if (!userId.trim()) throw new Error("A signed-in user is required to query usage.");
@@ -209,19 +209,19 @@ export function createLiteAdminOperations(context: OperationContext) {
   const usageOperations = [
     operation("read", "usage")(
       "get_usage_data",
-      "View dated global or user usage totals, daily trends, and top models, providers and keys",
+      "View dated global or user usage totals, daily trends, and top models, providers and keys with prompt, completion, cache-read and cache-creation token counts when available. Do not add cache counts to total_tokens",
       dated({ user_id: optionalText }),
       (a) => apiClient.get<unknown>("/user/daily/activity/aggregated", { ...auth, query: { ...a, api_key_limit: 20 } }),
     ),
     operation("read", "usage")(
       "get_team_usage_data",
-      "View dated usage by team, including model and provider breakdowns. Omit team_ids for all teams",
+      "View dated usage by team, including model and provider breakdowns with prompt, completion, cache-read and cache-creation token counts when available. Do not add cache counts to total_tokens. Omit team_ids for all teams",
       dated({ team_ids: optionalText }),
       (a) => apiClient.get<unknown>("/team/daily/activity/aggregated", { ...auth, query: { ...a, api_key_limit: 20 } }),
     ),
     operation("read", "usage")(
       "get_tag_usage_data",
-      "View dated usage by tag, including model and provider breakdowns. Omit tags for all tags",
+      "View dated usage by tag, including model and provider breakdowns with prompt, completion, cache-read and cache-creation token counts when available. Do not add cache counts to total_tokens. Omit tags for all tags",
       dated({ tags: optionalText }),
       (a) => apiClient.get<unknown>("/tag/daily/activity/aggregated", { ...auth, query: { ...a, api_key_limit: 20 } }),
     ),

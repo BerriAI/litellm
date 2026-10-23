@@ -15,12 +15,14 @@ import {
 import { createPortal } from "react-dom";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { History, Plus, X } from "lucide-react";
+import { z } from "zod";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useDisableLiteAdmin } from "@/app/(dashboard)/hooks/useDisableLiteAdmin";
 import { useProxySettingsQuery } from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import { ChatComposer } from "@/app/(dashboard)/playground/components/chat_ui/ChatComposer";
 import { EndpointType, isModeCompatibleWithEndpoint } from "@/components/chat_ui/mode_endpoint_mapping";
 import { fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
+import { createGatewayClient } from "@/components/llm_calls/gateway_client";
 import { getProxyBaseUrl } from "@/components/networking";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -505,8 +507,29 @@ function LiteAdminChat({
   useForegroundReviewFocus(chat.entries, active && open, reviewRef);
   useEffect(() => onPhaseChange(id, chat.phase), [id, chat.phase, onPhaseChange]);
   const modelQuery = {
-    queryKey: ["liteadmin-models", session.accessToken, session.managementBaseUrl],
-    queryFn: () => fetchAvailableModels(session.accessToken),
+    queryKey: ["liteadmin-models", session.accessToken, session.managementBaseUrl, session.inferenceBaseUrl],
+    queryFn: async ({ signal }: { signal: AbortSignal }) => {
+      const gatewayOptions = {
+        accessToken: session.accessToken,
+        baseURL: session.inferenceBaseUrl,
+        maxRetries: 0,
+        timeout: 10_000,
+      };
+      const [catalog, callable] = await Promise.all([
+        fetchAvailableModels(session.accessToken),
+        createGatewayClient(gatewayOptions).models.list({ signal, fetchOptions: { redirect: "error" } }),
+      ]);
+      const metadata = new Map(catalog.map((item) => [item.model_group, item]));
+      return z
+        .array(z.object({ id: z.string(), mode: z.string().nullish() }))
+        .parse(callable.data)
+        .map(({ id, mode }) => ({
+          ...metadata.get(id),
+          model_group: id,
+          mode: mode ?? metadata.get(id)?.mode,
+        }))
+        .sort((a, b) => a.model_group.localeCompare(b.model_group));
+    },
     enabled: active && (open || Boolean(state?.homeContainer || state?.usageContainer)),
     select: (available: ModelGroup[]) =>
       available.filter((item) => isModeCompatibleWithEndpoint(item.mode, EndpointType.CHAT)),
@@ -645,7 +668,7 @@ function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
       )}
       {models.isSuccess && models.data.length === 0 && (
         <Alert role="status">
-          <AlertDescription>Add a chat model to your gateway to use Aria.</AlertDescription>
+          <AlertDescription>No chat models are available for your account.</AlertDescription>
         </Alert>
       )}
     </>
