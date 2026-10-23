@@ -16,7 +16,7 @@ def test_budget_reset_sort_orders_durations_before_pagination(
     scenario: Scenario,
 ) -> None:
     prefix: Final = f"sort-{uuid4().hex}"
-    durations: Final = ("30d", "7d", "1h", "60m", "1mo", "weekly", "monthly", None)
+    durations: Final = ("30d", "7d", "1h", "60m", "1mo", "weekly", "monthly", "٥d", "۵d", "५d", "５d", "𝟝d", "5d", None)
     ids: Final = tuple(
         scenario.budget(budget_id=f"{prefix}-{index}", budget_duration=duration, max_budget=10)
         for index, duration in enumerate(durations)
@@ -44,7 +44,7 @@ def test_budget_reset_sort_orders_durations_before_pagination(
                 "page": str(page),
             },
         )
-        for page in (1, 2, 3)
+        for page in range(1, -(-len(ids) // 3) + 1)
     )
     assert all(page.status_code == 200 for page in pages), [page.text for page in pages]
     assert tuple(row["budget_id"] for row in chain.from_iterable(page.json()["data"] for page in pages)) == expected

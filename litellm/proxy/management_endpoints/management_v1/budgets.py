@@ -3,6 +3,7 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import chain
 from types import MappingProxyType
 from typing import Annotated, Final
 
@@ -76,7 +77,15 @@ _ROW_COUNTS: Final = TypeAdapter(tuple[_RowCount, ...])
 SELECTED_COLUMNS: Final = ", ".join(f'"{name}"' for name in BudgetListItem.model_fields)
 
 
-_BUDGET_DURATION_SECONDS: Final = """(
+# Unicode 17.0 Nd zeroes, each followed by its other nine digits in UnicodeData.txt.
+_DECIMAL_ZEROES: Final = "0٠۰߀०০੦૦୦௦౦೦൦෦๐໐༠၀႐០᠐᥆᧐᪀᪐᭐᮰᱀᱐꘠꣐꤀꧐꧰꩐꯰０𐒠𐴰𐵀𑁦𑃰𑄶𑇐𑋰𑑐𑓐𑙐𑛀𑛐𑛚𑜰𑣠𑥐𑯰𑱐𑵐𑶠\U00011de0𑽐𖄰𖩠𖫀𖭐𖵰𜳰𝟎𝟘𝟢𝟬𝟶𞅀𞋰𞓰𞗱𞥐🯰"
+_DECIMAL_DIGITS: Final = "".join(
+    chain.from_iterable(tuple(chr(ord(zero) + digit) for digit in range(10)) for zero in _DECIMAL_ZEROES)
+)
+_ASCII_DIGITS: Final = "0123456789" * len(_DECIMAL_ZEROES)
+
+
+_BUDGET_DURATION_SECONDS: Final = f"""(
     SELECT EXTRACT(EPOCH FROM (
         (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') +
         (parts[1] || ' ' || CASE parts[2]
@@ -87,7 +96,8 @@ _BUDGET_DURATION_SECONDS: Final = """(
         CASE lower(trim(budget_duration))
             WHEN 'hourly' THEN '1h' WHEN 'daily' THEN '24h'
             WHEN 'weekly' THEN '7d' WHEN 'monthly' THEN '30d'
-            ELSE budget_duration END,
+            ELSE CASE WHEN octet_length(budget_duration) = length(budget_duration) THEN budget_duration
+                ELSE translate(budget_duration, '{_DECIMAL_DIGITS}', '{_ASCII_DIGITS}') END END,
         '^([0-9]+)(mo|[smhdw])'
     ) AS duration(parts)
 )"""
