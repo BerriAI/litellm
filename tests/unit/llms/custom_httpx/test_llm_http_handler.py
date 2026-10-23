@@ -5542,3 +5542,75 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
     sent: Final = received[0]
     assert "safeguards" not in json.loads(sent.content)
     assert "dangerous-tool-use-2026-09-03" not in sent.headers.get("anthropic-beta", ""), dict(sent.headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    ("api_base", "explicit_header", "expected_session"),
+    [
+        ("https://opencode.ai/inference/go/anthropic", None, "conversation-123"),
+        ("https://opencode.ai/inference/go/anthropic", "caller-override", "caller-override"),
+        ("https://other.example", None, None),
+    ],
+)
+async def test_messages_opencode_session_header(
+    stream: bool, api_base: str, explicit_header: str | None, expected_session: str | None
+) -> None:
+    received: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+    payload: Final = {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-5-5",
+        "content": [{"type": "text", "text": "OK"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        received.put_nowait(request)
+        return (
+            httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': payload})}\n\n"
+                'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+            )
+            if stream
+            else httpx.Response(200, json=payload)
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    try:
+        result: Final = await litellm.anthropic.messages.acreate(
+            model="anthropic/claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=128000,
+            api_base=api_base,
+            api_key="test-key",
+            stream=stream,
+            litellm_session_id="conversation-123",
+            client=upstream,
+            extra_headers={"X-OpenCode-Session": explicit_header} if explicit_header else {"x-existing": "unchanged"},
+        )
+        if stream:
+            chunks: Final = b"".join([chunk async for chunk in result])
+            assert b'"text": "OK"' in chunks
+            assert b"message_stop" in chunks
+        else:
+            assert result["content"] == [{"type": "text", "text": "OK"}]
+    finally:
+        await upstream.close()
+    sent: Final = received.get_nowait()
+    assert str(sent.url) == f"{api_base}/v1/messages"
+    assert sent.headers.get("x-opencode-session") == expected_session
+    assert sent.headers["x-api-key"] == "test-key"
+    assert json.loads(sent.content) == {
+        "model": "claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 128000,
+        "stream": stream,
+    }
+    assert received.empty()

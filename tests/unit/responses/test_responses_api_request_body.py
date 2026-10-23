@@ -4,6 +4,7 @@ over the wire and surface provider errors correctly. Expected JSON bodies are st
 in expected_responses_api_request/.
 """
 
+import asyncio
 import copy
 import json
 import logging
@@ -1231,3 +1232,73 @@ def test_faked_stream_accepts_a_text_timeout(monkeypatch: pytest.MonkeyPatch) ->
     assert [event.response.output[0].content[0].text for event in response if event.type == "response.completed"] == [
         "Done."
     ]
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    ("api_base", "explicit_header", "expected_session"),
+    [
+        ("https://opencode.ai/inference/go/openai/v1", None, "conversation-123"),
+        ("https://opencode.ai/inference/go/openai/v1", "caller-override", "caller-override"),
+        ("https://other.example/v1", None, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_responses_opencode_session_header(
+    asynchronous: bool, stream: bool, api_base: str, explicit_header: str | None, expected_session: str | None
+) -> None:
+    received: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+    payload: Final = _minimal_responses_api_payload("resp_test", "gpt-6-luna")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        received.put_nowait(request)
+        return (
+            httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text="".join(
+                    f"event: {kind}\ndata: {json.dumps({'type': kind, 'response': payload})}\n\n"
+                    for kind in ("response.created", "response.completed")
+                ),
+            )
+            if stream
+            else httpx.Response(200, json=payload)
+        )
+
+    args: Final = {
+        "model": "openai/gpt-6-luna",
+        "input": "hello",
+        "api_base": api_base,
+        "api_key": "test-key",
+        "litellm_session_id": "conversation-123",
+        "stream": stream,
+        "extra_headers": {"X-OpenCode-Session": explicit_header} if explicit_header else {"x-existing": "unchanged"},
+    }
+    if asynchronous:
+        async_client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+        try:
+            response: Final = await litellm.aresponses(**args, client=async_client)
+            if stream:
+                events: Final = tuple([event.type async for event in response])
+                assert "response.completed" in events
+            else:
+                assert response.output[0].content[0].text == "Done."
+        finally:
+            await async_client.close()
+    else:
+        sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+        try:
+            result: Final = litellm.responses(**args, client=sync_client)
+            if stream:
+                assert "response.completed" in tuple(event.type for event in result)
+            else:
+                assert result.output[0].content[0].text == "Done."
+        finally:
+            sync_client.close()
+    sent: Final = received.get_nowait()
+    assert str(sent.url) == f"{api_base}/responses"
+    assert sent.headers.get("x-opencode-session") == expected_session
+    assert sent.headers["authorization"] == "Bearer test-key"
+    assert json.loads(sent.content) == {"model": "gpt-6-luna", "input": "hello", "stream": stream}
+    assert received.empty()

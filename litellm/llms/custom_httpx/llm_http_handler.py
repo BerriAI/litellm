@@ -53,6 +53,7 @@ from litellm.litellm_core_utils.core_helpers import set_provider_response_header
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
+from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header, is_opencode_api_base
 from litellm.litellm_core_utils.realtime_errors import (
     close_after_upstream_handshake_refusal,
     realtime_error_event,
@@ -2435,13 +2436,13 @@ class BaseLLMHTTPHandler:
         # Also check for extra_headers in kwargs (from config or direct calls)
         extra_headers_from_kwargs: Final = kwargs.get("extra_headers", None)
         # Merge all header sources: forwarded < extra_headers < provider_specific
-        merged_headers: Final = {}
-        if forwarded_headers:
-            merged_headers.update(forwarded_headers)
-        if extra_headers_from_kwargs:
-            merged_headers.update(extra_headers_from_kwargs)
-        if provider_specific_headers:
-            merged_headers.update(provider_specific_headers)
+        merged_headers: Final[Mapping[str, object]] = MappingProxyType(
+            {
+                **(forwarded_headers or {}),
+                **(extra_headers_from_kwargs or {}),
+                **(provider_specific_headers or {}),
+            }
+        )
         request_params: Final = reduce(
             delete_nested_value,
             litellm_params.get("additional_drop_params") or (),
@@ -2456,7 +2457,11 @@ class BaseLLMHTTPHandler:
             headers,
             api_base,
         ) = await anthropic_messages_provider_config.avalidate_anthropic_messages_environment(
-            headers=merged_headers or {},
+            headers=(
+                add_provider_affinity_header(merged_headers, litellm_params, api_base)
+                if is_opencode_api_base(api_base)
+                else dict(merged_headers)
+            ),
             model=model,
             messages=messages,
             optional_params=request_params,

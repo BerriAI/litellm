@@ -36,7 +36,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
 )
-from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header, is_opencode_api_base
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
@@ -1479,8 +1479,9 @@ def responses(
                             "litellm_metadata": kwargs.get("litellm_metadata"),
                         }
                     ),
+                    api_base=litellm_params.api_base,
                 )
-                if litellm_params.provider_affinity_header is not None
+                if litellm_params.provider_affinity_header is not None or is_opencode_api_base(litellm_params.api_base)
                 else extra_headers
             )
         except ValueError as affinity_error:

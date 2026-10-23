@@ -107,7 +107,7 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response as get_content_from_model_response,  # noqa: PLC0414  # public re-export
 )
-from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header, is_opencode_api_base
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -5990,19 +5990,23 @@ def completion(
             },
         )
         litellm_params: Final = with_control_options(requested_litellm_params, control_options)
-        if litellm_params.get("provider_affinity_header") is not None:
+        affinity_api_base: Final = (
+            str(client.base_url) if isinstance(client, openai.OpenAI | openai.AsyncOpenAI) else api_base
+        )
+        if litellm_params.get("provider_affinity_header") is not None or is_opencode_api_base(affinity_api_base):
             try:
                 headers = add_provider_affinity_header(
                     headers=headers or litellm.headers or MappingProxyType({}),
                     litellm_params=MappingProxyType(
                         {
-                            "provider_affinity_header": litellm_params["provider_affinity_header"],
+                            "provider_affinity_header": litellm_params.get("provider_affinity_header"),
                             "litellm_session_id": kwargs.get("litellm_session_id"),
                             "session_id": kwargs.get("session_id"),
                             "metadata": metadata,
                             "litellm_metadata": kwargs.get("litellm_metadata"),
                         }
                     ),
+                    api_base=affinity_api_base,
                 )
             except ValueError as affinity_error:
                 raise litellm.BadRequestError(
