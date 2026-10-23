@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
+import { Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -9,7 +10,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { getClaudeCodePluginsList, deleteClaudeCodePlugin } from "@/components/networking";
+import { getClaudeCodePluginsList, deleteClaudeCodePlugin, getProxyBaseUrl } from "@/components/networking";
 import AddPluginForm from "./add_plugin_form";
 import PluginTable from "./PluginTable";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
@@ -27,6 +28,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState(false);
+  const marketplaceUrl = `${getProxyBaseUrl().replace(/\/+$/, "")}/claude-code/marketplace.json`;
   const [pluginToDelete, setPluginToDelete] = useState<{
     name: string;
     displayName: string;
@@ -55,6 +57,28 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
   useEffect(() => {
     fetchPlugins();
   }, [accessToken]);
+
+  const marketplaceConfig = JSON.stringify(
+    [
+      {
+        source: "url",
+        url: marketplaceUrl,
+        credentialKind: "inferenceCredential",
+        installationPreference: "available",
+      },
+    ],
+    null,
+    2,
+  );
+
+  const handleCopyMarketplaceConfig = async () => {
+    try {
+      await navigator.clipboard.writeText(marketplaceConfig);
+      toast.success("Claude Desktop configuration copied");
+    } catch {
+      toast.error("Could not copy Claude Desktop configuration");
+    }
+  };
 
   const handleDeleteClick = (pluginName: string, displayName: string) => {
     setPluginToDelete({ name: pluginName, displayName });
@@ -95,6 +119,18 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
               Register Claude Code skills. Published skills appear in the Skill Hub for all users and are served via{" "}
               <code className="bg-muted px-1 rounded-sm">/claude-code/marketplace.json</code>.
             </p>
+            <section className="mt-2 rounded-lg border p-4">
+              <h2 className="text-sm font-semibold">Connect Claude Desktop</h2>
+              <p className="mt-1 text-sm text-muted-foreground">Marketplace URL</p>
+              <code className="break-all text-xs">{marketplaceUrl}</code>
+              <div className="mt-3 flex items-start justify-between gap-3">
+                <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">{marketplaceConfig}</pre>
+                <Button variant="outline" size="sm" onClick={handleCopyMarketplaceConfig}>
+                  <Copy className="size-4" />
+                  Copy JSON
+                </Button>
+              </div>
+            </section>
             <div className="mt-2 flex gap-2">
               <Button onClick={() => setIsAddModalVisible(true)} disabled={!accessToken || !isAdmin}>
                 + Add Skill

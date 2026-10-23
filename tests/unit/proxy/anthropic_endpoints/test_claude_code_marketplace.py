@@ -4,29 +4,42 @@ Unit tests for claude_code_marketplace.py source validation.
 Covers the git-subdir and archive source types added alongside the existing github and url types.
 """
 
+import base64
+import hashlib
+import io
 import json
-from typing import Final
+import zipfile
+from contextlib import asynccontextmanager
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from starlette.types import Message, Receive, Scope, Send
 
 import litellm
+from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints import claude_code_marketplace
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
     delete_plugin,
     disable_plugin,
+    download_plugin_archive,
     enable_plugin,
     get_marketplace,
     get_plugin,
     list_plugins,
     register_plugin,
     update_plugin,
+    upload_plugin_archive,
 )
+from litellm.proxy.auth import auth_checks
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import LitellmUserRoles
 from litellm.types.proxy.claude_code_endpoints import (
+    InstallationPreference,
     MarketplaceResponse,
     RegisterPluginRequest,
     UpdatePluginRequest,
@@ -36,7 +49,8 @@ from tests._master_key import MASTER_KEY
 
 def _make_mock_prisma():
     """Stateful prisma mock that supports find_unique, find_many, create, and update."""
-    store: dict = {}
+    store: dict[str, MagicMock] = {}
+    archive_store: dict[str, MagicMock] = {}
 
     mock_client = MagicMock()
     mock_client.proxy_logging_obj = MagicMock()
@@ -65,6 +79,7 @@ def _make_mock_prisma():
         record.enabled = data.get("enabled", True)
         record.created_at = data.get("created_at")
         record.updated_at = data.get("updated_at")
+        record.archive_sha256 = data.get("archive_sha256")
         store[data["name"]] = record
         return record
 
@@ -79,6 +94,36 @@ def _make_mock_prisma():
     mock_table.create = AsyncMock(side_effect=_create)
     mock_table.update = AsyncMock(side_effect=_update)
     mock_client.db.litellm_claudecodeplugintable = mock_table
+
+    archive_table = MagicMock()
+
+    async def _find_archive(where: dict[str, str]):
+        return archive_store.get(where.get("plugin_id"))
+
+    async def _upsert_archive(where: dict[str, str], data: dict[str, object]):
+        archive_data = data["update"] if where["plugin_id"] in archive_store else data["create"]
+        record = MagicMock()
+        record.plugin_id = archive_data["plugin_id"]
+        record.content = archive_data["content"]
+        record.size_bytes = archive_data["size_bytes"]
+        record.updated_at = archive_data["updated_at"]
+        record.model_dump = MagicMock(return_value={"content": base64.b64encode(record.content.decode()).decode()})
+        archive_store[where["plugin_id"]] = record
+        return record
+
+    async def _delete_archive(where: dict[str, str]):
+        archive_store.pop(where["plugin_id"], None)
+
+    archive_table.find_unique = AsyncMock(side_effect=_find_archive)
+    archive_table.upsert = AsyncMock(side_effect=_upsert_archive)
+    archive_table.delete_many = AsyncMock(side_effect=_delete_archive)
+    mock_client.db.litellm_claudecodepluginarchivetable = archive_table
+
+    @asynccontextmanager
+    async def _transaction():
+        yield mock_client.db
+
+    mock_client.db.tx = _transaction
     return mock_client
 
 
@@ -326,6 +371,21 @@ async def test_list_plugins_shows_disabled_plugin_only_to_granted_key_or_admin()
 
 
 @pytest.mark.asyncio
+async def test_list_plugins_returns_500_for_invalid_manifest_json():
+    await register_plugin(
+        request=RegisterPluginRequest(name="invalid-manifest", source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
+    )
+    table: Final = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    await table.update(where={"name": "invalid-manifest"}, data={"manifest_json": "{"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await list_plugins(user_api_key_dict=_USER)
+
+    assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
 async def test_get_plugin_returns_403_for_disabled_plugin_the_key_is_not_granted():
     await _register_public_and_private_plugins()
 
@@ -362,9 +422,529 @@ async def test_get_marketplace_key_query_param_adds_granted_disabled_plugins(mon
     assert await _marketplace_names("sk-plain") == ["public-skill"]
     assert await _marketplace_names("sk-granted") == ["private-skill", "public-skill"]
 
+    header_request: Final = MagicMock(headers={"Authorization": "Bearer sk-granted"})
+    header_response: Final = await get_marketplace(request=header_request)
+    assert sorted(plugin["name"] for plugin in json.loads(header_response.body)["plugins"]) == [
+        "private-skill",
+        "public-skill",
+    ]
+
     with pytest.raises(ProxyException) as exc_info:
         await get_marketplace(request=MagicMock(), key="sk-bogus")
     assert exc_info.value.code == "401"
+    with pytest.raises(ProxyException) as header_error:
+        await get_marketplace(request=MagicMock(headers={"Authorization": "Bearer sk-bogus"}))
+    assert header_error.value.code == "401"
+
+
+def _plugin_archive(manifest_path: str = ".claude-plugin/plugin.json") -> bytes:
+    archive_bytes: Final = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w") as archive:
+        archive.writestr(manifest_path, '{"name":"hosted-plugin"}')
+    return archive_bytes.getvalue()
+
+
+def _archive_request(
+    content: bytes,
+    *,
+    content_type: str = "application/zip",
+    content_length: str | None = None,
+    receive: Receive | None = None,
+) -> Request:
+    content_headers: Final = ((b"content-type", content_type.encode()),)
+    length_headers: Final = () if content_length is None else ((b"content-length", content_length.encode()),)
+    headers: Final = (*content_headers, *length_headers)
+
+    async def receive_body() -> Message:
+        return {"type": "http.request", "body": content, "more_body": False}
+
+    scope: Final[Scope] = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "PUT",
+        "scheme": "http",
+        "path": "/claude-code/plugins/hosted-plugin/archive",
+        "raw_path": b"/claude-code/plugins/hosted-plugin/archive",
+        "query_string": b"",
+        "headers": list(headers),
+        "server": ("testserver", 80),
+        "client": ("127.0.0.1", 1234),
+    }
+    return Request(scope, receive or receive_body)
+
+
+def _register_request(
+    name: str,
+    source: dict[str, str],
+    installation_preference: InstallationPreference | None = None,
+) -> RegisterPluginRequest:
+    return RegisterPluginRequest(
+        name=name,
+        source=source,
+        version="1.0.0",
+        description=None,
+        author=None,
+        homepage=None,
+        keywords=None,
+        category=None,
+        domain=None,
+        namespace=None,
+        installation_preference=installation_preference,
+    )
+
+
+def _update_request(source: dict[str, str]) -> UpdatePluginRequest:
+    return UpdatePluginRequest(
+        source=source,
+        version=None,
+        description=None,
+        author=None,
+        homepage=None,
+        keywords=None,
+        category=None,
+        domain=None,
+        namespace=None,
+        installation_preference=None,
+    )
+
+
+async def _register_hosted_plugin(name: str = "hosted-plugin") -> None:
+    await register_plugin(
+        request=_register_request(name, {"source": "hosted"}),
+        user_api_key_dict=_USER,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "manifest_path",
+    [".claude-plugin/plugin.json", "bundle/.claude-plugin/plugin.json"],
+)
+async def test_hosted_plugin_archive_upload_and_download(manifest_path: str):
+    await _register_hosted_plugin()
+    content: Final = _plugin_archive(manifest_path)
+    result: Final = await upload_plugin_archive(
+        plugin_name="hosted-plugin",
+        request=_archive_request(content),
+        user_api_key_dict=_USER,
+    )
+    assert result.sha256 == hashlib.sha256(content).hexdigest()
+
+    downloaded: Final = await download_plugin_archive(
+        plugin_name="hosted-plugin",
+        request=MagicMock(headers={}),
+    )
+    assert downloaded.body == content
+    assert downloaded.media_type == "application/zip"
+    assert downloaded.headers["content-disposition"] == 'attachment; filename="hosted-plugin.zip"'
+    listed: Final = await list_plugins(user_api_key_dict=_USER)
+    stored_plugin: Final = await get_plugin(plugin_name="hosted-plugin", user_api_key_dict=_USER)
+    assert next(plugin for plugin in listed.plugins if plugin.name == "hosted-plugin").archive_sha256 == result.sha256
+    assert stored_plugin["archive_sha256"] == result.sha256
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", ["application/zip", "application/octet-stream"])
+async def test_upload_plugin_archive_accepts_raw_body_route(
+    monkeypatch: pytest.MonkeyPatch,
+    content_type: str,
+):
+    await _register_hosted_plugin()
+    prisma_client: Final = litellm.proxy.proxy_server.prisma_client
+    monkeypatch.setattr(claude_code_marketplace, "get_prisma_client", AsyncMock(return_value=prisma_client))
+
+    app: Final = FastAPI()
+    app.include_router(claude_code_marketplace.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: _USER
+    content: Final = _plugin_archive()
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/claude-code/plugins/hosted-plugin/archive",
+            content=content,
+            headers={"Content-Type": content_type},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["sha256"] == hashlib.sha256(content).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_upload_plugin_archive_rejects_unauthenticated_request_before_storage(monkeypatch: pytest.MonkeyPatch):
+    await _register_hosted_plugin()
+    prisma_client: Final = litellm.proxy.proxy_server.prisma_client
+    monkeypatch.setattr(claude_code_marketplace, "get_prisma_client", AsyncMock(return_value=prisma_client))
+    app: Final = FastAPI()
+    app.include_router(claude_code_marketplace.router)
+
+    def reject_unauthenticated_request() -> UserAPIKeyAuth:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    app.dependency_overrides[user_api_key_auth] = reject_unauthenticated_request
+    content: Final = _plugin_archive()
+    receive_spy: Final = MagicMock()
+
+    async def track_body_reads(scope: Scope, receive: Receive, send: Send) -> None:
+        async def tracked_receive() -> Message:
+            message: Final = await receive()
+            if message["type"] == "http.request" and message.get("body"):
+                receive_spy(message)
+            return message
+
+        await app(scope, tracked_receive, send)
+
+    with TestClient(track_body_reads) as client:
+        response = client.put(
+            "/claude-code/plugins/hosted-plugin/archive",
+            content=content,
+            headers={"Content-Type": "application/zip"},
+        )
+
+    archive: Final = await prisma_client.db.litellm_claudecodepluginarchivetable.find_unique(
+        where={"plugin_id": "test-id"}
+    )
+    assert response.status_code == 401
+    assert receive_spy.call_count == 0
+    assert archive is None
+
+
+@pytest.mark.asyncio
+async def test_private_hosted_archive_uses_inference_key_visibility(monkeypatch: pytest.MonkeyPatch):
+    await _register_hosted_plugin("private-plugin")
+    await disable_plugin(plugin_name="private-plugin", user_api_key_dict=_USER)
+    content: Final = _plugin_archive()
+    await upload_plugin_archive(
+        plugin_name="private-plugin",
+        request=_archive_request(content),
+        user_api_key_dict=_USER,
+    )
+    keys: dict[str, UserAPIKeyAuth] = {"sk-granted": _granted_user(["private-plugin"]), "sk-plain": _NON_ADMIN_USER}
+
+    async def _fake_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
+        token = api_key.removeprefix("Bearer ")
+        if token not in keys:
+            raise ProxyException(message="invalid key", type="auth_error", param="key", code=401)
+        return keys[token]
+
+    monkeypatch.setattr(claude_code_marketplace, "user_api_key_auth", _fake_auth)
+    hidden_request = MagicMock(headers={"Authorization": "Bearer sk-plain"})
+    with pytest.raises(HTTPException) as hidden_error:
+        await download_plugin_archive("private-plugin", hidden_request)
+    assert hidden_error.value.status_code == 404
+
+    granted_request = MagicMock(headers={"Authorization": "Bearer sk-granted"})
+    visible_archive: Final = await download_plugin_archive("private-plugin", granted_request)
+    assert visible_archive.body == content
+
+
+@pytest.mark.asyncio
+async def test_access_group_grant_exposes_disabled_hosted_archive_and_marketplace(monkeypatch: pytest.MonkeyPatch):
+    await _register_hosted_plugin("group-only-plugin")
+    await disable_plugin(plugin_name="group-only-plugin", user_api_key_dict=_USER)
+    content: Final = _plugin_archive()
+    await upload_plugin_archive(
+        plugin_name="group-only-plugin",
+        request=_archive_request(content),
+        user_api_key_dict=_USER,
+    )
+
+    group_key: Final = UserAPIKeyAuth(
+        api_key="sk-group-only",
+        token="sk-group-only",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        access_group_ids=["plugin-access-group"],
+    )
+    access_group: Final = MagicMock()
+    access_group.access_group_id = "plugin-access-group"
+    access_group.access_skill_names = ["group-only-plugin"]
+    access_group.assigned_team_ids = []
+    access_group.assigned_key_ids = [group_key.token]
+    keys: Final[dict[str, UserAPIKeyAuth]] = {
+        "sk-group-only": group_key,
+        "sk-no-group": _NON_ADMIN_USER,
+    }
+
+    async def _fake_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
+        assert request.headers.get("Authorization") == api_key
+        return keys[api_key.removeprefix("Bearer ")]
+
+    monkeypatch.setattr(claude_code_marketplace, "user_api_key_auth", _fake_auth)
+    monkeypatch.setattr(auth_checks, "get_access_object", AsyncMock(return_value=access_group))
+    monkeypatch.setattr(auth_checks, "get_skill_names_from_access_groups", AsyncMock(return_value=frozenset()))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
+    monkeypatch.setenv("PROXY_BASE_URL", "https://marketplace.example.com")
+
+    grouped_request: Final = cast(Request, MagicMock(headers={"Authorization": "Bearer sk-group-only"}))
+    marketplace_response: Final = await get_marketplace(request=grouped_request)
+    marketplace_plugins: Final = json.loads(bytes(marketplace_response.body))["plugins"]
+    assert marketplace_plugins == [
+        {
+            "name": "group-only-plugin",
+            "source": {
+                "source": "archive",
+                "url": "https://marketplace.example.com/claude-code/plugins/group-only-plugin/archive.zip",
+                "sha256": hashlib.sha256(content).hexdigest(),
+            },
+            "version": "1.0.0",
+        }
+    ]
+
+    archive: Final = await download_plugin_archive("group-only-plugin", grouped_request)
+    assert archive.status_code == 200
+    assert archive.body == content
+
+    without_group_request: Final = cast(Request, MagicMock(headers={"Authorization": "Bearer sk-no-group"}))
+    with pytest.raises(HTTPException) as hidden_error:
+        await download_plugin_archive("group-only-plugin", without_group_request)
+    assert hidden_error.value.status_code == 404
+    assert hidden_error.value.detail == {"error": "Plugin not found"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source",
+    [{"source": "hosted", "url": "https://example.com/archive.zip"}, {"source": "hosted", "sha256": "abc"}],
+)
+async def test_register_rejects_hosted_source_extra_keys(source: dict[str, str]):
+    with pytest.raises(HTTPException) as exc_info:
+        await register_plugin(
+            request=_register_request("hosted-plugin", source),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source",
+    [{"source": "hosted", "url": "https://example.com/archive.zip"}, {"source": "hosted", "sha256": "abc"}],
+)
+async def test_update_rejects_hosted_source_extra_keys(source: dict[str, str]):
+    await register_plugin(
+        request=_register_request("existing-plugin", _GIT_SUBDIR_SOURCE),
+        user_api_key_dict=_USER,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_plugin(
+            plugin_name="existing-plugin",
+            request=_update_request(source),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_hosted_marketplace_uses_request_origin_and_digest(monkeypatch: pytest.MonkeyPatch):
+    await _register_hosted_plugin()
+    content: Final = _plugin_archive()
+    await upload_plugin_archive(
+        plugin_name="hosted-plugin",
+        request=_archive_request(content),
+        user_api_key_dict=_USER,
+    )
+    monkeypatch.setenv("PROXY_BASE_URL", "https://proxy.example.com/root")
+
+    response: Final = await get_marketplace(request=MagicMock(headers={}))
+    hosted_entry: Final = next(
+        plugin for plugin in json.loads(bytes(response.body))["plugins"] if plugin["name"] == "hosted-plugin"
+    )
+    assert hosted_entry["source"] == {
+        "source": "archive",
+        "url": "https://proxy.example.com/root/claude-code/plugins/hosted-plugin/archive.zip",
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+@pytest.mark.asyncio
+async def test_hosted_marketplace_uses_request_origin_without_configured_proxy_url(monkeypatch: pytest.MonkeyPatch):
+    await _register_hosted_plugin()
+    content: Final = _plugin_archive()
+    await upload_plugin_archive(
+        plugin_name="hosted-plugin",
+        request=_archive_request(content),
+        user_api_key_dict=_USER,
+    )
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    request: Final = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/claude-code/marketplace.json",
+            "raw_path": b"/claude-code/marketplace.json",
+            "query_string": b"",
+            "headers": [],
+            "server": ("marketplace.example.com", 443),
+            "client": ("127.0.0.1", 1234),
+        }
+    )
+
+    response: Final = await get_marketplace(request=request)
+    hosted_entry: Final = next(
+        plugin for plugin in json.loads(bytes(response.body))["plugins"] if plugin["name"] == "hosted-plugin"
+    )
+    assert hosted_entry["source"]["url"] == (
+        "https://marketplace.example.com/claude-code/plugins/hosted-plugin/archive.zip"
+    )
+
+
+@pytest.mark.asyncio
+async def test_hosted_plugin_without_archive_is_omitted_from_marketplace(caplog: pytest.LogCaptureFixture):
+    await _register_hosted_plugin()
+
+    response: Final = await get_marketplace(request=MagicMock(headers={}))
+
+    assert "hosted-plugin" not in {plugin["name"] for plugin in json.loads(bytes(response.body))["plugins"]}
+    assert "has no archive" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "plugin_name",
+    ["missing-plugin", "non-hosted-plugin", "hosted-plugin"],
+)
+async def test_archive_download_hides_missing_non_hosted_and_archive_less_plugins(plugin_name: str):
+    await register_plugin(
+        request=_register_request("non-hosted-plugin", _GIT_SUBDIR_SOURCE),
+        user_api_key_dict=_USER,
+    )
+    await _register_hosted_plugin()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await download_plugin_archive(plugin_name=plugin_name, request=MagicMock(headers={}))
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == {"error": "Plugin not found"}
+
+
+@pytest.mark.asyncio
+async def test_upload_archive_requires_admin_and_rejects_invalid_zip():
+    await _register_hosted_plugin()
+    with pytest.raises(HTTPException) as auth_error:
+        await upload_plugin_archive("hosted-plugin", _archive_request(b"not a zip"), _NON_ADMIN_USER)
+    assert auth_error.value.status_code == 403
+
+    with pytest.raises(HTTPException) as zip_error:
+        await upload_plugin_archive(
+            "hosted-plugin",
+            _archive_request(b"not a zip"),
+            _USER,
+        )
+    assert zip_error.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_upload_archive_enforces_stream_size_limit(monkeypatch: pytest.MonkeyPatch):
+    await _register_hosted_plugin()
+    monkeypatch.setattr(claude_code_marketplace, "CLAUDE_CODE_PLUGIN_ARCHIVE_MAX_BYTES", 4)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await upload_plugin_archive(
+            "hosted-plugin",
+            _archive_request(b"12345"),
+            _USER,
+        )
+
+    assert exc_info.value.status_code == 413
+    archive: Final = await litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodepluginarchivetable.find_unique(
+        where={"plugin_id": "test-id"}
+    )
+    assert archive is None
+
+
+@pytest.mark.asyncio
+async def test_upload_archive_rejects_over_limit_content_length_without_reading_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    await _register_hosted_plugin()
+    monkeypatch.setattr(claude_code_marketplace, "CLAUDE_CODE_PLUGIN_ARCHIVE_MAX_BYTES", 4)
+    receive: Final = AsyncMock(return_value={"type": "http.request", "body": _plugin_archive(), "more_body": False})
+    request: Final = _archive_request(
+        _plugin_archive(),
+        content_length="5",
+        receive=cast(Receive, receive),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await upload_plugin_archive("hosted-plugin", request, _USER)
+
+    archive: Final = await litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodepluginarchivetable.find_unique(
+        where={"plugin_id": "test-id"}
+    )
+    assert exc_info.value.status_code == 413
+    assert receive.await_count == 0
+    assert archive is None
+
+
+@pytest.mark.asyncio
+async def test_upload_archive_rejects_unsupported_content_type():
+    await _register_hosted_plugin()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await upload_plugin_archive(
+            "hosted-plugin",
+            _archive_request(_plugin_archive(), content_type="application/json"),
+            _USER,
+        )
+
+    assert exc_info.value.status_code == 415
+
+
+@pytest.mark.asyncio
+async def test_hosted_plugin_accepts_auto_install_preference():
+    response: Final = await register_plugin(
+        request=_register_request("hosted-auto-install", {"source": "hosted"}, "auto_install"),
+        user_api_key_dict=_USER,
+    )
+    assert response.plugin.source == {"source": "hosted"}
+    assert response.plugin.installation_preference == "auto_install"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "manifest_path",
+    ["../.claude-plugin/plugin.json", "/.claude-plugin/plugin.json", "folder/extra/.claude-plugin/plugin.json"],
+)
+async def test_upload_archive_rejects_unsafe_or_deep_manifest_paths(manifest_path: str):
+    await _register_hosted_plugin()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await upload_plugin_archive(
+            "hosted-plugin",
+            _archive_request(_plugin_archive(manifest_path)),
+            _USER,
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_update_away_from_hosted_source_clears_archive():
+    await _register_hosted_plugin()
+    await upload_plugin_archive(
+        "hosted-plugin",
+        _archive_request(_plugin_archive()),
+        _USER,
+    )
+
+    await update_plugin(
+        plugin_name="hosted-plugin",
+        request=_update_request(_GIT_SUBDIR_SOURCE),
+        user_api_key_dict=_USER,
+    )
+
+    plugin: Final = await litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable.find_unique(
+        where={"name": "hosted-plugin"}
+    )
+    archive: Final = await litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodepluginarchivetable.find_unique(
+        where={"plugin_id": plugin.id}
+    )
+    assert plugin.archive_sha256 is None
+    assert archive is None
 
 
 @pytest.mark.asyncio
@@ -384,6 +964,52 @@ async def test_get_marketplace_emits_installation_preference(preference):
     assert marketplace["plugins"] == [
         {"name": "s3-skill", "source": _ARCHIVE_SOURCE, "version": "1.0.0", "installationPreference": preference}
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_marketplace_preserves_non_hosted_entry_key_order_and_content():
+    await register_plugin(
+        request=RegisterPluginRequest(
+            name="marketplace-shape",
+            source=_ARCHIVE_SOURCE,
+            version="2.3.4",
+            description="Marketplace compatibility",
+            author={"name": "Ada Lovelace", "email": "ada@example.com"},
+            homepage="https://example.com/plugin",
+            keywords=["analysis", "tools"],
+            category="development",
+            installation_preference="available",
+        ),
+        user_api_key_dict=_USER,
+    )
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "server": ("gateway.example", 443),
+            "client": ("127.0.0.1", 12345),
+            "headers": [],
+            "path": "/claude-code/marketplace.json",
+            "query_string": b"",
+        }
+    )
+    marketplace = json.loads((await get_marketplace(request=request)).body)
+    entry = marketplace["plugins"][0]
+    expected = {
+        "name": "marketplace-shape",
+        "source": _ARCHIVE_SOURCE,
+        "installationPreference": "available",
+        "version": "2.3.4",
+        "description": "Marketplace compatibility",
+        "author": {"name": "Ada Lovelace", "email": "ada@example.com"},
+        "homepage": "https://example.com/plugin",
+        "keywords": ["analysis", "tools"],
+        "category": "development",
+    }
+
+    assert tuple(entry.items()) == tuple(expected.items())
 
 
 @pytest.mark.parametrize(

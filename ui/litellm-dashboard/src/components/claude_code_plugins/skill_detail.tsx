@@ -5,6 +5,14 @@ import { buildMarketplaceSettingsSnippet, formatInstallCommand, getSourceDisplay
 import { Plugin } from "./types";
 
 const SkillSource: React.FC<{ source: Plugin["source"] }> = ({ source }) => {
+  if (source.source === "hosted") {
+    return (
+      <div className="mb-6">
+        <div className="mb-1 text-xs text-muted-foreground">Source</div>
+        <div className="break-all text-[13px] text-foreground">Hosted on LiteLLM</div>
+      </div>
+    );
+  }
   const link = getSourceLink(source);
   const href = link && source.source === "git-subdir" && source.path ? `${link}/tree/main/${source.path}` : link;
   if (href) {

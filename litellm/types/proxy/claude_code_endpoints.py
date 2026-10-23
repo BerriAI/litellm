@@ -4,7 +4,7 @@ Claude Code Marketplace endpoint types for LiteLLM Proxy
 
 from typing import Final, Literal, TypeAlias
 
-from pydantic import AliasChoices, Field, TypeAdapter, model_validator
+from pydantic import AliasChoices, ConfigDict, Field, TypeAdapter, model_validator
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -38,7 +38,9 @@ class PluginSpec(LiteLLMBaseModel):
             "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
             "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n"
             "- Zip archive on any https host (e.g. S3): "
-            "{'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}"
+            "{'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', "
+            "'sha256': '<optional hex digest>'}\n"
+            "- Gateway-hosted archive: {'source': 'hosted'}; upload the zip to LiteLLM after registering the plugin"
         ),
     )
     version: str | None = Field("1.0.0", description="Semantic version")
@@ -54,9 +56,9 @@ class PluginSpec(LiteLLMBaseModel):
         validation_alias=AliasChoices("installation_preference", "installationPreference"),
         description=(
             "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, "
-            "the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' "
-            "also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share "
-            "its inference gateway origin"
+            "the only plugins Claude Desktop lists from a marketplace.json URL. LiteLLM supplies the sha256 for "
+            "gateway-hosted archives. Claude Desktop honors the mark only when the archive and marketplace.json "
+            "share its inference gateway origin"
         ),
     )
 
@@ -115,6 +117,14 @@ class PluginResponse(LiteLLMBaseModel):
     enabled: bool = Field(..., description="Whether plugin is enabled")
 
 
+class UploadPluginArchiveResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    plugin: PluginResponse = Field(..., description="Updated plugin information")
+    sha256: str = Field(..., description="SHA-256 digest of the uploaded archive")
+    size_bytes: int = Field(..., description="Size of the uploaded archive in bytes")
+
+
 class RegisterPluginResponse(LiteLLMBaseModel):
     """Response from plugin registration."""
 
@@ -138,6 +148,7 @@ class PluginListItem(LiteLLMBaseModel):
     domain: str | None = None
     namespace: str | None = None
     installation_preference: InstallationPreference | None = None
+    archive_sha256: str | None = None
     enabled: bool
     created_at: str | None
     updated_at: str | None
