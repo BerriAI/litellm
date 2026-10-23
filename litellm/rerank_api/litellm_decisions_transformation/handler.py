@@ -213,17 +213,18 @@ def _rerank(
     executor: Final = ThreadPoolExecutor(max_workers=workers)
     futures: Final = tuple(executor.submit(run, range(worker, count, workers)) for worker in range(workers))
     try:
-        wait(futures, timeout=max(0.0, deadline - time.monotonic()))
-        outcomes: Final[list[DecisionRerankResult]] = []  # mutable-ok: retain completed results for partial billing
-        while True:
-            try:
-                outcomes.append(completed.get_nowait())
-            except Empty:
-                break
-        return _finish(outcomes, request, logging_obj, len(outcomes) < count, model, provider)
+        waited: Final = wait(futures, timeout=max(0.0, deadline - time.monotonic()))
+        timed_out: Final = bool(waited.not_done) or time.monotonic() >= deadline
     finally:
         stopped.set()
-        executor.shutdown(wait=False, cancel_futures=True)
+        executor.shutdown(wait=True, cancel_futures=True)
+    outcomes: Final[list[DecisionRerankResult]] = []  # mutable-ok: retain completed results for partial billing
+    while True:
+        try:
+            outcomes.append(completed.get_nowait())
+        except Empty:
+            break
+    return _finish(outcomes, request, logging_obj, timed_out or len(outcomes) < count, model, provider)
 
 
 async def _arerank(
@@ -262,21 +263,23 @@ async def _arerank(
 
     tasks: Final = tuple(asyncio.create_task(run(range(worker, count, workers))) for worker in range(workers))
     try:
-        await asyncio.wait(tasks, timeout=max(0.0, deadline - time.monotonic()))
-        return _finish(outcomes, request, logging_obj, len(outcomes) < count, model, provider)
+        try:
+            _, pending = await asyncio.wait(tasks, timeout=max(0.0, deadline - time.monotonic()))
+            timed_out: Final = bool(pending) or time.monotonic() >= deadline
+        finally:
+            stopped.set()
+            cancellation_requested.set()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
     except asyncio.CancelledError:
         response_on_cancel, _ = LiteLLMDecisionsRerankConfig.transform_decisions_response(
             outcomes, request, model, provider
         )
         _record_partial(response_on_cancel, logging_obj)
         raise
-    finally:
-        stopped.set()
-        cancellation_requested.set()
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+    return _finish(outcomes, request, logging_obj, timed_out or len(outcomes) < count, model, provider)
 
 
 def _prepare_document(

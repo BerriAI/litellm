@@ -1,6 +1,7 @@
 import asyncio
 import json
 from threading import Event
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -655,39 +656,212 @@ async def test_custom_transport_configuration_and_untrusted_text(strategy, respx
     assert route.call_count == (1 if strategy == "multiple_choice" else 2)
 
 
-@pytest.mark.parametrize("sync", [True, False])
-async def test_deadline_bounds_fanout_and_never_starts_queued_requests(sync, respx_mock):
-    import threading
-    import time
+@pytest.fixture
+def deadline_expired(monkeypatch):
+    from litellm.rerank_api.litellm_decisions_transformation import handler
 
-    release = threading.Event()
-    started = []
+    expired = Event()
+    monkeypatch.setattr(
+        handler,
+        "time",
+        SimpleNamespace(monotonic=lambda: 102.0 if expired.is_set() else 100.0),
+    )
+    return expired
 
-    def sync_score(request):
-        started.append(request)
-        release.wait(5)
-        return response()
 
-    async def async_score(request):
-        started.append(request)
-        await asyncio.Event().wait()
+@pytest.mark.parametrize("refused", [False, True])
+@pytest.mark.parametrize("document_count", [1, 3])
+@pytest.mark.parametrize("settled_before_wait_returns", [False, True])
+async def test_sync_deadline_bills_late_responses_once_without_dispatching_queued_documents(
+    refused,
+    document_count,
+    settled_before_wait_returns,
+    respx_mock,
+    monkeypatch,
+    deadline_expired,
+):
+    from concurrent.futures import ThreadPoolExecutor, wait
 
-    respx_mock.post(URL).mock(side_effect=sync_score if sync else async_score)
-    start = time.monotonic()
-    try:
-        with pytest.raises(litellm.Timeout):
-            await rerank(
-                sync,
-                documents=["one", "two", "three"],
-                timeout=0.05,
-                concurrency=1,
+    from litellm.rerank_api.litellm_decisions_transformation import handler
+
+    logger = RecordingLogger()
+    started = Event()
+    release = Event()
+    logged = Event()
+
+    def record(kwargs, response_obj, start_time, end_time):
+        logger.events.append(kwargs["standard_logging_object"])
+        logged.set()
+
+    def score(request):
+        started.set()
+        assert release.wait(5)
+        return (
+            httpx.Response(
+                200,
+                json={"answers": {}, "usage": {"input_tokens": 10, "output_tokens": 3}},
             )
-        assert time.monotonic() - start < 0.75
-        assert len(started) == 1
-    finally:
-        release.set()
-    await asyncio.sleep(0.02)
-    assert len(started) == 1
+            if refused
+            else response(output_tokens=3)
+        )
+
+    def wait_until_deadline(futures, timeout):
+        assert started.wait(5)
+        deadline_expired.set()
+        if settled_before_wait_returns:
+            release.set()
+            return wait(futures)
+        return wait(futures, timeout=0)
+
+    class ReleasingExecutor(ThreadPoolExecutor):
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            release.set()
+            return super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(logger, "log_failure_event", record)
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(handler, "wait", wait_until_deadline)
+    monkeypatch.setattr(handler, "ThreadPoolExecutor", ReleasingExecutor)
+    route = respx_mock.post(URL).mock(side_effect=score)
+    error = litellm.ContentPolicyViolationError if refused else litellm.Timeout
+    with pytest.raises(error):
+        await rerank(True, documents=["document"] * document_count, timeout=1, concurrency=1)
+    assert await asyncio.to_thread(logged.wait, 5)
+    assert route.call_count == 1
+    assert len(logger.events) == 1
+    event = logger.events[0]
+    assert event["status"] == "failure"
+    assert (
+        event["prompt_tokens"],
+        event["completion_tokens"],
+        event["total_tokens"],
+    ) == (10, 3, 13)
+    assert event["response_cost"] == pytest.approx(10 * RATE)
+
+
+async def test_async_deadline_cancels_inflight_requests_without_dispatching_queued_documents(
+    respx_mock, monkeypatch, deadline_expired
+):
+    from litellm.rerank_api.litellm_decisions_transformation import handler
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    requests = []
+    wait = asyncio.wait
+
+    async def score(request):
+        requests.append(request)
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def wait_until_deadline(tasks, timeout):
+        await asyncio.wait_for(started.wait(), 5)
+        deadline_expired.set()
+        return await wait(tasks, timeout=0)
+
+    monkeypatch.setattr(handler.asyncio, "wait", wait_until_deadline)
+    respx_mock.post(URL).mock(side_effect=score)
+    with pytest.raises(litellm.Timeout):
+        await rerank(False, documents=["one", "two", "three"], timeout=1, concurrency=1)
+    assert cancelled.is_set()
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("refused", [False, True])
+@pytest.mark.parametrize("document_count", [1, 3])
+async def test_async_deadline_bills_responses_returned_during_cancellation_once(
+    refused, document_count, respx_mock, monkeypatch, deadline_expired
+):
+    from litellm.rerank_api.litellm_decisions_transformation import handler
+
+    logger = RecordingLogger()
+    started = asyncio.Event()
+    wait = asyncio.wait
+
+    async def score(request):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return (
+                httpx.Response(
+                    200,
+                    json={
+                        "answers": {},
+                        "usage": {"input_tokens": 10, "output_tokens": 3},
+                    },
+                )
+                if refused
+                else response(output_tokens=3)
+            )
+
+    async def wait_until_deadline(tasks, timeout):
+        await asyncio.wait_for(started.wait(), 5)
+        deadline_expired.set()
+        return await wait(tasks, timeout=0)
+
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(handler.asyncio, "wait", wait_until_deadline)
+    route = respx_mock.post(URL).mock(side_effect=score)
+    error = litellm.ContentPolicyViolationError if refused else litellm.Timeout
+    with pytest.raises(error):
+        await rerank(False, documents=["document"] * document_count, timeout=1, concurrency=1)
+    await flush_logging()
+    assert route.call_count == 1
+    assert len(logger.events) == 1
+    event = logger.events[0]
+    assert event["status"] == "failure"
+    assert (
+        event["prompt_tokens"],
+        event["completion_tokens"],
+        event["total_tokens"],
+    ) == (10, 3, 13)
+    assert event["response_cost"] == pytest.approx(10 * RATE)
+
+
+async def test_caller_cancellation_retains_usage_returned_during_transport_cleanup(
+    respx_mock,
+):
+    from litellm.rerank_api.litellm_decisions_transformation.handler import (
+        DecisionRerankLoggingCapture,
+    )
+
+    started = asyncio.Event()
+    capture = DecisionRerankLoggingCapture("cancelled-rerank")
+
+    async def score(request):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return response(output_tokens=3)
+
+    route = respx_mock.post(URL).mock(side_effect=score)
+    with capture.capture():
+        task = asyncio.create_task(
+            rerank(
+                False,
+                documents=["one", "two"],
+                concurrency=1,
+                litellm_call_id=capture.call_id,
+            )
+        )
+        await asyncio.wait_for(started.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert route.call_count == 1
+    assert capture.logging_obj is not None
+    usage = capture.logging_obj.model_call_details["combined_usage_object"]
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        10,
+        3,
+        13,
+    )
+    assert capture.logging_obj.model_call_details["response_cost"] == pytest.approx(10 * RATE)
 
 
 async def test_direct_token_price_override_is_respected(respx_mock):
@@ -950,15 +1124,18 @@ async def test_cancelled_child_fails_whole_request_and_bills_completed_usage(res
 
 
 @pytest.mark.parametrize("sync", [True, False])
-async def test_request_preparation_is_bounded_and_stops_at_deadline(sync, respx_mock, monkeypatch):
-    import threading
+async def test_request_preparation_is_bounded_and_stops_at_deadline(sync, respx_mock, monkeypatch, deadline_expired):
+    from concurrent.futures import wait
+    from threading import Barrier
 
     from litellm.rerank_api.litellm_decisions_transformation import handler
 
     prepared = []
     started = []
-    release = threading.Event()
+    sync_started = Barrier(2)
+    async_started = asyncio.Event()
     original = handler._prepare_document
+    async_wait = asyncio.wait
 
     def prepare(index, *args, **kwargs):
         prepared.append(index)
@@ -966,36 +1143,39 @@ async def test_request_preparation_is_bounded_and_stops_at_deadline(sync, respx_
 
     def sync_score(request):
         started.append(request)
-        release.wait(5)
+        sync_started.wait(timeout=5)
+        deadline_expired.set()
         return response()
 
     async def async_score(request):
         started.append(request)
-        await asyncio.Event().wait()
+        if len(started) == 2:
+            deadline_expired.set()
+            async_started.set()
+        await asyncio.wait_for(async_started.wait(), 5)
+        return response()
+
+    async def wait_for_started_tasks(tasks, timeout):
+        return await async_wait(tasks)
 
     monkeypatch.setattr(handler, "_prepare_document", prepare)
+    monkeypatch.setattr(handler, "wait", lambda futures, timeout: wait(futures))
+    monkeypatch.setattr(handler.asyncio, "wait", wait_for_started_tasks)
     respx_mock.post(URL).mock(side_effect=sync_score if sync else async_score)
-    try:
-        with pytest.raises(litellm.Timeout):
-            await rerank(
-                sync,
-                query="long query " * 1000,
-                documents=[""] * 100,
-                timeout=0.05,
-                concurrency=2,
-            )
-        assert len(prepared) == 2
-        assert len(started) == 2
-    finally:
-        release.set()
-    await asyncio.sleep(0.02)
+    with pytest.raises(litellm.Timeout):
+        await rerank(
+            sync,
+            query="long query " * 1000,
+            documents=[""] * 100,
+            timeout=1,
+            concurrency=2,
+        )
     assert len(prepared) == 2
+    assert len(started) == 2
 
 
 @pytest.mark.parametrize("sync", [True, False])
-async def test_preparation_time_counts_toward_request_deadline(sync, respx_mock, monkeypatch):
-    import time
-
+async def test_preparation_time_counts_toward_request_deadline(sync, respx_mock, monkeypatch, deadline_expired):
     from litellm.rerank_api.litellm_decisions_transformation import handler
 
     original = handler._prepare_document
@@ -1003,13 +1183,13 @@ async def test_preparation_time_counts_toward_request_deadline(sync, respx_mock,
 
     def prepare(index, *args, **kwargs):
         prepared.append(index)
-        time.sleep(0.03)
+        deadline_expired.set()
         return original(index, *args, **kwargs)
 
     monkeypatch.setattr(handler, "_prepare_document", prepare)
     route = respx_mock.post(URL).mock(return_value=response())
     with pytest.raises(litellm.Timeout):
-        await rerank(sync, documents=["one", "two"], timeout=0.01)
+        await rerank(sync, documents=["one", "two"], timeout=1)
     assert prepared == [0]
     assert route.call_count == 0
 
