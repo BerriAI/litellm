@@ -13,6 +13,34 @@ from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionR
 from ..chat.gpt_transformation import OpenAIGPTConfig
 from .utils import transform_prompt
 
+OPENAI_TEXT_COMPLETION_PARAMS: Final = frozenset(
+    {
+        "model",
+        "prompt",
+        "best_of",
+        "echo",
+        "frequency_penalty",
+        "logit_bias",
+        "logprobs",
+        "max_tokens",
+        "n",
+        "presence_penalty",
+        "seed",
+        "stop",
+        "stream",
+        "stream_options",
+        "suffix",
+        "temperature",
+        "top_p",
+        "user",
+        "extra_headers",
+        "extra_query",
+        "extra_body",
+        "timeout",
+        "max_retries",
+    }
+)
+
 
 class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
     """
@@ -155,8 +183,21 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         prompt: Final = transform_prompt(messages)
-        return {
+        openai_params: dict = {}
+        extra_body: dict = dict(optional_params.get("extra_body") or {})
+        for k, v in optional_params.items():
+            if k == "extra_body":
+                continue
+            if k in OPENAI_TEXT_COMPLETION_PARAMS:
+                openai_params[k] = v
+            else:
+                extra_body[k] = v
+
+        result: dict = {
             "model": model,
             "prompt": prompt,
-            **optional_params,
+            **openai_params,
         }
+        if extra_body:
+            result["extra_body"] = extra_body
+        return result

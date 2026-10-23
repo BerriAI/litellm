@@ -5,14 +5,12 @@ text completion path.
 Regression tests for https://github.com/BerriAI/litellm/issues/27410
 """
 
-
 import json
 from typing import Final
 
 import pytest
 import respx
 from httpx import Response
-
 
 import litellm
 from litellm import atext_completion, text_completion
@@ -78,9 +76,7 @@ def test_completion_forwards_extra_headers_to_provider(mock_completions_endpoint
 
 
 @respx.mock
-async def test_acompletion_forwards_client_headers_to_provider(
-    mock_completions_endpoint, monkeypatch
-):
+async def test_acompletion_forwards_client_headers_to_provider(mock_completions_endpoint, monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     await atext_completion(
         model="gpt-3.5-turbo-instruct",
@@ -297,11 +293,9 @@ async def test_async_text_completion_stream_returns_text_and_one_finish_reason(m
     chunks: Final = [chunk async for chunk in stream]
 
     assert [chunk.choices[0].text for chunk in chunks if chunk.choices[0].text] == ["hello"]
-    assert tuple(
-        chunk.choices[0].finish_reason
-        for chunk in chunks
-        if chunk.choices[0].finish_reason is not None
-    ) == ("stop",)
+    assert tuple(chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason is not None) == (
+        "stop",
+    )
     assert len(route.calls) == 1
 
 
@@ -320,9 +314,7 @@ async def test_async_text_completion_chat_model_stream_builds_chat_chunks(monkey
         )
     )
 
-    stream: Final = await atext_completion(
-        model="gpt-3.5-turbo", prompt="say hello", stream=True, max_tokens=5
-    )
+    stream: Final = await atext_completion(model="gpt-3.5-turbo", prompt="say hello", stream=True, max_tokens=5)
     chunks: Final = [chunk async for chunk in stream]
     response: Final = litellm.stream_chunk_builder(chunks=chunks)
 
@@ -332,11 +324,9 @@ async def test_async_text_completion_chat_model_stream_builds_chat_chunks(monkey
         completion_response=response,
         custom_cost_per_token={"input_cost_per_token": 5e-07, "output_cost_per_token": 1.5e-06},
     ) == pytest.approx(1 * 1.5e-06)
-    assert tuple(
-        chunk.choices[0].finish_reason
-        for chunk in chunks
-        if chunk.choices[0].finish_reason is not None
-    ) == ("stop",)
+    assert tuple(chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason is not None) == (
+        "stop",
+    )
     assert len(route.calls) == 1
 
 
@@ -372,6 +362,54 @@ def test_text_completion_stream_forwards_stream_options_and_usage(monkeypatch):
         1,
         3,
     )
-    assert json.loads(route.calls[0].request.content)["stream_options"] == {
-        "include_usage": True
+    assert json.loads(route.calls[0].request.content)["stream_options"] == {"include_usage": True}
+
+
+@respx.mock
+def test_completion_forwards_response_format_via_extra_body(mock_completions_endpoint):
+    text_completion(
+        model="gpt-3.5-turbo-instruct",
+        prompt="say hello",
+        response_format={"type": "json_object"},
+    )
+
+    request_body = json.loads(mock_completions_endpoint.calls.last.request.content)
+    assert request_body["response_format"] == {"type": "json_object"}
+
+
+@respx.mock
+async def test_acompletion_forwards_response_format_via_extra_body(mock_completions_endpoint, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    await atext_completion(
+        model="gpt-3.5-turbo-instruct",
+        prompt="say hello",
+        response_format={"type": "json_object"},
+    )
+
+    request_body = json.loads(mock_completions_endpoint.calls.last.request.content)
+    assert request_body["response_format"] == {"type": "json_object"}
+
+
+def test_transform_text_completion_request_preserves_standard_and_moves_extra_to_extra_body():
+    from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
+
+    config = OpenAITextCompletionConfig()
+    result = config.transform_text_completion_request(
+        model="gpt-3.5-turbo-instruct",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "temperature": 0.7,
+            "response_format": {"type": "json_object"},
+            "extra_body": {"custom_option": 123},
+        },
+        headers={},
+    )
+
+    assert result["model"] == "gpt-3.5-turbo-instruct"
+    assert result["prompt"] == "hello"
+    assert result["temperature"] == 0.7
+    assert "response_format" not in result  # moved to extra_body
+    assert result["extra_body"] == {
+        "custom_option": 123,
+        "response_format": {"type": "json_object"},
     }
