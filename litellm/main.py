@@ -8324,7 +8324,7 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
     )
 
-    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse] | None = None
+    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]
 
     provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
         model=model,
@@ -8486,10 +8486,16 @@ def transcription(
             provider_config=provider_config,
             shared_session=shared_session,
         )
+    else:
+        raise litellm.UnsupportedEndpointError(
+            message=f"{custom_llm_provider}/{model} does not support audio transcription.",
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
 
     # Store duration in _hidden_params for cost calculation without
     # exposing it in the response body (see sync path comment above).
-    if response is not None and not isinstance(response, Coroutine):
+    if not isinstance(response, Coroutine):
         existing_duration: Final = getattr(response, "duration", None)
         if existing_duration is None:
             calculated_duration: Final = calculate_request_duration(file)
@@ -8499,8 +8505,6 @@ def transcription(
                 )
                 response_hidden_params["audio_transcription_duration"] = calculated_duration
 
-    if response is None:
-        raise ValueError("Unmapped provider passed in. Unable to get the response.")
     return response
 
 
