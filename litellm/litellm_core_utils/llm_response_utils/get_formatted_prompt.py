@@ -60,9 +60,7 @@ def get_formatted_prompt(
     elif call_type == "image_generation" or call_type == "aimage_generation":
         prompt = data["prompt"]
     elif (
-        call_type == "audio_transcription"
-        or call_type == "transcription"
-        or call_type == "atranscription"
+        call_type == "audio_transcription" or call_type == "transcription" or call_type == "atranscription"
     ) and "prompt" in data:
         prompt = data["prompt"]
     return prompt
