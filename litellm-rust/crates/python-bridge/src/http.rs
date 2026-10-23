@@ -6,10 +6,11 @@ use std::{
 
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_http::{
-    Client, ClientVariant, HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer,
+    Client, ClientVariant, HttpClientConfig, HttpClientPool, HttpKeysPartial, HttpSettings,
     Resolution, SslVerify, TlsSource, Unsupported,
     media::{PublicDnsResolver, UrlPolicy},
 };
+use litellm_layered::merge;
 use pyo3::{
     exceptions::PyValueError,
     prelude::*,
@@ -101,14 +102,15 @@ pub(crate) fn call_config(
     kwargs: &Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<HttpClientConfig> {
-    let settings = HttpSettings::from_layers([
+    let settings = HttpSettings::from(merge([
         for_call(call_ssl_verify(kwargs)?, asynchronous),
-        HttpSettingsLayer::from_environment(&ProcessEnvironment),
+        HttpKeysPartial::from_env(&ProcessEnvironment)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
         match PythonSettings::Http.read_or_unset(py)? {
             Some(snapshot) => configured(&snapshot)?,
-            None => HttpSettingsLayer::default(),
+            None => HttpKeysPartial::default(),
         },
-    ])
+    ]))
     .without_missing_files(&|path: &Path| path.exists());
     let resolution = Resolution::from(&settings);
     for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
@@ -191,17 +193,29 @@ fn call_ssl_verify(kwargs: &Bound<'_, PyDict>) -> PyResult<Option<SslVerify>> {
     }
 }
 
-fn for_call(call_ssl_verify: Option<SslVerify>, asynchronous: bool) -> HttpSettingsLayer {
-    HttpSettingsLayer {
+fn for_call(call_ssl_verify: Option<SslVerify>, asynchronous: bool) -> HttpKeysPartial {
+    HttpKeysPartial {
         ssl_verify: call_ssl_verify,
+        ssl_cert_file: None,
+        ssl_certificate: None,
+        ssl_security_level: None,
+        ssl_ecdh_curve: None,
+        force_ipv4: None,
+        http2: None,
+        aiohttp_trust_env: None,
+        disable_aiohttp_trust_env: None,
         disable_aiohttp_transport: (!asynchronous).then_some(true),
-        ..HttpSettingsLayer::default()
+        user_agent: None,
+        tcp_keepalive: None,
+        pool_idle_timeout: None,
+        proxies: None,
     }
 }
 
-fn configured(snapshot: &Snapshot<'_>) -> PyResult<HttpSettingsLayer> {
-    Ok(HttpSettingsLayer {
+fn configured(snapshot: &Snapshot<'_>) -> PyResult<HttpKeysPartial> {
+    Ok(HttpKeysPartial {
         ssl_verify: snapshot.read(&SSL_VERIFY)?,
+        ssl_cert_file: None,
         ssl_certificate: snapshot.read(&SSL_CERTIFICATE)?.map(PathBuf::from),
         ssl_security_level: snapshot.read(&SSL_SECURITY_LEVEL)?,
         ssl_ecdh_curve: snapshot.read(&SSL_ECDH_CURVE)?,
@@ -211,7 +225,9 @@ fn configured(snapshot: &Snapshot<'_>) -> PyResult<HttpSettingsLayer> {
         disable_aiohttp_trust_env: Some(snapshot.read(&DISABLE_AIOHTTP_TRUST_ENV)?),
         disable_aiohttp_transport: Some(snapshot.read(&DISABLE_AIOHTTP_TRANSPORT)?),
         user_agent: Some(snapshot.read(&USER_AGENT)?),
-        ..HttpSettingsLayer::default()
+        tcp_keepalive: None,
+        pool_idle_timeout: None,
+        proxies: None,
     })
 }
 
@@ -221,7 +237,13 @@ mod tests {
     use pyo3::exceptions::PyRuntimeError;
     use rstest::rstest;
 
+    use litellm_layered::Env;
+
     use super::*;
+
+    fn stack(highest_first: impl IntoIterator<Item = HttpKeysPartial>) -> HttpSettings {
+        HttpSettings::from(merge(highest_first))
+    }
 
     fn evaluate<'py>(py: Python<'py>, source: &str) -> Bound<'py, PyAny> {
         py.eval(&std::ffi::CString::new(source).unwrap(), None, None)
@@ -260,7 +282,7 @@ settings = types.SimpleNamespace(**defaults)
         Python::attach(|py| {
             let layer = configured(&python_settings(py, "")).unwrap();
             assert_eq!(
-                HttpSettings::from_layers([layer]),
+                stack([layer]),
                 HttpSettings {
                     ssl_verify: Some(SslVerify::Enabled),
                     user_agent: Some("litellm/test".into()),
@@ -319,7 +341,7 @@ user_agent='litellm/9.9.9',
             .unwrap();
             assert_eq!(
                 layer,
-                HttpSettingsLayer {
+                HttpKeysPartial {
                     ssl_verify: Some(SslVerify::CaBundle("/etc/ssl/corp.pem".into())),
                     ssl_certificate: Some("/etc/ssl/client.pem".into()),
                     ssl_security_level: Some("2".into()),
@@ -330,7 +352,7 @@ user_agent='litellm/9.9.9',
                     disable_aiohttp_trust_env: Some(true),
                     disable_aiohttp_transport: Some(true),
                     user_agent: Some("litellm/9.9.9".into()),
-                    ..HttpSettingsLayer::default()
+                    ..HttpKeysPartial::default()
                 }
             );
         });
@@ -340,10 +362,9 @@ user_agent='litellm/9.9.9',
     fn user_agent_environment_variable_beats_the_python_default() {
         Python::initialize();
         Python::attach(|py| {
-            let settings = HttpSettings::from_layers([
-                HttpSettingsLayer::from_environment(&|name: &str| {
-                    (name == "LITELLM_USER_AGENT").then(|| "operator/1".to_string())
-                }),
+            let settings = stack([
+                HttpKeysPartial::from_env(&Env::of(&[("LITELLM_USER_AGENT", "operator/1")]))
+                    .unwrap(),
                 configured(&python_settings(py, "")).unwrap(),
             ]);
             assert_eq!(settings.user_agent.as_deref(), Some("operator/1"));
@@ -362,7 +383,7 @@ user_agent='litellm/9.9.9',
         Python::initialize();
         Python::attach(|py| {
             let layer = configured(&python_settings(py, overrides)).unwrap();
-            let config = Resolution::from(&HttpSettings::from_layers([layer])).config;
+            let config = Resolution::from(&stack([layer])).config;
             assert_eq!(config.verify, expected);
         });
     }
@@ -411,10 +432,10 @@ user_agent='litellm/9.9.9',
         });
     }
 
-    fn configured_ssl_verify(ssl_verify: SslVerify) -> HttpSettingsLayer {
-        HttpSettingsLayer {
+    fn configured_ssl_verify(ssl_verify: SslVerify) -> HttpKeysPartial {
+        HttpKeysPartial {
             ssl_verify: Some(ssl_verify),
-            ..HttpSettingsLayer::default()
+            ..HttpKeysPartial::default()
         }
     }
 
@@ -425,8 +446,7 @@ user_agent='litellm/9.9.9',
             let kwargs = PyDict::new(py);
             kwargs.set_item("ssl_verify", false).unwrap();
             let call = for_call(call_ssl_verify(&kwargs).unwrap(), true);
-            let settings =
-                HttpSettings::from_layers([call, configured_ssl_verify(SslVerify::Enabled)]);
+            let settings = stack([call, configured_ssl_verify(SslVerify::Enabled)]);
             assert_eq!(settings.ssl_verify, Some(SslVerify::Disabled));
         });
     }
@@ -438,8 +458,7 @@ user_agent='litellm/9.9.9',
             let kwargs = PyDict::new(py);
             kwargs.set_item("ssl_verify", py.None()).unwrap();
             let call = for_call(call_ssl_verify(&kwargs).unwrap(), true);
-            let settings =
-                HttpSettings::from_layers([call, configured_ssl_verify(SslVerify::Disabled)]);
+            let settings = stack([call, configured_ssl_verify(SslVerify::Disabled)]);
             assert_eq!(settings.ssl_verify, Some(SslVerify::Disabled));
         });
     }
@@ -485,12 +504,12 @@ user_agent='litellm/9.9.9',
         #[case] asynchronous: bool,
         #[case] expected: bool,
     ) {
-        let opted_out = HttpSettingsLayer {
+        let opted_out = HttpKeysPartial {
             disable_aiohttp_trust_env: Some(true),
             disable_aiohttp_transport: Some(false),
-            ..HttpSettingsLayer::default()
+            ..HttpKeysPartial::default()
         };
-        let settings = HttpSettings::from_layers([for_call(None, asynchronous), opted_out]);
+        let settings = stack([for_call(None, asynchronous), opted_out]);
         assert_eq!(settings.trust_proxy_env, expected);
     }
     #[rstest]

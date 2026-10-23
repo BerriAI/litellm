@@ -3743,12 +3743,14 @@ dependencies = [
  "litellm-gateway-ui",
  "litellm-http",
  "litellm-inference",
+ "litellm-layered",
  "litellm-llms",
  "litellm-secrets",
  "litellm-tracing",
  "rstest",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -3944,6 +3946,7 @@ dependencies = [
  "http 1.4.2",
  "hyper-util",
  "litellm-core-utils",
+ "litellm-layered",
  "rcgen",
  "reqwest 0.12.28",
  "reqwest 0.13.5",
@@ -4117,6 +4120,7 @@ dependencies = [
  "litellm-auth",
  "litellm-http",
  "litellm-inference",
+ "litellm-layered",
  "litellm-secrets",
  "tokio",
 ]
@@ -4139,6 +4143,27 @@ dependencies = [
  "tokio",
  "tracing",
  "wiremock",
+]
+
+[[package]]
+name = "litellm-layered"
+version = "0.1.0"
+dependencies = [
+ "litellm-core-utils",
+ "litellm-layered-derive",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-layered-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -4231,6 +4256,7 @@ dependencies = [
  "litellm-inference-ocr",
  "litellm-inference-responses",
  "litellm-inference-transcription",
+ "litellm-layered",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-router-types",
