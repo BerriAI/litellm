@@ -9,6 +9,8 @@ pub use litellm_core_utils::settings::Lookup;
 pub use litellm_layered_derive::Layered;
 pub use sources::Sources;
 
+pub type SharedLookup = std::sync::Arc<dyn Lookup + Send + Sync>;
+
 pub trait Partial: Default {
     fn or(self, lower: Self) -> Self;
 }

@@ -19,6 +19,10 @@ disallowed-methods = [
     { path = "sqlx::query_as_with", reason = "use sqlx::query_as! or query_file_as! so the SQL is checked against the migrated schema" },
     { path = "sqlx::query_scalar_with", reason = "use sqlx::query_scalar! so the SQL is checked against the migrated schema" },
     { path = "sqlx::raw_sql", reason = "raw_sql is unchecked; use the checked query macros" },
+    { path = "std::env::var", reason = "take a Lookup: Env in the Rust gateway, ProcessEnvironment in python-bridge" },
+    { path = "std::env::var_os", reason = "take a Lookup: Env in the Rust gateway, ProcessEnvironment in python-bridge" },
+    { path = "std::env::vars", reason = "take a Lookup: Env in the Rust gateway, ProcessEnvironment in python-bridge" },
+    { path = "std::env::vars_os", reason = "take a Lookup: Env in the Rust gateway, ProcessEnvironment in python-bridge" },
 ]
 
 # Every outbound client comes from litellm_http::HttpClientPool so it honors the host's TLS,

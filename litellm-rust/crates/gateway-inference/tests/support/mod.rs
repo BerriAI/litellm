@@ -13,6 +13,7 @@ use futures_util::future::BoxFuture;
 use litellm_gateway_inference::{Deployment, Gateway, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
+use litellm_llms::base_llm::ocr::settings::OcrSettings;
 use litellm_secrets::{SecretValue, source::SecretSource};
 use serde_json::Value;
 use tower::ServiceExt;
@@ -83,6 +84,8 @@ fn configured_app(
     let gateway = Gateway::new(
         resources,
         http,
+        OcrSettings::default(),
+        Arc::new(litellm_layered::Env::default()),
         secrets,
         [(
             "public/model".into(),

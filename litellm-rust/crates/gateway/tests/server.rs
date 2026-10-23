@@ -13,6 +13,7 @@ use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 use tokio::{net::TcpListener, sync::oneshot, time::timeout};
 use tower::ServiceExt;
+use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 struct LogSink(mpsc::Sender<Value>);
 
@@ -30,7 +31,11 @@ impl Sink for LogSink {
 
 #[fixture]
 fn inference() -> Arc<Gateway> {
-    litellm_gateway::build_inference(&Config::from_yaml("model_list: []").unwrap()).unwrap()
+    litellm_gateway::build_inference(
+        &Config::from_yaml("model_list: []").unwrap(),
+        &litellm_layered::Env::default(),
+    )
+    .unwrap()
 }
 
 #[rstest]
@@ -111,6 +116,112 @@ async fn authenticates_before_serving_mounted_inference_routes(
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn ocr_gives_up_at_the_request_timeout_from_config_environment_variables() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(3))
+                .set_body_json(json!({"pages": []})),
+        )
+        .mount(&upstream)
+        .await;
+    let config = Config::from_yaml(&format!(
+        "model_list:
+  - model_name: public/ocr
+    litellm_params:
+      model: mistral/test-ocr
+      api_base: {}
+      api_key: test-key
+general_settings:
+  master_key: gateway-key
+environment_variables:
+  REQUEST_TIMEOUT: '0.2'
+",
+        upstream.uri()
+    ))
+    .unwrap();
+    let inference =
+        litellm_gateway::build_inference(&config, &litellm_layered::Env::default()).unwrap();
+    let request = Request::post("/ocr")
+        .header("authorization", "Bearer gateway-key")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "model": "public/ocr",
+                "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = timeout(
+        Duration::from_secs(2),
+        litellm_gateway::router(inference, &config, None, None).oneshot(request),
+    )
+    .await
+    .expect("OCR must give up at REQUEST_TIMEOUT instead of the default")
+    .unwrap();
+
+    assert_eq!(response.status().as_u16(), 408);
+}
+
+#[rstest]
+#[tokio::test]
+async fn messages_auth_reads_credentials_from_config_environment_variables() {
+    let directory = tempfile::tempdir().unwrap();
+    let credentials = directory.path().join("service-account.json");
+    std::fs::write(&credentials, "not a service account").unwrap();
+    let config = Config::from_yaml(&format!(
+        "model_list:
+  - model_name: public/vertex
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-5
+      vertex_project: test-project
+      vertex_location: us-east5
+general_settings:
+  master_key: gateway-key
+environment_variables:
+  GOOGLE_APPLICATION_CREDENTIALS: '{}'
+",
+        credentials.display()
+    ))
+    .unwrap();
+    let inference =
+        litellm_gateway::build_inference(&config, &litellm_layered::Env::default()).unwrap();
+    let request = Request::post("/v1/messages")
+        .header("authorization", "Bearer gateway-key")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "model": "public/vertex",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = timeout(
+        Duration::from_secs(10),
+        litellm_gateway::router(inference, &config, None, None).oneshot(request),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&body).contains("ApplicationCredentials"),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
 }
 
 #[rstest]

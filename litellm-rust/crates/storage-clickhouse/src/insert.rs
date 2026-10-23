@@ -5,6 +5,7 @@ use litellm_http::Client;
 
 use crate::{Connection, Error, valid_identifier};
 
+#[allow(clippy::disallowed_methods)] // the ClickHouse sink is not built from an injected Lookup yet
 fn insert_timeout() -> Result<Duration, Error> {
     let name = "CLICKHOUSE_INSERT_TIMEOUT_SECONDS";
     match std::env::var(name) {

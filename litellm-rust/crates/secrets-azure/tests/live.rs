@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test and build tooling read their own settings from the process environment
 use std::sync::Arc;
 
 use litellm_core_utils::settings::ProcessEnvironment;

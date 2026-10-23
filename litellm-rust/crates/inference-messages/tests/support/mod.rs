@@ -22,6 +22,7 @@ pub fn messages_route(secrets: Arc<dyn SecretSource>) -> litellm_inference_messa
         provider_http(&resources, &http_config()),
         resources.auth,
         secrets,
+        std::sync::Arc::new(litellm_core_utils::settings::ProcessEnvironment),
     )
 }
 

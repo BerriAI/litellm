@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt};
+use std::{collections::BTreeMap, ffi::OsString, fmt};
 
 use crate::Lookup;
 
@@ -8,8 +8,12 @@ pub struct Env(BTreeMap<String, String>);
 impl Env {
     #[allow(clippy::disallowed_methods)]
     pub fn from_process() -> Self {
+        Self::from_vars(std::env::vars_os())
+    }
+
+    pub fn from_vars(vars: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
         Self(
-            std::env::vars_os()
+            vars.into_iter()
                 .filter_map(|(name, value)| {
                     Some((name.into_string().ok()?, value.into_string().ok()?))
                 })

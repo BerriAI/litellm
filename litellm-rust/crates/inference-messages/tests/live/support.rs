@@ -69,7 +69,12 @@ impl Interceptors<Error> for LiveCall {
 #[rstest::fixture]
 pub(super) fn route() -> MessagesRoute {
     let resources = LiveResources::default();
-    MessagesRoute::new(resources.http, resources.auth, resources.secrets)
+    MessagesRoute::new(
+        resources.http,
+        resources.auth,
+        resources.secrets,
+        std::sync::Arc::new(litellm_core_utils::settings::ProcessEnvironment),
+    )
 }
 
 pub(super) async fn request(
