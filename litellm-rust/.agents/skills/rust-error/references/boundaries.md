@@ -4,7 +4,7 @@ An error becomes text for someone else in exactly two places, and both are expli
 
 | Boundary | File | Reference |
 |---|---|---|
-| Gateway HTTP response | `crates/gateway-inference/src/error.rs` | [axum](axum.md) |
+| Gateway HTTP response | `crates/gateway-inference/src/error.rs` | [gateway](gateway.md) |
 | Python bridge | `crates/python-bridge/src/errors.rs` and `crates/python-bridge/src/routes/ocr/errors.rs` | [pyo3](pyo3.md) |
 
 Both ask a nested error the same questions in the same order
