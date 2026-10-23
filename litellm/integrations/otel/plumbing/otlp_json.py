@@ -73,7 +73,7 @@ def _encode_trace_request_json(request: ExportTraceServiceRequest) -> bytes:
 class _SendOptions(TypedDict, total=False):
     stream: ReadOnly[bool | None]
     verify: ReadOnly[bool | str | None]
-    proxies: ReadOnly[MutableMapping[str, str] | None]
+    proxies: ReadOnly[MutableMapping[str, str] | None]  # mutable-ok: requests.Session.request requires MutableMapping
     cert: ReadOnly[str | tuple[str, str] | None]
     timeout: ReadOnly[float | tuple[float | None, float | None] | None]
     allow_redirects: ReadOnly[bool]
@@ -99,9 +99,13 @@ class _JsonSession(requests.Session):
         self.cert = session.cert
         self.stream = session.stream
 
-    def send(self, request: requests.PreparedRequest, **kwargs: Unpack[_SendOptions]) -> requests.Response:
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        **kwargs: Unpack[_SendOptions],  # kwargs-ok: requests.Session.send requires forwarding transport options
+    ) -> requests.Response:
         if not isinstance(request.body, bytes):
-            raise ValueError("OTLP protobuf request body must be bytes")
+            raise TypeError("OTLP protobuf request body must be bytes")
         body: Final = _json_request_body(request.body, request.headers.get("Content-Encoding", ""))
         headers: Final = {
             key: value
