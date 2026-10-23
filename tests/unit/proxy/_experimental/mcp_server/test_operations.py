@@ -4,6 +4,7 @@ from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 from mcp.server.context import ServerRequestContext
 from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult
 from mcp.types import Tool as MCPTool
@@ -2035,3 +2036,48 @@ async def test_discovery_optional_probes_use_remaining_listing_budget(delay, mon
     else:
         assert entered.is_set()
         assert cleaned.is_set()
+
+
+class _FailureHookArguments(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: list[object] = []
+
+    async def async_post_call_failure_hook(self, request_data, original_exception, user_api_key_dict, traceback_str=None):
+        self.seen.append(request_data.get("arguments"))
+
+
+@pytest.mark.asyncio
+async def test_failure_hooks_see_the_guardrail_logged_arguments_not_the_raw_ones(monkeypatch):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy import proxy_server
+
+    blocked: Final = {"[redacted]": "blocked by guardrail"}
+    raw: Final = {"text": "deploy with glpat-Xq7rT2mPz9Lk4vB8nWc3"}
+    callback: Final = _FailureHookArguments()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="MCP: echo",
+        messages=[],
+        stream=False,
+        call_type="call_mcp_tool",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.model_call_details["litellm_params"] = {
+        "proxy_server_request": {"body": {"name": "echo", "arguments": blocked}}
+    }
+
+    await operations.fire_mcp_tool_call_failure_logging(
+        logging_obj,
+        HTTPException(status_code=400, detail="credential detected"),
+        datetime(2026, 1, 1),
+        UserAPIKeyAuth(),
+        {"name": "echo", "arguments": raw, "litellm_logging_obj": logging_obj},
+    )
+
+    assert callback.seen == [blocked]

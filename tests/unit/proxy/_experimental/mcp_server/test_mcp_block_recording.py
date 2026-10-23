@@ -45,6 +45,7 @@ class _RecordingLoggingObj:
         self._order = order
         self.failure_calls = 0
         self.async_failure_calls = 0
+        self.model_call_details: dict[str, object] = {}
 
     def failure_handler(self, *_args, **_kwargs) -> None:
         self.failure_calls += 1
