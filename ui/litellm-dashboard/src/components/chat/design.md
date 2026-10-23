@@ -38,6 +38,8 @@ The standalone `ChatModelPicker` exposes the account's chat and image-generation
 
 The **Models** sidebar destination opens `/ui/chat/models` inside the same shell. It reuses the existing Model Hub catalog, filters, pricing and details in a read-only `chat` variant. Admins see the authenticated catalog and other users see the published catalog, matching the dashboard's existing access rules. The page uses `.moyai-models-page` for scrolling and `.chat-model-hub-card` for the bordered Moyai surface. Portalled model details carry `.chat-theme`; catalog management and other hub tabs stay in the dashboard.
 
+Show available providers above the model list as branded, single-select cards. “All models” clears the provider filter while keeping the other filters. Provider logos reuse the existing asset mapping; white logo plates preserve the colors and contrast of the original assets in both themes. Unknown or failed logos fall back to a provider initial. The model list uses compact search and capability controls, quiet separators, and provider identities beside model names. Keep these styles scoped to Chat.
+
 ### Colors
 
 | Token                         | Tailwind class                        | Use                                                        |

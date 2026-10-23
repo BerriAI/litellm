@@ -15,7 +15,7 @@ export default function ChatModelsPage() {
           <p className="text-xs font-medium text-muted-foreground">Model Hub</p>
           <h1>Models</h1>
           <p className="text-sm text-muted-foreground">
-            Explore the models on your gateway, compare pricing, and discover their capabilities.
+            Find the right model. Explore providers, compare pricing, and see what each model can do.
           </p>
         </header>
         {isAdminRole(userRole) ? (

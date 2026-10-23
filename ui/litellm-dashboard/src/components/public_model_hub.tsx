@@ -5,6 +5,7 @@ import { Copy, Inbox, Info } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
   Combobox,
   ComboboxChip,
@@ -54,6 +55,7 @@ import { displayMode, isDecisionMode } from "@/lib/decisionModels";
 import { modelUsageExample } from "@/components/AIHub/modelUsageExample";
 import { filterBySearchTerm, rankBySearchRelevance } from "@/utils/searchUtils";
 import { ModelCustomMetadata } from "@/components/AIHub/ModelCustomMetadata";
+import ModelHubProviders, { formatModelModeLabel } from "@/components/AIHub/ModelHubProviders";
 
 interface PublicModelHubProps {
   accessToken?: string | null;
@@ -299,10 +301,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const modeOptions = useMemo(
     () =>
       [...new Set(modelFacets.modes.flatMap((mode) => displayMode(mode) ?? []))].map((mode) => ({
-        label: mode,
+        label: isChat ? formatModelModeLabel(mode) : mode,
         value: mode,
       })),
-    [modelFacets],
+    [modelFacets, isChat],
   );
   const featureOptions = useMemo(
     () => modelFacets.features.map((feature) => ({ label: featureLabel(feature), value: feature })),
@@ -312,7 +314,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [agentSorting, setAgentSorting] = useState<SortingState>([{ id: "name", desc: false }]);
   const [mcpSorting, setMcpSorting] = useState<SortingState>([{ id: "server_name", desc: false }]);
 
-  const modelColumns = useMemo(() => getPublicModelHubColumns({ onModelClick: showModal }), [showModal]);
+  const modelColumns = useMemo(
+    () => getPublicModelHubColumns({ onModelClick: showModal, showProviderLogos: isChat }),
+    [showModal, isChat],
+  );
   const agentColumns = useMemo(() => getPublicAgentHubColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
   const mcpColumns = useMemo(() => getPublicMCPHubColumns({ onServerClick: showMcpModal }), [showMcpModal]);
 
@@ -408,6 +413,15 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
               </Card>
             )}
 
+            {isChat && (
+              <ModelHubProviders
+                providers={modelFacets.providers}
+                selectedProviders={models.providerValues}
+                onSelect={(provider) => models.onProvidersChange(provider ? [provider] : [])}
+                loading={models.isLoading && modelFacets.providers.length === 0}
+              />
+            )}
+
             {/* Tabs for Models and Agents */}
             <Card
               className={
@@ -434,101 +448,131 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     </div>
                   )}
 
+                  {isChat && (
+                    <div className="chat-model-section-heading">
+                      <h2>Models</h2>
+                      <span className="chat-model-section-count" aria-label={`${models.rowCount} models`}>
+                        {models.rowCount.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+
                   {/* Filters */}
-                  <div className="chat-model-hub-filters grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border">
-                    <div>
-                      <div className="flex items-center space-x-2 mb-3">
-                        <p className="text-sm font-medium text-foreground">Search Models:</p>
-                        <Tooltip>
-                          <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
-                          <TooltipContent side="top" className={portalClassName}>
-                            Finds every published model whose name contains what you type, across all pages. Try
-                            &apos;grok&apos;, &apos;claude&apos;, &apos;gpt-4&apos;, or &apos;sonnet&apos;
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
+                  <div
+                    className={
+                      isChat
+                        ? "chat-model-hub-filters chat-model-filter-bar"
+                        : "chat-model-hub-filters grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border"
+                    }
+                  >
+                    <div className={isChat ? "chat-model-filter-search" : undefined}>
+                      {!isChat && (
+                        <div className="flex items-center space-x-2 mb-3">
+                          <p className="text-sm font-medium text-foreground">Search Models:</p>
+                          <Tooltip>
+                            <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
+                            <TooltipContent side="top" className={portalClassName}>
+                              Finds every published model whose name contains what you type, across all pages. Try
+                              &apos;grok&apos;, &apos;claude&apos;, &apos;gpt-4&apos;, or &apos;sonnet&apos;
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
+                      )}
                       <div className="relative">
                         <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
-                        <input
-                          type="text"
-                          placeholder="Search model names..."
-                          aria-label="Search model names"
-                          value={models.searchValue}
-                          onChange={(e) => models.onSearchChange(e.target.value)}
-                          className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
-                        />
+                        {isChat ? (
+                          <Input
+                            type="text"
+                            placeholder="Search models"
+                            aria-label="Search models"
+                            value={models.searchValue}
+                            onChange={(e) => models.onSearchChange(e.target.value)}
+                            className="pl-9"
+                          />
+                        ) : (
+                          <input
+                            type="text"
+                            placeholder="Search model names..."
+                            aria-label="Search model names"
+                            value={models.searchValue}
+                            onChange={(e) => models.onSearchChange(e.target.value)}
+                            className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
+                          />
+                        )}
                       </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium mb-3 text-foreground">Provider:</p>
-                      <Combobox
-                        multiple
-                        items={modelFacets.providers}
-                        value={models.providerValues}
-                        onValueChange={models.onProvidersChange}
-                      >
-                        <ComboboxChips render={<div ref={anchor} />} className="min-h-8 w-full py-1 text-sm">
-                          <ComboboxValue>
-                            {(values: string[]) =>
-                              values.map((provider) => (
-                                <ComboboxChip key={provider} aria-label={provider}>
-                                  {provider}
-                                </ComboboxChip>
-                              ))
-                            }
-                          </ComboboxValue>
-                          <ComboboxChipsInput
-                            placeholder="Select providers"
-                            aria-label="Select providers"
-                            className="min-w-24"
-                          />
-                        </ComboboxChips>
-                        <ComboboxContent anchor={anchor} className={portalClassName}>
-                          <ComboboxEmpty>No providers found</ComboboxEmpty>
-                          <ComboboxList>
-                            {(provider: string) => {
-                              const { logo } = getProviderLogoAndName(provider);
-                              return (
-                                <ComboboxItem key={provider} value={provider}>
-                                  <span className="flex min-w-0 items-center space-x-2">
-                                    {logo && (
-                                      <img
-                                        src={logo}
-                                        alt={provider}
-                                        className="w-5 h-5 shrink-0 object-contain"
-                                        onError={(e) => {
-                                          (e.target as HTMLImageElement).style.display = "none";
-                                        }}
-                                      />
-                                    )}
-                                    <span className="capitalize break-words">{provider}</span>
-                                  </span>
-                                </ComboboxItem>
-                              );
-                            }}
-                          </ComboboxList>
-                        </ComboboxContent>
-                      </Combobox>
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium mb-3 text-foreground">Mode:</p>
+                    {!isChat && (
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium mb-3 text-foreground">Provider:</p>
+                        <Combobox
+                          multiple
+                          items={modelFacets.providers}
+                          value={models.providerValues}
+                          onValueChange={models.onProvidersChange}
+                        >
+                          <ComboboxChips render={<div ref={anchor} />} className="min-h-8 w-full py-1 text-sm">
+                            <ComboboxValue>
+                              {(values: string[]) =>
+                                values.map((provider) => (
+                                  <ComboboxChip key={provider} aria-label={provider}>
+                                    {provider}
+                                  </ComboboxChip>
+                                ))
+                              }
+                            </ComboboxValue>
+                            <ComboboxChipsInput
+                              placeholder="Select providers"
+                              aria-label="Select providers"
+                              className="min-w-24"
+                            />
+                          </ComboboxChips>
+                          <ComboboxContent anchor={anchor} className={portalClassName}>
+                            <ComboboxEmpty>No providers found</ComboboxEmpty>
+                            <ComboboxList>
+                              {(provider: string) => {
+                                const { logo } = getProviderLogoAndName(provider);
+                                return (
+                                  <ComboboxItem key={provider} value={provider}>
+                                    <span className="flex min-w-0 items-center space-x-2">
+                                      {logo && (
+                                        <img
+                                          src={logo}
+                                          alt={provider}
+                                          className="w-5 h-5 shrink-0 object-contain"
+                                          onError={(e) => {
+                                            (e.target as HTMLImageElement).style.display = "none";
+                                          }}
+                                        />
+                                      )}
+                                      <span className="capitalize break-words">{provider}</span>
+                                    </span>
+                                  </ComboboxItem>
+                                );
+                              }}
+                            </ComboboxList>
+                          </ComboboxContent>
+                        </Combobox>
+                      </div>
+                    )}
+                    <div className={isChat ? "chat-model-filter-select min-w-0" : "min-w-0"}>
+                      {!isChat && <p className="text-sm font-medium mb-3 text-foreground">Mode:</p>}
                       <MultiSelect
                         options={modeOptions}
                         contentClassName={portalClassName}
                         value={models.modeValues}
                         onValueChange={models.onModesChange}
-                        placeholder="Select modes"
+                        placeholder={isChat ? "Model type" : "Select modes"}
                         className="w-full"
                       />
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium mb-3 text-foreground">Features:</p>
+                    <div className={isChat ? "chat-model-filter-select min-w-0" : "min-w-0"}>
+                      {!isChat && <p className="text-sm font-medium mb-3 text-foreground">Features:</p>}
                       <MultiSelect
                         options={featureOptions}
                         contentClassName={portalClassName}
                         value={models.featureValues}
                         onValueChange={models.onFeaturesChange}
-                        placeholder="Select features"
+                        placeholder={isChat ? "Model capability" : "Select features"}
                         className="w-full"
                       />
                     </div>

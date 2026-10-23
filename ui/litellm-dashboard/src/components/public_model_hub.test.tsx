@@ -134,6 +134,7 @@ beforeEach(() => {
     value: {
       pathname: "/",
       origin: "http://localhost:3000",
+      href: "http://localhost:3000/",
     },
   });
 });
@@ -148,6 +149,9 @@ describe("PublicModelHub", () => {
     renderHub();
 
     expect(await screen.findByText("gpt-4")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("button", { name: "gpt-4", exact: true })).queryByAltText(""),
+    ).not.toBeInTheDocument();
     expect(modelCalls()[0][0]).toBe(MODEL_HUB_PATH);
     expect(modelQueries()[0]).toEqual({ page: 1, page_size: 50, sort: "model_group" });
   });
@@ -447,8 +451,8 @@ describe("PublicModelHub chat variant", () => {
     const networkingModule = await import("./networking");
     renderHub({ isEmbedded: true, variant: "chat" });
 
-    expect(await screen.findByRole("button", { name: "gpt-4", exact: true })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Search model names" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^gpt-4(?: |$)/ })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search models" })).toBeInTheDocument();
     expect(screen.queryByTestId("navbar")).not.toBeInTheDocument();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Available Models" })).not.toBeInTheDocument();
@@ -461,13 +465,38 @@ describe("PublicModelHub chat variant", () => {
     expect(networkingModule.skillHubPublicCall).not.toHaveBeenCalled();
   });
 
+  it("should filter all published pages from the provider bar and clear the selection", async () => {
+    const user = userEvent.setup();
+    respondWith(DEFAULT_MODELS, 300);
+    renderHub({ isEmbedded: true, variant: "chat" });
+    const modelButton = await screen.findByRole("button", { name: /^gpt-4(?: |$)/ });
+    expect(within(modelButton).getByAltText("")).toBeInTheDocument();
+    expect(modelButton).toHaveTextContent("OpenAI");
+    expect(screen.getByRole("columnheader", { name: "Model" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Providers" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Tags" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Select providers" })).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("pagination-next"));
+    await waitFor(() => expect(lastModelQuery().page).toBe(2));
+
+    await user.click(await screen.findByRole("button", { name: "Anthropic", exact: true }));
+    await waitFor(() => expect(lastModelQuery()["filter[providers][in]"]).toBe("anthropic"));
+    expect(lastModelQuery().page).toBe(1);
+    expect(screen.getByRole("button", { name: "Anthropic", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "OpenAI", exact: true }));
+    await waitFor(() => expect(lastModelQuery()["filter[providers][in]"]).toBe("openai"));
+    expect(screen.getByRole("button", { name: "Anthropic", exact: true })).toHaveAttribute("aria-pressed", "false");
+    await user.click(screen.getByRole("button", { name: "All models", exact: true }));
+    await waitFor(() => expect(lastModelQuery()).not.toHaveProperty("filter[providers][in]"));
+  });
+
   it("should preserve published model search and pagination in chat", async () => {
     const user = userEvent.setup();
     respondWith(DEFAULT_MODELS, 300);
     renderHub({ isEmbedded: true, variant: "chat" });
-    await screen.findByRole("button", { name: "gpt-4", exact: true });
+    await screen.findByRole("button", { name: /^gpt-4(?: |$)/ });
 
-    await user.type(screen.getByRole("textbox", { name: "Search model names" }), "gpt");
+    await user.type(screen.getByRole("textbox", { name: "Search models" }), "gpt");
     await waitFor(() => expect(lastModelQuery().q).toBe("gpt"));
     await user.click(screen.getByTestId("pagination-next"));
     await waitFor(() => expect(lastModelQuery().page).toBe(2));
@@ -478,7 +507,7 @@ describe("PublicModelHub chat variant", () => {
     const user = userEvent.setup();
     respondWith([model({ model_group: "gpt-4", input_cost_per_token: 0.000001, output_cost_per_token: 0.000003 })]);
     renderHub({ isEmbedded: true, variant: "chat" });
-    await user.click(await screen.findByRole("button", { name: "gpt-4", exact: true }));
+    await user.click(await screen.findByRole("button", { name: /^gpt-4(?: |$)/ }));
 
     const dialog = await screen.findByRole("dialog", { name: "gpt-4" });
     expect(dialog).toHaveClass("chat-theme", "chat-model-hub-dialog");

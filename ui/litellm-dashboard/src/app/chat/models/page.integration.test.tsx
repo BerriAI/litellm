@@ -138,14 +138,12 @@ describe("Chat Models page", () => {
     renderWithProviders(<ChatModelsPage />);
 
     expect(screen.getByRole("heading", { name: "Models", level: 1 })).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: PRIVATE_MODEL.model_group })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: IMAGE_MODEL.model_group })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^research-private/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^image-studio/ })).toBeInTheDocument();
 
     await user.type(screen.getByPlaceholderText("Search model names..."), "research");
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: IMAGE_MODEL.model_group })).not.toBeInTheDocument(),
-    );
-    await user.click(screen.getByRole("button", { name: PRIVATE_MODEL.model_group }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^image-studio/ })).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /^research-private/ }));
 
     const details = await screen.findByRole("dialog", { name: PRIVATE_MODEL.model_group });
     expect(within(details).getByText(PRIVATE_MODEL.description)).toBeInTheDocument();
@@ -160,9 +158,9 @@ describe("Chat Models page", () => {
     const user = userEvent.setup();
     renderWithProviders(<ChatModelsPage />);
 
-    const publishedModel = await screen.findByRole("button", { name: PUBLISHED_MODEL.model_group });
-    expect(screen.queryByRole("button", { name: PRIVATE_MODEL.model_group })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: IMAGE_MODEL.model_group })).not.toBeInTheDocument();
+    const publishedModel = await screen.findByRole("button", { name: /^published-chat/ });
+    expect(screen.queryByRole("button", { name: /^research-private/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^image-studio/ })).not.toBeInTheDocument();
     await user.click(publishedModel);
 
     const details = await screen.findByRole("dialog", { name: PUBLISHED_MODEL.model_group });

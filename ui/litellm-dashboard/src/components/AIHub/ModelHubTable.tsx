@@ -4,6 +4,7 @@ import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
 import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { getMCPHubTableColumns, MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
 import { getModelHubTableColumns, ModelHubData } from "@/components/AIHub/ModelHubTableColumns";
+import ModelHubProviders from "@/components/AIHub/ModelHubProviders";
 import { modelUsageExample } from "@/components/AIHub/modelUsageExample";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
 import { getClaudeCodePluginsList } from "@/components/networking";
@@ -120,6 +121,11 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [selectedModel, setSelectedModel] = useState<null | ModelHubData>(null);
   const [filteredData, setFilteredData] = useState<ModelHubData[]>([]);
   const [selectedMode, setSelectedMode] = useState<string>("");
+  const [selectedProvider, setSelectedProvider] = useState("");
+  const providers = useMemo(
+    () => Array.from(new Set(modelHubData?.flatMap((model) => model.providers) ?? [])).sort(),
+    [modelHubData],
+  );
   const isDashboardCatalog = !isChat && !publicPage;
   const showDecisionGarden = isDashboardCatalog && (selectedMode === "" || selectedMode === DECISIONS_MODE);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
@@ -432,7 +438,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [agentSorting, setAgentSorting] = useState<SortingState>([{ id: "name", desc: false }]);
   const [mcpSorting, setMcpSorting] = useState<SortingState>([{ id: "server_name", desc: false }]);
 
-  const modelColumns = useMemo(() => getModelHubTableColumns({ onModelClick: showModal }), [showModal]);
+  const modelColumns = useMemo(
+    () => getModelHubTableColumns({ onModelClick: showModal, showProviderLogos: isChat }),
+    [showModal, isChat],
+  );
   const agentColumns = useMemo(() => getAgentHubTableColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
   const filteredAgentData = useMemo(
     () => filterBySearchTerm(agentHubData ?? [], agentSearchTerm, (agent) => [agent.name, agent.description]),
@@ -509,8 +518,24 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
             <div>
               {/* Model Hub Tab */}
               <TabsContent value="models" keepMounted>
+                {isChat && (
+                  <ModelHubProviders
+                    providers={providers}
+                    selectedProviders={selectedProvider ? [selectedProvider] : []}
+                    onSelect={(provider) => setSelectedProvider(provider ?? "")}
+                    loading={loading}
+                  />
+                )}
                 {/* Model Filters and Table */}
                 <Card className={isChat ? "chat-model-hub-card" : "px-6"}>
+                  {isChat && (
+                    <div className="chat-model-section-heading">
+                      <h2>Models</h2>
+                      <span className="chat-model-section-count" aria-label={`${filteredData.length} models`}>
+                        {filteredData.length}
+                      </span>
+                    </div>
+                  )}
                   {/* Header with Make Public Button */}
                   {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
@@ -520,12 +545,16 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
                   {/* Filters */}
                   <ModelFilters
+                    variant={variant}
                     modelHubData={modelHubData || []}
                     className={isChat ? "chat-model-hub-filters" : undefined}
                     showFiltersCard={!isChat}
                     onFilteredDataChange={handleFilteredDataChange}
                     extraModes={isDashboardCatalog ? [DECISIONS_MODE] : []}
                     onModeChange={setSelectedMode}
+                    selectedProvider={isChat ? selectedProvider : undefined}
+                    onProviderChange={isChat ? setSelectedProvider : undefined}
+                    showProviderFilter={!isChat}
                   />
 
                   {/* Model Table */}
@@ -546,11 +575,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   />
                 </Card>
 
-                <div className="mt-4 text-center space-y-2">
-                  <p className="text-sm text-muted-foreground">
-                    Showing {filteredData.length} of {modelHubData?.length || 0} models
-                  </p>
-                </div>
+                {!isChat && (
+                  <div className="mt-4 text-center space-y-2">
+                    <p className="text-sm text-muted-foreground">
+                      Showing {filteredData.length} of {modelHubData?.length || 0} models
+                    </p>
+                  </div>
+                )}
 
                 {showDecisionGarden && <DecisionModelGarden accessToken={accessToken} canAddModels={canAddModels} />}
               </TabsContent>
