@@ -697,6 +697,7 @@ def test_token_counter_counts_the_tools_system_turn_only_without_a_system_messag
 
     assert system_cost_with_tools == system_cost_without_tools - implicit_system_turn_tokens
 
+
 def _openai_tool_with_properties(properties: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
     return (
         {
@@ -737,13 +738,11 @@ def test_token_counter_counts_array_parameter_without_items_schema(
 ):
     messages: Final = [{"role": "user", "content": "What's on the list?"}]
     omitted_items: Final = tool_shape({"things": {"type": "array", "description": "The things on the list"}})
-    empty_items: Final = tool_shape(
-        {"things": {"type": "array", "description": "The things on the list", "items": {}}}
-    )
+    empty_items: Final = tool_shape({"things": {"type": "array", "description": "The things on the list", "items": {}}})
 
-    assert token_counter_new(
-        model="gpt-4o", messages=messages, tools=omitted_items
-    ) == token_counter_new(model="gpt-4o", messages=messages, tools=empty_items)
+    assert token_counter_new(model="gpt-4o", messages=messages, tools=omitted_items) == token_counter_new(
+        model="gpt-4o", messages=messages, tools=empty_items
+    )
 
 
 def test_format_type_renders_array_without_items_like_empty_items():
