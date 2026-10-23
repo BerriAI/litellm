@@ -76,9 +76,9 @@ _messages_carry_output_config = messages_carry_output_config
 
 
 def _ensure_stop_sequence(response: AnthropicMessagesResponse) -> AnthropicMessagesResponse:
-    if "stop_sequence" in response:
-        return response
-    return {**response, "stop_sequence": None}
+    if "stop_sequence" not in response:
+        response["stop_sequence"] = None  # rebind-ok: normalize the request-owned response in place
+    return response
 
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
