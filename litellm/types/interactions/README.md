@@ -9,11 +9,19 @@ https://ai.google.dev/static/api/interactions.openapi.json
 
 ### How to Regenerate
 
-When the API spec changes, regenerate the types with:
+The compliance tests in `tests/unit/interactions/test_openapi_compliance.py` read the snapshot at
+`tests/unit/interactions/interactions.openapi.json`, so a PR never depends on Google's live spec. The scheduled
+`interactions-spec-canary` workflow runs those tests against the live spec once a day, and a red run there means
+the spec moved in a way these types no longer cover
+
+When that happens, refresh the snapshot and regenerate the types from it:
 
 ```bash
+curl -fsSL https://ai.google.dev/static/api/interactions.openapi.json \
+    -o tests/unit/interactions/interactions.openapi.json
 uv tool run --from datamodel-code-generator datamodel-codegen \
-    --url "https://ai.google.dev/static/api/interactions.openapi.json" \
+    --input tests/unit/interactions/interactions.openapi.json \
+    --input-file-type openapi \
     --output litellm/types/interactions/generated.py \
     --output-model-type pydantic_v2.BaseModel \
     --target-python-version 3.9

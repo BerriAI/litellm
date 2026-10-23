@@ -1,8 +1,11 @@
 """
 OpenAPI compliance tests for Google Interactions API.
 
-Validates that our SDK requests/responses match the OpenAPI spec at:
-https://ai.google.dev/static/api/interactions.openapi.json
+Validates that our SDK requests/responses match the OpenAPI spec snapshot in
+interactions.openapi.json, taken from https://ai.google.dev/static/api/interactions.openapi.json
+(litellm/types/interactions/README.md says how to refresh it). The scheduled
+interactions-spec-canary workflow runs the same tests against the live spec with
+LITELLM_INTERACTIONS_SPEC_SOURCE=live, so a change Google makes shows up there, not in every PR.
 
 Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 """
@@ -10,6 +13,7 @@ Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, Final
 from unittest.mock import MagicMock, patch
 
@@ -17,27 +21,16 @@ import httpx
 import pytest
 from openapi_core import OpenAPI
 
-from litellm.types.interactions.generated import Status1
-
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
+OPENAPI_SPEC_SNAPSHOT: Final = Path(__file__).with_name("interactions.openapi.json")
 
 
 def _load_openapi_spec_dict() -> Dict[str, Any]:
-    """
-    Load the OpenAPI spec JSON.
-
-    In CI or offline environments, network access may not be available.
-    In that case, gracefully skip these tests instead of erroring.
-    """
-    try:
-        response = httpx.get(OPENAPI_SPEC_URL, timeout=5.0)
+    if os.environ.get("LITELLM_INTERACTIONS_SPEC_SOURCE") == "live":
+        response: Final = httpx.get(OPENAPI_SPEC_URL, timeout=30.0)
         response.raise_for_status()
         return response.json()
-    except Exception as e:  # pragma: no cover - defensive, env-dependent
-        pytest.skip(
-            f"Skipping Google Interactions OpenAPI compliance tests - "
-            f"unable to load spec from {OPENAPI_SPEC_URL}: {e}"
-        )
+    return json.loads(OPENAPI_SPEC_SNAPSHOT.read_text())
 
 
 def _model_create_request_schema(spec_dict: Dict[str, Any]) -> Dict[str, Any]:
@@ -252,12 +245,15 @@ class TestResponseCompliance:
             print(f"✓ Output field '{field}' exists in spec")
 
     def test_status_enum_values(self, spec_dict):
-        """Every status the live spec can return is one litellm's Interaction model parses."""
+        """Every status the spec can return is in litellm's generated Interaction status enum,
+        the enum the cost-polling status sets are checked against."""
+        from litellm.types.interactions.generated import Status1
+
         schema = spec_dict["components"]["schemas"]["Interaction"]
-        live_statuses: Final = frozenset(schema["properties"]["status"]["enum"])
+        spec_statuses: Final = frozenset(schema["properties"]["status"]["enum"])
         parsed_statuses: Final = frozenset(member.value for member in Status1)
-        assert live_statuses
-        assert live_statuses <= parsed_statuses, sorted(live_statuses - parsed_statuses)
+        assert spec_statuses
+        assert spec_statuses <= parsed_statuses, sorted(spec_statuses - parsed_statuses)
 
     def test_usage_schema(self, spec_dict):
         """Verify Usage schema fields."""

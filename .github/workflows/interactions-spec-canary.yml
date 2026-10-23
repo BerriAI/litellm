@@ -1,0 +1,42 @@
+name: Interactions spec canary
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  interactions-spec-canary:
+    name: interactions-spec-canary
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install dependencies
+        run: .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy --no-install-project
+
+      - name: Run the compliance tests against Google's live spec
+        env:
+          LITELLM_INTERACTIONS_SPEC_SOURCE: live
+        run: |
+          uv run --no-sync pytest tests/unit/interactions/test_openapi_compliance.py \
+            --tb=short -vv -p no:rerunfailures -p no:pytest-retry \
+            --allow-hosts=127.0.0.1,::1,localhost,ai.google.dev
