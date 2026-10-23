@@ -3418,6 +3418,34 @@
     "default_model_placeholder": "inferenceapis/deepseek-ai/DeepSeek-V4-Flash"
   },
   {
+    "provider": "OBSCURIFY",
+    "provider_display_name": "Obscurify.ai",
+    "litellm_provider": "obscurify",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://obscurify.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "obscurify/deepseek/deepseek-v4-flash"
+  },
+  {
     "provider": "Snowflake",
     "provider_display_name": "Snowflake",
     "litellm_provider": "snowflake",
