@@ -4,18 +4,22 @@ tool with the number of times it was invoked since the previous flush.
 """
 
 from collections.abc import Iterable
-from typing import Final, cast
+from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
+
+_ITEM: Final = TypeAdapter(ToolDiscoveryQueueItem)
 
 
 def _merged(existing: ToolDiscoveryQueueItem | None, item: ToolDiscoveryQueueItem) -> ToolDiscoveryQueueItem:
     """The first sighting keeps its origin and caller fields, later sightings only add to call_count."""
     increment: Final = item.get("call_count", 1)
     if existing is None:
-        return cast(ToolDiscoveryQueueItem, {**item, "call_count": increment})
-    return cast(ToolDiscoveryQueueItem, {**existing, "call_count": existing.get("call_count", 1) + increment})
+        return _ITEM.validate_python({**item, "call_count": increment})
+    return _ITEM.validate_python({**existing, "call_count": existing.get("call_count", 1) + increment})
 
 
 def aggregate_tool_discoveries(items: Iterable[ToolDiscoveryQueueItem]) -> tuple[ToolDiscoveryQueueItem, ...]:

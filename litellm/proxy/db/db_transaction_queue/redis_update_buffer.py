@@ -581,7 +581,7 @@ class RedisUpdateBuffer:
                     RedisPipelineRpushOperation(key=REDIS_TOOL_DISCOVERY_BUFFER_KEY, values=[safe_dumps(items)])
                 ]
             )
-        except Exception as e:
+        except (RedisError, OSError, asyncio.TimeoutError) as e:
             verbose_proxy_logger.error(
                 "Tool discovery - failed to push %d tool rows to Redis, restoring them for the next tick. Error: %s",
                 len(items),
@@ -590,6 +590,7 @@ class RedisUpdateBuffer:
             for item in items:
                 tool_discovery_queue.add_update(item)
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def get_all_tool_discoveries_from_redis_buffer(self) -> tuple[ToolDiscoveryQueueItem, ...]:
         """Drain every worker's tool rows and fold them to one row per tool_name."""
         if self.redis_cache is None:
@@ -605,6 +606,7 @@ class RedisUpdateBuffer:
         batches: Final = tuple(_TOOL_DISCOVERY_ITEMS.validate_json(entry) for entry in entries)
         return aggregate_tool_discoveries(item for batch in batches for item in batch)
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def store_spend_logs_in_redis(
         self,
         rows: Sequence[SpendLogRow],
