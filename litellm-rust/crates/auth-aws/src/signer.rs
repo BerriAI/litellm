@@ -89,7 +89,10 @@ mod tests {
     use serde_json::{Value, json as json_value};
     use std::time::{Duration, UNIX_EPOCH};
 
-    use litellm_http::outbound::{json, signed};
+    use litellm_http::{
+        outbound::{json, signed},
+        request::header_map,
+    };
 
     use super::*;
 
@@ -108,17 +111,14 @@ mod tests {
         .with_clock(fixed_clock)
     }
 
-    fn target() -> (String, String) {
-        ("X-Amz-Target".into(), "Textract.DetectDocumentText".into())
+    fn target() -> HeaderMap {
+        header_map(&[("X-Amz-Target", "Textract.DetectDocumentText")])
     }
 
     fn authorization(body: &Value, service: &'static str) -> String {
-        signed(
-            json(URL, &[target()], body, None).unwrap(),
-            &signer(service),
-        )
-        .unwrap()
-        .headers()["authorization"]
+        signed(json(URL, target(), body, None).unwrap(), &signer(service))
+            .unwrap()
+            .headers()["authorization"]
             .to_str()
             .unwrap()
             .to_string()
@@ -129,7 +129,7 @@ mod tests {
         let sent = signed(
             json(
                 URL,
-                &[target()],
+                target(),
                 &json_value!({"Document": {"Bytes": "aGk="}}),
                 None,
             )
@@ -180,7 +180,7 @@ mod tests {
         let error = signed(
             json(
                 URL,
-                &[("authorization".into(), "Bearer caller".into())],
+                header_map(&[("authorization", "Bearer caller")]),
                 &json_value!({}),
                 None,
             )
@@ -198,7 +198,7 @@ mod tests {
         let error = signed(
             json(
                 URL,
-                &[("x-amz-meta-note".into(), "café".into())],
+                header_map(&[("x-amz-meta-note", "café")]),
                 &json_value!({}),
                 None,
             )

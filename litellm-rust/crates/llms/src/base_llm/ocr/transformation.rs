@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use serde::{
     Serialize,
     de::{DeserializeOwned, IntoDeserializer},
@@ -49,7 +50,7 @@ impl OcrCredentialInputs {
 
 #[derive(Clone)]
 pub struct OcrTransportConfig {
-    pub extra_headers: Vec<(String, String)>,
+    pub extra_headers: HeaderMap,
     pub extra_headers_source: InputSource,
     pub timeout: Option<Duration>,
     pub max_response_bytes: usize,
@@ -58,7 +59,7 @@ pub struct OcrTransportConfig {
 impl Default for OcrTransportConfig {
     fn default() -> Self {
         Self {
-            extra_headers: Vec::new(),
+            extra_headers: HeaderMap::new(),
             extra_headers_source: InputSource::Deployment,
             timeout: None,
             max_response_bytes: OCR_RESPONSE_MAX_BYTES,
@@ -69,7 +70,7 @@ impl Default for OcrTransportConfig {
 impl OcrTransportConfig {
     pub fn with_overrides(
         self,
-        extra_headers: Vec<(String, String)>,
+        extra_headers: HeaderMap,
         extra_headers_source: InputSource,
         timeout: Option<Duration>,
     ) -> Self {
@@ -94,7 +95,7 @@ pub struct OcrConnection {
     pub api_key_source: InputSource,
     pub api_base: Option<String>,
     pub api_base_source: InputSource,
-    pub extra_headers: Vec<(String, String)>,
+    pub extra_headers: HeaderMap,
     pub extra_headers_source: InputSource,
     pub timeout: Duration,
     pub max_response_bytes: usize,
@@ -234,15 +235,15 @@ const HEALTH_CHECK_PDF_DATA_URI: &str = "data:application/pdf;base64,JVBERi0xLjQ
 /// Output of `validate_environment`: whatever a provider resolves up front
 /// (headers at minimum; Vertex also carries the project id).
 pub trait OcrEnvironment: Send + Sync {
-    fn headers(&self) -> &[(String, String)];
+    fn headers(&self) -> &HeaderMap;
 
     fn signer(&self) -> Option<&dyn RequestSigner> {
         None
     }
 }
 
-impl OcrEnvironment for Vec<(String, String)> {
-    fn headers(&self) -> &[(String, String)] {
+impl OcrEnvironment for HeaderMap {
+    fn headers(&self) -> &HeaderMap {
         self
     }
 }
@@ -260,7 +261,7 @@ pub struct OcrResponseContext<'a> {
     pub hooks: &'a dyn CallHooks<Error>,
     pub request_format: OcrResponseFormat,
     pub url: &'a str,
-    pub headers: &'a [(String, String)],
+    pub headers: &'a HeaderMap,
 }
 
 pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
@@ -322,7 +323,7 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         model: &str,
         document: OcrDocument,
         optional_params: &Self::OcrParams,
-        headers: &[(String, String)],
+        headers: &HeaderMap,
     ) -> Result<Self::ProviderRequest, Error>;
 
     fn async_transform_ocr_request(
@@ -330,7 +331,7 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         model: &str,
         document: OcrDocument,
         optional_params: &Self::OcrParams,
-        headers: &[(String, String)],
+        headers: &HeaderMap,
         _context: OcrRequestContext<'_>,
     ) -> impl Future<Output = Result<Self::ProviderRequest, Error>> + Send {
         async move { self.transform_ocr_request(model, document, optional_params, headers) }

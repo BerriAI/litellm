@@ -41,7 +41,7 @@ pub(super) fn chat_completions_provider(provider: LlmProviders) -> Option<ChatPr
 
 pub(super) fn string_headers(
     extra_headers: Option<Map<String, Value>>,
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<http::HeaderMap, Error> {
     shared_string_headers(HEADER_CONTEXT, extra_headers).map_err(Error::from)
 }
 
@@ -84,7 +84,7 @@ mod tests {
 
     #[rstest]
     #[case::anthropic(LlmProviders::Anthropic, ("anthropic-version", "2023-06-01"))]
-    #[case::bedrock(LlmProviders::Bedrock, ("Content-Type", "application/json"))]
+    #[case::bedrock(LlmProviders::Bedrock, ("content-type", "application/json"))]
     fn resolves_supported_provider_configs(
         #[case] provider: LlmProviders,
         #[case] expected_header: (&str, &str),

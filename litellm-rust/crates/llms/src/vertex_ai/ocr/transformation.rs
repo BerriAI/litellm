@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_auth_gcp::{self as vertex, VertexConfig};
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde_json::Value;
@@ -79,7 +80,7 @@ impl BaseOcrConfig for VertexAiOcrConfig {
         model: &str,
         document: OcrDocument,
         optional_params: &OpaqueParams,
-        headers: &[(String, String)],
+        headers: &HeaderMap,
     ) -> Result<MistralOcrRequest, Error> {
         MistralOcrConfig.transform_ocr_request(model, document, optional_params, headers)
     }
@@ -89,7 +90,7 @@ impl BaseOcrConfig for VertexAiOcrConfig {
         model: &str,
         document: OcrDocument,
         optional_params: &OpaqueParams,
-        headers: &[(String, String)],
+        headers: &HeaderMap,
         context: OcrRequestContext<'_>,
     ) -> Result<MistralOcrRequest, Error> {
         let document = inline_remote_document(
@@ -116,7 +117,7 @@ impl BaseOcrConfig for VertexAiOcrConfig {
 }
 
 impl OcrEnvironment for vertex::VertexEnvironment {
-    fn headers(&self) -> &[(String, String)] {
+    fn headers(&self) -> &HeaderMap {
         &self.headers
     }
 }

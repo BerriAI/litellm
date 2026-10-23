@@ -1,4 +1,5 @@
-use litellm_auth::{InputSource, Sourced};
+use http::{HeaderMap, header::AUTHORIZATION};
+use litellm_auth::{CredentialPlacement, InputSource, Sourced, http::apply_credential};
 use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde_json::Value;
@@ -25,7 +26,7 @@ pub struct AzureAiOcrConfig;
 impl BaseOcrConfig for AzureAiOcrConfig {
     type OcrParams = OpaqueParams;
     type ProviderRequest = MistralOcrRequest;
-    type Environment = Vec<(String, String)>;
+    type Environment = HeaderMap;
 
     fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
         MistralOcrConfig.get_supported_ocr_params(model)
@@ -85,7 +86,7 @@ impl BaseOcrConfig for AzureAiOcrConfig {
         model: &str,
         document: OcrDocument,
         optional_params: &OpaqueParams,
-        headers: &[(String, String)],
+        headers: &HeaderMap,
     ) -> Result<MistralOcrRequest, Error> {
         MistralOcrConfig.transform_ocr_request(model, document, optional_params, headers)
     }
@@ -95,7 +96,7 @@ impl BaseOcrConfig for AzureAiOcrConfig {
         model: &str,
         document: OcrDocument,
         optional_params: &OpaqueParams,
-        headers: &[(String, String)],
+        headers: &HeaderMap,
         context: OcrRequestContext<'_>,
     ) -> Result<MistralOcrRequest, Error> {
         let document = inline_remote_document(
@@ -143,9 +144,9 @@ impl AzureAiOcrConfig {
         connection: &OcrConnection,
         config: &AzureAuthInputs,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-    ) -> Result<Vec<(String, String)>, Error> {
+    ) -> Result<HeaderMap, Error> {
         Self::resolve_api_base(connection.api_base.as_deref(), env_lookup)?;
-        if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
+        if connection.extra_headers.contains_key(AUTHORIZATION) {
             if config.azure_ad_token_provider.is_some() {
                 super::common_utils::resolve_entra(auth, config, env_lookup).await?;
             }
@@ -165,7 +166,7 @@ impl AzureAiOcrConfig {
         });
         if let Some(key) = key {
             super::common_utils::validate_destination(connection, key.source())?;
-            return Ok(bearer_headers(connection, key.value()));
+            return bearer_headers(connection, key.value());
         }
         let key = super::common_utils::resolve_entra(auth, config, env_lookup)
             .await?
@@ -174,7 +175,7 @@ impl AzureAiOcrConfig {
                 guidance: "set AZURE_AI_API_KEY or configure Entra ID",
             })?;
         super::common_utils::validate_destination(connection, key.source())?;
-        Ok(bearer_headers(connection, key.value()))
+        bearer_headers(connection, key.value())
     }
 
     fn build_ocr_url(
@@ -190,10 +191,12 @@ impl AzureAiOcrConfig {
     }
 }
 
-fn bearer_headers(connection: &OcrConnection, key: &str) -> Vec<(String, String)> {
-    std::iter::once(("Authorization".into(), format!("Bearer {key}")))
-        .chain(connection.extra_headers.clone())
-        .collect()
+fn bearer_headers(connection: &OcrConnection, key: &str) -> Result<HeaderMap, Error> {
+    Ok(apply_credential(
+        connection.extra_headers.clone(),
+        key,
+        CredentialPlacement::Bearer,
+    )?)
 }
 
 fn nonblank(value: Option<String>) -> Option<String> {
@@ -250,7 +253,10 @@ mod tests {
     #[tokio::test]
     async fn supplied_authorization_precedes_keys(connection: OcrConnection) {
         let connection = OcrConnection {
-            extra_headers: vec![("authorization".into(), "Bearer prepared".into())],
+            extra_headers: litellm_http::request::header_map(&[(
+                "authorization",
+                "Bearer prepared",
+            )]),
             ..connection
         };
         assert_eq!(
@@ -279,8 +285,8 @@ mod tests {
                     &|_| { Some("environment-key".into()) }
                 )
                 .await
-                .unwrap()[0],
-            ("Authorization".into(), "Bearer request-key".into())
+                .unwrap()["authorization"],
+            "Bearer request-key"
         );
     }
 
@@ -329,10 +335,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            headers[0],
-            ("Authorization".into(), "Bearer request-key".into())
-        );
+        assert_eq!(headers["authorization"], "Bearer request-key");
     }
 
     #[tokio::test]
@@ -352,7 +355,7 @@ mod tests {
 
         assert_eq!(
             headers,
-            [("Authorization".to_string(), "Bearer env-key".to_string())]
+            litellm_http::request::header_map(&[("authorization", "Bearer env-key")])
         );
         assert_eq!(url, "https://env.example/providers/mistral/azure/ocr");
     }

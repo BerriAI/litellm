@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
@@ -8,7 +9,6 @@ use litellm_http::{
     Client, ClientVariant, HttpClientConfig, HttpClientPool,
     media::{MediaFetcher, UrlPolicy},
     outbound::{RequestSigner, json, signed},
-    request::header_pairs,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -128,7 +128,7 @@ pub async fn ocr<C: BaseOcrConfig>(
 ) -> Result<LiteLLMOcrResponse, Error> {
     let http = config.prepare_request(request, client, hooks).await?;
     let url = http.url().to_string();
-    let headers = header_pairs(http.headers());
+    let headers = http.headers().clone();
     let response = client
         .provider_http()
         .execute(http)
@@ -207,7 +207,7 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     config: &C,
     request: &PreparedOcrRequest,
     url: &str,
-    headers: &[(String, String)],
+    headers: &HeaderMap,
     body: B,
     signer: Option<&dyn RequestSigner>,
     hooks: &dyn CallHooks<Error>,
@@ -230,7 +230,7 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     config.validate_request_body(&changed.body)?;
     let built = json(
         url,
-        &changed.headers,
+        changed.headers,
         &changed.body,
         Some(request.connection.timeout),
     )?;
@@ -240,10 +240,10 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     })
 }
 
-fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireRequest {
+fn wire_request(url: &str, headers: &HeaderMap, body: Value) -> WireRequest {
     WireRequest {
         url: url.into(),
-        headers: headers.to_vec(),
+        headers: headers.clone(),
         body,
     }
 }
@@ -251,23 +251,18 @@ fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireReq
 pub fn build_http_request(
     request: &PreparedOcrRequest,
     url: String,
-    headers: Vec<(String, String)>,
+    headers: HeaderMap,
     body: &impl Serialize,
 ) -> Result<reqwest::Request, Error> {
-    Ok(json(
-        &url,
-        &headers,
-        body,
-        Some(request.connection.timeout),
-    )?)
+    Ok(json(&url, headers, body, Some(request.connection.timeout))?)
 }
 
 pub async fn guardrail_document(
     request: &PreparedOcrRequest,
     url: &str,
-    headers: &[(String, String)],
+    headers: &HeaderMap,
     hooks: &dyn CallHooks<Error>,
-) -> Result<(OcrDocument, Vec<(String, String)>), Error> {
+) -> Result<(OcrDocument, HeaderMap), Error> {
     let body = serde_json::to_value(&request.document)
         .map_err(|error| Error::request_field("document", error))?;
     let changed = hooks

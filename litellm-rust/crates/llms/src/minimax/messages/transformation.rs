@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_llms_types::{
@@ -16,7 +17,7 @@ use crate::{
         },
     },
     base_llm::{
-        auth::{AuthScheme, Headers, ValidatedEnvironment},
+        auth::{AuthScheme, ValidatedEnvironment},
         messages::{context::MessagesTransformContext, transformation::BaseMessagesConfig},
     },
 };
@@ -39,7 +40,7 @@ impl BaseMessagesConfig for MinimaxMessagesConfig {
 
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         api_key: Option<&str>,
         _model: &str,
         _optional_params: &MessagesOptionalParams,
@@ -110,7 +111,11 @@ impl BaseMessagesConfig for MinimaxMessagesConfig {
         DEFAULT_HEADERS
     }
 
-    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+    fn request_headers(
+        &self,
+        headers: HeaderMap,
+        request: &MessagesRequest,
+    ) -> Result<HeaderMap, Error> {
         update_headers_with_anthropic_beta(headers, request)
     }
 }
@@ -185,7 +190,7 @@ mod tests {
         };
         let environment = MINIMAX_MESSAGES_CONFIG
             .validate_environment(
-                vec![],
+                http::HeaderMap::new(),
                 key,
                 "test-model",
                 &MessagesOptionalParams::default(),

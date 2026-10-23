@@ -458,7 +458,7 @@ kwargs = {}
             );
             assert_eq!(
                 projected.transport.extra_headers,
-                [("x-source".to_string(), "original".to_string())]
+                litellm_http::request::header_map(&[("x-source", "original")])
             );
             assert_eq!(
                 projected.transport.timeout,
@@ -679,7 +679,7 @@ kwargs = {
             );
             assert_eq!(
                 projected.transport.extra_headers,
-                [("x-source".to_string(), "kwargs".to_string())]
+                litellm_http::request::header_map(&[("x-source", "kwargs")])
             );
             assert_eq!(
                 projected.transport.timeout,

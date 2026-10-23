@@ -1,5 +1,6 @@
+use http::HeaderMap;
 use litellm_auth::SecretValue;
-use litellm_http::request::{has_bearer_auth, has_header};
+use litellm_http::request::has_bearer_auth;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
@@ -19,7 +20,7 @@ use crate::{
         AZURE_API_BASE_ENV, AZURE_API_KEY_ENV, resolve_azure_api_base, resolve_azure_api_key,
     },
     base_llm::{
-        auth::{AuthScheme, Headers, ValidatedEnvironment},
+        auth::{AuthScheme, ValidatedEnvironment},
         messages::{
             context::MessagesTransformContext,
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
@@ -80,14 +81,14 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     /// otherwise the Azure key goes in `x-api-key`.
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         api_key: Option<&str>,
         _model: &str,
         _optional_params: &MessagesOptionalParams,
         _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        if has_header(&headers, API_KEY_PLACEMENT.header_name()) || has_bearer_auth(&headers) {
+        if headers.contains_key(API_KEY_PLACEMENT.header_name()) || has_bearer_auth(&headers) {
             return Ok(ValidatedEnvironment {
                 headers,
                 auth: AuthScheme::Forwarded,
@@ -104,7 +105,11 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         DEFAULT_HEADERS
     }
 
-    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+    fn request_headers(
+        &self,
+        headers: HeaderMap,
+        request: &MessagesRequest,
+    ) -> Result<HeaderMap, Error> {
         update_headers_with_safeguards_beta(headers, request, BetaProvider::AzureAi)
     }
 }
@@ -232,10 +237,7 @@ mod tests {
     fn validated(forwarded: &[(&str, &str)], api_key: Option<&str>) -> ValidatedEnvironment {
         AZURE_ANTHROPIC_MESSAGES_CONFIG
             .validate_environment(
-                forwarded
-                    .iter()
-                    .map(|(name, value)| (name.to_string(), value.to_string()))
-                    .collect(),
+                litellm_http::request::header_map(forwarded),
                 api_key,
                 "claude",
                 &MessagesOptionalParams::default(),
@@ -557,12 +559,7 @@ mod tests {
         #[case] forwarded: &[(&str, &str)],
         #[case] expected: &[(&str, &str)],
     ) {
-        let pairs = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
-            pairs
-                .iter()
-                .map(|(name, value)| (name.to_string(), value.to_string()))
-                .collect()
-        };
+        let pairs = litellm_http::request::header_map;
         let serde_json::Value::Object(fields) = fields else {
             panic!("case fields are an object")
         };
@@ -581,13 +578,10 @@ mod tests {
         ));
         assert_eq!(
             AZURE_ANTHROPIC_MESSAGES_CONFIG.request_headers(
-                pairs(&[("x-api-key", "k")])
-                    .into_iter()
-                    .chain(pairs(forwarded))
-                    .collect(),
+                pairs(&[[("x-api-key", "k")].as_slice(), forwarded].concat()),
                 &request
             ),
-            pairs(expected)
+            Ok(pairs(expected))
         );
     }
 
@@ -621,7 +615,7 @@ mod tests {
             None
         };
         let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.validate_environment(
-            Vec::new(),
+            http::HeaderMap::new(),
             None,
             "claude",
             &MessagesOptionalParams::default(),

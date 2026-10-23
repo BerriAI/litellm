@@ -124,10 +124,7 @@ fn with_source(request: LiteLLMOcrRequest, source: &str) -> LiteLLMOcrRequest {
 
 fn with_headers(request: LiteLLMOcrRequest, headers: &[(&str, &str)]) -> LiteLLMOcrRequest {
     let mut request = request;
-    request.transport.extra_headers = headers
-        .iter()
-        .map(|(name, value)| (name.to_string(), value.to_string()))
-        .collect();
+    request.transport.extra_headers = litellm_http::request::header_map(headers);
     request
 }
 

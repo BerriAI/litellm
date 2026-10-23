@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
 use serde_json::Value;
 
@@ -22,7 +23,7 @@ pub struct AzureAICohereParseConfig;
 impl BaseOcrConfig for AzureAICohereParseConfig {
     type OcrParams = CohereOptions;
     type ProviderRequest = CohereRequest;
-    type Environment = Vec<(String, String)>;
+    type Environment = HeaderMap;
 
     fn get_api_key_env_var(&self) -> Option<&'static str> {
         super::transformation::AzureAiOcrConfig.get_api_key_env_var()
@@ -67,7 +68,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         model: &str,
         document: OcrDocument,
         params: &CohereOptions,
-        headers: &[(String, String)],
+        headers: &HeaderMap,
     ) -> Result<CohereRequest, Error> {
         CohereParseConfig.transform_ocr_request(model, document, params, headers)
     }
@@ -89,7 +90,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         model: &str,
         document: OcrDocument,
         optional_params: &CohereOptions,
-        headers: &[(String, String)],
+        headers: &HeaderMap,
         context: OcrRequestContext<'_>,
     ) -> Result<CohereRequest, Error> {
         validate_document(&document)?;

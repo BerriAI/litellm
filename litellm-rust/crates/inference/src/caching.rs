@@ -47,7 +47,13 @@ impl CacheRequest {
                     "provider": identity.provider,
                     "model": identity.model,
                     "url": wire.url,
-                    "headers": wire.headers,
+                    "headers": wire
+                        .headers
+                        .iter()
+                        .map(|(name, value)| {
+                            (name.as_str(), String::from_utf8_lossy(value.as_bytes()))
+                        })
+                        .collect::<Vec<_>>(),
                     "body": wire.body,
                 })
             }),
