@@ -5,6 +5,8 @@ Tests for the Realtime transcription_sessions surface used by gpt-realtime-whisp
   - BaseLLMHTTPHandler.async_realtime_transcription_session_handler targeting
 """
 
+import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -142,36 +144,35 @@ async def test_client_secret_handler_still_targets_client_secrets_url():
 
 
 @pytest.mark.asyncio
-async def test_sdk_fn_routes_openai_transcription_session(monkeypatch):
-    """
-    litellm.acreate_realtime_transcription_session resolves the OpenAI provider
-    from the transcription model and POSTs to the OpenAI transcription_sessions URL.
-    """
+@pytest.mark.parametrize("provider", ["openai", "hosted_vllm"])
+@pytest.mark.parametrize("body_model", [False, True])
+async def test_sdk_fn_routes_openai_transcription_session(provider: str, body_model: bool) -> None:
     import litellm
 
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-unit-test")
+    model: Final = "transcription-deployment"
 
-    mock_response = MagicMock(spec=httpx.Response)
-    mock_client = MagicMock(spec=AsyncHTTPHandler)
-    mock_client.post = AsyncMock(return_value=mock_response)
+    def upstream(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://upstream.example/v1/realtime/client_secrets"
+        assert request.headers["authorization"] == "Bearer sk-test"
+        assert json.loads(request.content) == {
+            "session": {"type": "transcription", "audio": {"input": {
+                "format": {"type": "audio/pcm", "rate": 24000},
+                "transcription": {"model": model},
+            }}}
+        }
+        return httpx.Response(200, json={"value": "ek_upstream", "session": {"id": "sess_1"}})
 
-    result = await litellm.acreate_realtime_transcription_session(
-        model="openai/gpt-realtime-whisper",
+    response: Final = await litellm.acreate_realtime_transcription_session(
+        model=None if body_model else f"{provider}/{model}",
+        api_base="https://upstream.example",
+        api_key="sk-test",
         transcription_session={
             "input_audio_format": "pcm16",
-            "input_audio_transcription": {"model": "gpt-realtime-whisper"},
+            **({"model": f"{provider}/{model}"} if body_model else {}),
         },
-        client=mock_client,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
     )
-
-    assert result is mock_response
-    _, kwargs = mock_client.post.call_args
-    assert kwargs["url"].endswith("/v1/realtime/transcription_sessions")
-    # The litellm-only routing hint must not be forwarded upstream.
-    assert "model" not in kwargs["json"]
-    assert kwargs["json"]["input_audio_transcription"] == {
-        "model": "gpt-realtime-whisper"
-    }
+    assert response.json() == {"id": "sess_1", "client_secret": {"value": "ek_upstream", "expires_at": None}}
 
 
 def test_append_query_params_skips_existing_keys():

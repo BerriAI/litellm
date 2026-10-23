@@ -7,7 +7,7 @@ from enum import Enum, auto
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeAlias, TypedDict, cast, runtime_checkable
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -338,9 +338,11 @@ class RealTimeStreaming:
     _CLIENT_AUDIO_BUFFER_COMMIT_TYPES = frozenset(["input_audio_buffer.commit", "input_audio_buffer.end"])
     _AUDIO_FORMAT_MAP: dict[str, dict[str, str | int]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
-        "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
-        "g711_alaw": {"type": "audio/G711-alaw", "rate": 8000},
+        "g711_ulaw": {"type": "audio/pcmu"},
+        "g711_alaw": {"type": "audio/pcma"},
     }
+    audio_formats: Final = MappingProxyType({beta: MappingProxyType(ga) for beta, ga in _AUDIO_FORMAT_MAP.items()})
+
     # GA name → beta name (when client WebSocket includes OpenAI-Beta: realtime=v1)
     _GA_TO_BETA_EVENT_TYPES: dict[str, str] = {
         "conversation.item.added": "conversation.item.created",
@@ -1386,13 +1388,13 @@ class RealTimeStreaming:
             raw = session.pop("output_audio_format")
             out["format"] = RealTimeStreaming._AUDIO_FORMAT_MAP.get(raw, raw) if isinstance(raw, str) else raw
 
-        # turn_detection → audio.input.turn_detection
-        if "turn_detection" in session:
-            inp["turn_detection"] = session.pop("turn_detection")
-
-        # input_audio_transcription → audio.input.transcription
-        if "input_audio_transcription" in session:
-            inp["transcription"] = session.pop("input_audio_transcription")
+        for beta_field, ga_field in (
+            ("turn_detection", "turn_detection"),
+            ("input_audio_transcription", "transcription"),
+            ("input_audio_noise_reduction", "noise_reduction"),
+        ):
+            if beta_field in session:
+                inp[ga_field] = session.pop(beta_field)
 
         if inp:
             audio["input"] = inp
@@ -1402,7 +1404,7 @@ class RealTimeStreaming:
         if audio:
             # Merge with any existing GA-style `audio` block the client already set,
             # letting the remapped values take precedence within each sub-key.
-            existing: Final = session.get("audio") or {}
+            existing: Final = {**(session.get("audio") or {})}
             for sub_key, sub_val in audio.items():
                 if sub_key in existing and isinstance(existing[sub_key], dict) and isinstance(sub_val, dict):
                     existing[sub_key] = {**existing[sub_key], **sub_val}
@@ -1411,6 +1413,11 @@ class RealTimeStreaming:
             session["audio"] = existing
 
         return session
+
+    _session_remapper: Final[TypeAdapter[Callable[[Mapping[str, JsonValue]], object]]] = TypeAdapter(
+        Callable[[Mapping[str, JsonValue]], object]
+    )
+    remap_beta_session_to_ga: Final = _session_remapper.validate_python(_remap_beta_session_to_ga)
 
     @staticmethod
     def _translate_event_to_beta(event: dict) -> dict | None:

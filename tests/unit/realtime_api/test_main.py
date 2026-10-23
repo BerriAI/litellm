@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import JsonValue
 import respx
 
 import litellm
@@ -714,7 +715,7 @@ class _GatewayThatRecordsTheUrl:
     ("route", "route_kwargs", "path"),
     [
         (realtime_main.acreate_realtime_client_secret, {}, "client_secrets"),
-        (realtime_main.acreate_realtime_transcription_session, {}, "transcription_sessions"),
+        (realtime_main.acreate_realtime_transcription_session, {}, "client_secrets"),
         (realtime_main.arealtime_calls, {"openai_ephemeral_key": "ek_test", "sdp_body": b"v=0"}, "calls"),
     ],
 )
@@ -1199,3 +1200,18 @@ async def test_openai_realtime_health_check_sends_the_federated_bearer_for_a_key
             model_params={"model": "openai/gpt-realtime", **federated_deployment},
         )
     assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer federated-bearer"}
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_transcription_session_names_the_routed_model(nested: bool) -> None:
+    transcription: Final[JsonValue] = {"model": "alias", "language": "en"}
+    payload: Final[Mapping[str, JsonValue]] = (
+        {"audio": {"input": {"transcription": transcription}}} if nested else {"input_audio_transcription": transcription}
+    )
+    expected_transcription: Final[JsonValue] = {"model": "deployment", "language": "en"}
+    expected: Final[Mapping[str, JsonValue]] = (
+        {"audio": {"input": {"transcription": expected_transcription}}}
+        if nested else {"input_audio_transcription": expected_transcription}
+    )
+    assert _with_resolved_session_model({"type": "transcription", **payload}, "deployment") == {"type": "transcription", **expected}
+    assert transcription == {"model": "alias", "language": "en"}

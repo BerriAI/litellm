@@ -6841,7 +6841,7 @@ class BaseLLMHTTPHandler:
         self,
         api_base: str,
         api_key: str,
-        request_data: dict[str, object],
+        request_data: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
@@ -6903,7 +6903,7 @@ class BaseLLMHTTPHandler:
         endpoint: Literal["client_secrets", "transcription_sessions"],
         api_base: str,
         api_key: str,
-        request_data: dict[str, object],
+        request_data: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
@@ -6960,7 +6960,7 @@ class BaseLLMHTTPHandler:
             return await async_httpx_client.post(
                 url=url,
                 headers=headers,
-                json=request_data,
+                json=dict(request_data),
                 timeout=timeout,
             )
         except Exception as e:
@@ -6980,7 +6980,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        session_config: dict[str, object] | None = None,
+        session_config: Mapping[str, object] | None = None,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
@@ -7014,18 +7014,16 @@ class BaseLLMHTTPHandler:
         if extra_headers:
             headers.update(extra_headers)
 
-        # Build multipart form data: sdp + session JSON
-        session_data: Final = session_config or {}
-        if "type" not in session_data:
-            session_data["type"] = "realtime"
-        if "model" not in session_data and model:
-            session_data["model"] = model
+        session_data: Final = {"type": "realtime", **(session_config or {})}
+        resolved_session: Final = (
+            {"model": model, **session_data} if model and session_data["type"] == "realtime" else session_data
+        )
 
         sdp_text: Final = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
 
         files: Final = {
             "sdp": (None, sdp_text, "text/plain"),
-            "session": (None, json.dumps(session_data), "application/json"),
+            "session": (None, json.dumps(resolved_session), "application/json"),
         }
 
         logging_obj.pre_call(
