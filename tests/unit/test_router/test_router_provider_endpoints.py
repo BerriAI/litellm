@@ -42,6 +42,61 @@ CHAT_RESPONSE: Final = {
 }
 
 
+@pytest.mark.parametrize("prefix", ("systemone/", "decisions/", ""))
+@pytest.mark.parametrize("configured_mode", (None, "chat"))
+def test_decisions_format_prefix_exposes_both_decisions_endpoints_without_changing_chat_mode(
+    prefix: str, configured_mode: str | None
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "custom",
+                "litellm_params": {
+                    "model": f"openai/{prefix}org/custom-model",
+                    "api_base": "https://custom.example/v1",
+                    "api_key": "caller-key",
+                },
+                "model_info": {"mode": configured_mode} if configured_mode else {},
+            }
+        ]
+    )
+    info: Final = router.get_model_group_info("custom")
+
+    assert info is not None
+    assert info.mode == configured_mode
+    assert set(info.supported_endpoints or ()) == ({"/v1/systemone", "/v1/decisions"} if prefix else set())
+
+
+@pytest.mark.parametrize("wire_format", ("systemone", "decisions"))
+@pytest.mark.parametrize("custom_pricing", (False, True))
+def test_decisions_format_preserves_catalog_model_capabilities_and_pricing(
+    wire_format: str, custom_pricing: bool
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": prefix or "plain",
+                "litellm_params": {
+                    "model": f"openai/{prefix}gpt-6-luna",
+                    "api_base": "https://custom.example/v1",
+                    "api_key": "caller-key",
+                },
+                "model_info": EXPENSIVE_COSTS if custom_pricing else {},
+            }
+            for prefix in ("", f"{wire_format}/")
+        ]
+    )
+    plain: Final = router.get_model_group_info("plain")
+    explicit: Final = router.get_model_group_info(f"{wire_format}/")
+
+    assert plain is not None and explicit is not None
+    assert explicit.model_dump(exclude={"model_group", "supported_endpoints"}) == plain.model_dump(
+        exclude={"model_group", "supported_endpoints"}
+    )
+    assert set(plain.supported_endpoints or ()) <= set(explicit.supported_endpoints or ())
+    assert {"/v1/systemone", "/v1/decisions"} <= set(explicit.supported_endpoints or ())
+
+
 @pytest.fixture(autouse=True)
 def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -76,6 +131,59 @@ class _RouterLoggingCapture(CustomLogger):
 
     async def next_event(self) -> tuple[object | None, object | None]:
         return await asyncio.wait_for(self.success_events.get(), timeout=EVENT_TIMEOUT_SECONDS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire_format", ("systemone", "decisions"))
+async def test_one_openai_decisions_deployment_serves_chat_and_retains_router_pricing_and_identity(
+    wire_format: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_id: Final = f"custom-{wire_format}-deployment"
+    capture: Final = _RouterLoggingCapture(model_id)
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "custom-alias",
+                "litellm_params": {
+                    "model": f"openai/{wire_format}/org/custom-model",
+                    "api_base": "https://custom.example/v1",
+                    "api_key": "caller-key",
+                },
+                "model_info": {"id": model_id, "mode": "chat", **EXPENSIVE_COSTS},
+            }
+        ]
+    )
+    decisions: Final = respx_mock.post(f"https://custom.example/v1/{wire_format}").respond(
+        json={
+            "model": "org/custom-model",
+            "answers": (
+                {"ready": {"type": "noul", "noul": 0.9}}
+                if wire_format == "systemone"
+                else [{"type": "predicate", "name": "ready", "probability": 0.9}]
+            ),
+            "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3},
+        }
+    )
+    chat: Final = respx_mock.post("https://custom.example/v1/chat/completions").respond(
+        json={**CHAT_RESPONSE, "model": "org/custom-model"}
+    )
+
+    decision_response: Final = await router.asystemone(
+        model="custom-alias", state="review", questions={"ready": {"type": "noul", "instructions": "Ready?"}}
+    )
+    _, logging_event = await capture.next_event()
+    chat_response: Final = await router.acompletion(model="custom-alias", messages=[{"role": "user", "content": "Hi"}])
+
+    assert decision_response.answers["ready"].noul == 0.9
+    assert isinstance(logging_event, dict)
+    assert logging_event["model_id"] == model_id
+    assert logging_event["model_group"] == "custom-alias"
+    assert logging_event["response_cost"] == 3.0
+    assert isinstance(chat_response, ModelResponse)
+    assert chat_response.choices[0].message.content == "ok"
+    assert json.loads(decisions.calls[0].request.content)["model"] == "org/custom-model"
+    assert json.loads(chat.calls[0].request.content)["model"] == "org/custom-model"
 
 
 def _rpm_tpm_router(model_id: str) -> Router:

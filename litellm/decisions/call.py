@@ -85,6 +85,7 @@ _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
 ] = TypeAdapter(ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None)
 _HANDLER: Final = BaseLLMHTTPHandler()
 _BASE64_MARKER: Final = ";base64,"
+_API_BASE_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 
 _IMAGE_ADAPTER: Final[TypeAdapter[DecisionsImage]] = TypeAdapter(DecisionsImage, config=ConfigDict(title="images"))
@@ -456,10 +457,18 @@ def prepare_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    try:
+        configured_api_base: Final = api_base or _API_BASE_ADAPTER.validate_python(kwargs.get("base_url"))
+    except ValidationError as error:
+        raise litellm.BadRequestError(
+            message=f"Invalid Decisions base_url: {error}",
+            model=model,
+            llm_provider=custom_llm_provider or "",
+        ) from error
     upstream_model, provider, dynamic_api_key, dynamic_api_base = litellm.get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
+        api_base=configured_api_base,
         api_key=api_key,
     )
     provider_config: Final = _provider_config(upstream_model, provider)
@@ -488,7 +497,7 @@ def prepare_call(
 
     try:
         resolved_api_base, static_api_key = provider_config.resolve_connection(
-            dynamic_api_base or api_base, dynamic_api_key or api_key
+            dynamic_api_base or configured_api_base, dynamic_api_key or api_key
         )
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
@@ -693,6 +702,9 @@ def _pricing_model(response: DecisionsIRResponse, call: DecisionsCall) -> str:
     returned: Final = get_model_cost_key(f"{call.custom_llm_provider}/{response.model}")
     if returned is not None and cost_map_key_prices_anything(returned):
         return returned
+    requested: Final = get_model_cost_key(call.requested_model)
+    if requested is not None and cost_map_key_prices_anything(requested):
+        return requested
     return f"{call.custom_llm_provider}/{call.model}"
 
 

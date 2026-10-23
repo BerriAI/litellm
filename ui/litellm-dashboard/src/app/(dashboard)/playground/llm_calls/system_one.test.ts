@@ -235,4 +235,28 @@ describe("fetchDecisionModels", () => {
 
     await expect(fetchDecisionModels("virtual-key")).rejects.toThrow();
   });
+
+  it("should include chat models with either decision endpoint and preserve legacy decision models", async () => {
+    mockFetch.mockResolvedValueOnce(
+      modelGroupInfo([
+        {
+          model_group: "custom-systemone",
+          mode: "chat",
+          supported_endpoints: ["/v1/chat/completions", "/v1/systemone"],
+        },
+        { model_group: "custom-decisions", mode: "chat", supported_endpoints: ["/v1/decisions"] },
+        { model_group: "legacy-evaluation", mode: "evaluation" },
+        { model_group: "legacy-decisions", mode: "decisions", supported_endpoints: null },
+        { model_group: "chat-only", mode: "chat", supported_endpoints: ["/v1/chat/completions"] },
+        { model_group: "unknown", mode: "chat" },
+      ]),
+    );
+
+    await expect(fetchDecisionModels("virtual-key")).resolves.toEqual([
+      "custom-decisions",
+      "custom-systemone",
+      "legacy-decisions",
+      "legacy-evaluation",
+    ]);
+  });
 });

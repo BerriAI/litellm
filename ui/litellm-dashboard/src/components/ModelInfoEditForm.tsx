@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { CircleHelp } from "lucide-react";
 import type { Dayjs } from "dayjs";
 import * as React from "react";
-import { useForm, type Resolver } from "react-hook-form";
+import { useForm, useWatch, type Resolver } from "react-hook-form";
 import { z } from "zod";
 
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
@@ -27,6 +27,12 @@ import CacheControlInjectionPoints, {
   CACHE_CONTROL_TOOLTIP,
   type CacheControlInjectionPoint,
 } from "./add_model/cache_control_settings";
+import {
+  OpenAIUpstreamFormat,
+  isOpenAIUpstreamModel,
+  parseOpenAIUpstreamModel,
+} from "./add_model/openai_upstream_format";
+import UpstreamFormatSelect from "./add_model/UpstreamFormatSelect";
 import type { Team } from "./key_team_helpers/key_list";
 import type { CredentialItem } from "./networking";
 import NumericalInput from "./shared/numerical_input";
@@ -95,6 +101,7 @@ export const perMillionToPerToken = scalar
 const modelEditShape = {
   model_name: textish,
   litellm_model_name: textish,
+  upstream_format: z.enum(OpenAIUpstreamFormat).default(OpenAIUpstreamFormat.Default),
   api_base: textish,
   custom_llm_provider: textish,
   organization: textish,
@@ -197,7 +204,8 @@ const perMillionTokens = (...rates: (number | null | undefined)[]): number | nul
 
 export const toModelEditFormValues = (localModelData: any, isWildcardModel: boolean): ModelEditFormValues => ({
   model_name: localModelData.model_name,
-  litellm_model_name: localModelData.litellm_model_name,
+  litellm_model_name: parseOpenAIUpstreamModel(localModelData.litellm_model_name ?? "").model,
+  upstream_format: parseOpenAIUpstreamModel(localModelData.litellm_model_name ?? "").format,
   api_base: localModelData.litellm_params.api_base,
   custom_llm_provider: localModelData.litellm_params.custom_llm_provider,
   organization: localModelData.litellm_params.organization,
@@ -370,6 +378,11 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
     resolver,
     defaultValues: toModelEditFormValues(localModelData, isWildcardModel),
   });
+  const [currentModel, currentProvider] = useWatch({
+    control: form.control,
+    name: ["litellm_model_name", "custom_llm_provider"],
+  });
+  const isOpenAIModel = isOpenAIUpstreamModel(currentModel, currentProvider);
 
   const submit = (event: React.FormEvent<HTMLFormElement>) =>
     form.handleSubmit(async (values) => {
@@ -460,6 +473,13 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               "LiteLLM Model Name",
               "Enter LiteLLM model name",
               localModelData.litellm_model_name,
+            )}
+            {isEditing && isOpenAIModel && (
+              <FormField control={form.control} name="upstream_format" label="Upstream format">
+                {({ value, ...control }) => (
+                  <UpstreamFormatSelect {...control} value={value ?? OpenAIUpstreamFormat.Default} />
+                )}
+              </FormField>
             )}
 
             {pricingField("input_cost", "Input Cost (per 1M tokens)", "Enter input cost")}

@@ -130,6 +130,7 @@ from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantl
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.decisions.routing import chat_model_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -5664,7 +5665,7 @@ def completion(
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
-            model=model,
+            model=chat_model_name(model, custom_llm_provider),
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
             api_base=api_base,

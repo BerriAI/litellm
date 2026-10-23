@@ -19,6 +19,59 @@ from litellm.llms.openai.chat.gpt_transformation import (
 )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("format_prefix", ("systemone/org/", "decisions/org/", "org/"))
+@pytest.mark.parametrize("sync_mode", (False, True))
+async def test_decisions_format_prefix_keeps_chat_requests_on_chat_completions(
+    format_prefix: str, sync_mode: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream_model: Final = "org/custom-model"
+    route: Final = respx_mock.post("https://custom.example/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": upstream_model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    response: Final = (
+        litellm.completion(
+            model=f"openai/{format_prefix}custom-model",
+            messages=[{"role": "user", "content": "Hi"}],
+            api_base="https://custom.example/v1",
+            api_key="caller-key",
+        )
+        if sync_mode
+        else await litellm.acompletion(
+            model=f"openai/{format_prefix}custom-model",
+            messages=[{"role": "user", "content": "Hi"}],
+            api_base="https://custom.example/v1",
+            api_key="caller-key",
+        )
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "Hello"
+    assert json.loads(route.calls[0].request.content)["model"] == upstream_model
+
+
+@pytest.mark.parametrize("format_prefix", ("systemone/", "decisions/"))
+def test_chat_rejects_a_decisions_format_without_a_model_name(format_prefix: str, respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(litellm.BadRequestError, match="model name is required"):
+        litellm.completion(
+            model=f"openai/{format_prefix}",
+            messages=[{"role": "user", "content": "Hi"}],
+            api_base="https://custom.example/v1",
+            api_key="caller-key",
+        )
+
+    assert not respx_mock.calls
+
+
 class TestOpenAIGPTConfig:
     """Tests for OpenAIGPTConfig class"""
 

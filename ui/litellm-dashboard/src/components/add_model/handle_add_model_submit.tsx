@@ -2,6 +2,12 @@ import { toast } from "@/lib/toast";
 import { Model, modelCreateCall } from "../networking";
 import { resolveLitellmProviderSlug } from "../provider_info_helpers";
 import { ptuPickerToUtcIso } from "../../utils/ptuDatetime";
+import {
+  OpenAIUpstreamFormat,
+  parseOpenAIUpstreamFormat,
+  parseOpenAIUpstreamModel,
+  serializeOpenAIUpstreamModel,
+} from "./openai_upstream_format";
 
 export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {
   try {
@@ -103,6 +109,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           continue;
         }
         // Skip the custom_pricing and pricing_model fields as they're only used for UI control
+        if (key === "upstream_format") continue;
         if (key === "custom_pricing" || key === "pricing_model" || key === "cache_control") {
           continue;
         }
@@ -198,6 +205,15 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         }
       }
 
+      if (typeof litellmParamsObj.model === "string") {
+        const format = parseOpenAIUpstreamFormat(formValues.upstream_format);
+        if (format !== OpenAIUpstreamFormat.Default) {
+          litellmParamsObj.model = serializeOpenAIUpstreamModel(
+            parseOpenAIUpstreamModel(litellmParamsObj.model).model,
+            format,
+          );
+        }
+      }
       deployments.push({ litellmParamsObj, modelInfoObj, modelName });
     }
 

@@ -146,6 +146,169 @@ _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
 }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ("", "decisions/", "systemone/"))
+@pytest.mark.parametrize("sync_mode", (False, True))
+async def test_openai_format_prefix_routes_systemone_requests(
+    prefix: str, sync_mode: bool, respx_mock: respx.MockRouter
+) -> None:
+    native: Final = prefix == "systemone/"
+    route: Final = respx_mock.post(f"https://custom.example/v1/{'systemone' if native else 'decisions'}").respond(
+        json={**(_RESPONSE if native else _OPENAI_RESPONSE), "model": "org/custom-model"}
+    )
+    model: Final = f"openai/{prefix}org/custom-model"
+    questions: Final = {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}
+    response: Final = (
+        litellm.systemone(
+            model=model, state="review", questions=questions, api_key="caller-key", base_url="https://custom.example/v1"
+        )
+        if sync_mode
+        else await litellm.asystemone(
+            model=model, state="review", questions=questions, api_key="caller-key", base_url="https://custom.example/v1"
+        )
+    )
+
+    assert response.answers == {"is_defect": NoulAnswer(type="noul", noul=0.9)}
+    request: Final = route.calls[0].request
+    assert request.headers["authorization"] == "Bearer caller-key"
+    assert json.loads(request.content) == {
+        "model": "org/custom-model",
+        **(
+            {"state": "review", "questions": questions}
+            if native
+            else {
+                "input": "review",
+                "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+            }
+        ),
+    }
+    assert response.hidden_params["model"] == "openai/org/custom-model"
+    assert response.hidden_params["provider_response_model"] == "openai/org/custom-model"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ("", "decisions/", "systemone/"))
+@pytest.mark.parametrize("sync_mode", (False, True))
+async def test_openai_format_prefix_routes_decisions_requests(
+    prefix: str, sync_mode: bool, respx_mock: respx.MockRouter
+) -> None:
+    native: Final = prefix == "systemone/"
+    route: Final = respx_mock.post(f"https://custom.example/v1/{'systemone' if native else 'decisions'}").respond(
+        json={**(_RESPONSE if native else _OPENAI_RESPONSE), "model": "org/custom-model"}
+    )
+    model: Final = f"openai/{prefix}org/custom-model"
+    questions: Final = [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}]
+    response: Final = (
+        litellm.decisions(
+            model=model, input="review", questions=questions, api_key="caller-key", api_base="https://custom.example/v1"
+        )
+        if sync_mode
+        else await litellm.adecisions(
+            model=model, input="review", questions=questions, api_key="caller-key", api_base="https://custom.example/v1"
+        )
+    )
+
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [
+        {"type": "predicate", "name": "is_defect", "probability": 0.9}
+    ]
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "org/custom-model",
+        **(
+            {"state": "review", "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}}
+            if native
+            else {"input": "review", "questions": questions}
+        ),
+    }
+
+
+@pytest.mark.parametrize("prefix", ("", "decisions/", "systemone/"))
+def test_openai_decisions_api_base_takes_precedence_over_base_url(prefix: str, respx_mock: respx.MockRouter) -> None:
+    native: Final = prefix == "systemone/"
+    route: Final = respx_mock.post(f"https://explicit.example/v1/{'systemone' if native else 'decisions'}").respond(
+        json=_RESPONSE if native else _OPENAI_RESPONSE
+    )
+
+    litellm.systemone(
+        model=f"openai/{prefix}org/custom-model",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_key="caller-key",
+        api_base="https://explicit.example/v1",
+        base_url="https://alias.example/v1",
+    )
+
+    assert route.call_count == 1
+
+
+@pytest.mark.parametrize("prefix", ("decisions/", "systemone/"))
+def test_openai_decisions_format_requires_a_model_name(prefix: str, respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(litellm.BadRequestError, match="model name is required"):
+        litellm.systemone(
+            model=f"openai/{prefix}",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            api_key="caller-key",
+        )
+
+    assert not respx_mock.calls
+
+
+@pytest.mark.parametrize("base_url", (123, {"url": "https://custom.example"}, ["https://custom.example"]))
+def test_decisions_rejects_malformed_base_url_before_http(base_url: object, respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions base_url") as error:
+        litellm.systemone(
+            model="openai/systemone/custom-model",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            api_key="caller-key",
+            base_url=base_url,
+        )
+
+    assert error.value.status_code == 400
+    assert not respx_mock.calls
+
+
+@pytest.mark.parametrize("prefix", ("systemone", "decisions"))
+@pytest.mark.parametrize("returned_model_is_priced", (False, True))
+def test_decisions_format_preserves_registered_prices_and_prefers_a_priced_returned_model(
+    prefix: str,
+    returned_model_is_priced: bool,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_model: Final = f"openai/{prefix}/org/custom-model"
+    registered_prices: Final = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+    }
+    monkeypatch.setitem(litellm.model_cost, requested_model, registered_prices)
+    if returned_model_is_priced:
+        monkeypatch.setitem(
+            litellm.model_cost, "openai/org/returned-model", {**registered_prices, "input_cost_per_token": 0.003}
+        )
+    respx_mock.post(f"https://custom.example/v1/{prefix}").respond(
+        json={
+            **(_RESPONSE if prefix == "systemone" else _OPENAI_RESPONSE),
+            "model": "org/returned-model",
+            "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3},
+        }
+    )
+
+    response: Final = litellm.systemone(
+        model=requested_model,
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_key="caller-key",
+        api_base="https://custom.example/v1",
+    )
+
+    assert litellm.completion_cost(completion_response=response, call_type="systemone") == pytest.approx(
+        2 * (0.003 if returned_model_is_priced else 0.001) + 0.002
+    )
+
+
 class _RecordingLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
