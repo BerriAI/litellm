@@ -66,6 +66,63 @@ const baseProps = {
 };
 
 describe("OrganizationsTable", () => {
+  it.each(["max_budget", "tpm_limit", "rpm_limit"])("sorts %s numerically with Unlimited last", async (field) => {
+    const user = userEvent.setup();
+    const organizations = [20, 3, null, 100, 0].map((value, index) =>
+      makeOrganization({
+        organization_id: `org-${index}`,
+        organization_alias: `Value ${value}`,
+        litellm_budget_table: { [field]: value },
+      }),
+    );
+    renderWithProviders(<OrganizationsTable {...baseProps} organizations={organizations} />, {
+      searchParams: { sort_by: field, sort_order: "asc", page_size: "25" },
+    });
+    const names = () =>
+      screen
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => within(row).getByText(/^Value /).textContent);
+    expect(names()).toEqual(["Value 0", "Value 3", "Value 20", "Value 100", "Value null"]);
+    if (field === "max_budget") {
+      await user.click(screen.getByTestId("sort-header-max_budget"));
+    } else {
+      await user.click(screen.getByRole("button", { name: "Sort options for TPM or RPM" }));
+      await user.click(
+        await screen.findByRole("menuitem", { name: `${field === "tpm_limit" ? "TPM" : "RPM"} descending` }),
+      );
+    }
+    await waitFor(() => expect(names()).toEqual(["Value 100", "Value 20", "Value 3", "Value 0", "Value null"]));
+  });
+
+  it.each(["models", "members"])("sorts %s by its displayed data", async (field) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <OrganizationsTable
+        {...baseProps}
+        organizations={[
+          makeOrganization({ organization_id: "org-zed", organization_alias: "Zed", models: ["z"], members: [] }),
+          makeOrganization({
+            organization_id: "org-ace",
+            organization_alias: "Ace",
+            models: ["a"],
+            members: [{ user_id: "1" }, { user_id: "2" }],
+          }),
+          makeOrganization({
+            organization_id: "org-mid",
+            organization_alias: "Mid",
+            models: ["m"],
+            members: [{ user_id: "3" }],
+          }),
+        ]}
+      />,
+    );
+    await user.click(screen.getByTestId(`sort-header-${field}`));
+    await waitFor(() => expect(bodyRowAliases()).toEqual(["Ace", "Mid", "Zed"]));
+    await user.click(screen.getByTestId(`sort-header-${field}`));
+    await waitFor(() => expect(bodyRowAliases()).toEqual(["Zed", "Mid", "Ace"]));
+  });
+
   it("renders every column header", () => {
     renderWithProviders(<OrganizationsTable {...baseProps} organizations={[]} />);
     for (const header of [
@@ -75,7 +132,6 @@ describe("OrganizationsTable", () => {
       "Spend (USD)",
       "Budget (USD)",
       "Models",
-      "TPM / RPM Limits",
       "Members",
     ]) {
       expect(screen.getByText(header)).toBeInTheDocument();
@@ -87,7 +143,7 @@ describe("OrganizationsTable", () => {
     for (const header of ["Spend (USD)", "Budget (USD)", "Members"]) {
       expect(screen.getByRole("columnheader", { name: header })).toHaveClass("text-right");
     }
-    for (const header of ["Organization Name", "TPM / RPM Limits"]) {
+    for (const header of ["Organization Name"]) {
       expect(screen.getByRole("columnheader", { name: header })).not.toHaveClass("text-right");
     }
   });
@@ -270,7 +326,7 @@ describe("OrganizationsTable URL state", () => {
 
   it("falls back to sorting by creation date for a ?sort_by= column that cannot be sorted", () => {
     renderWithProviders(<OrganizationsTable {...baseProps} organizations={sortableOrganizations} />, {
-      searchParams: "?sort_by=members&sort_order=asc",
+      searchParams: "?sort_by=actions&sort_order=asc",
     });
 
     expect(bodyRowAliases()).toEqual(["Zed", "Mid", "Ace"]);
