@@ -25,11 +25,13 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
+    count_request_input_tokens,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
     reserve_budget_for_request,
 )
+from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_model
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -218,6 +220,140 @@ def test_deployment_pricing_update_invalidates_cached_estimate() -> None:
     after: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
     assert after is not None
     assert math.isclose(after, before * 1000)
+
+
+def _rerank_router(backend_model: str, custom_llm_provider: str | None = None, api_base: str | None = None) -> Router:
+    return Router(
+        model_list=[
+            Deployment(
+                model_name="budgeted-rerank",
+                litellm_params=LiteLLM_Params(
+                    model=backend_model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key="sk-fake"
+                ),
+                model_info=ModelInfo(
+                    id="budgeted-rerank-deployment",
+                    input_cost_per_token=0.001,
+                    output_cost_per_token=0.002,
+                    max_output_tokens=10,
+                ),
+            ).model_dump()
+        ]
+    )
+
+
+RERANK_QUERY: Final = "relevant query " * 100
+RERANK_BODY: Final = {
+    "model": "budgeted-rerank",
+    "query": RERANK_QUERY,
+    "documents": ["first passage", {"text": "second passage"}, "third passage", "fourth passage"],
+    "max_tokens": 1,
+}
+
+
+async def _reserve_rerank(router: Router, max_budget: float) -> dict[str, object] | None:
+    return await reserve_budget_for_request(
+        request_body=RERANK_BODY,
+        route="/v1/rerank",
+        llm_router=router,
+        valid_token=UserAPIKeyAuth(token="decision-rerank-budget", max_budget=max_budget, spend=0.0),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        fail_closed_budget_enforcement=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("backend_model", "call_count"),
+    [("typesafe/jev-latest", 4), ("perplexity/pplx-decider-latest", 1)],
+)
+async def test_decision_rerank_reserves_transformed_inputs_and_output_for_every_call(
+    spend_counter_cache: DualCache, backend_model: str, call_count: int
+) -> None:
+    reservation: Final = await _reserve_rerank(_rerank_router(backend_model), max_budget=100.0)
+    query_tokens: Final = litellm.token_counter(model=backend_model, text=RERANK_QUERY)
+
+    assert reservation is not None
+    input_tokens: Final = reservation["input_tokens"]
+    assert isinstance(input_tokens, int)
+    assert input_tokens > query_tokens * call_count
+    assert reservation["input_cost"] == pytest.approx(input_tokens * 0.001)
+    assert reservation["reserved_cost"] == pytest.approx(input_tokens * 0.001 + call_count * 10 * 0.002)
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:key:decision-rerank-budget") == pytest.approx(
+        reservation["reserved_cost"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend_model", ["typesafe/jev-latest", "perplexity/pplx-decider-latest"])
+async def test_decision_rerank_rejects_a_budget_that_only_covers_the_untransformed_request(
+    spend_counter_cache: DualCache, backend_model: str
+) -> None:
+    raw_tokens: Final = count_input_tokens_for_model(request_body=RERANK_BODY, model="budgeted-rerank")
+    assert raw_tokens is not None
+
+    with pytest.raises(litellm.BudgetExceededError, match="Estimated request cost"):
+        await _reserve_rerank(_rerank_router(backend_model), max_budget=raw_tokens * 0.001 + 0.001)
+
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:key:decision-rerank-budget") == pytest.approx(0)
+
+
+def test_native_rerank_remains_input_only() -> None:
+    router: Final = _rerank_router("cohere/rerank-v3.5")
+    raw_tokens: Final = count_input_tokens_for_model(request_body=RERANK_BODY, model="budgeted-rerank")
+    assert raw_tokens is not None
+
+    estimate: Final = estimate_request_max_cost(request_body=RERANK_BODY, route="/v1/rerank", llm_router=router)
+
+    assert estimate == pytest.approx(raw_tokens * 0.001)
+
+
+@pytest.mark.parametrize("invalid_fields", [{"documents": []}, {"top_n": 0}])
+def test_decision_rerank_admission_preserves_client_validation_errors(invalid_fields: dict[str, object]) -> None:
+    with pytest.raises(litellm.BadRequestError) as error:
+        estimate_request_max_cost(
+            request_body={**RERANK_BODY, **invalid_fields},
+            route="/v1/rerank",
+            llm_router=_rerank_router("typesafe/jev-latest"),
+        )
+
+    assert error.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "provider", "api_base"),
+    [
+        ("jev-latest", "typesafe", None),
+        ("pplx-decider-latest", "perplexity", None),
+        ("pplx-decider-latest", "perplexity", "https://api.perplexity.ai"),
+    ],
+)
+@pytest.mark.parametrize("use_router", [False, True])
+async def test_decision_rerank_provider_configuration_reserves_the_same_cost_as_provider_prefix(
+    model: str, provider: str, api_base: str | None, use_router: bool
+) -> None:
+    prefixed_model: Final = f"{provider}/{model}"
+    prefixed_router: Final = _rerank_router(prefixed_model) if use_router else None
+    explicit_provider: Final = None if api_base is not None else provider
+    explicit_router: Final = _rerank_router(model, explicit_provider, api_base) if use_router else None
+    prefixed_body: Final = RERANK_BODY if use_router else {**RERANK_BODY, "model": prefixed_model}
+    explicit_body: Final = (
+        RERANK_BODY
+        if use_router
+        else {**RERANK_BODY, "model": model, "custom_llm_provider": explicit_provider, "api_base": api_base}
+    )
+    prefixed_counts: Final = await count_request_input_tokens(prefixed_body, "/v1/rerank", prefixed_router)
+    explicit_counts: Final = await count_request_input_tokens(explicit_body, "/v1/rerank", explicit_router)
+    prefixed_cost: Final = estimate_request_max_cost(prefixed_body, "/v1/rerank", prefixed_router, prefixed_counts)
+    explicit_cost: Final = estimate_request_max_cost(explicit_body, "/v1/rerank", explicit_router, explicit_counts)
+
+    assert prefixed_cost is not None and prefixed_cost > 0
+    assert explicit_cost == pytest.approx(prefixed_cost)
+    assert tuple(explicit_counts.values()) == tuple(prefixed_counts.values())
 
 
 @pytest.mark.asyncio

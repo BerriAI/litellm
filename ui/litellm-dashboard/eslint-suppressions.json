@@ -1776,7 +1776,7 @@
       "count": 140
     },
     "prefer-const": {
-      "count": 29
+      "count": 28
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -1798,9 +1798,6 @@
     },
     "prefer-const": {
       "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
     }
   },
   "src/components/organization/organization_view.tsx": {

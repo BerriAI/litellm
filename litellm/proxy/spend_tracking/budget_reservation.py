@@ -39,9 +39,18 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
-from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model
+from litellm.proxy.spend_tracking.input_tokens import (
+    count_input_tokens,
+    count_input_tokens_for_model,
+    count_text_tokens,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.rerank_api.litellm_decisions_transformation.transformation import (
+    DecisionRerankRequest,
+    LiteLLMDecisionsRerankConfig,
+)
+from litellm.rerank_api.rerank_utils import get_decision_rerank_strategy
 from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
@@ -74,6 +83,7 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
 
 _CACHED_VALUE: Final = TypeAdapter(object)
 _WINDOW_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_REQUEST_BODY: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _CounterReservationUnavailable(Exception):
@@ -1341,26 +1351,34 @@ def _estimate_request_input_cost_for_model(
     llm_router: Router | None,
     input_tokens: int | None = None,
 ) -> float | None:
+    body: Final = _REQUEST_BODY.validate_python(request_body)
     estimates: Final = [
         _input_cost_for_cost_info(
-            request_body=request_body,
+            request_body=body,
             route=route,
             model=model,
             model_info=model_info,
             input_tokens=input_tokens,
+            llm_router=llm_router,
         )
-        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+        for model_info in _get_model_cost_infos(
+            model=model,
+            llm_router=llm_router,
+            custom_llm_provider=_request_string(body, "custom_llm_provider"),
+            api_base=_request_string(body, "api_base"),
+        )
     ]
     valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
 
 
 def _input_cost_for_cost_info(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     model: str,
     model_info: Mapping[str, object],
     input_tokens: int | None = None,
+    llm_router: Router | None = None,
 ) -> float | None:
     estimated_input_tokens: Final = _estimate_input_tokens(
         request_body=request_body,
@@ -1368,6 +1386,7 @@ def _input_cost_for_cost_info(
         model=model,
         model_info=model_info,
         input_tokens=input_tokens,
+        llm_router=llm_router,
     )
     if estimated_input_tokens is None:
         return None
@@ -1389,26 +1408,34 @@ def _estimate_request_max_cost_for_model(
     llm_router: Router | None,
     input_tokens: int | None = None,
 ) -> float | None:
+    body: Final = _REQUEST_BODY.validate_python(request_body)
     estimates: Final = [
         _max_cost_for_cost_info(
-            request_body=request_body,
+            request_body=body,
             route=route,
             model=model,
             model_info=model_info,
             input_tokens=input_tokens,
+            llm_router=llm_router,
         )
-        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+        for model_info in _get_model_cost_infos(
+            model=model,
+            llm_router=llm_router,
+            custom_llm_provider=_request_string(body, "custom_llm_provider"),
+            api_base=_request_string(body, "api_base"),
+        )
     ]
     valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
 
 
 def _max_cost_for_cost_info(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     model: str,
     model_info: Mapping[str, object],
     input_tokens: int | None = None,
+    llm_router: Router | None = None,
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
         request_body=request_body,
@@ -1423,11 +1450,13 @@ def _max_cost_for_cost_info(
         model=model,
         model_info=model_info,
         input_tokens=input_tokens,
+        llm_router=llm_router,
     )
     output_tokens: Final = _estimate_output_tokens(
         request_body=request_body,
         route=route,
         model_info=model_info,
+        decision_requests=_decision_rerank_requests(request_body, route, model, llm_router),
     )
     if estimated_input_tokens is None or output_tokens is None:
         return None
@@ -1507,17 +1536,26 @@ def _estimate_image_generation_cost(
 def _get_model_cost_info(
     model: str,
     llm_router: Router | None,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
 ) -> Mapping[str, object] | None:
     if llm_router is not None:
         model_group_info: Final = llm_router.cached_model_group_info(model)
         if model_group_info is not None:
             return model_group_info.model_dump()
-    return dict(litellm.get_model_info(model=model))
+    resolved_model, provider, _, _ = (
+        litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+        if api_base is not None
+        else (model, custom_llm_provider, None, None)
+    )
+    return dict(litellm.get_model_info(model=resolved_model, custom_llm_provider=provider, api_base=api_base))
 
 
 def _get_model_cost_infos(
     model: str,
     llm_router: Router | None,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
 ) -> Sequence[Mapping[str, object]]:
     """Cost-info candidates to estimate a request against for one model group.
 
@@ -1528,7 +1566,9 @@ def _get_model_cost_infos(
     deployment can never leave the request under-reserved.
     """
     try:
-        base: Final = _get_model_cost_info(model=model, llm_router=llm_router)
+        base: Final = _get_model_cost_info(
+            model=model, llm_router=llm_router, custom_llm_provider=custom_llm_provider, api_base=api_base
+        )
         if base is None:
             return []
         tiered_tables: Final = _get_deployment_tiered_pricing_tables(model=model, llm_router=llm_router)
@@ -1594,24 +1634,109 @@ async def count_request_input_tokens(
     """Input-token count per candidate model, counted once per request.
 
     The counts are reused by both the max-cost and the input-cost estimate."""
+    body: Final = _REQUEST_BODY.validate_python(request_body)
     models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     if not models:
         return MappingProxyType({})
-    return await count_input_tokens(request_body=request_body, raw_body=raw_body, models=models)
+    decision_requests: Final = {
+        model: requests for model in models if (requests := _decision_rerank_requests(body, route, model, llm_router))
+    }
+    ordinary_counts: Final = await count_input_tokens(
+        request_body=request_body,
+        raw_body=raw_body,
+        models=models,
+    )
+    decision_counts: Final = await asyncio.gather(
+        *(asyncio.to_thread(_decision_rerank_input_tokens, requests) for requests in decision_requests.values())
+    )
+    return MappingProxyType(
+        {
+            **ordinary_counts,
+            **{
+                model: max(tokens, ordinary_counts.get(model, 0))
+                for model, tokens in zip(decision_requests, decision_counts, strict=True)
+            },
+        }
+    )
+
+
+def _request_string(request_body: Mapping[str, object], field: str) -> str | None:
+    value: Final = request_body.get(field)
+    return value if isinstance(value, str) else None
+
+
+def _decision_rerank_request(
+    request_body: Mapping[str, object], model: str, custom_llm_provider: str | None, api_base: str | None
+) -> tuple[str, DecisionRerankRequest] | None:
+    try:
+        resolved_model, provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        )
+    except litellm.BadRequestError:
+        return None
+    strategy: Final = get_decision_rerank_strategy(resolved_model, provider)
+    if strategy is None:
+        return None
+    return (
+        f"{provider}/{resolved_model}",
+        LiteLLMDecisionsRerankConfig.validate_request(request_body, model=model, provider=provider, strategy=strategy),
+    )
+
+
+def _decision_rerank_requests(
+    request_body: Mapping[str, object], route: str, model: str, llm_router: Router | None
+) -> tuple[tuple[str, DecisionRerankRequest], ...]:
+    if "rerank" not in route:
+        return ()
+    deployments: Final = llm_router.get_model_list(model_name=model) if llm_router is not None else ()
+    models: Final = tuple(
+        dict.fromkeys(
+            (
+                deployment["litellm_params"]["model"],
+                _request_string(deployment["litellm_params"], "custom_llm_provider"),
+                _request_string(deployment["litellm_params"], "api_base"),
+            )
+            for deployment in deployments or ()
+            if "model" in deployment["litellm_params"]
+        )
+    )
+    return tuple(
+        request
+        for backend_model, provider, api_base in models
+        or ((model, _request_string(request_body, "custom_llm_provider"), _request_string(request_body, "api_base")),)
+        if (request := _decision_rerank_request(request_body, backend_model, provider, api_base)) is not None
+    )
+
+
+def _decision_rerank_input_tokens(requests: Sequence[tuple[str, DecisionRerankRequest]]) -> int:
+    return max(
+        sum(
+            count_text_tokens(
+                model=model,
+                text=LiteLLMDecisionsRerankConfig.transform_rerank_request(request, index).model_dump_json(
+                    exclude_none=True, exclude_defaults=True
+                ),
+            )
+            for index in range(request.call_count)
+        )
+        for model, request in requests
+    )
 
 
 def _estimate_input_tokens(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     model: str,
     model_info: Mapping[str, object],
     input_tokens: int | None = None,
+    llm_router: Router | None = None,
 ) -> int | None:
-    counted: Final = (
-        input_tokens
-        if input_tokens is not None
-        else count_input_tokens_for_model(request_body=request_body, model=model)
-    )
+    if input_tokens is not None:
+        return input_tokens
+    decision_requests: Final = _decision_rerank_requests(request_body, route, model, llm_router)
+    if decision_requests:
+        return _decision_rerank_input_tokens(decision_requests)
+    counted: Final = count_input_tokens_for_model(request_body=request_body, model=model)
     if counted is not None:
         return counted
 
@@ -1629,7 +1754,11 @@ def _estimate_output_tokens(
     request_body: dict,
     route: str,
     model_info: Mapping[str, object],
+    decision_requests: Sequence[tuple[str, DecisionRerankRequest]] = (),
 ) -> int | None:
+    if decision_requests:
+        per_call: Final = _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+        return per_call * max(request.call_count for _, request in decision_requests)
     if _is_input_only_route(route=route):
         return 0
 

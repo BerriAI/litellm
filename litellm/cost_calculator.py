@@ -1616,13 +1616,31 @@ def completion_cost(
     Raises if no candidate model name resolves to pricing. Register the model via `litellm.register_model`
     or add it to model_prices_and_context_window.json.
     """
-    if isinstance(completion_response, DecisionRerankResponse):
+    decision_rerank_child: Final = (
+        completion_response.decision_responses[0]
+        if isinstance(completion_response, DecisionRerankResponse) and completion_response.decision_responses
+        else None
+    )
+    decision_rerank_model: Final = (
+        _get_hidden_str_for_cost_calc(decision_rerank_child.hidden_params, "model") or decision_rerank_child.model
+        if decision_rerank_child is not None
+        else None
+    )
+    decision_rerank_provider: Final = (
+        _get_hidden_str_for_cost_calc(decision_rerank_child.hidden_params, "custom_llm_provider")
+        if decision_rerank_child is not None
+        else None
+    )
+    if isinstance(completion_response, DecisionRerankResponse) and (
+        custom_cost_per_second is None
+        or custom_cost_per_token is not None
+        or not completion_response.decision_responses
+    ):
         return _decision_rerank_cost(
             completion_response.decision_responses,
             partial(
                 response_cost_calculator,
-                model=model
-                or (completion_response.decision_responses[0].model if completion_response.decision_responses else ""),
+                model=model or (decision_rerank_child.model if decision_rerank_child is not None else ""),
                 call_type="decisions",
                 custom_llm_provider=custom_llm_provider,
                 optional_params=optional_params or {},
@@ -1735,7 +1753,7 @@ def completion_cost(
             litellm_logging_obj,
         )
         selected_model: Final = select_model_name_for_cost_calc(
-            model=model,
+            model=model or decision_rerank_model,
             completion_response=completion_response,
             custom_llm_provider=base_model_provider or custom_llm_provider,
             custom_pricing=custom_pricing,
@@ -1771,8 +1789,10 @@ def completion_cost(
                     verbose_logger.debug("selected model name for cost calculation: %s", model)
 
                 if completion_response is not None and (
-                    isinstance(completion_response, BaseModel) or isinstance(completion_response, dict)
-                ):  # tts returns a custom class
+                    isinstance(completion_response, (BaseModel, dict))
+                    or isinstance(completion_response, HttpxBinaryResponseContent)
+                    and completion_response.usage is not None
+                ):
                     if isinstance(completion_response, dict):
                         usage_obj: dict | Usage | None = completion_response.get("usage", {})
                     else:
@@ -1835,7 +1855,7 @@ def completion_cost(
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
                         custom_llm_provider = pricing_provider or hidden_params.get(
-                            "custom_llm_provider", custom_llm_provider or None
+                            "custom_llm_provider", custom_llm_provider or decision_rerank_provider
                         )
                         region_name = hidden_params.get("region_name", region_name)
 

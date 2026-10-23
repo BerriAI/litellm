@@ -31,9 +31,10 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
 from litellm.types.llms.base import CachedTokensDetails
-from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.llms.xai import RealtimeMeteredUsage
-from litellm.types.rerank import RerankResponse
+from litellm.types.decisions import OpenAIDecisionResponse, OpenAIDecisionUsage
+from litellm.types.rerank import DecisionRerankResponse, RerankResponse
 from litellm.types.utils import CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.utils import supports_prompt_caching
@@ -4047,6 +4048,130 @@ def test_completion_cost_per_second_deployment_bills_the_call_duration(
     )
 
     assert cost == pytest.approx(0.02 * expected_seconds)
+
+
+@pytest.mark.parametrize(
+    ("document_count", "rate", "stamped_ms", "total_time", "logged_ms", "expected_seconds"),
+    [
+        (1, 0.5, None, 2000.0, 4000.0, 2.0),
+        (3, 0.5, None, 2000.0, 4000.0, 2.0),
+        (3, 0.5, 3000.0, 2000.0, 4000.0, 3.0),
+        (3, 0.5, None, 0.0, 4000.0, 4.0),
+        (3, 0.0, None, 2000.0, 4000.0, 2.0),
+    ],
+)
+def test_decision_rerank_custom_per_second_price_bills_outer_duration_once(
+    monkeypatch: pytest.MonkeyPatch,
+    document_count: int,
+    rate: float,
+    stamped_ms: float | None,
+    total_time: float,
+    logged_ms: float,
+    expected_seconds: float,
+) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.1})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"percentage": 0.2, "fixed_amount": 0.05}})
+    child: Final = OpenAIDecisionResponse(
+        model="openai/rerank-time-test",
+        answers=(),
+        usage=OpenAIDecisionUsage(input_tokens=10, output_tokens=0, total_tokens=10),
+    )
+    child.set_hidden_params({"additional_headers": {"llm_provider-x-litellm-response-cost": "50.0"}})
+    response: Final = DecisionRerankResponse(decision_responses=(child,) * document_count).model_copy(
+        update={"_response_ms": stamped_ms}
+    )
+    logging_obj: Final = _logging_obj_with_call_window(logged_ms)
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        custom_cost_per_second=rate,
+        total_time=total_time,
+        litellm_logging_obj=logging_obj,
+    )
+
+    expected_base: Final = rate * expected_seconds
+    assert cost == pytest.approx(expected_base * 0.9 * 1.2 + 0.05)
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["original_cost"] == pytest.approx(expected_base)
+    assert logging_obj.cost_breakdown["total_cost"] == pytest.approx(cost)
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "pricing_provider", "expected_cost"),
+    [
+        (None, None, None, 1.25),
+        ("unprefixed-deployment", None, None, 1.25),
+        (None, "openai", None, 1.6),
+        (None, "typesafe", "openai", 1.6),
+    ],
+)
+def test_decision_rerank_per_second_price_preserves_child_provider_with_explicit_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str | None,
+    provider: str | None,
+    pricing_provider: str | None,
+    expected_cost: float,
+) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    monkeypatch.setattr(
+        litellm,
+        "cost_margin_config",
+        {"typesafe": {"percentage": 0.2, "fixed_amount": 0.05}, "openai": {"percentage": 0.5, "fixed_amount": 0.1}},
+    )
+    child: Final = OpenAIDecisionResponse(
+        model="rerank-time-test",
+        answers=(),
+        usage=OpenAIDecisionUsage(input_tokens=10, output_tokens=0, total_tokens=10),
+    )
+    child.set_hidden_params({"model": "typesafe/rerank-time-test", "custom_llm_provider": "typesafe"})
+
+    cost: Final = completion_cost(
+        completion_response=DecisionRerankResponse(decision_responses=(child, child)),
+        model=model,
+        custom_cost_per_second=0.5,
+        total_time=2000.0,
+        custom_llm_provider=provider,
+        pricing_provider=pricing_provider,
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_decision_rerank_without_billable_responses_has_no_time_cost() -> None:
+    assert (
+        completion_cost(
+            completion_response=DecisionRerankResponse(decision_responses=()),
+            custom_cost_per_second=0.5,
+            total_time=2000.0,
+        )
+        == 0.0
+    )
+
+
+def test_decision_rerank_custom_token_price_takes_precedence_over_per_second_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    monkeypatch.setattr(litellm, "cost_margin_config", {})
+    response: Final = DecisionRerankResponse(
+        decision_responses=(
+            OpenAIDecisionResponse(
+                model="openai/rerank-time-test",
+                answers=(),
+                usage=OpenAIDecisionUsage(input_tokens=10, output_tokens=2, total_tokens=12),
+            ),
+        )
+        * 3
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        custom_cost_per_token={"input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+        custom_cost_per_second=0.5,
+        total_time=2000.0,
+    )
+
+    assert cost == pytest.approx(3 * (10 * 0.01 + 2 * 0.02))
 
 
 @pytest.mark.parametrize("mode", ["audio_speech", "video_generation", "realtime"])
@@ -9132,6 +9257,33 @@ def test_azure_tts_cost_uses_test_owned_character_rate(monkeypatch: pytest.Monke
     )
 
     assert cost == pytest.approx(0.05)
+
+
+def test_speech_cost_with_custom_pricing_bills_the_reported_usage() -> None:
+    usage: Final = Usage(
+        prompt_tokens=10,
+        completion_tokens=1000,
+        total_tokens=1010,
+        completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=1000),
+    )
+    response: Final = HttpxBinaryResponseContent(
+        httpx.Response(200, content=b"RIFF....WAVE", headers={"content-type": "audio/wav"})
+    )
+    response.usage = usage
+    rates: Final = MappingProxyType({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-5})
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="vertex_ai/gemini-3.1-flash-tts-preview",
+        call_type="speech",
+        prompt="Say hello",
+        custom_cost_per_token=dict(rates),
+    )
+
+    assert cost == pytest.approx(
+        usage.prompt_tokens * rates["input_cost_per_token"]
+        + usage.completion_tokens * rates["output_cost_per_token"]
+    )
 
 
 def test_moderation_cost_uses_test_owned_token_rate() -> None:
