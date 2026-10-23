@@ -139,7 +139,7 @@ async def image_generation(
             original_function="aimage_generation",
             rules_obj=litellm.utils.Rules(),
             start_time=start_time,
-            **data,
+            **data,  # pyright: ignore[reportUnknownArgumentType]  # request payload dict carries dynamic values
         )
         data["litellm_logging_obj"] = logging_obj
 
@@ -160,11 +160,9 @@ async def image_generation(
         if isinstance(messages, list) and messages:
             sanitized_prompt: Final = get_str_from_messages(messages)
             data["prompt"] = sanitized_prompt
-            if logging_obj is not None:
-                logging_obj.messages = sanitized_prompt
-                if hasattr(logging_obj, "model_call_details") and isinstance(logging_obj.model_call_details, dict):
-                    logging_obj.model_call_details["prompt"] = sanitized_prompt
-                    logging_obj.model_call_details["messages"] = sanitized_prompt
+            logging_obj.messages = sanitized_prompt
+            logging_obj.model_call_details["prompt"] = sanitized_prompt
+            logging_obj.model_call_details["messages"] = sanitized_prompt
         data.pop("messages", None)
 
         ## ROUTE TO CORRECT ENDPOINT ##
