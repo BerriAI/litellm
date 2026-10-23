@@ -60,7 +60,16 @@ def _write_config(directory: Path) -> Path:
                             "api_base": f"https://{_CONTROL_HOST}/v1",
                             "api_key": "synthetic-provider-key",
                         },
-                    }
+                    },
+                    {
+                        "model_name": "offline-mode-kimi",
+                        "litellm_params": {
+                            "model": "bedrock/us.moonshotai.kimi-k3",
+                            "aws_region_name": "us-east-1",
+                            "aws_access_key_id": "synthetic-access-key",
+                            "aws_secret_access_key": "synthetic-secret-key",
+                        },
+                    },
                 ],
                 "router_settings": {"num_retries": 0},
                 "general_settings": {
@@ -134,6 +143,14 @@ def test_offline_mode_stops_every_self_initiated_request(
                     {"model": "meta-llama/llama-3-8b-instruct", "messages": [{"role": "user", "content": "count me"}]},
                 )
             )
+            kimi_tokens: Final = object_value(
+                _json(
+                    isolated,
+                    "POST",
+                    "/utils/token_counter",
+                    {"model": "offline-mode-kimi", "messages": [{"role": "user", "content": "count me"}]},
+                )
+            )
             control: Final = isolated.request(
                 "POST",
                 "/v1/chat/completions",
@@ -155,6 +172,7 @@ def test_offline_mode_stops_every_self_initiated_request(
     ]
     assert password_set["user_id"] == user["user_id"], password_set
     assert tokens["tokenizer_type"] == "openai_tokenizer", tokens
+    assert isinstance(kimi_tokens["total_tokens"], int) and kimi_tokens["total_tokens"] > 0, kimi_tokens
 
 
 def _list(value: JsonValue) -> list[JsonValue]:
