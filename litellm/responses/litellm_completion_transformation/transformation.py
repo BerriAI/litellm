@@ -2305,27 +2305,25 @@ class LiteLLMCompletionResponsesConfig:
         Empty/None text parts are dropped so tool-only turns do not become
         content=[{"type":"text","text":""}] (rejected by backends like Z.ai 1210).
         """
-        item_type = item.get("type")
+        item_type: Final = item.get("type")
         if item_type == "input_file":
             return LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(item)
         if item_type == "input_image":
-            image_block = _STR_KEY_DICT_ADAPTER.validate_python(
-                dict(  # mutable-ok: adapter needs a plain dict for cache_control mutation
-                    LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item)
-                )
+            image_block: Final = _STR_KEY_DICT_ADAPTER.validate_python(
+                dict(LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item))
             )
             if "cache_control" in item:
                 image_block["cache_control"] = item["cache_control"]
             return image_block
         if item_type == "encrypted_content":
-            encrypted_content = item.get("encrypted_content")
+            encrypted_content: Final = item.get("encrypted_content")
             if encrypted_content is None:
                 return None
             return OpenAIChatCompletionTextObject(type="text", text=str(encrypted_content))
-        text_value = item.get("text")
+        text_value: Final = item.get("text")
         if text_value is None or text_value == "":
             return None
-        content_block: dict[str, object] = {  # mutable-ok: outbound chat content part
+        content_block: Final[dict[str, object]] = {  # mutable-ok: outbound chat content part
             "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(item_type or "text"),
             "text": text_value,
         }
