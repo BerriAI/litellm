@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final, Protocol, cast  # noqa: TID251  # adapts the public exception mapper
 
 import httpx
@@ -12,7 +13,23 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 
 _UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
-_UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
+_UPSTREAM_HEADERS: Final = TypeAdapter(tuple[tuple[str, str], ...])
+
+
+@dataclass(frozen=True, slots=True)
+class UpstreamReply:
+    status: int
+    body: str
+    headers: tuple[tuple[str, str], ...]
+
+
+def decode_upstream(error: BaseException) -> UpstreamReply | None:
+    try:
+        status, body = _UPSTREAM_ARGS.validate_python(error.args)
+        headers: Final = _UPSTREAM_HEADERS.validate_python(getattr(error, "headers", ()))
+    except ValidationError:
+        return None
+    return UpstreamReply(status=status, body=body, headers=headers)
 
 
 class UpstreamFailure(Exception):
@@ -25,14 +42,12 @@ class UpstreamFailure(Exception):
 
 
 def _upstream_failure(error: Exception, api_base: str | None) -> Exception:
-    try:
-        status, body = _UPSTREAM_ARGS.validate_python(error.args)
-        headers: Final = _UPSTREAM_HEADERS.validate_python(getattr(error, "headers", None))
-    except ValidationError:
+    reply: Final = decode_upstream(error)
+    if reply is None:
         return error
     http_request: Final = httpx.Request("POST", api_base or "https://docs.litellm.ai/docs")
     return UpstreamFailure(
-        httpx.Response(status, content=body.encode(), headers=headers, request=http_request),
+        httpx.Response(reply.status, content=reply.body.encode(), headers=reply.headers, request=http_request),
         error,
     )
 

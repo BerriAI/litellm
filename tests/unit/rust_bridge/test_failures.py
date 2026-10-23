@@ -22,6 +22,22 @@ def test_upstream_status_maps_onto_the_public_exception_contract() -> None:
     assert mapped.model == "claude-sonnet-4-5"
 
 
+class RustUpstreamError(Exception):
+    pass
+
+
+def test_native_failure_without_headers_maps_from_its_status() -> None:
+    native_error: Final = RustUpstreamError(429, "rate limited")
+
+    mapped: Final = failures.map_native_failure(
+        native_error, "anthropic/claude-sonnet-4-5", "anthropic", MappingProxyType({})
+    )
+
+    assert isinstance(mapped, litellm.RateLimitError)
+    assert mapped.status_code == 429
+    assert mapped.__context__ is native_error
+
+
 def test_mapper_failure_keeps_the_native_error_as_context(monkeypatch: pytest.MonkeyPatch) -> None:
     def explode(**_kwargs: object) -> Exception:
         raise ValueError("mapper broke")
