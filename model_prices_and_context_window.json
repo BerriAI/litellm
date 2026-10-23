@@ -67513,6 +67513,48 @@
             "/v1/audio/transcriptions"
         ]
     },
+    "elevenlabs/eleven_realtime_v1_max": {
+        "input_cost_per_second": 0.0013333333333333333,
+        "input_cost_per_token": 1.8e-06,
+        "litellm_provider": "elevenlabs",
+        "mode": "realtime",
+        "output_cost_per_token": 9e-06,
+        "source": "https://elevenlabs.io/pricing/api",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
+    "elevenlabs/eleven_realtime_v1_mini": {
+        "input_cost_per_second": 0.0013333333333333333,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "elevenlabs",
+        "mode": "realtime",
+        "output_cost_per_token": 6e-06,
+        "source": "https://elevenlabs.io/pricing/api",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
     "scaleway/glm-5.2": {
         "input_cost_per_token": 1.8e-06,
         "litellm_provider": "scaleway",

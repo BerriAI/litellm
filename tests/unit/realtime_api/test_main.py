@@ -1199,3 +1199,76 @@ async def test_openai_realtime_health_check_sends_the_federated_bearer_for_a_key
             model_params={"model": "openai/gpt-realtime", **federated_deployment},
         )
     assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer federated-bearer"}
+
+
+class _ConnectThatStopsAfterCapturingTheHandshake:
+    def __init__(self) -> None:
+        self.url: str | None = None
+        self.additional_headers: Mapping[str, str] | None = None
+
+    def __call__(
+        self, url: str, *, additional_headers: Mapping[str, str], max_size: int, ssl: object
+    ) -> "_ConnectThatStopsAfterCapturingTheHandshake":
+        self.url = url
+        self.additional_headers = additional_headers
+        return self
+
+    async def __aenter__(self) -> None:
+        raise RuntimeError("backend handshake captured, nothing to bridge")
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_arealtime_elevenlabs_dials_the_convai_realtime_route_with_the_xi_api_key_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ELEVENLABS_API_BASE", raising=False)
+    connect: Final = _ConnectThatStopsAfterCapturingTheHandshake()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="elevenlabs/eleven_realtime_v1_mini",
+            websocket=_ClosableGaClientWebSocket(),
+            api_key="xi-secret",
+            query_params={"model": "voyce-eleven-realtime"},
+            litellm_logging_obj=FakeLogging(),
+        )
+    assert connect.url == "wss://api.elevenlabs.io/v1/convai/realtime?model=eleven_realtime_v1_mini"
+    assert connect.additional_headers == {"xi-api-key": "xi-secret"}
+
+
+@pytest.mark.asyncio
+async def test_arealtime_elevenlabs_falls_back_to_the_environment_key_and_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "xi-from-env")
+    monkeypatch.setenv("ELEVENLABS_API_BASE", "https://eleven.internal.example")
+    connect: Final = _ConnectThatStopsAfterCapturingTheHandshake()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="elevenlabs/eleven_realtime_v1_max",
+            websocket=_ClosableGaClientWebSocket(),
+            litellm_logging_obj=FakeLogging(),
+        )
+    assert connect.url == "wss://eleven.internal.example/v1/convai/realtime?model=eleven_realtime_v1_max"
+    assert connect.additional_headers == {"xi-api-key": "xi-from-env"}
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_health_check_sends_the_key_as_xi_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ELEVENLABS_API_BASE", raising=False)
+    connect: Final = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="eleven_realtime_v1_mini",
+            custom_llm_provider="elevenlabs",
+            api_key="xi-secret",
+        )
+    assert connect.url == "wss://api.elevenlabs.io/v1/convai/realtime?model=eleven_realtime_v1_mini"
+    assert connect.kwargs["additional_headers"] == {"xi-api-key": "xi-secret"}

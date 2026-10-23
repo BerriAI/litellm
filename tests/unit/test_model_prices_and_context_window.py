@@ -791,3 +791,17 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     sibling = rows["volcengine/doubao-seed-2-1-pro-260628"]
     assert isinstance(sibling, dict)
     assert all(entry[key] == sibling[key] for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+
+
+_ELEVENLABS_REALTIME_ROWS: Final = ("elevenlabs/eleven_realtime_v1_mini", "elevenlabs/eleven_realtime_v1_max")
+
+
+def test_elevenlabs_realtime_rows_are_served_on_the_realtime_websocket_and_billed_per_second(prices: dict) -> None:
+    rows: Final = tuple(prices[key] for key in _ELEVENLABS_REALTIME_ROWS)
+
+    assert {row["mode"] for row in rows} == {"realtime"}
+    assert all("/v1/realtime" in row["supported_endpoints"] for row in rows)
+    assert {row["litellm_provider"] for row in rows} == {"elevenlabs"}
+    assert len({row["input_cost_per_second"] for row in rows}) == 1
+    assert rows[0]["input_cost_per_second"] > 0
+    assert {litellm.get_model_info(key)["mode"] for key in _ELEVENLABS_REALTIME_ROWS} == {"realtime"}

@@ -10395,3 +10395,30 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+@pytest.fixture
+def _elevenlabs_realtime_test_model(_local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "eleven-realtime-test",
+        {"litellm_provider": "elevenlabs", "mode": "realtime", "input_cost_per_second": 0.002},
+    )
+    litellm.get_model_info.cache_clear()
+
+
+def test_elevenlabs_realtime_bills_the_connected_wall_clock_time(_elevenlabs_realtime_test_model: None) -> None:
+    start_time: Final = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=_live_session_results(
+            {"type": "session.created", "session": {"model": "eleven-realtime-test"}},
+            {"type": "response.done", "response": {"id": "resp_1", "usage": None}},
+        ),
+        combined_usage_object=Usage(),
+        custom_llm_provider="elevenlabs",
+        litellm_model_name="eleven-realtime-test",
+        litellm_logging_obj=_live_logging_object(start_time, start_time + datetime.timedelta(seconds=45)),
+    )
+
+    assert cost == pytest.approx(45 * 0.002)

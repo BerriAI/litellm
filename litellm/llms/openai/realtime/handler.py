@@ -139,9 +139,9 @@ class OpenAIRealtime(OpenAIChatCompletion):
         timeout: float | None = None,
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: object | None = None,
-        litellm_metadata: dict | None = None,
+        litellm_metadata: dict[str, object] | None = None,
         **kwargs: object,
-    ):
+    ) -> None:
         import websockets
         from websockets.asyncio.client import ClientConnection
 

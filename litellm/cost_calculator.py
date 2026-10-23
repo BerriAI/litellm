@@ -3373,6 +3373,9 @@ def _first_live_model_rate(
     )
 
 
+_WALL_CLOCK_BILLED_REALTIME_PROVIDERS: Final = frozenset({LlmProviders.XAI.value, LlmProviders.ELEVENLABS.value})
+
+
 def _xai_metered_usage(litellm_logging_obj: LitellmLoggingObject | None) -> RealtimeMeteredUsage | None:
     if litellm_logging_obj is None:
         return None
@@ -3547,14 +3550,14 @@ def handle_realtime_stream_cost_calculation(
     xai_metered: Final = (
         _xai_metered_usage(litellm_logging_obj) if custom_llm_provider == LlmProviders.XAI.value else None
     )
-    xai_audio_seconds: Final = (
+    audio_duration_seconds: Final = (
         xai_metered.audio_seconds_sent + xai_metered.audio_seconds_received
         if xai_metered is not None and xai_metered.push_to_talk
         else _live_session_wall_clock_seconds(litellm_logging_obj)
-        if custom_llm_provider == LlmProviders.XAI.value
+        if custom_llm_provider in _WALL_CLOCK_BILLED_REALTIME_PROVIDERS
         else 0.0
     )
-    audio_duration_cost: Final = xai_audio_seconds * _first_live_model_rate(
+    audio_duration_cost: Final = audio_duration_seconds * _first_live_model_rate(
         potential_model_names,
         custom_llm_provider,
         "input_cost_per_second",
