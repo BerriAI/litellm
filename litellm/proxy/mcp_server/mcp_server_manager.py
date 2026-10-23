@@ -7880,6 +7880,22 @@ class MCPServerManager:
             for offset in range(0, len(unique_server_ids), batch_size)
         ]
         return [server for batch in batches for server in batch if server is not None]
+    
+_STATIC_CREDENTIAL_AUTH_TYPES: Final = frozenset(
+    (MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.token, MCPAuth.authorization, MCPAuth.basic)
+)
 
+
+def _server_credential_occupies_authorization(server: MCPServer) -> bool:
+    """True when the server's own configured credential is sent in the ``Authorization`` header.
+
+    ``bearer_token`` / ``token`` / ``authorization`` / ``basic`` send ``authentication_token`` in
+    ``Authorization``; ``api_key`` sends it in ``X-API-Key``; ``upstream_token_header`` moves either.
+    A signer-injected ``Authorization`` would replace such a credential upstream.
+    """
+    if not server.authentication_token or server.auth_type not in _STATIC_CREDENTIAL_AUTH_TYPES:
+        return False
+    default_slot: Final = "X-API-Key" if server.auth_type == MCPAuth.api_key else "Authorization"
+    return (server.upstream_token_header or default_slot).lower() == "authorization"
 
 global_mcp_server_manager: Final[MCPServerManager] = MCPServerManager()
