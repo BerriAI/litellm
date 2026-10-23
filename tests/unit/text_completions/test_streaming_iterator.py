@@ -115,7 +115,7 @@ async def test_async_text_completion_stream_rejects_invalid_chunks(chunk: str | 
 
     wrapper: Final = TextCompletionStreamWrapper(completion_stream=chunks(), model="test-model")
 
-    with pytest.raises(Exception) as error:
+    with pytest.raises(Exception, match=r"^$") as error:
         await anext(wrapper)
 
     assert not isinstance(error.value, StopAsyncIteration)
