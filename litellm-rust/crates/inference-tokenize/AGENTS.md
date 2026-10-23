@@ -2,4 +2,4 @@
 - Keep public payloads in llms-types and provider policy in llms
 - Resolve providers through inference::provider when execution begins
 - Token strings and numeric token IDs are separate optional fields; never synthesize either from the other
-- Count-only APIs do not satisfy the tokenization contract
+- Count-only is the public default, while requested IDs and token strings remain separate optional representations

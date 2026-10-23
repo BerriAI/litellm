@@ -75,6 +75,9 @@ impl TokenizeRoute {
         observers: Option<&ObservationSender>,
     ) -> Result<TokenizeResponse, Error> {
         litellm_inference::diagnostic::unary(async {
+            if call.model.is_empty() {
+                return Err(Error::InvalidRequest("model must not be empty".into()));
+            }
             if matches!(&call.backend, TokenizeBackend::Local { .. }) {
                 return handler::execute_local(self, call, interceptors, observers).await;
             }
@@ -85,7 +88,27 @@ impl TokenizeRoute {
                 LlmProviders::Watsonx => &WatsonxTokenizeConfig,
                 _ => return Err(Error::Unsupported("tokenize provider")),
             };
-            if !config.tokenize_capabilities().supports(call.output) {
+            if call.add_special_tokens.is_some()
+                && call
+                    .optional_params
+                    .contains_key("add_special_tokens")
+            {
+                return Err(Error::InvalidRequest(
+                    "add_special_tokens cannot be specified in both the top-level request and optional_params"
+                        .into(),
+                ));
+            }
+            if call.add_special_tokens.is_some()
+                && !config
+                    .get_supported_tokenize_params()
+                    .contains(&"add_special_tokens")
+            {
+                return Err(Error::Unsupported("add_special_tokens"));
+            }
+            if !config
+                .tokenize_capabilities()
+                .supports(call.include.output())
+            {
                 return Err(Error::Unsupported("requested tokenize output"));
             }
             litellm_inference::diagnostic::provider(provider.model, provider.provider.into());
