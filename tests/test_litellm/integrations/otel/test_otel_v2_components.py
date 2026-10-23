@@ -8,8 +8,11 @@ from collections.abc import Iterator
 from contextvars import Context as ContextVarContext
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
+from typing import Final
 
 import pytest
+import requests
+import requests_mock
 
 pytest.importorskip("opentelemetry")
 
@@ -20,11 +23,12 @@ from opentelemetry import baggage  # noqa: E402
 from opentelemetry.context import attach, detach  # noqa: E402
 from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
-from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider  # noqa: E402  # optional SDK checked above
 from opentelemetry.sdk.trace.export import (  # noqa: E402
     BatchSpanProcessor,
     ConsoleSpanExporter,
     SimpleSpanProcessor,
+    SpanExportResult,
 )
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
@@ -36,6 +40,7 @@ from opentelemetry.trace.propagation.tracecontext import (  # noqa: E402
 
 from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
+from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter  # noqa: E402  # optional SDK checked above
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config  # noqa: E402
 from litellm.integrations.otel.mappers.genai import GenAIMapper  # noqa: E402
 from litellm.integrations.otel.mappers.legacy import LegacyMapper  # noqa: E402
@@ -704,7 +709,9 @@ def _export_one_trace_to_local_collector(exporter_kind: str) -> tuple[list[dict]
     class Collector(BaseHTTPRequestHandler):
         def do_POST(self):
             body = self.rfile.read(int(self.headers["Content-Length"]))
-            received.append({"path": self.path, "headers": dict(self.headers), "body": body})
+            received.append(
+                {"path": self.path, "headers": requests.structures.CaseInsensitiveDict(self.headers), "body": body}
+            )
             self.send_response(200)
             self.end_headers()
 
@@ -762,6 +769,86 @@ def test_http_json_exporter_posts_otlp_json_to_traces_endpoint():
     assert child["traceId"] == format(trace_id, "032x")
     assert child["spanId"] == format(child_id, "016x")
     assert child["parentSpanId"] == format(parent_id, "016x")
+
+
+@pytest.mark.parametrize(
+    ("statuses", "expected"),
+    [
+        ((200,), SpanExportResult.SUCCESS),
+        ((400,), SpanExportResult.FAILURE),
+        ((503, 200), SpanExportResult.SUCCESS),
+    ],
+)
+def test_http_json_exporter_preserves_http_failure_and_retry_results(
+    statuses: tuple[int, ...], expected: SpanExportResult
+) -> None:
+    endpoint: Final = "https://collector.test/v1/traces"
+    with requests_mock.Mocker() as collector:
+        collector.register_uri(
+            "POST",
+            endpoint,
+            [{"status_code": status, "headers": {"Retry-After": "0"}} for status in statuses],
+        )
+        exporter: Final = OTLPJsonSpanExporter(
+            endpoint=endpoint,
+            headers={
+                "CONTENT-TYPE": "application/x-protobuf",
+                "x-collector-token": "secret",
+            },
+        )
+        try:
+            assert exporter.export(()) is expected
+        finally:
+            exporter.shutdown()
+    assert len(collector.request_history) == len(statuses)
+    for request in collector.request_history:
+        assert request.headers["Content-Type"] == "application/json"
+        assert request.headers["x-collector-token"] == "secret"
+        assert request.json() == {"resourceSpans": []}
+
+
+@pytest.mark.parametrize(
+    ("size_limit", "expected", "request_count"),
+    [
+        (0, SpanExportResult.SUCCESS, 1),
+        (len(b'{"resourceSpans":[]}'), SpanExportResult.SUCCESS, 1),
+        (len(b'{"resourceSpans":[]}') - 1, SpanExportResult.FAILURE, 0),
+    ],
+)
+def test_http_json_exporter_checks_json_size_before_sending(
+    size_limit: int, expected: SpanExportResult, request_count: int
+) -> None:
+    endpoint: Final = "https://collector.test/v1/traces"
+    with requests_mock.Mocker() as collector:
+        collector.register_uri("POST", endpoint, status_code=200)
+        exporter: Final = OTLPJsonSpanExporter(endpoint, {}, max_request_size=size_limit)
+        try:
+            assert exporter.export(()) is expected
+        finally:
+            exporter.shutdown()
+    assert len(collector.request_history) == request_count
+
+
+def test_http_json_exporter_rejects_export_after_shutdown() -> None:
+    endpoint: Final = "https://collector.test/v1/traces"
+    with requests_mock.Mocker() as collector:
+        collector.register_uri("POST", endpoint, status_code=200)
+        exporter: Final = OTLPJsonSpanExporter(endpoint, {})
+        exporter.shutdown()
+        assert exporter.export(()) is SpanExportResult.FAILURE
+    assert collector.request_history == []
+
+
+def test_http_json_exporter_returns_failure_for_unencodable_spans() -> None:
+    endpoint: Final = "https://collector.test/v1/traces"
+    with requests_mock.Mocker() as collector:
+        collector.register_uri("POST", endpoint, status_code=200)
+        exporter: Final = OTLPJsonSpanExporter(endpoint, {})
+        try:
+            assert exporter.export((ReadableSpan("missing-context"),)) is SpanExportResult.FAILURE
+        finally:
+            exporter.shutdown()
+    assert collector.request_history == []
 
 
 def test_http_protobuf_exporter_still_posts_protobuf():
