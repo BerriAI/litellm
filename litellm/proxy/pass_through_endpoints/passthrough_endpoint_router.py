@@ -1,4 +1,5 @@
 import json
+import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
@@ -87,6 +88,14 @@ class PassthroughEndpointRouter:
             custom_llm_provider=custom_llm_provider,
         )
         return _resolve_oidc_reference(get_secret_str(_env_variable_name))
+
+    def has_credentials(self, custom_llm_provider: str) -> bool:
+        if self._get_deployment_api_key(custom_llm_provider=custom_llm_provider, region_name=None) is not None:
+            return True
+        env_variable_name: Final = self._get_default_env_variable_name_passthrough_endpoint(
+            custom_llm_provider=custom_llm_provider,
+        )
+        return bool(os.environ.get(env_variable_name))
 
     def _get_deployment_api_key(
         self,

@@ -691,6 +691,19 @@ async def typesafe_proxy_route(
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
 
 
+_COST_MAP_ENTRIES: Final = TypeAdapter(Mapping[str, object])
+
+
+def typesafe_allowlist_model_names() -> tuple[str, ...]:
+    if not passthrough_endpoint_router.has_credentials(custom_llm_provider="typesafe"):
+        return ()
+    cost_map: Final = _COST_MAP_ENTRIES.validate_python(litellm.model_cost)  # pyright: ignore[reportUnknownMemberType]  # legacy registry is validated at this boundary
+    priced_jev_models: Final = sorted(
+        name.removeprefix("typesafe/") for name in cost_map if name.startswith("typesafe/")
+    )
+    return ("typesafe/*", *priced_jev_models)
+
+
 @router.post(
     "/laya/v1/systemone",
     tags=["Laya Pass-through", "pass-through"],
