@@ -317,6 +317,10 @@ class MalformedRequestFieldError(BadRequestError):
     pass
 
 
+class UnsupportedEndpointError(BadRequestError):
+    pass
+
+
 class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,
@@ -1054,6 +1058,7 @@ LITELLM_EXCEPTION_TYPES: Final = [
     BadRequestError,
     UnprocessableEntityError,
     UnsupportedParamsError,
+    UnsupportedEndpointError,
     Timeout,
     PermissionDeniedError,
     RateLimitError,
