@@ -957,3 +957,243 @@ def test_router_warns_once_and_serves_no_flag_for_a_deployment_synced_from_the_d
     assert len(capability_warnings) == 1, capability_warnings
     assert "db-model" in capability_warnings[0]
     assert "supports_max_reasoning_effort" not in router.get_model_list()[0]["litellm_params"]
+
+
+@pytest.mark.parametrize("declared", (True, False, None))
+def test_image_capability_uses_explicit_deployment_metadata(declared: bool | None) -> None:
+    from litellm.router_utils.common_utils import deployment_supports_image_input
+
+    deployment: Final = {
+        "litellm_params": {"model": "openai/custom-image-model"},
+        "model_info": {"supports_vision": declared},
+    }
+    assert deployment_supports_image_input(deployment) is (declared is True)
+
+
+def test_image_capability_uses_loaded_catalog_without_provider_discovery() -> None:
+    from litellm.router_utils.common_utils import deployment_supports_image_input
+
+    key, row = next(
+        (key, row)
+        for key, row in GetModelCostMap.loaded_model_cost_map().items()
+        if row.get("litellm_provider") == "openai" and row.get("supports_vision") is True
+    )
+    assert deployment_supports_image_input({"litellm_params": {"model": key}}) is row["supports_vision"]
+    assert not deployment_supports_image_input(
+        {"litellm_params": {"model": key}, "model_info": {"supports_vision": False}}
+    )
+
+
+@pytest.mark.parametrize(
+    "part",
+    (
+        {"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}},
+        {"type": "input_image", "file_id": "file-image"},
+        {"type": "image", "source": {"type": "base64", "data": "aGk=", "media_type": "image/png"}},
+        {
+            "type": "tool_result",
+            "tool_use_id": "screenshot",
+            "content": [{"type": "image", "source": {"type": "url", "url": "https://example.invalid/image.png"}}],
+        },
+    ),
+)
+def test_image_requirement_recognizes_shared_message_shapes(part: dict[str, object]) -> None:
+    from litellm.router_utils.common_utils import responses_routing_scope
+
+    with responses_routing_scope("aresponses"):
+        from litellm.router_utils.common_utils import request_requires_vision
+
+        assert request_requires_vision([{"role": "user", "content": [part]}], None, None)
+
+
+@pytest.mark.parametrize("input_value", ("hello", [{"role": "user", "content": "hello"}]))
+def test_text_input_does_not_require_vision(input_value: str | list[dict[str, str]]) -> None:
+    from litellm.router_utils.common_utils import responses_routing_scope
+
+    with responses_routing_scope("aresponses"):
+        from litellm.router_utils.common_utils import request_requires_vision
+
+        assert not request_requires_vision(None, input_value, {})
+
+
+def test_responses_image_input_requires_vision() -> None:
+    from litellm.router_utils.common_utils import responses_routing_scope
+
+    with responses_routing_scope("aresponses"):
+        from litellm.router_utils.common_utils import request_requires_vision
+
+        assert request_requires_vision(
+            None,
+            [{"role": "user", "content": [{"type": "input_image", "image_url": "https://example.invalid/image.png"}]}],
+            {},
+        )
+
+
+@pytest.mark.parametrize(
+    "deployment",
+    (
+        {},
+        {"litellm_params": None},
+        {"litellm_params": {}},
+        {"litellm_params": {"model": 123}},
+        {"litellm_params": {"model": "github_copilot/unmapped-image-model"}},
+        {"litellm_params": {"model": "unmapped-image-model"}},
+    ),
+)
+def test_unknown_image_capability_is_ineligible(deployment: dict[str, object]) -> None:
+    from litellm.router_utils.common_utils import deployment_supports_image_input
+
+    assert not deployment_supports_image_input(deployment)
+
+
+@pytest.mark.parametrize("provider_prefix", (False, True))
+def test_image_capability_matches_catalog_with_or_without_provider_prefix(provider_prefix: bool) -> None:
+    from litellm.router_utils.common_utils import deployment_supports_image_input
+
+    key, row = next(
+        (key, row)
+        for key, row in GetModelCostMap.loaded_model_cost_map().items()
+        if row.get("litellm_provider") == "openai" and row.get("supports_vision") is True
+    )
+    model: Final = f"openai/{key}" if provider_prefix else key
+    assert deployment_supports_image_input({"litellm_params": {"model": model}}) is row["supports_vision"]
+
+
+def test_image_filter_preserves_deployment_identity_and_does_not_change_group() -> None:
+    from litellm.router_utils.common_utils import require_image_compatible_deployments
+
+    capable: Final = {"model_info": {"supports_vision": True}}
+    incompatible: Final = {"model_info": {"supports_vision": False}}
+    group: Final = (incompatible, capable)
+    result: Final = require_image_compatible_deployments("mixed", group)
+    assert result == (capable,)
+    assert result[0] is capable
+    assert group == (incompatible, capable)
+
+
+@pytest.mark.parametrize("embedding_input", (["hello"], [1, 2, 3], [[1, 2, 3]], []))
+def test_embedding_input_does_not_require_image_support(embedding_input: list[object]) -> None:
+    from litellm.router_utils.common_utils import request_requires_vision
+
+    assert not request_requires_vision(None, embedding_input, {})
+
+
+@pytest.mark.parametrize("regional_name", (False, True))
+def test_bedrock_image_capability_uses_normalized_catalog_name(regional_name: bool) -> None:
+    from litellm.router_utils.common_utils import deployment_supports_image_input
+
+    key, row = next(
+        (key, row)
+        for key, row in GetModelCostMap.loaded_model_cost_map().items()
+        if row.get("litellm_provider") == "bedrock_converse" and row.get("supports_vision") is True and "/" not in key
+    )
+    model: Final = (
+        f"us-east-1/{key}" if regional_name else f"arn:aws:bedrock:us-east-1:123456789012:foundation-model/{key}"
+    )
+    assert (
+        deployment_supports_image_input({"litellm_params": {"model": model, "custom_llm_provider": "bedrock"}})
+        is row["supports_vision"]
+    )
+
+
+def test_catalog_text_only_deployment_is_ineligible_for_images() -> None:
+    from litellm.router_utils.common_utils import deployment_supports_image_input
+
+    key: Final = next(
+        key
+        for key, row in GetModelCostMap.loaded_model_cost_map().items()
+        if row.get("litellm_provider") == "openai" and row.get("supports_vision") is False
+    )
+    assert not deployment_supports_image_input({"litellm_params": {"model": f"openai/{key}"}})
+    assert deployment_supports_image_input(
+        {"litellm_params": {"model": f"openai/{key}"}, "model_info": {"supports_vision": True}}
+    )
+
+
+@pytest.mark.parametrize("declarations", ((), (False,), (None, False)))
+def test_image_filter_reports_how_to_resolve_an_incompatible_group(declarations: tuple[bool | None, ...]) -> None:
+    from litellm.exceptions import BadRequestError
+    from litellm.router_utils.common_utils import require_image_compatible_deployments
+
+    deployments: Final = tuple({"model_info": {"supports_vision": declared}} for declared in declarations)
+    with pytest.raises(BadRequestError, match=r"model_info\.supports_vision") as error:
+        require_image_compatible_deployments("image-pool", deployments)
+    assert error.value.status_code == 400
+    assert "image-pool" in str(error.value)
+
+
+@pytest.mark.parametrize("base_field", ("model_info", "litellm_params"))
+@pytest.mark.parametrize("vision", (True, False))
+@pytest.mark.parametrize("provider_prefix", (True, False))
+def test_image_capability_respects_declared_base_model(base_field: str, vision: bool, provider_prefix: bool) -> None:
+    from litellm.router_utils.common_utils import deployment_supports_image_input
+
+    base_model: Final = next(
+        key
+        for key, row in GetModelCostMap.loaded_model_cost_map().items()
+        if row.get("litellm_provider") == "azure" and row.get("supports_vision") is vision
+    )
+    declared_base: Final = base_model if provider_prefix else base_model.removeprefix("azure/")
+    params: Final = {"model": "azure/custom-deployment"}
+    deployment: Final = {
+        "litellm_params": {**params, "base_model": declared_base} if base_field == "litellm_params" else params,
+        "model_info": {"base_model": declared_base} if base_field == "model_info" else {},
+    }
+    assert deployment_supports_image_input(deployment) is vision
+    assert not deployment_supports_image_input(
+        {**deployment, "model_info": {**deployment["model_info"], "supports_vision": False}}
+    )
+
+
+def test_image_capability_base_model_info_precedes_params() -> None:
+    from litellm.router_utils.common_utils import deployment_supports_image_input
+
+    vision_model: Final = next(
+        key for key, row in GetModelCostMap.loaded_model_cost_map().items() if row.get("supports_vision") is True
+    )
+    assert not deployment_supports_image_input(
+        {
+            "litellm_params": {"model": vision_model, "base_model": vision_model},
+            "model_info": {"base_model": "unknown-custom-base-model"},
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "handler", (None, "acompletion", "anthropic_messages", "adecisions", "asystemone", "aresponses", "responses")
+)
+def test_image_filtering_requires_responses_dispatch(handler: str | None) -> None:
+    from litellm.router_utils.common_utils import request_requires_vision, responses_routing_scope
+
+    request: Final = {"input": [{"role": "user", "content": [{"type": "input_image", "file_id": "file-image"}]}]}
+    with responses_routing_scope(handler):
+        assert request_requires_vision(None, None, request) is (handler in ("responses", "aresponses"))
+    assert not request_requires_vision(None, None, request)
+
+
+def test_responses_routing_scope_restores_outer_endpoint_after_failure() -> None:
+    from litellm.router_utils.common_utils import is_responses_routing, responses_routing_scope
+
+    def fail_decisions_request() -> None:
+        with responses_routing_scope("adecisions"):
+            assert not is_responses_routing()
+            raise ValueError("failed request")
+
+    with responses_routing_scope("aresponses"):
+        with pytest.raises(ValueError, match="failed request"):
+            fail_decisions_request()
+        assert is_responses_routing()
+    assert not is_responses_routing()
+
+
+@pytest.mark.parametrize("has_image", (False, True))
+def test_responses_tool_output_keeps_image_requirement(has_image: bool) -> None:
+    from litellm.router_utils.common_utils import request_requires_vision, responses_routing_scope
+
+    output: Final = (
+        [{"type": "input_image", "image_url": "https://example.invalid/image.png"}]
+        if has_image else "No image was produced"
+    )
+    request_input: Final = [{"type": "function_call_output", "call_id": "call-image", "output": output}]
+    with responses_routing_scope("aresponses"):
+        assert request_requires_vision(None, request_input, {}) is has_image

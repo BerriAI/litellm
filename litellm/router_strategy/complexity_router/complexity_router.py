@@ -42,6 +42,7 @@ from litellm.constants import (
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
+from litellm.exceptions import BadRequestError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.classifier_logging import masked_originating_request
@@ -67,6 +68,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
 )
+from litellm.router_utils.common_utils import deployment_supports_image_input, get_request_team_id, is_responses_routing
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -130,6 +132,9 @@ from .jev_classifier import (
 )
 from .llm_v2 import LLM_V2_PROMPT_VERSION, LLMV2Decision, LLMV2TaskContext, LLMV2Verdict, llm_v2_response_format
 from .stall_detector import detect_stalled_task
+
+_ROUTING_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -3665,22 +3670,7 @@ class ComplexityRouter(CustomLogger):
         )
 
     def _vision_verdicts(self, model_name: str) -> tuple[bool | None, ...]:
-        """Declared vision support per deployment serving the name: True, False, or None when
-        nothing declares either way.
-
-        Resolved through the deployments that would actually serve the name; a name with no
-        deployment on the router is served by the SDK directly and is checked against the model
-        cost map itself. A deployment-level model_info override wins over the map.
-
-        One verdict set, two readings, because the two callers fail in opposite directions.
-        Routing a user's image asks whether anything RULES IT OUT, so an undeclared model stays
-        eligible and unmapped custom names keep routing. Handing an image to the classifier asks
-        whether something RULES IT IN: an undeclared model that turns out to be text-only rejects
-        every image request, and that rejection is swallowed by the classifier's own fallback, so
-        the router quietly serves all image traffic from the fallback tier and pays for the failed
-        call each time. An undeclared model instead keeps today's text-only payload, which is a
-        visible no-op the operator fixes by declaring supports_vision on the deployment.
-        """
+        """Vision declarations used to decide whether the classifier receives image content."""
         from litellm.utils import is_vision_explicitly_disabled, supports_vision
 
         def model_verdict(model: str) -> bool | None:
@@ -3699,25 +3689,29 @@ class ComplexityRouter(CustomLogger):
             return (model_verdict(model_name),)
         return tuple(deployment_verdict(deployment) for deployment in deployments)
 
-    def _model_accepts_image_input(self, model_name: str) -> bool:
-        """Whether a routed model or pool entry can serve an image request.
-
-        A multi-deployment group must accept on EVERY deployment: the router picks a deployment
-        inside the group after this gate runs, so a mixed group marked eligible could still hand
-        the image to its text-only member and fail with the exact 400 the gate exists to prevent.
-        """
-        return all(verdict is not False for verdict in self._vision_verdicts(model_name))
+    def _model_accepts_image_input(self, model_name: str, request_kwargs: Mapping[str, object]) -> bool:
+        if not is_responses_routing():
+            return all(verdict is not False for verdict in self._vision_verdicts(model_name))
+        team_id: Final = get_request_team_id(request_kwargs)
+        deployments: Final = (
+            self.litellm_router_instance.get_model_list(model_name=model_name, team_id=team_id)
+            if team_id is not None
+            else self.litellm_router_instance.get_model_list(model_name=model_name)
+        )
+        if not deployments:
+            return deployment_supports_image_input({"litellm_params": {"model": model_name}})
+        return any(deployment_supports_image_input(deployment) for deployment in deployments)
 
     def _model_declares_vision_support(self, model_name: str) -> bool:
         """Whether every deployment serving the name is declared vision-capable."""
         return all(verdict is True for verdict in self._vision_verdicts(model_name))
 
-    def _modality_eligible_models(self) -> frozenset[str]:
+    def _modality_eligible_models(self, request_kwargs: Mapping[str, object]) -> frozenset[str]:
         """Every configured pool entry, plus default_model, that can serve an image request."""
         names: Final = frozenset(entry for pool in self._tier_pools().values() for entry in pool) | frozenset(
             name for name in (self.config.default_model,) if name
         )
-        return frozenset(name for name in names if self._model_accepts_image_input(name))
+        return frozenset(name for name in names if self._model_accepts_image_input(name, request_kwargs))
 
     async def _gate_response_modality(
         self,
@@ -3728,37 +3722,42 @@ class ComplexityRouter(CustomLogger):
         context_fit: _RequestContextFit | None = None,
         retained_pin: _SessionAffinityPin | None = None,
     ) -> PreRoutingHookResponse:
-        """Replace a routed model that cannot accept this request's image input.
-
-        The single modality owner, applied to the decided response at the hook's exits so every
-        routing path is covered uniformly. A KEPT session pin is exempt by design (its cause)
-        unless modality_pin_override is set, in which case the image turn is re-placed and reported
-        as modality_pin_override while the stored pin, written upstream from the session's own
-        model, is left for the next text turn; replacement picks and every other path are just
-        responses. The re-placement walks
-        UPWARD-ONLY from the decision's tier (so a plan-mode floor can never be undercut), picks
-        through `_pick_model_for_tier` so routing plugins still apply, then falls to
-        default_model (never on plugin routers, and never on a plan-floored decision, since
-        default_model carries no tier guarantee), else raises the clear 400. The rewritten
-        decision keeps its cause on a same-tier repick and becomes modality_escalation when the
-        tier moved or default_model took over, with the displaced placement in signals.
-        """
+        """Keep compatible placements, reject incompatible pins, and repick permitted image routes."""
         decision: Final = response.routing_decision
         if (
-            not self.config.modality_routing
+            (not is_responses_routing() and not self.config.modality_routing)
             or not resolved_messages
             or response.model is None
             or (
-                decision is not None
+                not is_responses_routing()
+                and decision is not None
                 and decision.get("cause") == "session_affinity_pin"
                 and not self.config.modality_pin_override
             )
             or not request_contains_image_content(resolved_messages)
-            or self._model_accepts_image_input(response.model)
+            or self._model_accepts_image_input(response.model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs))
         ):
             return response
+        if (
+            decision is not None
+            and decision.get("cause") == "session_affinity_pin"
+            and not self.config.modality_pin_override
+        ):
+            raise BadRequestError(
+                message=(
+                    f"Auto-router {self.model_name} is pinned to '{response.model}', which has no deployment "
+                    "with confirmed image support. Configure model_info.supports_vision for a vision-capable "
+                    "deployment, enable modality_pin_override to permit relocation, or remove the image content."
+                ),
+                model=self.model_name,
+                llm_provider="",
+            )
         fit: Final = context_fit or await self._request_context_fit(resolved_messages, request_kwargs)
-        eligible: Final = frozenset(name for name in self._modality_eligible_models() if fit.accepts(name))
+        eligible: Final = frozenset(
+            name
+            for name in self._modality_eligible_models(_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs))
+            if fit.accepts(name)
+        )
         names: Final = self.config.tier_names()
         pools: Final = self._tier_pools()
         decided: Final = decision.get("tier") if decision is not None else None
@@ -3781,11 +3780,14 @@ class ComplexityRouter(CustomLogger):
             new_tier = None
             new_model = self._placed_default_model()
         else:
-            import litellm
-
-            raise litellm.BadRequestError(
+            raise BadRequestError(
                 message=(
                     f"Auto-router {self.model_name} received a request with image input, but no model "
+                    f"at or above the decided tier has confirmed image support. "
+                    f"Tiers checked: {', '.join(names[start:])}. Add a vision-capable model to a tier, "
+                    f"or set model_info.supports_vision: true for a custom vision deployment, or remove the image content."
+                    if is_responses_routing()
+                    else f"Auto-router {self.model_name} received a request with image input, but no model "
                     f"at or above the decided tier accepts images and modality_routing is enabled. "
                     f"Tiers checked: {', '.join(names[start:])}. Add a vision-capable model to a tier, "
                     f"or set a vision-capable default_model, or remove the image content."
@@ -3797,7 +3799,7 @@ class ComplexityRouter(CustomLogger):
         same_tier: Final = capable is not None and decided == capable
         base_cause: Final = (decision.get("cause") if decision is not None else None) or "default_fallback"
         # Reaching here on a kept pin means modality_pin_override is on, since the guard above
-        # returns otherwise. The model moved off the pin even on a same-tier repick, so reporting
+        # rejects otherwise. The model moved off the pin even on a same-tier repick, so reporting
         # the pin's own cause would claim the session's model served a request it did not.
         displaced_pin: Final = base_cause == "session_affinity_pin"
         displaced_default: Final = decided is None and response.model == self.config.default_model
@@ -3933,8 +3935,10 @@ class ComplexityRouter(CustomLogger):
         ):
             return response
         eligible: Final = (
-            self._modality_eligible_models()
-            if self.config.modality_routing and resolved_messages and request_contains_image_content(resolved_messages)
+            self._modality_eligible_models(_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs))
+            if (is_responses_routing() or self.config.modality_routing)
+            and resolved_messages
+            and request_contains_image_content(resolved_messages)
             else None
         )
         pools: Final = self._tier_pools()

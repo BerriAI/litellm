@@ -413,22 +413,28 @@ response = litellm.completion(
 
 ### Modality-based capability routing
 
-The classifier reads text alone, so a request carrying an image can classify cheap and land on a
-text-only model, which rejects it with a provider 400 no fallback catches. With
-`modality_routing: true`, one gate inspects every decided placement: when the routed model is
-explicitly declared `supports_vision: false` (deployment `model_info` first, the model cost map
-otherwise; unmapped names stay routable, and a multi-deployment group must accept on every
-deployment), the request is re-placed on the nearest HIGHER tier holding a capable model, with
-routing plugins still applied to the re-pick, then on `default_model` (never on plugin routers
-and never for a plan-floored decision), and otherwise rejected with a clear 400 naming the
-router. The walk only ever goes up, so a plan-mode floor cannot be undercut; a router whose only
-vision model sits below the decided tier gets the 400 and an actionable message instead.
+Responses API image requests route only to deployments with confirmed vision support. The router reads
+`model_info.supports_vision` first, then the loaded model catalog. False or unknown support
+excludes a deployment from image requests. Text requests retain their existing routing behavior.
+
+Mixed model groups remain valid. A group is eligible when it contains a compatible deployment,
+and normal load balancing chooses among its compatible deployments. Existing health, access,
+quota, ordering, and routing plugin checks still apply.
+
+If the chosen group cannot accept images, the auto-router tries compatible peers and higher
+tiers, then an allowed `default_model`. Otherwise it returns an actionable 400 before provider
+dispatch. A plan-mode floor cannot be undercut. These checks always apply to Responses API requests. Other endpoints retain their existing
+`modality_routing` behavior and default setting.
+
+For custom deployments missing catalog metadata, set `model_info.supports_vision: true` only
+when the underlying model supports images. Existing custom deployments without that declaration
+continue serving text requests but are excluded from image requests.
 
 A same-tier re-pick keeps the decision's cause and adds `modality:image` to `signals`; a tier
 change or default takeover records `cause: modality_escalation` with the displaced placement
 (`modality_escalated_from:<TIER>` or `modality_displaced_default_model`). Escalations are never
-pinned by session affinity, and by default a KEPT session pin bypasses the gate: a session pinned
-to a text-only model keeps it even when an image arrives.
+pinned by session affinity. Without `modality_pin_override`, an image request fails before provider
+dispatch when the pinned group has no compatible deployment.
 
 Context-window and modality recovery take priority over the default model. If a compatible tier
 cannot serve, the router checks the remaining compatible recovery tiers before using `default_model`.
@@ -446,8 +452,7 @@ Add `modality_pin_override: true` to lift that last exemption. The image turn is
 the same way every other decision is, and records `cause: modality_pin_override` whether or not
 the tier moved, since the model left the pin either way. The pin itself is untouched: the session
 affinity write happens upstream of the gate and stores the session's own model, so the next text
-turn replays the original pin and the override is never pinned in its place. It does nothing
-unless `modality_routing` is also on.
+turn replays the original pin and the override is never pinned in its place.
 
 ### Session pin retention
 

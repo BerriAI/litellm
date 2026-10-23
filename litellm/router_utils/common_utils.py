@@ -1,6 +1,8 @@
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -13,6 +15,8 @@ import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.get_litellm_params import get_base_model_from_litellm_call_metadata
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
@@ -26,15 +30,20 @@ from litellm.types.router import (
 from litellm.types.utils import (
     AdminApiKeySecretReference,
     LlmProviders,
+    LlmProvidersSet,
     ProviderSpecificModelInfo,
     admin_api_key_secret_reference,
 )
 
 _V = TypeVar("_V")
+_ImageDeployment: Final = TypeVar("_ImageDeployment", bound=Mapping[str, object])
 
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+_REQUEST_MESSAGE_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
 _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
@@ -342,6 +351,103 @@ def deployments_the_caller_may_use(
         )
     except BadRequestError:
         return ()
+
+
+_RESPONSES_ROUTING: Final[ContextVar[bool]] = ContextVar("responses_capability_routing", default=False)
+
+
+@contextmanager
+def responses_routing_scope(handler_name: str | None) -> Generator[None]:
+    token: Final = _RESPONSES_ROUTING.set(handler_name in ("responses", "aresponses"))
+    try:
+        yield
+    finally:
+        _RESPONSES_ROUTING.reset(token)
+
+
+def is_responses_routing() -> bool:
+    return _RESPONSES_ROUTING.get()
+
+
+def request_requires_vision(
+    messages: Sequence[Mapping[str, object]] | None,
+    input: object,
+    request_kwargs: Mapping[str, object] | None,
+) -> bool:
+    from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
+    from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
+
+    if not is_responses_routing():
+        return False
+    if messages:
+        return request_contains_image_content(messages)
+    request_input: Final = input if input is not None else (request_kwargs or {}).get("input")
+    if not isinstance(request_input, list) or not request_input or not isinstance(request_input[0], Mapping):
+        return False
+    rows: Final = _REQUEST_MESSAGE_ROWS_ADAPTER.validate_python(request_input)
+    if all("content" in row for row in rows):
+        return request_contains_image_content(rows)
+    resolved: Final = resolve_structured_messages(None, {**(request_kwargs or {}), "input": request_input})
+    return resolved is not None and request_contains_image_content(resolved)
+
+
+def deployment_supports_image_input(deployment: Mapping[str, object]) -> bool:
+    info: Final = as_str_mapping(deployment.get("model_info"))
+    if info is not None and isinstance(info.get("supports_vision"), bool):
+        return info["supports_vision"] is True
+    params: Final = as_str_mapping(deployment.get("litellm_params"))
+    if params is None:
+        return False
+    route_model: Final = params.get("model")
+    if not isinstance(route_model, str):
+        return False
+    declared_base: Final = get_base_model_from_litellm_call_metadata({"model_info": info}) or params.get("base_model")
+    model: Final = declared_base if isinstance(declared_base, str) and declared_base else route_model
+    provider: Final = params.get("custom_llm_provider")
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    inferred_provider: Final = provider if isinstance(provider, str) else route_model.partition("/")[0]
+    if inferred_provider not in LlmProvidersSet:
+        return catalog.get(model, {}).get("supports_vision") is True
+    exact: Final = (
+        catalog.get(f"{inferred_provider}/{model}")
+        or catalog.get(model)
+        or catalog.get(model.removeprefix(f"{inferred_provider}/"))
+        or {}
+    ).get("supports_vision")
+    if isinstance(exact, bool):
+        return exact
+    from litellm.utils import get_potential_model_names
+
+    names: Final = get_potential_model_names(model, inferred_provider)
+    candidates: Final = (
+        names["provider_prefixed_model_name"],
+        names["combined_model_name"],
+        model,
+        names["region_free_combined_model_name"],
+        names["split_model"],
+        names["combined_stripped_model_name"],
+        names["stripped_model_name"],
+    )
+    declarations: Final = (catalog.get(name, {}).get("supports_vision") for name in candidates)
+    return next((value for value in declarations if isinstance(value, bool)), False) is True
+
+
+def require_image_compatible_deployments(
+    model: str,
+    deployments: Sequence[_ImageDeployment],
+) -> tuple[_ImageDeployment, ...]:
+    compatible: Final = tuple(deployment for deployment in deployments if deployment_supports_image_input(deployment))
+    if compatible:
+        return compatible
+    raise BadRequestError(
+        message=(
+            f"Model group '{model}' has no deployment with confirmed image support. "
+            "Configure a vision-capable deployment or set model_info.supports_vision: true "
+            "if your custom deployment supports images. Otherwise remove the image content."
+        ),
+        model=model,
+        llm_provider="",
+    )
 
 
 _WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
