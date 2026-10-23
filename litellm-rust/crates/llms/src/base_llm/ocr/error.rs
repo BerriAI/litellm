@@ -8,14 +8,13 @@ pub enum Error {
     },
     #[error("File is empty or could not be read")]
     EmptyFile,
-    #[error("Failed to read OCR file {}: {source}", path.display())]
+    #[error("Failed to read OCR file {}: {cause}", path.display())]
     FileRead {
         path: std::path::PathBuf,
-        #[source]
-        source: std::sync::Arc<std::io::Error>,
+        cause: std::sync::Arc<std::io::Error>,
     },
     #[error("OCR document preparation task failed: {0}")]
-    DocumentTask(#[source] std::sync::Arc<tokio::task::JoinError>),
+    DocumentTask(std::sync::Arc<tokio::task::JoinError>),
     #[error("Invalid MIME type: {0}")]
     InvalidMimeType(String),
     #[error(
@@ -87,7 +86,7 @@ pub enum Error {
     )]
     MissingReductoApiKey,
     #[error("secret resolution failed: {0}")]
-    Secret(#[source] std::sync::Arc<litellm_secrets::Error>),
+    Secret(std::sync::Arc<litellm_secrets::Error>),
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
@@ -117,6 +116,20 @@ impl From<litellm_core_utils::call_arguments::ArgumentError> for Error {
 }
 
 impl Error {
+    pub fn is_missing_credential(&self) -> bool {
+        match self {
+            Self::MissingAzureAiCredentials
+            | Self::MissingAzureDocumentIntelligenceCredentials
+            | Self::MissingReductoApiKey => true,
+            Self::Auth(error) => error.is_missing_credential(),
+            _ => false,
+        }
+    }
+
+    pub fn is_unsupported(&self) -> bool {
+        matches!(self, Self::Unsupported(_))
+    }
+
     pub fn http_status_code(&self) -> Option<u16> {
         match self {
             Self::Provider { status, .. } => Some(*status),

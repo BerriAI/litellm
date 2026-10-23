@@ -51,24 +51,31 @@ fn display_preserves_failure_phase_and_caller_context(
 #[rstest]
 #[case::configuration(true)]
 #[case::acquisition(false)]
-fn contextual_failures_keep_the_original_source(#[case] configuration: bool) {
+fn contextual_failures_render_their_cause_once(#[case] configuration: bool) {
     use litellm_auth_types::ErrorDetail;
 
-    let detail = ErrorDetail::failed(
-        "test credential",
-        std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-    );
+    let cause = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+    let cause_message = cause.to_string();
+    let detail = ErrorDetail::failed("test credential", cause);
     let error = if configuration {
         Error::InvalidConfiguration(detail)
     } else {
         Error::CredentialAcquisition(detail)
     };
-    let source = std::iter::successors(Some(&error as &dyn std::error::Error), |error| {
-        error.source()
-    })
-    .find_map(|error| error.downcast_ref::<std::io::Error>())
-    .expect("the original credential error remains available");
-    assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+    let (Error::InvalidConfiguration(detail) | Error::CredentialAcquisition(detail)) = &error
+    else {
+        unreachable!("built above");
+    };
+    let ErrorDetail::Failed { cause, .. } = detail else {
+        panic!("a contextual failure keeps its typed cause: {detail:?}");
+    };
+    assert_eq!(
+        cause
+            .downcast_ref::<std::io::Error>()
+            .map(std::io::Error::kind),
+        Some(std::io::ErrorKind::PermissionDenied)
+    );
     assert!(error.to_string().contains("test credential failed:"));
-    assert!(error.to_string().ends_with(&source.to_string()));
+    assert!(error.to_string().ends_with(&cause_message));
+    assert!(std::error::Error::source(&error).is_none());
 }

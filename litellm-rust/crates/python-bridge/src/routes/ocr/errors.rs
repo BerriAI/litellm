@@ -29,10 +29,10 @@ pub(super) fn to_pyerr(error: Error) -> PyErr {
                     .ok();
                 error
             }
-            Error::FileRead { path, source } if source.kind() == std::io::ErrorKind::NotFound => {
+            Error::FileRead { path, cause } if cause.kind() == std::io::ErrorKind::NotFound => {
                 PyFileNotFoundError::new_err(format!("File not found: {}", path.display()))
             }
-            Error::FileRead { source, .. } => PyOSError::new_err(source.to_string()),
+            Error::FileRead { cause, .. } => PyOSError::new_err(cause.to_string()),
             other => by_fault(is_request(&other), other.to_string()),
         })
     })
@@ -165,7 +165,7 @@ mod tests {
     fn file_read(kind: std::io::ErrorKind) -> Error {
         Error::FileRead {
             path: "/missing/scan.pdf".into(),
-            source: std::sync::Arc::new(std::io::Error::new(kind, "disk said no")),
+            cause: std::sync::Arc::new(std::io::Error::new(kind, "disk said no")),
         }
     }
 

@@ -12,7 +12,7 @@ Error::Signature(error.to_string())
 Error::AwsSignableRequest(format!("{name} is not visible ASCII"))
 
 // the call site names what happened, the variant owns the words
-Repr::HandshakeAccept.into()
+Repr::Handshake(HandshakeFault::Accept).into()
 Error::signature(error)
 Error::NonAsciiHeader { name }
 ```
@@ -58,7 +58,7 @@ Call `without_url()` where a `reqwest::Error` enters our type, which in practice
 
 Either the variant's message includes the cause or `source()` returns it, never both, or a reporter that walks the chain prints it twice. This is the rule from the [`std::error::Error` docs](https://doc.rust-lang.org/std/error/trait.Error.html)
 
-Our boundaries (the gateway error body and the Python bridge) render with `to_string()` and never walk the chain. So in this workspace a leaf variant puts its cause in its message, and stores it in a field named `cause` so thiserror does not also expose it as the source
+Our boundaries (the gateway error body and the Python bridge) render with `to_string()` and never walk the chain. So in this workspace a leaf variant puts its cause in its message and stores it in a field named `cause`, with no `#[source]`. thiserror treats a field named `source` as the source even without the attribute, so the name matters. `litellm_llms::ErrorDetail`, the auth, inference and OCR errors all follow this
 
 | Field | thiserror does | Use for |
 |---|---|---|
@@ -83,7 +83,7 @@ Http(litellm_http::Error),
 
 `#[error(transparent)]` is an invisible layer, not an extra chain node. A transparent wrapper's `source()` is the inner value's `source()`, so a transparent wrapper over a leaf has no source at all
 
-`reqwest::Error` keeps the useful part of its message in its own source chain (the hyper and io errors), so the `Chain` helper in `crates/http/src/error.rs` renders `reqwest::Error` plus its sources into one message. Use it for any reqwest cause in a message
+`reqwest::Error` keeps the useful part of its message in its own source chain (the hyper and io errors), so the private `Chain` helper in `crates/http/src/error.rs` renders `reqwest::Error` plus its sources into one message. Every reqwest error enters our types in that crate, so that is the only place it is needed
 
 ## #[from] limits
 

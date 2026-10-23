@@ -176,8 +176,8 @@ async fn a_missing_path_document_fails_before_sending() {
     assert!(
         matches!(
             &error,
-            Error::FileRead { path: failed, source }
-                if *failed == path && source.kind() == std::io::ErrorKind::NotFound
+            Error::FileRead { path: failed, cause }
+                if *failed == path && cause.kind() == std::io::ErrorKind::NotFound
         ),
         "{error:?}"
     );

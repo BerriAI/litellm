@@ -21,9 +21,9 @@ pub enum Error {
     #[error("invalid provider: {0}")]
     InvalidProvider(String),
     #[error("invalid request: {0}")]
-    InvalidRequest(#[source] litellm_llms::ErrorDetail),
+    InvalidRequest(litellm_llms::ErrorDetail),
     #[error("invalid response: {0}")]
-    InvalidResponse(#[source] litellm_llms::ErrorDetail),
+    InvalidResponse(litellm_llms::ErrorDetail),
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
     #[error(transparent)]
@@ -35,7 +35,7 @@ pub enum Error {
     #[error(transparent)]
     Secret(#[from] SecretError),
     #[error("post-call hook failed: {0}")]
-    PostCallHook(#[source] Arc<Error>),
+    PostCallHook(Arc<Error>),
 }
 
 impl From<litellm_host::machine::MachineFault> for Error {
@@ -63,10 +63,18 @@ impl Error {
             | Self::InvalidRequest(_)
             | Self::Unsupported(_)
             | Self::Headers(_) => true,
-            Self::Auth(error) => !matches!(error, litellm_auth::Error::MissingApiKey { .. }),
+            Self::Auth(error) => !error.is_missing_credential(),
             Self::Http(error) => error.is_request(),
             Self::InvalidResponse(_) | Self::Secret(_) | Self::PostCallHook(_) => false,
         }
+    }
+
+    pub fn is_missing_credential(&self) -> bool {
+        matches!(self, Self::Auth(error) if error.is_missing_credential())
+    }
+
+    pub fn is_unsupported(&self) -> bool {
+        matches!(self, Self::Unsupported(_))
     }
 }
 
@@ -156,7 +164,7 @@ mod tests {
     #[rstest]
     #[case::request(true)]
     #[case::response(false)]
-    fn contextual_errors_preserve_sources_and_route_classification(#[case] request: bool) {
+    fn contextual_errors_render_their_cause_and_route_classification(#[case] request: bool) {
         let source = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
         let source_message = source.to_string();
         let detail = ErrorDetail::invalid("test payload", source);
@@ -171,11 +179,9 @@ mod tests {
             error.to_string(),
             format!("invalid {category}: invalid test payload: {source_message}")
         );
-        let source = std::iter::successors(Some(&error as &dyn std::error::Error), |error| {
-            error.source()
-        })
-        .find_map(|error| error.downcast_ref::<serde_json::Error>())
-        .expect("the original JSON error remains available");
-        assert_eq!(source.to_string(), source_message);
+        assert!(
+            std::error::Error::source(&error).is_none(),
+            "a cause rendered in the message is not also exposed as source()"
+        );
     }
 }

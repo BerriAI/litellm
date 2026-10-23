@@ -220,7 +220,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
                         Error::InvalidResponse(crate::ErrorDetail::InvalidLine {
                             subject: "Anthropic batch result",
                             line: index + 1,
-                            source: crate::ErrorSource::new(error),
+                            cause: crate::ErrorSource::new(error),
                         })
                     })?;
                 match record.result {

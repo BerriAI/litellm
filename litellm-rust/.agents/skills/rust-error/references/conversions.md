@@ -73,7 +73,7 @@ All four inference routes classify a header the signer computes the same way, be
 | changes what the failure means | translate to an upper variant, keep the cause attached when it helps | computed header -> `Unsupported` |
 | knows something the lower one does not | a variant with the extra fields plus the cause | `Read { path, tls_source, cause }` |
 
-Never re-declare a lower crate's variants in the upper type with an upper-layer name and a 1:1 mapping function. OCR once did that for every media download failure, `MediaError::BlockedUrl => Error::BlockedDocumentUrl` and so on, which doubled every change and let the two lists drift
+Never re-declare a lower crate's variants in the upper type with an upper-layer name and a 1:1 mapping function. OCR once did that for every media download failure, `MediaError::BlockedUrl => Error::BlockedDocumentUrl` and so on, which doubled every change and let the two lists drift. `litellm_inference::Error`'s `From<litellm_llms::Error>` still maps six same-named variants one to one. It predates this rule and is the shape to migrate away from, not to copy
 
 ## Third-party and host faults
 

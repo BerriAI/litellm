@@ -267,7 +267,7 @@ fn anthropic_body(
 #[cfg(test)]
 mod tests {
     use crate::{
-        Error,
+        Error, ErrorDetail,
         anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
         base_llm::{
             auth::AuthScheme,
@@ -676,15 +676,14 @@ mod tests {
     #[case::missing_model(json!({"content": [], "usage": {"input_tokens": 1, "output_tokens": 1}}))]
     fn errors_on_a_response_missing_required_fields(#[case] body: Value) {
         let error = transform_response(body).expect_err("invalid response");
-        assert!(matches!(error, Error::InvalidResponse(_)));
-        let source = std::iter::successors(Some(&error as &dyn std::error::Error), |error| {
-            error.source()
-        })
-        .find_map(|error| error.downcast_ref::<serde_json::Error>())
-        .expect("the JSON decoding source is preserved");
+        let Error::InvalidResponse(ErrorDetail::Invalid { subject, cause }) = &error else {
+            panic!("decoding failures keep their JSON cause: {error:?}");
+        };
+        assert_eq!(*subject, "messages response");
+        assert!(cause.downcast_ref::<serde_json::Error>().is_some());
         assert_eq!(
             error.to_string(),
-            format!("invalid response: invalid messages response: {source}")
+            format!("invalid response: invalid messages response: {cause}")
         );
     }
 

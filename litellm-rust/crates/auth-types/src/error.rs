@@ -3,9 +3,9 @@ use thiserror::Error as ThisError;
 #[derive(Clone, Debug, ThisError, PartialEq, Eq)]
 pub enum Error {
     #[error("invalid authentication configuration: {0}")]
-    InvalidConfiguration(#[source] ErrorDetail),
+    InvalidConfiguration(ErrorDetail),
     #[error("credential acquisition failed: {0}")]
-    CredentialAcquisition(#[source] ErrorDetail),
+    CredentialAcquisition(ErrorDetail),
     #[error("credential caller failed: {0}")]
     EmptyCallerCredential(&'static str),
     #[error("{0}")]
@@ -33,6 +33,14 @@ pub enum Error {
     InvalidHeader,
 }
 
+impl Error {
+    /// The environment lacks the credential the provider needs, as opposed to the caller
+    /// having sent a bad one.
+    pub fn is_missing_credential(&self) -> bool {
+        matches!(self, Self::MissingApiKey { .. })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ErrorDetail {
     #[error("{0}")]
@@ -46,22 +54,21 @@ pub enum ErrorDetail {
     Empty { subject: String },
     #[error("credential header {0} already exists")]
     DuplicateHeader(&'static str),
-    #[error("{operation} failed: {source}")]
+    #[error("{operation} failed: {cause}")]
     Failed {
         operation: &'static str,
-        #[source]
-        source: ErrorSource,
+        cause: ErrorSource,
     },
 }
 
 impl ErrorDetail {
     pub fn failed(
         operation: &'static str,
-        source: impl std::error::Error + Send + Sync + 'static,
+        cause: impl std::error::Error + Send + Sync + 'static,
     ) -> Self {
         Self::Failed {
             operation,
-            source: ErrorSource::new(source),
+            cause: ErrorSource::new(cause),
         }
     }
 }

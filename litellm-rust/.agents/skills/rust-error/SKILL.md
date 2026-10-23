@@ -21,7 +21,11 @@ description: Define, wrap, convert, classify, report or test Rust error types in
   - Callers ask predicates named after their decision, they do not match nested variants
   - Classification states facts. Retry and fallback policy lives with the caller that knows idempotency
 - [boundaries](references/boundaries.md)
-  - The gateway and the Python bridge are the only places an error becomes text for someone else
+  - The gateway and the Python bridge are the only places an error becomes text for someone else, and both ask the same predicates in the same order
+- [axum](references/axum.md)
+  - One `Error` with `IntoResponse` per gateway crate. `status()` is pure and separate from the envelope, extractors reject with the same type
+- [pyo3](references/pyo3.md)
+  - Two `create_exception!` classes with the payload in `args`, `ValueError` for the caller's fault and `RuntimeError` otherwise, decoded once in Python
 - [testing](references/testing.md)
   - Test predicates, chain shape and redaction on errors built the way production builds them
 - [recipes](references/recipes.md)

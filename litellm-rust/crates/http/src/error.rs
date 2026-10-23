@@ -57,14 +57,8 @@ pub(crate) enum Repr {
     WebSocketUrl(url::ParseError),
     #[error("unsupported WebSocket URL scheme {0:?}")]
     WebSocketScheme(String),
-    #[error("WebSocket handshake returned a wrong Sec-WebSocket-Accept")]
-    HandshakeAccept,
-    #[error("WebSocket handshake returned an invalid Upgrade header")]
-    HandshakeUpgrade,
-    #[error("WebSocket handshake returned an invalid Connection header")]
-    HandshakeConnection,
-    #[error("WebSocket handshake returned an invalid subprotocol")]
-    HandshakeSubprotocol,
+    #[error("WebSocket handshake returned {0}")]
+    Handshake(HandshakeFault),
     #[error("WebSocket connection timed out")]
     HandshakeTimeout,
     #[error("upstream WebSocket error: {0}")]
@@ -88,6 +82,18 @@ pub(crate) enum Repr {
     DownloadStatus(u16),
     #[error("media download timed out")]
     DownloadTimeout,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum HandshakeFault {
+    #[error("a wrong Sec-WebSocket-Accept")]
+    Accept,
+    #[error("an invalid Upgrade header")]
+    Upgrade,
+    #[error("an invalid Connection header")]
+    Connection,
+    #[error("an invalid subprotocol")]
+    Subprotocol,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -135,18 +141,9 @@ impl Error {
             Repr::Network(_)
                 | Repr::Timeout(_)
                 | Repr::Status { .. }
-                | Repr::HandshakeAccept
-                | Repr::HandshakeUpgrade
-                | Repr::HandshakeConnection
-                | Repr::HandshakeSubprotocol
+                | Repr::Handshake(_)
                 | Repr::HandshakeTimeout
                 | Repr::WebSocket(_)
-                | Repr::TooManyRedirects
-                | Repr::MissingRedirectLocation
-                | Repr::InvalidRedirect
-                | Repr::DownloadTooLarge
-                | Repr::DownloadStatus(_)
-                | Repr::DownloadTimeout
         )
     }
 

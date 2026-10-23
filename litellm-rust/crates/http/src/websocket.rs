@@ -18,7 +18,7 @@ use tokio_tungstenite::{
 
 use crate::{
     client::Client,
-    error::{Error, Repr},
+    error::{Error, HandshakeFault, Repr},
 };
 
 pub type UpstreamWebSocket = WebSocketStream<reqwest::Upgraded>;
@@ -64,7 +64,7 @@ async fn handshake(
         .map(HeaderValue::as_bytes)
         != Some(expected.as_bytes())
     {
-        return Err(Repr::HandshakeAccept.into());
+        return Err(Repr::Handshake(HandshakeFault::Accept).into());
     }
     validate_response_headers(response.headers(), offered_protocols.as_ref())?;
     let upgraded = response.upgrade().await?;
@@ -79,7 +79,7 @@ fn validate_response_headers(
         .get(UPGRADE)
         .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"websocket"))
     {
-        return Err(Repr::HandshakeUpgrade.into());
+        return Err(Repr::Handshake(HandshakeFault::Upgrade).into());
     }
     if !headers.get_all(CONNECTION).iter().any(|value| {
         value.to_str().is_ok_and(|value| {
@@ -88,7 +88,7 @@ fn validate_response_headers(
                 .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
         })
     }) {
-        return Err(Repr::HandshakeConnection.into());
+        return Err(Repr::Handshake(HandshakeFault::Connection).into());
     }
     let protocol_matches = match (offered_protocols, headers.get(SEC_WEBSOCKET_PROTOCOL)) {
         (None, None) => true,
@@ -104,7 +104,7 @@ fn validate_response_headers(
         _ => false,
     };
     if !protocol_matches {
-        return Err(Repr::HandshakeSubprotocol.into());
+        return Err(Repr::Handshake(HandshakeFault::Subprotocol).into());
     }
     Ok(())
 }

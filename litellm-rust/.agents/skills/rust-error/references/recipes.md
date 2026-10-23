@@ -6,7 +6,7 @@ Say media downloads must reject a `Content-Type` outside an allow-list
 
 1. Add a `Repr` variant with typed facts and the message, `#[error("media type {0:?} is not allowed")] DisallowedMediaType(String)`
 2. Return it where the check fails, `return Err(Repr::DisallowedMediaType(content_type.to_owned()).into())`
-3. Answer every predicate on purpose, the way its neighbor `DownloadTooLarge` does. The download request went out, so it is in `dispatched()`. The caller chose the URL, so it is in `is_request()`
+3. Answer every predicate on purpose, the way its neighbor `DownloadTooLarge` does. A media download happens before the provider call, so it is not in `dispatched()`. The caller chose the URL, so it is in `is_request()`
 4. Leave both boundaries alone. With those answers the gateway returns 400 and Python raises `ValueError`
 5. Test it with a mock server answering `Content-Type: application/x-msdownload` and assert `error.is_request()`
 
@@ -17,7 +17,7 @@ Python raises `Missing REDUCTO_API_KEY - set it in the environment or pass api_k
 1. Look for an existing provider-neutral variant whose template produces the exact text. `litellm_auth::Error::MissingApiKey { provider, environment_variable }` renders `Missing {provider} API Key - Set ...`, which does not match
 2. Find what varies between providers with the same failure. Here it is the environment variable and the guidance after the dash
 3. Add one neutral variant with those as fields, `#[error("Missing {environment_variable} - {guidance}")] MissingCredential { environment_variable: &'static str, guidance: &'static str }`, and pass Reducto's values from the Reducto transformation
-4. The next provider with the same failure passes its own values and adds no variant. Boundaries that mapped `MissingReductoApiKey` to 401 now match `MissingCredential { .. }` once
+4. The next provider with the same failure passes its own values and adds no variant. `is_missing_credential()` lists `MissingCredential { .. }` once and the boundaries need no change
 
 ## Wrapping a new lower crate in litellm_inference
 

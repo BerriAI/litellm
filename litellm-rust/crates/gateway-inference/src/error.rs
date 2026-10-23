@@ -48,29 +48,12 @@ impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::Auth(error) => error.status(),
-            Self::Unsupported(_)
-            | Self::Route(InferenceError::Unsupported(_))
-            | Self::Ocr(OcrError::Unsupported(_)) => StatusCode::NOT_IMPLEMENTED,
+            Self::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::Ocr(
-                OcrError::Auth(litellm_auth::Error::MissingApiKey { .. })
-                | OcrError::MissingAzureAiCredentials
-                | OcrError::MissingAzureDocumentIntelligenceCredentials
-                | OcrError::MissingReductoApiKey,
-            ) => StatusCode::UNAUTHORIZED,
-            Self::Ocr(error) => error
-                .http_status_code()
-                .and_then(|status| StatusCode::from_u16(status).ok())
-                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             Self::InvalidBody(_) | Self::UnknownModel(_) => StatusCode::BAD_REQUEST,
-            Self::Route(error) if let Some((status, _)) = error.upstream_response() => {
-                StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY)
-            }
-            Self::Route(InferenceError::Auth(litellm_auth::Error::MissingApiKey { .. })) => {
-                StatusCode::UNAUTHORIZED
-            }
-            Self::Route(error) if error.is_request() => StatusCode::BAD_REQUEST,
-            Self::Route(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Ocr(error) => ocr_status(error),
+            Self::Route(error) => route_status(error),
         }
     }
 
@@ -116,6 +99,35 @@ impl Error {
     pub fn sse_frame(&self) -> String {
         format!("event: error\ndata: {}\n\n", self.body(None))
     }
+}
+
+fn route_status(error: &InferenceError) -> StatusCode {
+    if error.is_unsupported() {
+        return StatusCode::NOT_IMPLEMENTED;
+    }
+    if let Some((status, _)) = error.upstream_response() {
+        return StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    }
+    if error.is_missing_credential() {
+        return StatusCode::UNAUTHORIZED;
+    }
+    if error.is_request() {
+        return StatusCode::BAD_REQUEST;
+    }
+    StatusCode::INTERNAL_SERVER_ERROR
+}
+
+fn ocr_status(error: &OcrError) -> StatusCode {
+    if error.is_unsupported() {
+        return StatusCode::NOT_IMPLEMENTED;
+    }
+    if error.is_missing_credential() {
+        return StatusCode::UNAUTHORIZED;
+    }
+    error
+        .http_status_code()
+        .and_then(|status| StatusCode::from_u16(status).ok())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn error_type(status: StatusCode) -> &'static str {

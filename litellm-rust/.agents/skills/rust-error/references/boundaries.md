@@ -2,21 +2,23 @@
 
 An error becomes text for someone else in exactly two places, and both are explicit mappings. Nothing else formats an error for a client
 
-| Boundary | File | Maps |
+| Boundary | File | Reference |
 |---|---|---|
-| Gateway HTTP response | `crates/gateway-inference/src/error.rs` | `status()` picks the code, `body()` builds the Anthropic or OpenAI envelope |
-| Python bridge | `crates/python-bridge/src/errors.rs` and `crates/python-bridge/src/routes/ocr/errors.rs` | `RustUpstreamError(status, body)` for provider answers, `ValueError` for request faults and `RuntimeError` otherwise |
+| Gateway HTTP response | `crates/gateway-inference/src/error.rs` | [axum](axum.md) |
+| Python bridge | `crates/python-bridge/src/errors.rs` and `crates/python-bridge/src/routes/ocr/errors.rs` | [pyo3](pyo3.md) |
 
-Both follow the same order
+Both ask a nested error the same questions in the same order
 
 ```rust
-match error.upstream_response() {
-    Some((status, body)) => pass the provider's status and body through,
-    None => by_fault(error.is_request(), error.to_string()),
-}
+if let Some((status, body)) = error.upstream_response() { the provider's status and body pass through }
+else if error.is_missing_credential() { 401 at the gateway, RuntimeError at the bridge }
+else if error.is_request() { 400 at the gateway, ValueError at the bridge }
+else { 500 at the gateway, RuntimeError at the bridge }
 ```
 
-So a new failure only needs the right predicate answers to land correctly on both boundaries. If you find yourself adding an arm for your variant at a boundary, check whether a predicate is missing first
+So a new failure in a nested crate only needs the right predicate answers to land correctly on both. If you find yourself adding an arm for your variant at a boundary, check whether a predicate is missing first
+
+The two boundaries are not identical. The gateway has variants of its own for body parsing, an unknown model and an unsupported path, and the OCR bridge has Python parity arms such as `FileNotFoundError` for a missing file. Those arms match the boundary's own variants or the top level of a public enum, never a nested error's variants. A missing API key is 401 at the gateway, `RuntimeError` at the inference bridge and `ValueError` at the OCR bridge, each pinned by a test to what Python's own path does
 
 ## What reaches the client
 

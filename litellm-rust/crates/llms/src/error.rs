@@ -8,9 +8,9 @@ pub enum Error {
     #[error("missing required field: {0}")]
     MissingField(&'static str),
     #[error("invalid request: {0}")]
-    InvalidRequest(#[source] ErrorDetail),
+    InvalidRequest(ErrorDetail),
     #[error("invalid response: {0}")]
-    InvalidResponse(#[source] ErrorDetail),
+    InvalidResponse(ErrorDetail),
     #[error("unsupported: {0}")]
     Unsupported(&'static str),
     #[error(transparent)]
@@ -21,17 +21,15 @@ pub enum Error {
 pub enum ErrorDetail {
     #[error("{0}")]
     Message(String),
-    #[error("invalid {subject}: {source}")]
+    #[error("invalid {subject}: {cause}")]
     Invalid {
         subject: &'static str,
-        #[source]
-        source: ErrorSource,
+        cause: ErrorSource,
     },
-    #[error("{operation} failed: {source}")]
+    #[error("{operation} failed: {cause}")]
     Failed {
         operation: &'static str,
-        #[source]
-        source: ErrorSource,
+        cause: ErrorSource,
     },
     #[error("{field} must be {expected}, got {actual}")]
     InvalidValue {
@@ -60,12 +58,11 @@ pub enum ErrorDetail {
         value: String,
         hint: String,
     },
-    #[error("invalid {subject} on line {line}: {source}")]
+    #[error("invalid {subject} on line {line}: {cause}")]
     InvalidLine {
         subject: &'static str,
         line: usize,
-        #[source]
-        source: ErrorSource,
+        cause: ErrorSource,
     },
     #[error("{operation} failed: {detail}")]
     RemoteFailure {
@@ -77,21 +74,21 @@ pub enum ErrorDetail {
 impl ErrorDetail {
     pub fn invalid(
         subject: &'static str,
-        source: impl std::error::Error + Send + Sync + 'static,
+        cause: impl std::error::Error + Send + Sync + 'static,
     ) -> Self {
         Self::Invalid {
             subject,
-            source: ErrorSource::new(source),
+            cause: ErrorSource::new(cause),
         }
     }
 
     pub fn failed(
         operation: &'static str,
-        source: impl std::error::Error + Send + Sync + 'static,
+        cause: impl std::error::Error + Send + Sync + 'static,
     ) -> Self {
         Self::Failed {
             operation,
-            source: ErrorSource::new(source),
+            cause: ErrorSource::new(cause),
         }
     }
 }

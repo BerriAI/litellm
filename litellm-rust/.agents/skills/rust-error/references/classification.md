@@ -12,24 +12,27 @@ Downstream crates ask a lower error questions instead of matching its nested var
 | `upstream_response()` | the provider's own status and body to pass through |
 | `status()` | an HTTP status to report |
 | `tls_source()` | which TLS setting to blame in a config error |
+| `is_computed_header()` | the caller forwarded a header the signer owns, so the host should take the call |
+
+Upper types add the questions their callers ask. `litellm_inference::Error` and the OCR error answer `is_missing_credential()` and `is_unsupported()`, which the gateway asks instead of reaching into `Auth` or `Unsupported`
 
 ```rust
 // reaches through two crates' variants and breaks when either changes
-Self::Route(InferenceError::Transport(TransportError::Http { status, .. })) => status,
+Self::Route(InferenceError::Auth(litellm_auth::Error::MissingApiKey { .. })) => StatusCode::UNAUTHORIZED,
 
 // asks the question it cares about
-Self::Route(error) if let Some((status, _)) = error.upstream_response() => status,
+Self::Route(error) if error.is_missing_credential() => StatusCode::UNAUTHORIZED,
 ```
 
-Add a predicate when a real caller needs a new distinction, and name it after what the caller decides, not after the variant. An upper type's predicates call through to the nested error, as in `Self::Http(error) => error.is_request()`
+Add a predicate when a real caller needs a new distinction, and name it after the fact the caller needs, in the caller's words, not after the variant's spelling. An upper type's predicates call through to the nested error, as in `Self::Http(error) => error.is_request()` and `Self::Auth(error) => error.is_missing_credential()`
 
-A public enum may still be matched where matching is the contract, such as `litellm_auth::Error::MissingApiKey` mapping to 401. Matching is fine at the top of the variant tree, reaching through a nested error is what to avoid
+A public enum may be matched one level down by the type that owns the variant, such as the gateway matching its own `Unsupported` or the OCR bridge matching `FileRead`. Going a second level down, into a variant of a variant, is what to avoid, the gateway used to do that for `MissingApiKey` and `Unsupported`
 
 ## Facts, not policy
 
 A predicate reports what happened. The decision to retry, reroute or fall back depends on things the error cannot know, such as whether the request is idempotent, whether its body can be replayed, the deadline and the attempt budget. That decision lives with the caller
 
-A timeout is the main trap. A request that timed out may already have reached the provider and been billed, so `Timeout` answers `dispatched() == true` and is not safe to retry as if it were a connect failure. Only a failure that provably happened before any byte left, such as connect or request building, answers `false`
+A timeout is the main trap. A request that timed out may already have reached the provider and been billed, so `Timeout` answers `dispatched() == true` and is not safe to retry as if it were a connect failure. Only a failure that provably happened before any byte reached the provider answers `false`: connecting, building or signing the request, and media downloads, which fetch the caller's document before the provider call is made
 
 ```rust
 pub fn dispatched(&self) -> bool {
@@ -37,7 +40,7 @@ pub fn dispatched(&self) -> bool {
 }
 ```
 
-When the transport cannot tell whether a request went out, it must answer `true`. Wrongly answering `false` risks a duplicate billed call, wrongly answering `true` only costs a reroute
+When the transport cannot tell whether a request reached the provider, it must answer `true`. Wrongly answering `false` risks a duplicate billed call, wrongly answering `true` only costs a reroute
 
 Keep one predicate per question. `status()` currently mixes the provider's status, the media download's status and a synthesized 408 for timeouts, so a caller that wants "did the provider answer" must use `upstream_response()` instead. Do not add more meanings to an existing predicate, add a new one
 

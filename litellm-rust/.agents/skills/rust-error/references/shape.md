@@ -8,7 +8,7 @@ That one type takes one of two forms
 
 | Form | Use when | Example |
 |---|---|---|
-| Public enum | Callers outside the crate match variants, and every variant's data is ours, cheap to clone and compare | `litellm_inference::Error`, `litellm_auth::Error` |
+| Public enum | Callers outside the crate match variants, and every variant holds our own data or another crate's `Error` that is already `Clone` and comparable | `litellm_inference::Error`, `litellm_auth::Error` |
 | Opaque struct over a private `Repr` | The variants hold third-party causes, or the variants must be free to change without breaking callers | `litellm_http::Error` |
 
 Both forms are still one top-level `Error`. The opaque form just moves the enum behind `Repr`, where it is `pub(crate)`
@@ -39,7 +39,7 @@ pub(crate) enum Repr {
 
 Start with the public enum. Move to opaque when a variant needs a non-`Clone` third-party cause, or when downstream crates keep matching variants in ways that duplicate classification. `reqwest::Error`, `std::io::Error` and `serde_json::Error` are built the opaque way
 
-In the opaque form other crates cannot name a variant, so they cannot build an error with their own message. Public constructors exist only for errors another crate genuinely produces, take typed data and never a message, as in `Error::upstream(status, body)`, `Error::computed_header(name)` and `Error::signature(cause)`
+In the opaque form other crates cannot name a variant, so they cannot build an error with their own message. Public constructors exist only for errors another crate genuinely produces, take typed data and never a message, as in `Error::upstream(status, body)`, `Error::computed_header(name)`, `Error::unsignable_body()` and `Error::signature(cause)`
 
 `Arc` makes cloning a refcount bump, so `Repr` never has to be `Clone`. `Box<Repr>` is enough when the goal is only a small `Result`. `Arc` is for when callers clone
 
@@ -69,7 +69,7 @@ MissingApiBase { provider: &'static str, guidance: &'static str },
 
 An exact parity message does not justify a provider-specific variant when caller-supplied data can produce the same text
 
-Inside a private `Repr` a variant costs no API, so one per distinct reason is fine when each one carries a different message. When several only differ in a word and share every predicate answer, prefer one variant with a fieldless reason enum, so predicates list one arm instead of five
+Inside a private `Repr` a variant costs no API, so one per distinct reason is fine when each one carries a different message. When several only differ in a word and share every predicate answer, prefer one variant with a fieldless reason enum, so predicates list one arm instead of four, as `Repr::Handshake(HandshakeFault)` does
 
 ```rust
 #[error("WebSocket handshake returned {0}")]
@@ -81,6 +81,10 @@ pub(crate) enum HandshakeFault {
     Accept,
     #[error("an invalid Upgrade header")]
     Upgrade,
+    #[error("an invalid Connection header")]
+    Connection,
+    #[error("an invalid subprotocol")]
+    Subprotocol,
 }
 ```
 
