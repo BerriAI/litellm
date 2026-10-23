@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { ArrowLeft, CircleHelp, Lock } from "lucide-react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import {
   vectorStoreInfoCall,
   vectorStoreUpdateCall,

@@ -21,7 +21,7 @@ import { consumeReturnUrl, getLoginUrl, getReturnUrl, isValidReturnUrl } from "@
 import { CircleAlert, Info, TriangleAlert, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { useWorker } from "@/hooks/useWorker";
 
 const loginSchema = z.object({

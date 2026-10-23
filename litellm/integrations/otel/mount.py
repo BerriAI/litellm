@@ -104,8 +104,8 @@ def instrument_fastapi_app(app: "FastAPI") -> None:
 
     Safe no-op when the V2 gate is off or ``opentelemetry-instrumentation-fastapi``
     is unavailable. This MUST be called at app-creation time — once the lifespan
-    runs, the middleware stack is frozen and ``instrument_app`` raises "Cannot add
-    middleware after an application has started".
+    runs, the middleware stack is frozen and middleware added later never runs, so
+    a late call is skipped without registering anything.
 
     No ``TracerProvider`` is passed, so the instrumentation binds to the OTel global
     ``ProxyTracerProvider``; the proxy publishes the real provider as the global
@@ -114,6 +114,9 @@ def instrument_fastapi_app(app: "FastAPI") -> None:
     """
     try:
         if not is_otel_v2_enabled():
+            return
+        if app.middleware_stack is not None:
+            verbose_logger.debug("Skipping OTel V2 FastAPI instrumentation: the app has already started")
             return
 
         # Lazy: only the V2-enabled path needs the optional
