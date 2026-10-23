@@ -1,12 +1,14 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
-use litellm_http::websocket::{UpstreamWebSocket, connect_upstream};
+use litellm_http::{
+    Client,
+    websocket::{self, UpstreamWebSocket},
+};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::{
     Message,
-    client::IntoClientRequest,
-    http::{HeaderName, HeaderValue},
+    http::{HeaderMap, HeaderName, HeaderValue},
 };
 
 use super::Error;
@@ -24,42 +26,33 @@ impl ResponsesWebSocketConnection {
         fields(outcome)
     )]
     pub async fn connect_url(
+        client: &Client,
         url: &str,
         headers: &HashMap<String, String>,
         timeout: Option<Duration>,
     ) -> Result<Self, Error> {
         litellm_inference::diagnostic::operation("litellm.websocket.connect_url", async {
-            let mut request = url.into_client_request().map_err(|error| {
-                Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-            })?;
-            for (name, value) in headers {
-                let header_name = name
-                    .parse::<HeaderName>()
-                    .map_err(|error| Error::InvalidRequest(error.to_string().into()))?;
-                let header_value = HeaderValue::from_str(value)
-                    .map_err(|error| Error::InvalidRequest(error.to_string().into()))?;
-                request.headers_mut().insert(header_name, header_value);
-            }
-            let connect = connect_upstream(request);
-            let result = match timeout {
+            let headers = headers
+                .iter()
+                .map(|(name, value)| {
+                    Ok((
+                        name.parse::<HeaderName>()
+                            .map_err(|error| Error::InvalidRequest(error.to_string().into()))?,
+                        HeaderValue::from_str(value)
+                            .map_err(|error| Error::InvalidRequest(error.to_string().into()))?,
+                    ))
+                })
+                .collect::<Result<HeaderMap, Error>>()?;
+            let connect = websocket::connect(client, url, headers);
+            let socket = match timeout {
                 Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
                     Error::Transport(litellm_http::transport::Error::Network(
                         "Responses WebSocket connection timed out".into(),
                     ))
                 })?,
                 None => connect.await,
-            };
-            let (socket, _) = result.map_err(|error| match *error {
-                tokio_tungstenite::tungstenite::Error::Http(response) => {
-                    Error::Transport(litellm_http::transport::Error::Http {
-                        status: response.status().as_u16(),
-                        body: String::new(),
-                    })
-                }
-                other => {
-                    Error::Transport(litellm_http::transport::Error::Network(other.to_string()))
-                }
-            })?;
+            }
+            .map_err(Error::Transport)?;
             Ok(Self {
                 socket: Arc::new(Mutex::new(Some(socket))),
             })
