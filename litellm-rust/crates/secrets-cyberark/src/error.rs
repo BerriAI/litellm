@@ -55,3 +55,30 @@ impl Error {
         }
     }
 }
+
+#[derive(thiserror::Error, veil::Redact)]
+#[error("CyberArk Conjur write failed")]
+pub struct WriteFailure {
+    pub source: Error,
+    #[redact]
+    pub request_url: Option<reqwest::Url>,
+    pub authentication: bool,
+}
+
+impl WriteFailure {
+    pub(crate) fn local(source: Error) -> Self {
+        Self {
+            source,
+            request_url: None,
+            authentication: false,
+        }
+    }
+
+    pub(crate) fn request(source: Error, url: reqwest::Url) -> Self {
+        Self {
+            source,
+            request_url: Some(url),
+            authentication: false,
+        }
+    }
+}

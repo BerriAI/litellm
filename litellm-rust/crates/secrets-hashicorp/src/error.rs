@@ -1,3 +1,6 @@
+use rustify::errors::ClientError as RustifyClientError;
+use vaultrs::error::ClientError;
+
 #[derive(thiserror::Error, veil::Redact)]
 pub enum Error {
     #[error("HashiCorp Vault requires an enterprise license")]
@@ -8,9 +11,15 @@ pub enum Error {
     Operation(#[from] litellm_secrets_types::Error),
     #[error("HashiCorp Vault client failed")]
     Client(
-        #[from]
+        #[source]
         #[redact]
         vaultrs::error::ClientError,
+    ),
+    #[error("HashiCorp Vault request failed")]
+    Transport(
+        #[source]
+        #[redact]
+        litellm_http::Error,
     ),
     #[error("HashiCorp Vault client settings are invalid")]
     ClientSettings(#[source] vaultrs::client::VaultClientSettingsBuilderError),
@@ -50,6 +59,28 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn login_status(&self) -> Option<u16> {
+        match self {
+            Self::LoginStatus { status } => Some(*status),
+            Self::EnterpriseRequired
+            | Self::InvalidSecretName(_)
+            | Self::Operation(_)
+            | Self::Client(_)
+            | Self::Transport(_)
+            | Self::ClientSettings(_)
+            | Self::TlsIdentity { .. }
+            | Self::MalformedLogin(_)
+            | Self::NoAuthConfigured
+            | Self::Status { .. }
+            | Self::MalformedPayload(_)
+            | Self::NonStringValue
+            | Self::DataKeyConflictsWithDescription
+            | Self::CasVersionOverflow(_)
+            | Self::Timeout
+            | Self::RefreshInterval(_) => None,
+        }
+    }
+
     pub fn is_unsafe_secret_name(&self) -> bool {
         match self {
             Self::InvalidSecretName(error) | Self::Operation(error) => {
@@ -57,6 +88,7 @@ impl Error {
             }
             Self::EnterpriseRequired
             | Self::Client(_)
+            | Self::Transport(_)
             | Self::ClientSettings(_)
             | Self::TlsIdentity { .. }
             | Self::LoginStatus { .. }
@@ -70,5 +102,43 @@ impl Error {
             | Self::Timeout
             | Self::RefreshInterval(_) => false,
         }
+    }
+}
+
+impl From<ClientError> for Error {
+    fn from(error: ClientError) -> Self {
+        match error {
+            ClientError::RestClientError { source } => match transport(source) {
+                Ok(error) => Self::Transport(error),
+                Err(source) => Self::Client(ClientError::RestClientError { source }),
+            },
+            ClientError::RestClientBuildError { source } => Self::Transport(source.into()),
+            error => Self::Client(error),
+        }
+    }
+}
+
+pub(crate) fn transport(
+    error: RustifyClientError,
+) -> Result<litellm_http::Error, RustifyClientError> {
+    match error {
+        RustifyClientError::RequestError {
+            source,
+            url,
+            method,
+        } => source
+            .downcast::<reqwest::Error>()
+            .map(litellm_http::Error::from)
+            .map_err(|source| RustifyClientError::RequestError {
+                source,
+                url,
+                method,
+            }),
+        RustifyClientError::ResponseError { source } => source
+            .downcast::<reqwest::Error>()
+            .map(litellm_http::Error::from)
+            .map_err(|source| RustifyClientError::ResponseError { source }),
+        RustifyClientError::ReqwestBuildError { source } => Ok(source.into()),
+        error => Err(error),
     }
 }

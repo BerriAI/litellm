@@ -84,7 +84,7 @@ impl HashicorpVault {
             .verify(true)
             .build()
             .map_err(Error::ClientSettings)?;
-        VaultClient::new(settings).map_err(Error::Client)
+        VaultClient::new(settings).map_err(Error::from)
     }
 }
 

@@ -473,12 +473,7 @@ text = Text(' False ')
         });
     }
 
-    #[test]
-    fn missing_snapshot_fields_and_descriptor_attribute_errors_are_distinct() {
-        with_python(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                c"
+    const RAISING_ATTRIBUTES: &std::ffi::CStr = c"
 failure = AttributeError('descriptor failed')
 class Snapshot:
     @property
@@ -490,46 +485,56 @@ class Intercepted:
     def __getattribute__(self, name): raise failure
 dynamic = Dynamic()
 intercepted = Intercepted()
-",
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let snapshot = locals.get_item("snapshot").unwrap().unwrap();
-            let descriptor = PyErr::from(Field::read(&snapshot, "test", "flag").err().unwrap());
+";
+
+    #[rstest]
+    #[case::descriptor("snapshot")]
+    #[case::dynamic("dynamic")]
+    #[case::intercepted("intercepted")]
+    fn attribute_errors_raised_by_a_snapshot_surface_as_raised(#[case] name: &str) {
+        with_python(|py| {
+            let locals = PyDict::new(py);
+            py.run(RAISING_ATTRIBUTES, Some(&locals), Some(&locals))
+                .unwrap();
+            let value = locals.get_item(name).unwrap().unwrap();
+            let error = PyErr::from(Field::read(&value, "test", "flag").err().unwrap());
             assert!(
-                descriptor
+                error
                     .value(py)
                     .is(locals.get_item("failure").unwrap().unwrap())
             );
-            for name in ["dynamic", "intercepted"] {
-                let value = locals.get_item(name).unwrap().unwrap();
-                let error = PyErr::from(Field::read(&value, "test", "flag").err().unwrap());
-                assert!(
-                    error
-                        .value(py)
-                        .is(locals.get_item("failure").unwrap().unwrap())
-                );
-            }
+        });
+    }
+
+    #[test]
+    fn missing_snapshot_fields_are_runtime_errors_naming_the_field() {
+        with_python(|py| {
+            let locals = PyDict::new(py);
+            py.run(RAISING_ATTRIBUTES, Some(&locals), Some(&locals))
+                .unwrap();
+            let snapshot = locals.get_item("snapshot").unwrap().unwrap();
             let missing = PyErr::from(Field::read(&snapshot, "test", "missing").err().unwrap());
             assert!(missing.is_instance_of::<PyRuntimeError>(py));
             assert!(missing.to_string().contains("test.missing"));
         });
     }
 
-    #[test]
-    fn configuration_errors_name_fields_without_exposing_values() {
+    #[rstest]
+    #[case::mapping("{'secret': 'do-not-print'}")]
+    #[case::nested("['host.test', {'secret': 'do-not-print'}]")]
+    fn configuration_errors_name_fields_without_exposing_values(#[case] source: &str) {
         with_python(|py| {
-            for source in [
-                "{'secret': 'do-not-print'}",
-                "['host.test', {'secret': 'do-not-print'}]",
-            ] {
-                let field = Field::new("test", "setting", evaluate(py, source));
-                let error = PyErr::from(field.falsy_optional_string().err().unwrap());
-                assert!(error.is_instance_of::<PyValueError>(py));
-                assert!(error.to_string().contains("test.setting"));
-                assert!(!error.to_string().contains("do-not-print"));
-            }
+            let field = Field::new("test", "setting", evaluate(py, source));
+            let error = PyErr::from(field.falsy_optional_string().err().unwrap());
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(error.to_string().contains("test.setting"));
+            assert!(!error.to_string().contains("do-not-print"));
+        });
+    }
+
+    #[test]
+    fn invalid_collections_and_flags_are_configuration_errors() {
+        with_python(|py| {
             let hosts = Field::new(
                 "url_policy",
                 "user_url_allowed_hosts",

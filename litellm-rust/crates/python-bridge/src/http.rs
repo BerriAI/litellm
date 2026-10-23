@@ -139,7 +139,7 @@ pub(crate) fn client_error(error: litellm_http::Error) -> PyErr {
         Some(TlsSource::CaBundle) => {
             PyValueError::new_err("http_settings.ssl_verify: expected a readable PEM CA bundle")
         }
-        None => PyValueError::new_err("http_settings: native HTTP client configuration is invalid"),
+        None => PyValueError::new_err(litellm_error::Report::new(&error).to_string()),
     }
 }
 
@@ -288,6 +288,34 @@ settings = types.SimpleNamespace(**defaults)
             assert_eq!(
                 client_error.to_string(),
                 "ValueError: http_settings.ssl_certificate: expected a readable PEM certificate and private key"
+            );
+        });
+    }
+
+    #[test]
+    fn client_error_without_a_tls_source_reports_the_build_failure() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = HttpClientPool::new(Arc::new(PublicDnsResolver))
+                .client(
+                    &HttpClientConfig {
+                        user_agent: Some("bad\nagent".into()),
+                        ..Resolution::from(&HttpSettings::default()).config
+                    },
+                    ClientVariant::Provider,
+                )
+                .map(drop)
+                .unwrap_err();
+            assert_eq!(error.tls_source(), None);
+            let report = litellm_error::Report::new(&error).to_string();
+
+            let failure = client_error(error);
+
+            assert!(failure.is_instance_of::<PyValueError>(py));
+            assert_eq!(failure.value(py).str().unwrap().to_string(), report);
+            assert!(
+                report.contains("could not build the HTTP client: "),
+                "{report}"
             );
         });
     }

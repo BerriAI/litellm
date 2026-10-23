@@ -31,7 +31,7 @@ use vaultrs::{
 
 use crate::{Error, HashicorpVaultConfig, TlsCertAuth, cert_login::CertLoginRequest};
 
-pub use raw::RawOperationError;
+pub use raw::{HttpFailure, LoginFailure, RawOperationError};
 
 const CACHE_CAPACITY: u64 = 200;
 
@@ -194,9 +194,9 @@ fn map_api_error(error: ClientError, context: ErrorContext) -> Error {
             source @ RustifyClientError::ResponseParseError { .. } => {
                 malformed_response(context, ClientError::RestClientError { source })
             }
-            source => Error::Client(ClientError::RestClientError { source }),
+            source => ClientError::RestClientError { source }.into(),
         },
-        error => Error::Client(error),
+        error => error.into(),
     }
 }
 

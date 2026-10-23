@@ -17,7 +17,7 @@ use litellm_secrets_types::{
 use moka::future::Cache;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
-use crate::Error;
+use crate::{Error, WriteFailure};
 
 const CYBERARK_API_BASE: &str = "CYBERARK_API_BASE";
 const CYBERARK_ACCOUNT: &str = "CYBERARK_ACCOUNT";
@@ -60,32 +60,6 @@ pub enum DeleteOutcome {
 pub enum AuthenticationRetry {
     Never,
     Unauthorized,
-}
-
-#[derive(veil::Redact)]
-pub struct WriteFailure {
-    pub source: Error,
-    #[redact]
-    pub request_url: Option<reqwest::Url>,
-    pub authentication: bool,
-}
-
-impl WriteFailure {
-    fn local(source: Error) -> Self {
-        Self {
-            source,
-            request_url: None,
-            authentication: false,
-        }
-    }
-
-    fn request(source: Error, url: reqwest::Url) -> Self {
-        Self {
-            source,
-            request_url: Some(url),
-            authentication: false,
-        }
-    }
 }
 
 impl CyberArkSecretManager {

@@ -143,8 +143,8 @@ impl CyberArkSecretManager {
                     );
                     return;
                 }
-                Err(error) => {
-                    litellm_tracing::warn!("Error ensuring CyberArk variable exists: {error}");
+                Err(_) => {
+                    litellm_tracing::warn!("Error ensuring CyberArk variable exists");
                     return;
                 }
             }

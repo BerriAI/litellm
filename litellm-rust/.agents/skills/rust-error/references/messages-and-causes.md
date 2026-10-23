@@ -56,6 +56,8 @@ Json(#[from] serde_json::Error),
 
 A field that holds an error but is neither rendered nor a source hides that error from every reader. Every error-typed field is a source. A fieldless reason enum, such as `HandshakeFault` or `PagesFault`, is data and not a cause, so the variant renders it in its message
 
+`source()` is one chain, so an error with several causes, such as `CredentialChain` trying each credential in turn, makes the most relevant one its source and renders the others in its message, each with `Report`
+
 ## Keep causes typed
 
 Store the lower-level error itself, never its string, and never drop it with `map_err(|_| ...)`
@@ -82,7 +84,7 @@ A cause that must not be shown at all, such as a secret manager's response, is s
 
 ## Strip reqwest URLs on entry
 
-Every `reqwest::Error` enters our types through `From<reqwest::Error> for litellm_http::Error`, which calls `without_url()`. A crate that talks HTTP holds `litellm_http::Error`, never `reqwest::Error`, so every later `Display`, `Debug` or chain walk is safe from that URL
+Every `reqwest::Error` enters our types through `From<reqwest::Error> for litellm_http::Error`, which calls `without_url()`. A crate that talks HTTP holds `litellm_http::Error`, never `reqwest::Error`. When a dependency's own error wraps a `reqwest::Error`, as vaultrs and rustify do, one `From` takes the reqwest error out and converts it, as `secrets-hashicorp` does. That way so every later `Display`, `Debug` or chain walk is safe from that URL
 
 `without_url()` only removes the URL reqwest attached. It does not scrub headers, response bodies, provider messages, file paths or anything a variant stores next to it. Those need their own policy, see [boundaries](boundaries.md)
 

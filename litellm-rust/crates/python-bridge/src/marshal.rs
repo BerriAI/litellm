@@ -409,48 +409,52 @@ module.__getattr__ = fail
         float: Option<f64>,
     }
 
-    #[test]
-    fn numeric_adapters_agree_across_json_and_python_boundaries() {
+    #[rstest::rstest]
+    #[case::empty(json!({}))]
+    #[case::explicit_nulls(json!({"integers": null, "float": null}))]
+    #[case::lax_values(json!({
+        "integers": [i64::MIN, i64::MAX, "9007199254740993.0", " +1_000.00 ", true, 3.0],
+        "float": " 1.25 ",
+    }))]
+    #[case::integer_overflow(json!({"integers": [u64::MAX]}))]
+    #[case::imprecise_integer_string(json!({"integers": ["1.0000000000000001"]}))]
+    #[case::fractional_integer(json!({"integers": [2.5]}))]
+    #[case::nan_string(json!({"float": "NaN"}))]
+    #[case::infinity_string(json!({"float": "inf"}))]
+    #[case::overflowing_float_string(json!({"float": "1e999"}))]
+    #[case::boolean_float(json!({"float": true}))]
+    #[case::large_integer_float(json!({"float": u64::MAX}))]
+    fn numeric_adapters_agree_across_json_and_python_boundaries(#[case] input: Value) {
         Python::initialize();
         Python::attach(|py| {
-            for input in [
-                json!({}),
-                json!({"integers": null, "float": null}),
-                json!({"integers": [i64::MIN, i64::MAX, "9007199254740993.0", " +1_000.00 ", true, 3.0], "float": " 1.25 "}),
-                json!({"integers": [u64::MAX]}),
-                json!({"integers": ["1.0000000000000001"]}),
-                json!({"integers": [2.5]}),
-                json!({"float": "NaN"}),
-                json!({"float": "inf"}),
-                json!({"float": "1e999"}),
-                json!({"float": true}),
-                json!({"float": u64::MAX}),
-            ] {
-                let expected = serde_json::from_value::<Numbers>(input.clone());
-                let python = litellm_host_python::to_py(py, &input).unwrap();
-                let actual = from_py::<Numbers>(python.bind(py));
-                match (expected, actual) {
-                    (Ok(expected), Ok(actual)) => {
-                        assert_eq!(actual, expected);
-                        let serialized = litellm_host_python::to_py(py, &actual).unwrap();
-                        assert_eq!(
-                            from_py::<Value>(serialized.bind(py)).unwrap(),
-                            serde_json::to_value(expected).unwrap()
-                        );
-                    }
-                    (Err(_), Err(_)) => {}
-                    mismatch => panic!("boundary mismatch for {input}: {mismatch:?}"),
+            let expected = serde_json::from_value::<Numbers>(input.clone());
+            let python = litellm_host_python::to_py(py, &input).unwrap();
+            let actual = from_py::<Numbers>(python.bind(py));
+            match (expected, actual) {
+                (Ok(expected), Ok(actual)) => {
+                    assert_eq!(actual, expected);
+                    let serialized = litellm_host_python::to_py(py, &actual).unwrap();
+                    assert_eq!(
+                        from_py::<Value>(serialized.bind(py)).unwrap(),
+                        serde_json::to_value(expected).unwrap()
+                    );
                 }
+                (Err(_), Err(_)) => {}
+                mismatch => panic!("boundary mismatch for {input}: {mismatch:?}"),
             }
-            for source in [
-                c"{'float': float('nan')}",
-                c"{'float': float('inf')}",
-                c"{'integers': [float('inf')]}",
-                c"{'integers': [2 ** 100]}",
-            ] {
-                let value = py.eval(source, None, None).unwrap();
-                assert!(from_py::<Numbers>(&value).is_err());
-            }
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::nan(c"{'float': float('nan')}")]
+    #[case::infinity(c"{'float': float('inf')}")]
+    #[case::infinite_integer(c"{'integers': [float('inf')]}")]
+    #[case::integer_overflow(c"{'integers': [2 ** 100]}")]
+    fn non_finite_and_overflowing_python_numbers_are_rejected(#[case] source: &std::ffi::CStr) {
+        Python::initialize();
+        Python::attach(|py| {
+            let value = py.eval(source, None, None).unwrap();
+            assert!(from_py::<Numbers>(&value).is_err());
         });
     }
 

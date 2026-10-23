@@ -1,5 +1,5 @@
 use litellm_host_python::{release_count, runtime_started};
-use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict};
+use pyo3::{prelude::*, types::PyDict};
 
 #[pyfunction]
 pub(crate) fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -18,11 +18,7 @@ pub(crate) fn process_state_started() -> bool {
 /// so the runtime can never start. Raises if it already has. Forked workers are unaffected.
 #[pyfunction]
 pub(crate) fn reserve_process_for_forking() -> PyResult<()> {
-    litellm_host_python::reserve_process_for_forking().map_err(
-        |litellm_host_python::RuntimeAlreadyStarted| {
-            PyRuntimeError::new_err("the native runtime already started in this process")
-        },
-    )
+    Ok(litellm_host_python::reserve_process_for_forking()?)
 }
 
 #[cfg(feature = "panic-test")]

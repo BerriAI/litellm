@@ -4,8 +4,6 @@ use litellm_host_python::{json_loads, to_py};
 use litellm_secrets::cyberark;
 use pyo3::{prelude::*, types::PyDict};
 
-use super::ManagerError;
-
 pub(super) fn mutation_value(
     result: Result<PythonMutationResponse, PythonMutationError>,
     context: &super::vault::ErrorContext,
@@ -26,16 +24,7 @@ pub(super) fn mutation_value(
                 &serde_json::json!({"status": "error", "message": message}),
             )
         }
-        Err(PythonMutationError::CurrentMissing(name)) => {
-            Err(ManagerError::CurrentMissing(name).into())
-        }
-        Err(PythonMutationError::ReplacementMissing(name)) => {
-            Err(ManagerError::ReplacementMissing(name).into())
-        }
-        Err(PythonMutationError::ReplacementMismatch) => {
-            Err(ManagerError::ReplacementMismatch.into())
-        }
-        Err(PythonMutationError::Unsupported) => Err(ManagerError::MutationUnsupported.into()),
+        Err(PythonMutationError::Manager(error)) => Err(error.into()),
     })
 }
 
