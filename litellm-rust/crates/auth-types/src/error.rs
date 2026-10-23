@@ -22,7 +22,7 @@ pub enum Error {
     #[error("Missing {provider} {} - {}", .spec.setting, .spec.guidance())]
     MissingParam {
         provider: &'static str,
-        spec: &'static crate::ParamSpec,
+        spec: &'static litellm_layered::Sources,
     },
     #[error("Missing {provider} API Base - {guidance}")]
     MissingApiBase {
@@ -108,3 +108,9 @@ impl PartialEq for ErrorSource {
 }
 
 impl Eq for ErrorSource {}
+
+impl Error {
+    pub fn missing(provider: &'static str, spec: &'static litellm_layered::Sources) -> Self {
+        Self::MissingParam { provider, spec }
+    }
+}

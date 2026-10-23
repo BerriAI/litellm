@@ -1,20 +1,16 @@
-use litellm_auth_types::{AwsParams, ParamSpec};
+use litellm_auth_types::{AwsKeys, Error, Sources, VertexKeys, VertexKeysPartial, VertexParams};
+use litellm_layered::{Env, merge};
 use rstest::rstest;
 
-const LOCATION: ParamSpec = ParamSpec {
-    setting: "location",
-    wire: &["vertex_location", "vertex_ai_location"],
-    module_global: Some("vertex_location"),
-    env: &["VERTEXAI_LOCATION", "VERTEX_LOCATION"],
-};
-
-fn lookup(entries: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
-    move |name| {
+fn vertex_params(entries: &[(&str, &str)]) -> VertexParams {
+    serde_json::from_value(
         entries
             .iter()
-            .find(|(key, _)| *key == name)
-            .map(|(_, value)| value.to_string())
-    }
+            .map(|(name, value)| (name.to_string(), serde_json::Value::from(*value)))
+            .collect::<serde_json::Map<_, _>>()
+            .into(),
+    )
+    .unwrap()
 }
 
 #[rstest]
@@ -38,35 +34,32 @@ fn lookup(entries: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> 
     &[("VERTEX_LOCATION", "second"), ("VERTEXAI_LOCATION", "first")],
     Some("first")
 )]
+#[case::values_are_kept_untrimmed(&[("vertex_location", " eu ")], &[], Some(" eu "))]
 #[case::nothing_set(&[], &[], None)]
-fn resolution_walks_wire_names_then_environment_names(
-    #[case] params: &'static [(&'static str, &'static str)],
-    #[case] env: &'static [(&'static str, &'static str)],
+fn params_are_stacked_above_the_environment(
+    #[case] params: &[(&str, &str)],
+    #[case] env: &[(&str, &str)],
     #[case] expected: Option<&str>,
 ) {
-    assert_eq!(
-        LOCATION.resolve(&lookup(params), &lookup(env)).as_deref(),
-        expected
-    );
+    let merged = merge([
+        vertex_params(params).keys(),
+        VertexKeysPartial::from_env(&Env::of(env)).unwrap(),
+    ]);
+    assert_eq!(merged.location.as_deref(), expected);
 }
 
 #[rstest]
-#[case::without_a_module_global(
-    &AwsParams::REGION,
+#[case::without_a_litellm_setting(
+    AwsKeys::REGION,
     "Missing AWS region - pass aws_region_name or set AWS_REGION_NAME or AWS_REGION"
 )]
-#[case::with_a_module_global(
-    &LOCATION,
+#[case::with_a_litellm_setting(
+    VertexKeys::LOCATION,
     "Missing AWS location - pass vertex_location or vertex_ai_location, set litellm.vertex_location, or set VERTEXAI_LOCATION or VERTEX_LOCATION"
 )]
-fn a_missing_param_names_every_place_the_spec_reads(
-    #[case] spec: &'static ParamSpec,
+fn a_missing_param_names_every_source_the_group_reads(
+    #[case] sources: &'static Sources,
     #[case] expected: &str,
 ) {
-    let message = spec.missing("AWS").to_string();
-
-    assert_eq!(message, expected);
-    assert!(spec.wire.iter().all(|name| message.contains(name)));
-    assert!(spec.env.iter().all(|name| message.contains(name)));
-    assert_eq!(message.contains("litellm."), spec.module_global.is_some());
+    assert_eq!(Error::missing("AWS", sources).to_string(), expected);
 }

@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt, ops::Deref};
 
-use litellm_auth_types::{AwsParams, ParamSpec, SecretValue, VertexParams};
+use litellm_auth_types::{AwsKeys, AwsParams, SecretValue, VertexKeys, VertexParams};
 use serde::Deserialize;
 use serde_json::Value;
 use serde_with::{OneOrMany, formats::PreferMany, serde_as};
@@ -54,10 +54,13 @@ pub struct LitellmParams {
 }
 
 impl LitellmParams {
-    /// Every connection param spec the credential families declare, for hosts that fold a
-    /// spec's module global in when a call names none of its spellings.
-    pub fn specs() -> impl Iterator<Item = &'static ParamSpec> {
-        AwsParams::SPECS.iter().chain(VertexParams::SPECS.iter())
+    /// Every credential setting that has a `litellm.*` global, for hosts that fold the global
+    /// in when a call leaves the setting unset.
+    pub fn litellm_settings() -> impl Iterator<Item = &'static litellm_auth_types::Sources> {
+        AwsKeys::SOURCES
+            .iter()
+            .chain(VertexKeys::SOURCES.iter())
+            .filter(|sources| sources.litellm_setting.is_some())
     }
 
     /// The wire names a host projects out of a caller's kwargs: the model, the credentials
@@ -66,8 +69,8 @@ impl LitellmParams {
     pub fn fields() -> impl Iterator<Item = &'static str> {
         ["model", "api_key", "api_base", "api_version"]
             .into_iter()
-            .chain(AwsParams::fields())
-            .chain(VertexParams::fields())
+            .chain(AwsKeys::LITELLM_PARAMS.iter().copied())
+            .chain(VertexKeys::LITELLM_PARAMS.iter().copied())
     }
 }
 

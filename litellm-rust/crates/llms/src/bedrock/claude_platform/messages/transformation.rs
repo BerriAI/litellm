@@ -1,9 +1,10 @@
 use std::sync::LazyLock;
 
-use litellm_auth::{AwsParams, CredentialPlacement, ParamSpec, SecretValue};
+use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{AwsCredentialSource, resolve_aws_region};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{header_value, with_header, without_headers};
+use litellm_layered::{Layered, read};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
@@ -26,20 +27,26 @@ use crate::{
 
 const SERVICE: &str = "aws-external-anthropic";
 const BASE_ENVS: &[&str] = &["ANTHROPIC_AWS_BASE_URL", "ANTHROPIC_AWS_API_BASE"];
-const WORKSPACE_ENVS: &[&str] = &["ANTHROPIC_AWS_WORKSPACE_ID", "ANTHROPIC_WORKSPACE_ID"];
-const WORKSPACE_FIELDS: &[&str] = &[
-    "workspace_id",
-    "aws_workspace_id",
-    "anthropic-workspace-id",
-    "anthropic_workspace_id",
-];
+const WORKSPACE_ENVS: &[&str] = WorkspaceKeys::ENV_NAMES;
+const WORKSPACE_FIELDS: &[&str] = WorkspaceKeys::LITELLM_PARAMS;
 const WORKSPACE_HEADER: &str = "anthropic-workspace-id";
-static WORKSPACE: ParamSpec = ParamSpec {
-    setting: "workspace_id",
-    wire: WORKSPACE_FIELDS,
-    module_global: None,
-    env: WORKSPACE_ENVS,
-};
+
+#[derive(Layered)]
+#[expect(dead_code, reason = "only WorkspaceKeysPartial is built")]
+struct WorkspaceKeys {
+    #[layer(
+        litellm_param = [
+            "workspace_id",
+            "aws_workspace_id",
+            "anthropic-workspace-id",
+            "anthropic_workspace_id",
+        ],
+        env = ["ANTHROPIC_AWS_WORKSPACE_ID", "ANTHROPIC_WORKSPACE_ID"],
+        read = read::text,
+        setting = "workspace_id"
+    )]
+    workspace_id: String,
+}
 const UNSUPPORTED_OVERRIDE: &str = "claude_platform_unsupported_params";
 
 pub struct BedrockClaudePlatformMessagesConfig;
@@ -72,8 +79,12 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
                         .or_else(|| workspace_value(params.extra.get(*field)))
                 })
             });
-        let workspace = resolve_non_empty(workspace, env, WORKSPACE_ENVS)
-            .ok_or_else(|| Error::Auth(WORKSPACE.missing("Claude Platform on AWS")))?;
+        let workspace = resolve_non_empty(workspace, env, WORKSPACE_ENVS).ok_or_else(|| {
+            Error::Auth(litellm_auth::Error::missing(
+                "Claude Platform on AWS",
+                WorkspaceKeys::WORKSPACE_ID,
+            ))
+        })?;
         let headers = with_header(headers, WORKSPACE_HEADER, workspace);
         let key = resolve_non_empty(api_key, env, &["ANTHROPIC_AWS_API_KEY"]);
         let headers = without_headers(headers, &["authorization"]);
@@ -150,7 +161,7 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
                 .chain(BASE_ENVS.iter().copied())
                 .chain(WORKSPACE_ENVS.iter().copied())
                 .chain(["AWS_DEFAULT_REGION"])
-                .chain(AwsParams::secret_names().iter().copied())
+                .chain(litellm_auth::AwsKeys::ENV_NAMES.iter().copied())
                 .collect()
         });
         &NAMES
@@ -199,7 +210,12 @@ fn platform_region(
     let region = host_region
         .or_else(|| resolve_aws_region(None, &params.aws, env))
         .or_else(|| resolve_non_empty(None, env, &["AWS_DEFAULT_REGION"]))
-        .ok_or_else(|| Error::Auth(AwsParams::REGION.missing("Claude Platform on AWS")))?;
+        .ok_or_else(|| {
+            Error::Auth(litellm_auth::Error::missing(
+                "Claude Platform on AWS",
+                litellm_auth::AwsKeys::REGION,
+            ))
+        })?;
     validated_region(region)
 }
 
@@ -250,6 +266,7 @@ fn invalid_request(error: serde_json::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use litellm_auth::AwsParams;
     use litellm_llms_types::providers::anthropic::AnthropicBeta;
     use rstest::rstest;
     use serde_json::json;
@@ -267,7 +284,10 @@ mod tests {
                     &|_| None
                 )
                 .unwrap_err(),
-            Error::Auth(WORKSPACE.missing("Claude Platform on AWS"))
+            Error::Auth(litellm_auth::Error::missing(
+                "Claude Platform on AWS",
+                WorkspaceKeys::WORKSPACE_ID,
+            ))
         );
     }
 

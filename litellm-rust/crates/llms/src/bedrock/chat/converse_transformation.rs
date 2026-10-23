@@ -94,7 +94,7 @@ pub const BEDROCK_CHAT_COMPLETIONS_CONFIG: AmazonConverseConfig = AmazonConverse
 
 impl BaseConfig for AmazonConverseConfig {
     fn secret_names(&self) -> Vec<&'static str> {
-        litellm_auth::AwsParams::secret_names()
+        litellm_auth::AwsKeys::ENV_NAMES
             .iter()
             .copied()
             .chain([AWS_BEARER_TOKEN_BEDROCK])

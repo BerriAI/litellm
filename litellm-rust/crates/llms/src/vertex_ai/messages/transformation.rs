@@ -1,4 +1,3 @@
-use litellm_auth::VertexParams;
 use litellm_auth_gcp::{
     VertexConfig, get_vertex_ai_location, get_vertex_ai_project,
     get_vertex_ai_project_from_credentials, secret_names,
@@ -64,7 +63,12 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         let config = VertexConfig::from_params(&litellm_params.vertex);
         let project = get_vertex_ai_project(&config, env_lookup)
             .or_else(|| get_vertex_ai_project_from_credentials(&config, env_lookup))
-            .ok_or_else(|| Error::Auth(VertexParams::PROJECT.missing("Vertex AI")))?;
+            .ok_or_else(|| {
+                Error::Auth(litellm_auth::Error::missing(
+                    "Vertex AI",
+                    litellm_auth::VertexKeys::PROJECT,
+                ))
+            })?;
         let location = get_vertex_ai_location(&config, env_lookup)
             .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
         complete_vertex_anthropic_url(api_base, &project, &location, model, stream)
@@ -227,6 +231,7 @@ fn vertex_feature_betas(request: &MessagesRequest) -> BetaSet {
 
 #[cfg(test)]
 mod tests {
+    use litellm_auth::VertexParams;
     use rstest::rstest;
     use serde_json::json;
 
@@ -422,7 +427,7 @@ mod tests {
             error,
             Error::Auth(litellm_auth::Error::MissingParam {
                 provider: "Vertex AI",
-                spec: &VertexParams::PROJECT,
+                spec: litellm_auth::VertexKeys::PROJECT,
             })
         ));
         assert_eq!(
