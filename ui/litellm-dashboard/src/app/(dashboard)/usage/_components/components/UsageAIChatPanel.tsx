@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { MessageSquare, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -71,6 +72,7 @@ const ToolCallDisplay: React.FC<{ step: ToolCallStep }> = ({ step }) => {
 
 const MarkdownContent: React.FC<{ content: string }> = ({ content }) => (
   <ReactMarkdown
+    remarkPlugins={[remarkGfm]}
     components={{
       p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
       strong: ({ children }) => <strong className="font-semibold">{children}</strong>,

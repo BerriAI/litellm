@@ -1,6 +1,7 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
+import { usageAiChatStream } from "@/components/networking";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 
 beforeAll(() => {
@@ -79,5 +80,26 @@ describe("UsageAIChatPanel", () => {
 
     expect(screen.getByTestId("usage-ai-chat-panel")).not.toHaveClass("translate-x-full");
     expect(screen.getByTestId("usage-ai-chat-panel")).toHaveClass("translate-x-0");
+  });
+
+  it("should render a markdown table in the answer as a table", async () => {
+    vi.mocked(usageAiChatStream).mockImplementation(async (...args) => {
+      const [, , , onChunk, onDone] = args;
+      onChunk("| Model | Spend |\n| --- | --- |\n| gpt-4 | $12.34 |\n");
+      onDone();
+    });
+    renderWithProviders(<UsageAIChatPanel {...defaultProps} />);
+
+    const input = screen.getByPlaceholderText("Ask about your usage...");
+    fireEvent.change(input, { target: { value: "Spend by model?" } });
+    fireEvent.click(screen.getByText("Send"));
+    // The answer renders once while streaming and again when it moves into the message list,
+    // so wait for the stream to finish before querying the table.
+    await waitFor(() => expect(input).toBeEnabled());
+
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Model" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "$12.34" })).toBeInTheDocument();
+    expect(screen.queryByText(/\| Model \|/)).not.toBeInTheDocument();
   });
 });
