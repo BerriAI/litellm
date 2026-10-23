@@ -163,3 +163,9 @@ async def test_tools_call_keeps_hook_authorization_when_server_key_rides_x_api_k
     headers = await _call_tool_and_capture_extra_headers(_server(MCPAuth.api_key), {"Authorization": "Bearer hook-jwt"})
 
     assert headers.get("Authorization") == "Bearer hook-jwt"
+
+
+def test_byok_server_stored_secret_never_occupies_authorization():
+    server = _server(MCPAuth.bearer_token).model_copy(update={"is_byok": True})
+
+    assert _server_credential_occupies_authorization(server) is False
