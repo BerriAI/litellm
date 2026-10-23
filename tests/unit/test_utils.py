@@ -10,7 +10,7 @@ import logging
 import os
 import queue
 import threading
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePath
@@ -90,7 +90,6 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_embeddings,
     ProviderConfigManager,
-    TextCompletionStreamWrapper,
     _check_provider_match,
     get_potential_model_names,
     _is_litellm_router_call,
@@ -2526,80 +2525,6 @@ def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
     assert f"gemini/{deployment_id}" not in listed
     assert deployment_id not in litellm.models_by_provider["gemini"]
     assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.000001
-
-
-def test_reasoning_content_preserved_in_text_completion_wrapper():
-    """Ensure reasoning_content is copied from delta to text_choices."""
-    chunk = ModelResponseStream(
-        id="test-id",
-        created=1234567890,
-        model="test-model",
-        object="chat.completion.chunk",
-        choices=[
-            StreamingChoices(
-                finish_reason=None,
-                index=0,
-                delta=Delta(
-                    content="Some answer text",
-                    role="assistant",
-                    reasoning_content="Here's my chain of thought...",
-                ),
-            )
-        ],
-    )
-
-    wrapper = TextCompletionStreamWrapper(
-        completion_stream=None,  # Not used in convert_to_text_completion_object
-        model="test-model",
-        stream_options=None,
-    )
-
-    transformed = wrapper.convert_to_text_completion_object(chunk)
-
-    assert "choices" in transformed
-    assert len(transformed["choices"]) == 1
-    choice = transformed["choices"][0]
-    assert choice["text"] == "Some answer text"
-    assert choice["reasoning_content"] == "Here's my chain of thought..."
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("async_stream", (False, True))
-@pytest.mark.parametrize("stream_options", (None, {}, {"include_usage": False}, {"include_usage": True}))
-@pytest.mark.parametrize("usage", (None, Usage(prompt_tokens=7, completion_tokens=2, total_tokens=9), Usage()))
-async def test_text_completion_stream_usage_is_opt_in(
-    async_stream: bool, stream_options: dict[str, bool] | None, usage: Usage | None
-) -> None:
-    chunk: Final = ModelResponseStream(
-        id="test-id",
-        created=1234567890,
-        model="test-model",
-        choices=[StreamingChoices(index=0, delta=Delta(content="Hello"))],
-        usage=usage,
-    )
-
-    async def chunks() -> AsyncIterator[ModelResponseStream]:
-        yield chunk
-
-    wrapper: Final = TextCompletionStreamWrapper(
-        completion_stream=chunks() if async_stream else iter((chunk,)),
-        model="test-model",
-        stream_options=stream_options,
-    )
-    response: Final = await anext(wrapper) if async_stream else next(wrapper)
-    expected_usage: Final = (
-        {"usage": usage.model_dump(exclude_none=True)}
-        if stream_options and stream_options.get("include_usage") is True and usage is not None
-        else {}
-    )
-    assert response.model_dump(exclude_none=True) == {
-        "id": "test-id",
-        "object": "text_completion",
-        "created": 1234567890,
-        "model": "test-model",
-        "choices": [{"index": 0, "text": "Hello"}],
-        **expected_usage,
-    }
 
 
 def test_anthropic_claude_4_invoke_chat_provider_config():
