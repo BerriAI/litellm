@@ -2067,10 +2067,13 @@ def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
             custom_logger_init_args={},
         )
         assert type(logger) is OpenTelemetry and logger.callback_name == "langtrace"
-        exporter: Final = logger._get_span_processor().span_exporter
-        assert isinstance(exporter, OTLPSpanExporter)
-        assert exporter._endpoint == expected_endpoint
-        assert exporter._headers == {"x-api-key": api_key}
+        with patch(
+            "opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter", wraps=OTLPSpanExporter
+        ) as exporter_factory:
+            logger._get_span_processor()
+        exporter_factory.assert_called_once()
+        assert exporter_factory.call_args.kwargs["endpoint"] == expected_endpoint
+        assert exporter_factory.call_args.kwargs["headers"] == {"x-api-key": api_key}
         assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
     finally:
         logging_module._in_memory_loggers.clear()
