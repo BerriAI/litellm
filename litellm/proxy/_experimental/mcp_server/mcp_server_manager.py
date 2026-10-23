@@ -4508,10 +4508,14 @@ class MCPServerManager:
                 has_extra_authorization: Final = bool(extra_headers) and any(
                     isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
                 )
+                # The server's own authentication_token (bearer_token / token / authorization / basic)
+                # is written to Authorization too; the signer must not replace it either.
+                has_server_credential_authorization: Final = _server_credential_occupies_authorization(server)
 
                 if (
                     get_mcp_jwt_signer() is not None
                     and not has_static_authorization
+                    and not has_server_credential_authorization
                     and not mcp_auth_header
                     and not has_extra_authorization
                 ):
@@ -6601,9 +6605,14 @@ class MCPServerManager:
             hook_has_authorization: Final = any(k.lower() == "authorization" for k in hook_extra_headers)
             existing_has_authorization: Final = any(k.lower() == "authorization" for k in extra_headers)
             server_auth_occupies_authorization: Final = (
-                any(k.lower() == "authorization" for k in server_auth_header)
-                if isinstance(server_auth_header, dict)
-                else server_auth_header is not None and mcp_server.auth_type != MCPAuth.api_key
+                (
+                    any(k.lower() == "authorization" for k in server_auth_header)
+                    if isinstance(server_auth_header, dict)
+                    else server_auth_header is not None and mcp_server.auth_type != MCPAuth.api_key
+                )
+                # server_auth_header carries only the client's x-mcp-<alias>-authorization, never the
+                # server's own authentication_token, so check that credential directly.
+                or _server_credential_occupies_authorization(mcp_server)
             )
             if hook_has_authorization and (existing_has_authorization or server_auth_occupies_authorization):
                 # Mirror the tools/list signer guard: an upstream credential (user OAuth,
@@ -7797,6 +7806,27 @@ class MCPServerManager:
             for offset in range(0, len(unique_server_ids), batch_size)
         ]
         return [server for batch in batches for server in batch if server is not None]
+
+
+_STATIC_CREDENTIAL_AUTH_TYPES: Final = frozenset(
+    (MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.token, MCPAuth.authorization, MCPAuth.basic)
+)
+
+
+def _server_credential_occupies_authorization(server: MCPServer) -> bool:
+    """True when the server's own configured credential is sent in the ``Authorization`` header.
+
+    ``bearer_token`` / ``token`` / ``authorization`` / ``basic`` send ``authentication_token`` in
+    ``Authorization``; ``api_key`` sends it in ``X-API-Key``; ``upstream_token_header`` moves either.
+    A signer-injected ``Authorization`` would replace such a credential upstream.
+    """
+    if server.is_byok:
+        # A BYOK server's stored authentication_token is never sent upstream; the caller's own credential is.
+        return False
+    if not server.authentication_token or server.auth_type not in _STATIC_CREDENTIAL_AUTH_TYPES:
+        return False
+    default_slot: Final = "X-API-Key" if server.auth_type == MCPAuth.api_key else "Authorization"
+    return (server.upstream_token_header or default_slot).lower() == "authorization"
 
 
 global_mcp_server_manager: Final[MCPServerManager] = MCPServerManager()
