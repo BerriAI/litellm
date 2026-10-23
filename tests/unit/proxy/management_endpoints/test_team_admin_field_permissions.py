@@ -19,7 +19,11 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TeamAdminEditingDisabled,
     TeamAdminFieldNotPermitted,
     TeamAdminKeyEditAllowed,
+    TeamAdminMemberKeyCreationAllowed,
+    TeamAdminMemberKeyCreationDisabled,
     TeamAdminMemberKeyEditingDisabled,
+    TeamAdminMemberKeyOwnerNotPermitted,
+    TeamAdminMemberKeyTypeNotPermitted,
     TeamAdminMetadataKeyProxyControlled,
     TeamMemberDefaults,
     changed_key_fields,
@@ -34,10 +38,6 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     team_admin_may_raise_max_budget,
     team_admin_member_key_creation_or_raise,
     team_admin_member_key_creation_verdict,
-    TeamAdminMemberKeyCreationAllowed,
-    TeamAdminMemberKeyCreationDisabled,
-    TeamAdminMemberKeyOwnerNotPermitted,
-    TeamAdminMemberKeyTypeNotPermitted,
     team_admin_request_or_raise,
 )
 
@@ -239,6 +239,29 @@ class TestTeamMemberDefaultEdits:
         )
         assert isinstance(verdict, TeamAdminEditAllowed)
         assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "tpm_limit": 6}
+
+    def test_backfill_onto_the_unchanged_default_keeps_the_default_it_compares_against(self):
+        data: Final = UpdateTeamRequest(
+            team_id="team-1", team_member_budget=10.0, team_member_budget_backfill="raise_to_default"
+        )
+        verdict: Final = team_admin_edit_verdict(
+            data, _team(), _permitted("team_member_budget"), _STORED_MEMBER_DEFAULTS
+        )
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {
+            "team_id": "team-1",
+            "team_member_budget": 10.0,
+            "team_member_budget_backfill": "raise_to_default",
+        }
+
+    def test_backfill_needs_the_member_budget_enabled(self):
+        data: Final = UpdateTeamRequest(
+            team_id="team-1", team_member_budget=10.0, team_member_budget_backfill="lower_to_default"
+        )
+        verdict: Final = team_admin_edit_verdict(
+            data, _team(), _permitted("team_member_budget_duration"), _STORED_MEMBER_DEFAULTS
+        )
+        assert verdict == TeamAdminFieldNotPermitted(field="team_member_budget_backfill")
 
     def test_nulls_resent_for_a_team_without_member_defaults_are_dropped(self):
         data: Final = UpdateTeamRequest(

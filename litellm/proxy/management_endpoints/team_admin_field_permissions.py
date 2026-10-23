@@ -123,6 +123,7 @@ class TeamMemberDefaults:
 TEAM_MEMBER_DEFAULT_FIELDS: Final[frozenset[str]] = frozenset(
     {"team_member_budget", "team_member_budget_duration", "team_member_tpm_limit", "team_member_rpm_limit"}
 )
+_MEMBER_BUDGET_BACKFILL_FIELD: Final = "team_member_budget_backfill"
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,7 +448,10 @@ def _only_changes(data: UpdateTeamRequest, changed: frozenset[str]) -> UpdateTea
     such as a resent budget_duration pushing budget_reset_at back."""
     sent: Final = frozenset(data.model_fields_set)
     via_metadata: Final = frozenset({"metadata"}) if changed - sent else frozenset[str]()
-    kept: Final = frozenset({"team_id"}) | (changed & sent) | via_metadata
+    backfilled_default: Final = (
+        frozenset({"team_member_budget"}) & sent if _MEMBER_BUDGET_BACKFILL_FIELD in changed else frozenset[str]()
+    )
+    kept: Final = frozenset({"team_id"}) | (changed & sent) | via_metadata | backfilled_default
     return UpdateTeamRequest.model_validate(data.model_dump(include=MappingProxyType({field: True for field in kept})))
 
 
@@ -466,7 +470,10 @@ def team_admin_edit_verdict(
     if controlled:
         return TeamAdminMetadataKeyProxyControlled(key=controlled[0])
     changed: Final = changed_team_fields(data, existing, member_defaults)
-    blocked: Final = sorted(changed - permitted)
+    may_backfill: Final = (
+        frozenset({_MEMBER_BUDGET_BACKFILL_FIELD}) if "team_member_budget" in permitted else frozenset[str]()
+    )
+    blocked: Final = sorted(changed - permitted - may_backfill)
     if blocked:
         return TeamAdminFieldNotPermitted(field=blocked[0])
     cleared: Final = sorted(

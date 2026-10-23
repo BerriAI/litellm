@@ -40584,6 +40584,11 @@ export interface components {
             team_id?: string | null;
             /** Team Member Budget */
             team_member_budget?: number | null;
+            /**
+             * Team Member Budget Backfill
+             * @description Which members with their own budget move onto the team_member_budget sent in the same request: 'raise_to_default' moves those below it, 'lower_to_default' those above it, 'all_to_default' both. Members whose budget resets on a different schedule than the default are left alone
+             */
+            team_member_budget_backfill?: ("none" | "raise_to_default" | "lower_to_default" | "all_to_default") | null;
             /** Team Member Budget Duration */
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
@@ -48770,6 +48775,11 @@ export interface components {
             team_id: string;
             /** Team Member Budget */
             team_member_budget?: number | null;
+            /**
+             * Team Member Budget Backfill
+             * @description Which members with their own budget move onto the team_member_budget sent in the same request: 'raise_to_default' moves those below it, 'lower_to_default' those above it, 'all_to_default' both. Members whose budget resets on a different schedule than the default are left alone
+             */
+            team_member_budget_backfill?: ("none" | "raise_to_default" | "lower_to_default" | "all_to_default") | null;
             /** Team Member Budget Duration */
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */

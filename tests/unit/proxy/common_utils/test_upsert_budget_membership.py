@@ -85,6 +85,26 @@ async def test_empty_patch_is_noop(mock_tx, fake_user):
     mock_tx.litellm_budgettable.create.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_clearing_all_limits_links_the_member_to_the_team_default(mock_tx, fake_user):
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row(max_budget=100.0))
+
+    await upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-1",
+        user_id="user-1",
+        existing_budget_id="bud-1",
+        user_api_key_dict=fake_user,
+        budget_patch={"max_budget": None},
+        team_default_budget_id="team-default",
+    )
+
+    mock_tx.litellm_teammembership.update.assert_awaited_once_with(
+        where={"user_id_team_id": {"user_id": "user-1", "team_id": "team-1"}},
+        data={"litellm_budget_table": {"connect": {"budget_id": "team-default"}}},
+    )
+
+
 # TEST: clearing every limit on a member's private budget disconnects it, so the
 # member falls back to the team default instead of keeping an empty private row.
 @pytest.mark.asyncio

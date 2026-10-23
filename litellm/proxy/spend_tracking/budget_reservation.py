@@ -37,6 +37,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     project_cache_key,
     project_spend_counter_key,
     tag_cache_key,
+    team_member_default_budget_cache_key,
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model
@@ -744,7 +745,7 @@ async def _get_team_member_budget_counter(
         default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
         if isinstance(default_budget_id, str):
             default_budget: Final = _CACHED_VALUE.validate_python(
-                await user_api_key_cache.async_get_cache(key=f"team_member_default_budget:{default_budget_id}")
+                await user_api_key_cache.async_get_cache(key=team_member_default_budget_cache_key(default_budget_id))
             )
             default_cap: Final = _to_float(_get_value(default_budget, "max_budget"))
             if default_cap is not None and default_cap > 0:
