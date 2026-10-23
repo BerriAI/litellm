@@ -8,11 +8,12 @@ import { getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity } from "@/utils/jwtUtils";
 import { runLiteAdmin } from "./agent";
 import type { ActionResult, AriaAccess, LiteAdminAction } from "./operations";
+import type { UsageChart } from "./usageChart";
 
 type ActionState = { status: "review" | "applying" | "cancelled" } | ActionResult;
 export type ActionEntry = { kind: "action"; id: string; action: LiteAdminAction } & ActionState;
 export type ConversationEntry =
-  | { kind: "message"; id: string; message: ChatMessage }
+  | { kind: "message"; id: string; message: ChatMessage; chart?: UsageChart; question?: string }
   | ActionEntry
   | { kind: "error"; id: string; text: string };
 export interface LiteAdminSession {
@@ -28,6 +29,7 @@ type ActiveTurn = {
   controller: AbortController;
   outcome: "none" | "submitted" | "completed" | "unknown";
   approval?: { id: string; resolve: (approved: boolean) => void };
+  chart?: UsageChart;
 };
 const INTERRUPTED_WRITE = "A submitted change may have completed. Check the relevant page before trying again.";
 const RESOURCE_QUERIES = new Set([
@@ -131,7 +133,16 @@ export function useLiteAdmin(session: LiteAdminSession) {
         onMessage: (content) => {
           assertCurrent();
           const reply: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content, timestamp: Date.now() };
-          setEntries((current) => [...current, { kind: "message", id: reply.id, message: reply }]);
+          const chart = turn.chart;
+          turn.chart = undefined;
+          setEntries((current) => [
+            ...current,
+            { kind: "message", id: reply.id, message: reply, chart, question: message.content },
+          ]);
+        },
+        onChart: (chart) => {
+          assertCurrent();
+          turn.chart = chart;
         },
         confirm: (action) =>
           new Promise<boolean>((resolve) => {

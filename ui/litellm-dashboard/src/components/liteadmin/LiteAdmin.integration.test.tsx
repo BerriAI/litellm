@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { setGlobalLitellmHeaderName, switchToWorkerUrl } from "@/components/networking";
@@ -50,10 +51,10 @@ type ModelReply = {
 
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-const toolReply = (name: string, args: Record<string, unknown>): ModelReply => ({
+const toolReply = (name: string, args: Record<string, unknown>, id = "call-test"): ModelReply => ({
   role: "assistant",
   content: null,
-  tool_calls: [{ id: "call-test", type: "function", function: { name, arguments: JSON.stringify(args) } }],
+  tool_calls: [{ id, type: "function", function: { name, arguments: JSON.stringify(args) } }],
 });
 const answer = (content: string): ModelReply => ({ role: "assistant", content });
 
@@ -139,8 +140,10 @@ function renderWidget(
 
 interface GatewayOptions {
   models?: ModelGroup[];
+  callableModels?: string[] | (() => Promise<Response>);
   write?: () => Promise<Response>;
   read?: () => Promise<Response>;
+  usage?: () => Promise<Response>;
   settings?: { target: string; status: number } | ((request: Request) => Promise<Response>);
   useSiTerminology?: boolean;
 }
@@ -157,7 +160,10 @@ function completionResponse(message: ModelReply | undefined) {
   return json(completion);
 }
 
-function gateway(replies: (ModelReply | Promise<ModelReply>)[], options: GatewayOptions = {}) {
+function gateway(
+  replies: (ModelReply | Promise<ModelReply> | ((request: RecordedRequest) => ModelReply))[],
+  options: GatewayOptions = {},
+) {
   const requests: RecordedRequest[] = [];
   const settings = options.settings ?? { target: INFERENCE, status: 200 };
   transport.mockImplementation(async (input, init) => {
@@ -187,11 +193,20 @@ function gateway(replies: (ModelReply | Promise<ModelReply>)[], options: Gateway
           { model_group: "chat-model", mode: "chat" },
         ],
       });
-    if (path.endsWith("/chat/completions")) return completionResponse(await replies.shift());
+    if (path.endsWith("/models")) {
+      if (typeof options.callableModels === "function") return options.callableModels();
+      const names = options.callableModels ??
+        options.models?.map((model) => model.model_group) ?? ["a-embedding", "chat-model"];
+      return json({ data: names.map((id) => ({ id })) });
+    }
+    if (path.endsWith("/chat/completions")) {
+      const reply = replies.shift();
+      return completionResponse(typeof reply === "function" ? reply(recorded) : await reply);
+    }
     if (path.endsWith("/team/info"))
       return options.read ? options.read() : json({ team_info: { team_id: "team-1", max_budget: 40 } });
     if (path.endsWith("/user/daily/activity/aggregated"))
-      return json({ results: [], metadata: { total_spend: 12.34 } });
+      return options.usage ? options.usage() : json({ results: [], metadata: { total_spend: 12.34 } });
     if (path.endsWith("/team/update"))
       return options.write ? options.write() : json({ team_id: "team-1", max_budget: body.max_budget });
     if (path.endsWith("/key/generate"))
@@ -257,6 +272,7 @@ describe("Aria Agent in the gateway", () => {
       ]);
       if (role === "internal_user") {
         expect(completions[0].body.tools).toEqual([
+          expect.objectContaining({ function: expect.objectContaining({ name: "render_usage_chart" }) }),
           expect.objectContaining({ function: expect.objectContaining({ name: "get_usage_data" }) }),
         ]);
       }
@@ -268,7 +284,7 @@ describe("Aria Agent in the gateway", () => {
     const requests = gateway([], { models: [] });
     renderWidget();
     await userEvent.setup().click(await screen.findByRole("button", { name: "Launch Aria Agent" }));
-    await screen.findByText("Add a chat model to your gateway to use Aria.");
+    await screen.findByText("No chat models are available for your account.");
     for (const question of [
       "How much have I spent this week?",
       "Which models are costing the most?",
@@ -408,6 +424,7 @@ describe("Aria Agent in the gateway", () => {
       { role: "user", content: "And last month?" },
     ]);
     expect(completions.at(-1)?.body.tools).toEqual([
+      expect.objectContaining({ function: expect.objectContaining({ name: "render_usage_chart" }) }),
       expect.objectContaining({ function: expect.objectContaining({ name: "get_usage_data" }) }),
     ]);
   });
@@ -512,7 +529,9 @@ describe("Aria Agent in the gateway", () => {
       expect(completions[0].body.tools).toEqual(expect.arrayContaining([tool("get_usage_data")]));
       if (!writable) {
         const names =
-          scope === "global" ? ["get_usage_data", "get_team_usage_data", "get_tag_usage_data"] : ["get_usage_data"];
+          scope === "global"
+            ? ["render_usage_chart", "get_usage_data", "get_team_usage_data", "get_tag_usage_data"]
+            : ["render_usage_chart", "get_usage_data"];
         expect(completions[0].body.tools).toEqual(names.map(tool));
       }
       expect(requests.some((request) => request.url.includes("/usage/ai/chat"))).toBe(false);
@@ -568,6 +587,7 @@ describe("Aria Agent in the gateway", () => {
       { role: "user", content: "Show my usage" },
     ]);
     expect(completions.at(-1)?.body.tools).toEqual([
+      expect.objectContaining({ function: expect.objectContaining({ name: "render_usage_chart" }) }),
       expect.objectContaining({ function: expect.objectContaining({ name: "get_usage_data" }) }),
     ]);
     expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
@@ -629,7 +649,7 @@ describe("Aria Agent in the gateway", () => {
     expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
   });
 
-  it("preserves the draft and chosen model when opening, closing and leaving Home", async () => {
+  it("should preserve the draft and chosen model when opening, closing and leaving Home", async () => {
     const requests = gateway([answer("Draft received.")], {
       models: [
         { model_group: "claude-sonnet-5-5", mode: "chat" },
@@ -641,7 +661,7 @@ describe("Aria Agent in the gateway", () => {
     fireEvent.change(screen.getByPlaceholderText("What would you like to do?"), {
       target: { value: "Keep this draft" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Recent chats" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
     expect(screen.getByPlaceholderText("Ask Aria…")).toHaveValue("Keep this draft");
     fireEvent.click(screen.getByRole("button", { name: "Close Aria Agent" }));
     const home = screen.getByRole("region", { name: "Ask Aria Agent" });
@@ -657,262 +677,84 @@ describe("Aria Agent in the gateway", () => {
     expect(completion?.body.messages).toContainEqual({ role: "user", content: "Keep this draft" });
   });
 
-  it("keeps each tab's history, model and draft independent through the Home composer", async () => {
-    const requests = gateway(
-      [answer("First answer."), answer("Second answer."), answer("Second follow-up."), answer("First follow-up.")],
-      {
-        models: [
-          { model_group: "chat-model", mode: "chat" },
-          { model_group: "other-chat-model", mode: "chat" },
-        ],
-      },
-    );
+  it("should start over with an empty history and draft while preserving the selected model", async () => {
+    const requests = gateway([answer("Old answer."), answer("Fresh answer.")], {
+      models: [
+        { model_group: "chat-model", mode: "chat" },
+        { model_group: "other-chat-model", mode: "chat" },
+      ],
+    });
     renderWidget(undefined, true);
-    await selectModel();
-    send("First question");
-    await screen.findByText("First answer.");
-    expect(within(screen.getByRole("tablist", { name: "Aria Agent chats" })).getAllByRole("tab")).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
-    expect(screen.getByRole("tab", { name: "Chat 2" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.queryByText("First answer.")).not.toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Ask Aria…")).toHaveValue("");
     await selectModel("other-chat-model");
-    send("Second question");
-    await screen.findByText("Second answer.");
-    fireEvent.change(screen.getByPlaceholderText("Ask Aria…"), { target: { value: "Second draft" } });
+    act(() => send("Old question"));
+    await screen.findByText("Old answer.");
+    act(() => fireEvent.change(screen.getByPlaceholderText("Ask Aria…"), { target: { value: "Old draft" } }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Start over" }));
 
-    fireEvent.click(screen.getByRole("tab", { name: "Chat 1" }));
-    expect(screen.getByText("First answer.")).toBeInTheDocument();
-    expect(screen.queryByText("Second answer.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByText("Old question")).not.toBeInTheDocument();
+    expect(screen.queryByText("Old answer.")).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText("Ask Aria…")).toHaveValue("");
-    expect(screen.getByRole("combobox", { name: "Aria Agent model" })).toHaveValue("chat-model");
-    fireEvent.change(screen.getByPlaceholderText("Ask Aria…"), { target: { value: "First draft" } });
-    fireEvent.click(screen.getByRole("button", { name: "Close Aria Agent" }));
-    const home = screen.getByRole("region", { name: "Ask Aria Agent" });
-    expect(within(home).getByPlaceholderText("What would you like to do?")).toHaveValue("First draft");
-    expect(screen.getAllByPlaceholderText("What would you like to do?")).toHaveLength(1);
-
-    fireEvent.click(screen.getByRole("button", { name: "Recent chats" }));
-    fireEvent.click(screen.getByRole("tab", { name: "Chat 2" }));
-    expect(screen.getByPlaceholderText("Ask Aria…")).toHaveValue("Second draft");
     expect(screen.getByRole("combobox", { name: "Aria Agent model" })).toHaveValue("other-chat-model");
-    expect(screen.getAllByLabelText("Aria Agent conversation")).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Close Aria Agent" }));
-    expect(within(home).getByPlaceholderText("What would you like to do?")).toHaveValue("Second draft");
-    fireEvent.click(within(home).getByRole("button", { name: "Send message" }));
-    await screen.findByText("Second follow-up.");
-    expect(screen.getByRole("tab", { name: "Chat 2" })).toHaveAttribute("aria-selected", "true");
-    fireEvent.click(screen.getByRole("tab", { name: "Chat 1" }));
-    expect(screen.getByPlaceholderText("Ask Aria…")).toHaveValue("First draft");
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    await screen.findByText("First follow-up.");
-
-    const completions = requests.filter((request) => request.url.endsWith("/chat/completions"));
-    expect(completions.map((request) => request.body.model)).toEqual([
-      "chat-model",
-      "other-chat-model",
-      "other-chat-model",
-      "chat-model",
-    ]);
-    expect(completions[1].body.messages).toEqual([
+    expect(screen.getByRole("button", { name: "Start over" })).toBeDisabled();
+    act(() => send("Fresh question"));
+    await screen.findByText("Fresh answer.");
+    const completion = requests.filter((request) => request.url.endsWith("/chat/completions")).at(-1);
+    expect(completion?.body.model).toBe("other-chat-model");
+    expect(completion?.body.messages).toEqual([
       { role: "system", content: expect.any(String) },
-      { role: "user", content: "Second question" },
-    ]);
-    expect(completions[2].body.messages).toEqual([
-      { role: "system", content: expect.any(String) },
-      { role: "user", content: "Second question" },
-      { role: "assistant", content: "Second answer." },
-      { role: "user", content: "Second draft" },
-    ]);
-    expect(completions[3].body.messages).toEqual([
-      { role: "system", content: expect.any(String) },
-      { role: "user", content: "First question" },
-      { role: "assistant", content: "First answer." },
-      { role: "user", content: "First draft" },
+      { role: "user", content: "Fresh question" },
     ]);
   });
 
-  it("supports keyboard tab switching and keeps focus on a surviving tab after closing", async () => {
-    gateway([]);
-    renderWidget();
-    await openWidget();
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "New chat" }));
-    await user.click(screen.getByRole("tab", { name: "Chat 1" }));
-    await user.keyboard("{ArrowRight}{Enter}");
-    expect(screen.getByRole("tab", { name: "Chat 2" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Chat 2" })).toHaveFocus();
-    await user.click(screen.getByRole("button", { name: "Close Chat 2" }));
-    expect(screen.getByRole("tab", { name: "Chat 1" })).toHaveFocus();
-    await user.click(screen.getByRole("button", { name: "Close Chat 1" }));
-    expect(screen.getByRole("tab", { name: "Chat 3" })).toHaveFocus();
-    expect(screen.getByRole("tab", { name: "Chat 3" })).toHaveAttribute("aria-selected", "true");
-  });
-
-  it("keeps tab focus when returning to a saved approval and focuses it when reopening the panel", async () => {
+  it("should focus a pending approval when reopening the same conversation", async () => {
     const requests = gateway([toolReply("key_create", keyArguments)]);
     renderWidget();
     await openWidget();
-    send("Prepare a key for approval");
+    act(() => send("Prepare a key for approval"));
     const review = await screen.findByRole("region", { name: "Create a virtual key" });
     expect(review).toHaveFocus();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "New chat" }));
-    await user.click(screen.getByRole("tab", { name: "Chat 2" }));
-    await user.keyboard("{ArrowLeft}{Enter}");
-    expect(screen.getByRole("tab", { name: "Chat 1" })).toHaveFocus();
-    expect(screen.getByRole("button", { name: "Confirm change" })).toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "Chat 2" }));
-    await user.click(screen.getByRole("button", { name: "Close Chat 2" }));
-    expect(screen.getByRole("tab", { name: "Chat 1" })).toHaveFocus();
     await user.click(screen.getByRole("button", { name: "Close Aria Agent" }));
     await user.click(screen.getByRole("button", { name: "Aria Agent" }));
     await waitFor(() => expect(screen.getByRole("region", { name: "Create a virtual key" })).toHaveFocus());
     expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
   });
 
-  it("lets simultaneous turns finish independently without a background review stealing focus", async () => {
-    const first = deferred<ModelReply>();
-    const second = deferred<ModelReply>();
-    const requests = gateway([first.promise, second.promise]);
+  it("should cancel a pending approval when starting over", async () => {
+    const requests = gateway([toolReply("key_create", keyArguments), answer("Fresh answer.")]);
     renderWidget();
     await openWidget();
-    send("First pending question");
-    await waitFor(() =>
-      expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(1),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
-    await selectModel();
-    send("Second pending question");
-    await waitFor(() =>
-      expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(2),
-    );
-    const completions = requests.filter((request) => request.url.endsWith("/chat/completions"));
-    expect(completions.every((request) => !request.signal.aborted)).toBe(true);
-    await act(async () => second.resolve(answer("Second completed first.")));
-    await screen.findByText("Second completed first.");
-    const composer = screen.getByPlaceholderText("Ask Aria…");
-    fireEvent.change(composer, { target: { value: "Keep typing in the second chat" } });
-    act(() => composer.focus());
-
-    await act(async () => first.resolve(toolReply("key_create", keyArguments)));
-    expect(composer).toHaveFocus();
-    expect(composer).toHaveValue("Keep typing in the second chat");
-    expect(composer).toBeEnabled();
-    expect(screen.getByRole("tab", { name: "Chat 2" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.queryByRole("button", { name: "Confirm change" })).not.toBeInTheDocument();
-    expect(screen.queryByText("First pending question")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Chat 1" }));
-    expect(await screen.findByRole("region", { name: "Create a virtual key" })).toHaveTextContent("Widget key");
-    expect(screen.getByText("First pending question")).toBeInTheDocument();
-    expect(screen.queryByText("Second completed first.")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Chat 2" }));
-    expect(screen.getByPlaceholderText("Ask Aria…")).toHaveValue("Keep typing in the second chat");
-    expect(screen.getByText("Second completed first.")).toBeInTheDocument();
-    expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
-  });
-
-  it("cancels only a closed tab's approval and prevents closing an applying write even from another tab", async () => {
-    const response = deferred<Response>();
-    const requests = gateway(
-      [
-        toolReply("key_create", keyArguments),
-        answer("Second chat is usable."),
-        toolReply("key_create", { ...keyArguments, key_alias: "Second chat key" }),
-        answer("Third chat is usable."),
-        answer("Second chat write completed."),
-      ],
-      { write: () => response.promise },
-    );
-    renderWidget();
-    await openWidget();
-    send("Propose a first key");
+    act(() => send("Propose a key"));
     await screen.findByRole("button", { name: "Confirm change" });
-    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
-    await selectModel();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Start over" }));
     expect(screen.queryByRole("button", { name: "Confirm change" })).not.toBeInTheDocument();
-    send("Read in the second chat");
-    await screen.findByText("Second chat is usable.");
-    fireEvent.click(screen.getByRole("tab", { name: "Chat 1" }));
-    expect(screen.getByRole("region", { name: "Create a virtual key" })).toHaveTextContent("Widget key");
-    fireEvent.click(screen.getByRole("tab", { name: "Chat 2" }));
-    fireEvent.click(screen.getByRole("button", { name: "Close Chat 1" }));
-    expect(screen.queryByRole("tab", { name: "Chat 1" })).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Chat 2" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByText("Propose a key")).not.toBeInTheDocument();
     expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
-
-    send("Create the second chat key");
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm change" }));
-    await waitFor(() => expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(1));
-    expect(screen.getByRole("button", { name: "Close Chat 2" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Close Chat 2" }));
-    expect(screen.getByRole("tab", { name: "Chat 2" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("button", { name: "New chat" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
-    expect(screen.getByRole("button", { name: "Close Chat 2" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Close Chat 2" }));
-    expect(screen.getByRole("tab", { name: "Chat 2" })).toBeInTheDocument();
-    await selectModel();
-    send("Read while the other tab writes");
-    await screen.findByText("Third chat is usable.");
-    await act(async () => response.resolve(json({ key: NEW_KEY })));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Close Chat 2" })).toBeEnabled());
-    expect(screen.getByRole("tab", { name: "Chat 3" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.queryByText(NEW_KEY)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Chat 2" }));
-    expect(await screen.findByText("Second chat write completed.")).toBeInTheDocument();
-    expect(screen.getByText(NEW_KEY)).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Create a virtual key" })).toHaveTextContent("Completed");
-    expect(requests.filter((request) => request.url.endsWith("/key/generate")).map((request) => request.body)).toEqual([
-      { key_alias: "Second chat key", team_id: "team-1", max_budget: 40 },
+    act(() => send("Fresh question"));
+    await screen.findByText("Fresh answer.");
+    expect(requests.filter((request) => request.url.endsWith("/chat/completions")).at(-1)?.body.messages).toEqual([
+      { role: "system", content: expect.any(String) },
+      { role: "user", content: "Fresh question" },
     ]);
-    expect(screen.queryByText(/A submitted change may have completed/)).not.toBeInTheDocument();
   });
 
-  it("closes inactive, active and last tabs without cancelling survivors or reusing closed histories", async () => {
-    const first = deferred<ModelReply>();
-    const second = deferred<ModelReply>();
-    const requests = gateway([first.promise, second.promise, answer("Third answer."), answer("Fresh answer.")]);
+  it("should abort an unfinished answer when starting over and ignore a late approval", async () => {
+    const pending = deferred<ModelReply>();
+    const requests = gateway([pending.promise, answer("Fresh answer.")]);
     renderWidget();
     await openWidget();
-    send("First pending question");
+    act(() => send("Old pending question"));
     await waitFor(() =>
       expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(1),
     );
-    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
-    await selectModel();
-    send("Second pending question");
-    await waitFor(() =>
-      expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(2),
-    );
-    const pending = requests.filter((request) => request.url.endsWith("/chat/completions"));
-    fireEvent.click(screen.getByRole("button", { name: "Close Chat 1" }));
-    await waitFor(() => expect(pending[0].signal.aborted).toBe(true));
-    expect(pending[1].signal.aborted).toBe(false);
-    expect(screen.getByRole("tab", { name: "Chat 2" })).toHaveAttribute("aria-selected", "true");
-    await act(async () => first.resolve(toolReply("key_create", keyArguments)));
+    const original = requests.find((request) => request.url.endsWith("/chat/completions"));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Start over" }));
+    expect(original?.signal.aborted).toBe(true);
+    await act(async () => pending.resolve(toolReply("key_create", keyArguments)));
     expect(screen.queryByRole("button", { name: "Confirm change" })).not.toBeInTheDocument();
-    expect(screen.getByRole("status", { name: "Aria Agent is working" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
-    await selectModel();
-    send("Third question");
-    await screen.findByText("Third answer.");
-    fireEvent.click(screen.getByRole("button", { name: "Close Chat 3" }));
-    expect(screen.getByRole("tab", { name: "Chat 2" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("Second pending question")).toBeInTheDocument();
-    expect(pending[1].signal.aborted).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Close Chat 2" }));
-    await waitFor(() => expect(pending[1].signal.aborted).toBe(true));
-    expect(within(screen.getByRole("tablist", { name: "Aria Agent chats" })).getAllByRole("tab")).toHaveLength(1);
-    expect(screen.getByRole("tab", { name: "Chat 4" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByPlaceholderText("Ask Aria…")).toHaveValue("");
-    expect(screen.queryByRole("button", { name: "Stop request" })).not.toBeInTheDocument();
-    await act(async () => second.resolve(answer("Late closed answer.")));
-    expect(screen.queryByText("Late closed answer.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Third answer.")).not.toBeInTheDocument();
-    await selectModel();
-    send("Fresh question");
+    expect(screen.queryByText("Old pending question")).not.toBeInTheDocument();
+    act(() => send("Fresh question"));
     await screen.findByText("Fresh answer.");
     expect(requests.filter((request) => request.url.endsWith("/chat/completions")).at(-1)?.body.messages).toEqual([
       { role: "system", content: expect.any(String) },
@@ -926,7 +768,7 @@ describe("Aria Agent in the gateway", () => {
     const requests = gateway([], options);
     const { client } = renderWidget(undefined, true);
     const home = await screen.findByRole("region", { name: "Ask Aria Agent" });
-    expect(await within(home).findByText("Add a chat model to your gateway to use Aria.")).toBeInTheDocument();
+    expect(await within(home).findByText("No chat models are available for your account.")).toBeInTheDocument();
     expect(within(home).getByPlaceholderText("What would you like to do?")).toBeDisabled();
     expect(within(home).getByRole("button", { name: "Send message" })).toBeDisabled();
     options.models = [{ model_group: "chat-model", mode: "chat" }];
@@ -1054,7 +896,7 @@ describe("Aria Agent in the gateway", () => {
     await screen.findByText("Your usage remains available.");
     const completion = requests.find((request) => request.url.endsWith("/chat/completions"));
     expect(completion?.body.tools).toEqual(
-      ["get_usage_data", "get_team_usage_data", "get_tag_usage_data"].map((name) =>
+      ["render_usage_chart", "get_usage_data", "get_team_usage_data", "get_tag_usage_data"].map((name) =>
         expect.objectContaining({ function: expect.objectContaining({ name }) }),
       ),
     );
@@ -1192,8 +1034,8 @@ describe("Aria Agent in the gateway", () => {
       await screen.findByText("Usage is available.");
       const names =
         role === "proxy_admin_viewer"
-          ? ["get_usage_data", "get_team_usage_data", "get_tag_usage_data"]
-          : ["get_usage_data"];
+          ? ["render_usage_chart", "get_usage_data", "get_team_usage_data", "get_tag_usage_data"]
+          : ["render_usage_chart", "get_usage_data"];
       const completion = requests.find((request) => request.url.endsWith("/chat/completions"));
       expect(completion?.body.tools).toEqual(
         names.map((name) => expect.objectContaining({ function: expect.objectContaining({ name }) })),
@@ -1229,6 +1071,132 @@ describe("Aria Agent in the gateway", () => {
     expect(within(screen.getByLabelText("Aria Agent conversation")).queryByRole("img")).not.toBeInTheDocument();
   });
 
+  it("should render a chart from the scoped usage lookup and clear it when starting over without changing models", async () => {
+    session("internal_user");
+    const dates = { start_date: "2026-10-23", end_date: "2026-10-23" };
+    const requests = gateway(
+      [
+        toolReply("get_usage_data", dates),
+        (request) => {
+          const body = z
+            .object({ messages: z.array(z.object({ role: z.string(), content: z.string().nullish() })) })
+            .parse(request.body);
+          const lookup = body.messages.findLast((message) => message.role === "tool");
+          if (!lookup?.content) throw new Error("The usage lookup must finish before rendering its chart.");
+          const result = z
+            .object({ operation: z.literal("get_usage_data"), success: z.literal(true), source_id: z.string().min(1) })
+            .parse(JSON.parse(lookup.content));
+          return toolReply("render_usage_chart", { source_id: result.source_id, view: "model_spend" }, "call-chart");
+        },
+        answer("The primary model accounts for most of your spend."),
+        answer("This is a fresh conversation."),
+      ],
+      {
+        models: [
+          { model_group: "chat-model", mode: "chat" },
+          { model_group: "other-chat-model", mode: "chat" },
+        ],
+        usage: async () =>
+          json({
+            results: [
+              {
+                date: dates.start_date,
+                metrics: { spend: 4, api_requests: 3, total_tokens: 22 },
+                breakdown: {
+                  models: {
+                    "primary-model": { metrics: { spend: 3.25, api_requests: 2, total_tokens: 18 } },
+                    "fallback-model": { metrics: { spend: 0.75, api_requests: 1, total_tokens: 4 } },
+                  },
+                },
+              },
+            ],
+            metadata: { total_spend: 4, total_api_requests: 3, total_tokens: 22 },
+          }),
+      },
+    );
+    renderWidget(undefined, false, true);
+    const input = await screen.findByRole("textbox", { name: "Message Aria Agent" });
+    await waitFor(() => expect(input).toBeEnabled());
+    await selectModel("other-chat-model");
+    act(() => send("Which models cost the most?"));
+
+    const reply = await screen.findByRole("article", { name: "Aria Agent answer" });
+    expect(reply).toHaveTextContent("The primary model accounts for most of your spend.");
+    const figure = within(reply).getByRole("figure", { name: "Spend by model" });
+    const values = within(figure).getByRole("table", { name: "Spend by model values" });
+    expect(within(values).getByRole("row", { name: "primary-model $3.25" })).toBeInTheDocument();
+    expect(within(values).getByRole("row", { name: "fallback-model $0.75" })).toBeInTheDocument();
+    expect(figure).toHaveTextContent("Your usage");
+    expect(within(reply).getByRole("button", { name: "Export answer" })).toBeEnabled();
+    expect(within(reply).queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
+    const reads = requests.filter((request) => request.url.includes("/user/daily/activity/aggregated"));
+    expect(reads).toHaveLength(1);
+    expect(new URL(reads[0].url).searchParams.get("user_id")).toBe("first-admin");
+    expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(3);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Start over" }));
+    expect(screen.queryByRole("figure", { name: "Spend by model" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Export answer" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Aria Agent model" })).toHaveValue("other-chat-model");
+    act(() => send("Start fresh"));
+    expect(await screen.findByText("This is a fresh conversation.")).toBeInTheDocument();
+    expect(screen.queryByRole("figure")).not.toBeInTheDocument();
+    const freshRequest = requests.filter((request) => request.url.endsWith("/chat/completions")).at(-1);
+    expect(freshRequest?.body.model).toBe("other-chat-model");
+    expect(freshRequest?.body.messages).toEqual([
+      { role: "system", content: expect.any(String) },
+      { role: "user", content: "Start fresh" },
+    ]);
+  });
+
+  it("should render a usage-only assistant's Markdown table as accessible headers and cells", async () => {
+    session("internal_user");
+    const markdown = [
+      "## Usage by model",
+      "",
+      "> Spend is shown in USD.",
+      "",
+      "| Model | Requests | Spend |",
+      "| :--- | ---: | ---: |",
+      "| primary-model | 12 | $3.40 |",
+      "| fallback-model | 5 | $0.60 |",
+    ].join("\n");
+    gateway([answer(markdown), answer("The primary model accounts for $3.40 of your $4.00 spend.")]);
+    renderWidget(undefined, false, true);
+    const input = await screen.findByRole("textbox", { name: "Message Aria Agent" });
+    await waitFor(() => expect(input).toBeEnabled());
+    act(() => send("Show my usage by model as a table"));
+    const conversation = screen.getByLabelText("Aria Agent conversation");
+    const table = await within(conversation).findByRole("table");
+    expect(within(conversation).getByRole("heading", { name: "Usage by model", level: 2 })).toBeInTheDocument();
+    expect(within(conversation).getByRole("article", { name: "Your question" })).toHaveTextContent(
+      "Show my usage by model as a table",
+    );
+    expect(within(conversation).getByRole("article", { name: "Aria Agent answer" })).toHaveTextContent(
+      "Spend is shown in USD.",
+    );
+    for (const header of ["Model", "Requests", "Spend"]) {
+      expect(within(table).getByRole("columnheader", { name: header })).toBeInTheDocument();
+    }
+    expect(within(table).getAllByRole("row")).toHaveLength(3);
+    for (const values of [
+      ["primary-model", "12", "$3.40"],
+      ["fallback-model", "5", "$0.60"],
+    ]) {
+      const row = within(table).getByRole("row", { name: values.join(" ") });
+      for (const value of values) {
+        expect(within(row).getByRole("cell", { name: value })).toBeInTheDocument();
+      }
+    }
+    expect(within(conversation).queryByText(/\|.*Model.*\|/)).not.toBeInTheDocument();
+    act(() => send("Which model is driving the cost?"));
+    expect(
+      await within(conversation).findByText("The primary model accounts for $3.40 of your $4.00 spend."),
+    ).toBeInTheDocument();
+    expect(within(conversation).getByRole("table")).toBeInTheDocument();
+    expect(within(conversation).getAllByRole("article", { name: "Your question" })).toHaveLength(2);
+  });
+
   it("defaults to eligible Sonnet and preserves a manual choice across catalog refresh", async () => {
     const requests = gateway([answer("Default selected."), answer("Manual choice retained.")], {
       models: [
@@ -1252,6 +1220,80 @@ describe("Aria Agent in the gateway", () => {
     expect(requests.filter((request) => request.url.endsWith("/chat/completions")).at(-1)?.body.model).toBe(
       "chat-model",
     );
+  });
+
+  it("should let an admin viewer select only models their inference session can call", async () => {
+    session("proxy_admin_viewer");
+    const options: GatewayOptions = {
+      models: [
+        { model_group: "claude-sonnet-5-5", mode: "chat", providers: ["anthropic"] },
+        { model_group: "allowed-chat", mode: "chat" },
+        { model_group: "allowed-embedding", mode: "embedding" },
+      ],
+      callableModels: ["allowed-chat", "allowed-embedding"],
+    };
+    const requests = gateway([answer("Your usage is available.")], options);
+    const { client } = renderWidget(undefined, false, true);
+    const user = userEvent.setup();
+    const input = await screen.findByRole("textbox", { name: "Message Aria Agent" });
+    await waitFor(() => expect(input).toBeEnabled());
+    const picker = screen.getByRole("combobox", { name: "Aria Agent model" });
+    expect(picker).toHaveValue("allowed-chat");
+    await user.click(picker);
+    expect(screen.getByRole("option", { name: "allowed-chat" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "claude-sonnet-5-5" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "allowed-embedding" })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    act(() => send("Show our usage"));
+    await screen.findByText("Your usage is available.");
+    expect(requests.find((request) => request.url.endsWith("/chat/completions"))?.body.model).toBe("allowed-chat");
+    const discovery = requests.find((request) => request.url === `${INFERENCE}/models`);
+    expect(discovery?.headers.get("X-Gateway-Session")).toBe("Bearer sk-session-first-admin");
+    options.callableModels = [];
+    await act(async () => client.invalidateQueries({ queryKey: ["liteadmin-models"] }));
+    expect(await screen.findByText("No chat models are available for your account.")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Ask Aria…")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(1);
+  });
+
+  it("should keep viewer prompts disabled when inference model discovery fails", async () => {
+    session("proxy_admin_viewer");
+    const requests = gateway([], { callableModels: async () => json({ error: { message: "Forbidden" } }, 403) });
+    renderWidget(undefined, false, true);
+    expect(await screen.findByText(/Could not load models/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Message Aria Agent" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(0);
+  });
+
+  it("should send a callable team model's public name and respect its inference mode", async () => {
+    const requests = gateway([answer("The team model answered.")], {
+      models: [
+        { model_group: "model_name_team1_def", mode: "chat" },
+        { model_group: "renamed-model", mode: "chat" },
+      ],
+      callableModels: async () =>
+        json({
+          data: [
+            { id: "team-chat", mode: "chat" },
+            { id: "renamed-model", mode: "embedding" },
+          ],
+        }),
+    });
+    renderWidget(undefined, false, true);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Message Aria Agent" })).toBeEnabled());
+    const picker = screen.getByRole("combobox", { name: "Aria Agent model" });
+    expect(picker).toHaveValue("team-chat");
+    const user = userEvent.setup();
+    await user.click(picker);
+    expect(screen.getByRole("option", { name: "team-chat" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "model_name_team1_def" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "renamed-model" })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    act(() => send("Show our usage"));
+    await screen.findByText("The team model answered.");
+    expect(requests.find((request) => request.url.endsWith("/chat/completions"))?.body.model).toBe("team-chat");
   });
 
   it("reviews the explicit team removal, sends nothing on cancel and detaches on confirmation", async () => {
@@ -1278,7 +1320,7 @@ describe("Aria Agent in the gateway", () => {
     ]);
   });
 
-  it("keeps a single inline action through review, close/reopen and one confirmed write", async () => {
+  it("should keep a single inline action through review, close/reopen and one confirmed write", async () => {
     const response = deferred<Response>();
     const proposed = { ...toolReply("key_create", keyArguments), content: "Here is the requested change." };
     const requests = gateway([proposed, answer("Created the key."), answer("You are welcome.")], {
@@ -1296,8 +1338,9 @@ describe("Aria Agent in the gateway", () => {
     const confirm = await screen.findByRole("button", { name: "Confirm change" });
     fireEvent.click(confirm);
     fireEvent.click(confirm);
-    expect(screen.getByRole("button", { name: "Close Chat 1" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "New chat" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start over" })).toBeDisabled();
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Start over" })));
+    expect(screen.getByRole("region", { name: "Create a virtual key" })).toHaveTextContent("Applying");
     expect(screen.queryByRole("button", { name: "Stop request" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close Aria Agent" }));
     await act(async () => response.resolve(json({ key: NEW_KEY })));
@@ -1380,73 +1423,76 @@ describe("Aria Agent in the gateway", () => {
     expect(screen.queryByText(/A submitted change may have completed/)).not.toBeInTheDocument();
   });
 
-  it.each(["account", "gateway", "destination", "permission"])(
-    "resets every chat when the %s changes",
-    async (transition) => {
-      const pending = deferred<ModelReply>();
-      const settings = { target: INFERENCE, status: 200 };
-      const requests = gateway([pending.promise, toolReply("key_create", keyArguments), answer("Fresh session.")], {
-        settings,
-      });
-      const view = renderWidget(undefined, true);
-      await openWidget();
-      send("Old request");
+  it.each(
+    ["account", "gateway", "destination", "permission"].flatMap((transition) =>
+      ["pending", "approval", "draft"].map((stage) => [transition, stage] as const),
+    ),
+  )("should clear the conversation when %s changes during %s", async (transition, stage) => {
+    const pending = deferred<ModelReply>();
+    const settings = { target: INFERENCE, status: 200 };
+    const replies = [
+      answer("Old answer."),
+      ...(stage === "pending" ? [pending.promise] : []),
+      ...(stage === "approval" ? [toolReply("key_create", keyArguments)] : []),
+      answer("Fresh session."),
+    ];
+    const requests = gateway(replies, { settings });
+    const view = renderWidget(undefined, true);
+    await openWidget();
+    act(() => send("Old question"));
+    await screen.findByText("Old answer.");
+    if (stage === "pending") {
+      act(() => send("Old pending request"));
       await waitFor(() =>
-        expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(1),
+        expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(2),
       );
-      const original = requests.find((request) => request.url.endsWith("/chat/completions"));
-      fireEvent.click(screen.getByRole("button", { name: "New chat" }));
-      await selectModel();
-      send("Old approval");
+    } else if (stage === "approval") {
+      act(() => send("Old approval"));
       await screen.findByRole("button", { name: "Confirm change" });
-      fireEvent.click(screen.getByRole("button", { name: "New chat" }));
-      await selectModel();
-      fireEvent.change(screen.getByPlaceholderText("Ask Aria…"), { target: { value: "Old draft" } });
-      if (transition === "account") {
-        session("proxy_admin", "second-admin");
-        view.refresh();
-      } else if (transition === "gateway") {
-        settings.target = "https://worker.test/inference";
-        switchToWorkerUrl("https://worker.test/proxy");
-        view.refresh();
-      } else if (transition === "destination") {
-        settings.target = `${INFERENCE}/updated`;
-        await act(async () => view.client.invalidateQueries({ queryKey: ["proxySettings"] }));
-      } else {
-        session("proxy_admin_viewer", "first-admin", { premium_user: true }, "sk-session-first-admin-viewer");
-        view.refresh();
-        expect(screen.queryByRole("button", { name: "Aria Agent" })).not.toBeInTheDocument();
-        expect(screen.queryByRole("region", { name: "Ask Aria Agent", hidden: true })).not.toBeInTheDocument();
-        expect(screen.queryByRole("tablist", { name: "Aria Agent chats", hidden: true })).not.toBeInTheDocument();
-        fireEvent.keyDown(document, { key: "j", ctrlKey: true });
-        expect(screen.queryByRole("dialog", { name: "Aria Agent" })).not.toBeInTheDocument();
-        session();
-        view.refresh();
-      }
-      await waitFor(() => expect(original?.signal.aborted).toBe(true));
-      const trigger = await screen.findByRole("button", { name: "Aria Agent" });
-      if (trigger.getAttribute("aria-expanded") === "false") fireEvent.click(trigger);
-      const tabs = await screen.findByRole("tablist", { name: "Aria Agent chats" });
-      expect(within(tabs).getAllByRole("tab")).toHaveLength(1);
-      expect(screen.getByRole("tab", { name: "Chat 1" })).toHaveAttribute("aria-selected", "true");
-      await waitFor(() => expect(screen.queryByRole("button", { name: "Confirm change" })).not.toBeInTheDocument());
-      expect(screen.queryByText("Old request")).not.toBeInTheDocument();
-      expect(screen.queryByText("Old approval")).not.toBeInTheDocument();
-      expect(screen.getByPlaceholderText("Ask Aria…")).toHaveValue("");
-      expect(screen.getByRole("combobox", { name: "Aria Agent model" })).toHaveValue("chat-model");
-      await act(async () => pending.resolve(toolReply("key_create", keyArguments)));
-      expect(screen.queryByRole("button", { name: "Confirm change" })).not.toBeInTheDocument();
-      expect(screen.queryByText(/A submitted change may have completed/)).not.toBeInTheDocument();
-      expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
-      await selectModel();
-      send("Fresh question");
-      await screen.findByText("Fresh session.");
-      expect(requests.filter((request) => request.url.endsWith("/chat/completions")).at(-1)?.body.messages).toEqual([
-        { role: "system", content: expect.any(String) },
-        { role: "user", content: "Fresh question" },
-      ]);
-    },
-  );
+    } else {
+      act(() => fireEvent.change(screen.getByPlaceholderText("Ask Aria…"), { target: { value: "Old draft" } }));
+    }
+    const original = requests.filter((request) => request.url.endsWith("/chat/completions")).at(-1);
+    if (transition === "account") {
+      session("proxy_admin", "second-admin");
+      view.refresh();
+    } else if (transition === "gateway") {
+      settings.target = "https://worker.test/inference";
+      switchToWorkerUrl("https://worker.test/proxy");
+      view.refresh();
+    } else if (transition === "destination") {
+      settings.target = INFERENCE + "/updated";
+      await act(async () => view.client.invalidateQueries({ queryKey: ["proxySettings"] }));
+    } else {
+      session("proxy_admin_viewer", "first-admin", { premium_user: true }, "sk-session-first-admin-viewer");
+      view.refresh();
+      expect(screen.queryByRole("button", { name: "Aria Agent" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("region", { name: "Ask Aria Agent", hidden: true })).not.toBeInTheDocument();
+      session();
+      view.refresh();
+    }
+    if (stage === "pending") await waitFor(() => expect(original?.signal.aborted).toBe(true));
+    const trigger = await screen.findByRole("button", { name: "Aria Agent" });
+    if (trigger.getAttribute("aria-expanded") === "false") act(() => fireEvent.click(trigger));
+    await screen.findByRole("dialog", { name: "Aria Agent" });
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Confirm change" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Old question")).not.toBeInTheDocument();
+    expect(screen.queryByText("Old answer.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Old approval")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Ask Aria…")).toHaveValue("");
+    await selectModel();
+    if (stage === "pending") await act(async () => pending.resolve(toolReply("key_create", keyArguments)));
+    expect(screen.queryByRole("button", { name: "Confirm change" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/A submitted change may have completed/)).not.toBeInTheDocument();
+    expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
+    act(() => send("Fresh question"));
+    await screen.findByText("Fresh session.");
+    expect(requests.filter((request) => request.url.endsWith("/chat/completions")).at(-1)?.body.messages).toEqual([
+      { role: "system", content: expect.any(String) },
+      { role: "user", content: "Fresh question" },
+    ]);
+  });
 
   it.each(["account", "target"])(
     "warns about an interrupted write when the %s changes and rejects its late key",
