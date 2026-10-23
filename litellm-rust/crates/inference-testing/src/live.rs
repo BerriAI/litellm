@@ -37,6 +37,7 @@ impl Default for LiveResources {
     }
 }
 
+#[allow(clippy::disallowed_methods)] // live tests read their own model names
 pub fn model(route: &str, provider: &str) -> String {
     let name = format!("LITELLM_LIVE_{route}_{provider}_MODEL").to_ascii_uppercase();
     std::env::var(&name)

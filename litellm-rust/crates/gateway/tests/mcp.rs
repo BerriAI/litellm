@@ -126,7 +126,8 @@ mcp_servers:
         upstream.url
     ))
     .unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference =
+        litellm_gateway::build_inference(&config, &litellm_layered::Env::default()).unwrap();
     let shutdown = CancellationToken::new();
     let mcp = litellm_gateway::build_mcp(
         &config,
@@ -243,7 +244,8 @@ async fn rejects_unsupported_or_invalid_settings_before_serving(
     #[case] expected: &str,
 ) {
     let config = Config::from_yaml(&format!("general_settings: {{master_key: gateway-key}}\nmcp_servers:\n  docs:\n    url: http://127.0.0.1:1/mcp\n    {settings}\n")).unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference =
+        litellm_gateway::build_inference(&config, &litellm_layered::Env::default()).unwrap();
     let result = litellm_gateway::build_mcp(
         &config,
         Arc::new(NoSecrets),
@@ -261,7 +263,8 @@ async fn rejects_unsupported_or_invalid_settings_before_serving(
 #[tokio::test]
 async fn mcp_is_optional_and_requires_admission_credentials_when_enabled() {
     let empty = Config::from_yaml("{}").unwrap();
-    let inference = litellm_gateway::build_inference(&empty).unwrap();
+    let inference =
+        litellm_gateway::build_inference(&empty, &litellm_layered::Env::default()).unwrap();
     assert!(
         litellm_gateway::build_mcp(
             &empty,
@@ -311,7 +314,9 @@ fn applies_configured_http_environment_before_building_clients() {
         missing.display(),
     ))
     .unwrap();
-    let error = litellm_gateway::build_inference(&config).err().unwrap();
+    let error = litellm_gateway::build_inference(&config, &litellm_layered::Env::default())
+        .err()
+        .unwrap();
     assert!(matches!(
         error,
         litellm_gateway::Error::Http(litellm_http::Error::Read { path, .. })
@@ -329,7 +334,8 @@ async fn refuses_unimplemented_global_mcp_policy(#[case] settings: &str) {
         "{settings}\nmcp_servers: {{docs: {{url: 'http://127.0.0.1:1/mcp'}}}}\n"
     ))
     .unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference =
+        litellm_gateway::build_inference(&config, &litellm_layered::Env::default()).unwrap();
     let error = litellm_gateway::build_mcp(
         &config,
         Arc::new(NoSecrets),

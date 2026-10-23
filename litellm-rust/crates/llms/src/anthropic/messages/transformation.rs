@@ -792,6 +792,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // the probe decides whether this child test process runs
     fn new_reads_thinking_budgets_from_the_process_environment() {
         if std::env::var_os(PROCESS_ENV_PROBE).is_some() {
             assert_eq!(

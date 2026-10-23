@@ -15,6 +15,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use crate::Error;
 use litellm_storage_clickhouse::Connection;
 
+#[allow(clippy::disallowed_methods)] // the ClickHouse sink is not built from an injected Lookup yet
 fn max_insert_bytes() -> Result<usize, Error> {
     let name = "CLICKHOUSE_TRACE_MAX_INSERT_BYTES";
     match std::env::var(name) {

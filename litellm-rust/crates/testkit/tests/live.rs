@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test and build tooling read their own settings from the process environment
 //! Drives the real agents through a real gateway. Run with `cargo test -p litellm-testkit --test live -- --ignored`
 //! after exporting `TESTKIT_GATEWAY_URL`, `TESTKIT_GATEWAY_KEY`, one `TESTKIT_MODEL_<WIRE>` per wire
 //! (`MESSAGES`, `RESPONSES`, `CHAT_COMPLETIONS`) and one `TESTKIT_<AGENT>_VERSION` per agent

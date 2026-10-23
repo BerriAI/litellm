@@ -42,7 +42,7 @@ async fn credentials_resolve(
     #[case] env: fn(&str) -> Option<String>,
     #[case] expected: (&str, &str, Option<&str>),
 ) {
-    let credentials = S3Credentials::with_env(config, env)
+    let credentials = S3Credentials::new(config, std::sync::Arc::new(env))
         .provide_credentials()
         .await
         .unwrap();

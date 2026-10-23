@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_methods)] // test and build tooling read their own settings from the process environment
 //! Replays `generated/values.json`, which CPython wrote with `scripts/generate_fixtures.py`.
 
 use std::{collections::BTreeMap, fs::File, io::Write};

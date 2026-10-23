@@ -92,7 +92,8 @@ impl ThinkingBudgets {
     pub fn from_lookup(env: &impl Lookup) -> Self {
         let defaults = Self::default();
         let tier = |name: &str, default: u64| {
-            env.parsed::<u64>(&format!("DEFAULT_REASONING_EFFORT_{name}_THINKING_BUDGET"))
+            env.get(&format!("DEFAULT_REASONING_EFFORT_{name}_THINKING_BUDGET"))
+                .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(default)
         };
         Self {
