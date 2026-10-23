@@ -15357,9 +15357,24 @@ async def count_request_tokens(
         )
     system_message: Final = _system_message(system)
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
-    typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    typed_messages: Final = cast(  # cast-ok: request messages and adapter output are chat-shaped dicts
         Sequence[AllMessageValues] | None,
-        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else request_messages),
+        [{"role": "user", "content": prompt}]
+        if prompt_turn
+        else (
+            None
+            if prompt_only
+            else request_messages
+            if request_messages is not None or contents is None
+            else GoogleGenAIAdapter()
+            .translate_generate_content_to_completion(  # pyright: ignore[reportUnknownMemberType]  # the adapter method has an untyped **kwargs
+                model_to_use,
+                cast(list[dict[str, object]], contents),  # cast-ok: the request contents are Gemini content dicts
+            )
+            .get("messages")
+        ),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
