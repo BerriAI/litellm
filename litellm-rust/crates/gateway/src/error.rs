@@ -1,6 +1,10 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(
+        "LITELLM_RUST_GATEWAY_TRUSTED_PROXIES must contain comma-separated IP addresses or CIDRs, not wildcard trust"
+    )]
+    TrustedProxies,
+    #[error(
         "LITELLM_RUST_GATEWAY=true requires LITELLM_PYTHON_UPSTREAM to be a valid http:// origin"
     )]
     PythonUpstreamConfig,

@@ -14,6 +14,12 @@ from uvicorn.importer import import_from_string
 from uvicorn.main import main as uvicorn_main
 
 from gateway.launch import GATEWAY_APP, main, pool_database_url, uvicorn_argv
+from gateway.supervisor import (
+    RUST_GATEWAY_BINARY,
+    ConfigurationFailure,
+    build_configuration,
+    gateway_enabled,
+)
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR, PgBouncerError, PgBouncerSettings
 from litellm.proxy.proxy_server import app as proxy_app
@@ -156,6 +162,132 @@ class TestPoolDatabaseUrl:
         pooled: Final = urllib.parse.urlsplit(outcome)
         assert (pooled.username, pooled.hostname, pooled.port) == ("litellm_pgbouncer", "127.0.0.1", port)
         assert "MINTED_TOKEN" not in outcome
+
+
+class TestRustGatewayConfiguration:
+    @pytest.fixture
+    def rust_binary(self, tmp_path: Path) -> Path:
+        binary: Final = tmp_path / "litellm-gateway"
+        binary.write_text("#!/bin/sh\nexit 0\n")
+        binary.chmod(0o700)
+        return binary
+
+    @pytest.fixture
+    def clear_uvicorn_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in (
+            "UVICORN_HOST",
+            "UVICORN_PORT",
+            "UVICORN_UDS",
+            "UVICORN_FD",
+            "UVICORN_RELOAD",
+            "UVICORN_PROXY_HEADERS",
+            "UVICORN_SSL_KEYFILE",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
+    def test_flag_requires_exact_lowercase_values(self) -> None:
+        assert gateway_enabled({}) is False
+        assert gateway_enabled({"LITELLM_RUST_GATEWAY": "true"}) is True
+        assert isinstance(gateway_enabled({"LITELLM_RUST_GATEWAY": "TRUE"}), ConfigurationFailure)
+
+    def test_private_worker_keeps_config_rootpath_keepalive_and_unknown_options(
+        self,
+        rust_binary: Path,
+        clear_uvicorn_environment: None,
+    ) -> None:
+        environ: Final = {
+            RUST_GATEWAY_BINARY: str(rust_binary),
+            "CONFIG_FILE_PATH": "/app/config/config.yaml",
+            "KEEPALIVE_TIMEOUT": "41",
+        }
+        configuration: Final = build_configuration(
+            (
+                "--workers",
+                "3",
+                "--proxy-headers",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "4000",
+                "--root-path",
+                "/gateway",
+                "--unknown-option",
+                "preserved",
+                "--proxy-headers",
+            ),
+            environ,
+            sys.executable,
+        )
+
+        assert not isinstance(configuration, ConfigurationFailure)
+        assert configuration.python_command == (
+            sys.executable,
+            "-m",
+            "gateway.launch",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "4002",
+            "--proxy-headers",
+            "--forwarded-allow-ips",
+            "127.0.0.1",
+            "--workers",
+            "3",
+            "--root-path",
+            "/gateway",
+            "--unknown-option",
+            "preserved",
+            "--timeout-keep-alive",
+            "41",
+        )
+        assert configuration.python_environment["CONFIG_FILE_PATH"] == "/app/config/config.yaml"
+        assert configuration.python_environment["LITELLM_RUST_GATEWAY"] == "false"
+        assert configuration.rust_environment["LITELLM_RUST_GATEWAY"] == "true"
+        assert configuration.rust_environment["LITELLM_PYTHON_UPSTREAM"] == "http://127.0.0.1:4002"
+        assert configuration.rust_environment["HOST"] == "0.0.0.0"
+        assert configuration.rust_environment["PORT"] == "4000"
+
+    @pytest.mark.parametrize(
+        ("arguments", "extra_environment", "reason"),
+        (
+            (("--no-proxy-headers",), {}, "--no-proxy-headers"),
+            (("--ssl-certfile", "/tmp/cert.pem"), {}, "TLS"),
+            (("--env-file", "/tmp/uvicorn.env"), {}, "--env-file"),
+            (("--uds", "/tmp/gateway.sock"), {}, "Unix socket"),
+            (("--fd", "5"), {}, "file descriptor"),
+            (("--http", "h2"), {}, "HTTP/1.1"),
+            (("--host", "0.0.0.0", "--port", "4000"), {"PORT": "4001"}, "PORT conflicts"),
+            (("--host", "0.0.0.0", "--port", "4000"), {"LITELLM_GATEWAY_METRICS_PORT": "4002"}, "same TCP port"),
+            (
+                ("--host", "0.0.0.0", "--port", "4000"),
+                {"LITELLM_RUST_GATEWAY_TERMINATION_GRACE_SECONDS": "20"},
+                "must allow Rust drain",
+            ),
+            (
+                ("--host", "0.0.0.0", "--port", "4000"),
+                {"LITELLM_RUST_GATEWAY_TERMINATION_GRACE_SECONDS": "0"},
+                "must be a positive integer",
+            ),
+            (
+                ("--host", "0.0.0.0", "--port", "4000"),
+                {"LITELLM_COLLECTOR_ENABLED": "true", "LITELLM_COLLECTOR_ADDRESS": "tcp://127.0.0.1:4002"},
+                "same TCP port",
+            ),
+        ),
+    )
+    def test_rejects_unsupported_or_conflicting_configuration(
+        self,
+        rust_binary: Path,
+        clear_uvicorn_environment: None,
+        arguments: tuple[str, ...],
+        extra_environment: dict[str, str],
+        reason: str,
+    ) -> None:
+        environ: Final = {RUST_GATEWAY_BINARY: str(rust_binary), **extra_environment}
+        outcome: Final = build_configuration(arguments, environ, sys.executable)
+
+        assert isinstance(outcome, ConfigurationFailure)
+        assert reason in outcome.reason
 
 
 class TestMain:

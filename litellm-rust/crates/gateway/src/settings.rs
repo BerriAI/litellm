@@ -12,6 +12,7 @@ pub(super) struct Settings {
     pub litellm_config: String,
     pub litellm_python_upstream: Option<String>,
     pub litellm_rust_gateway: bool,
+    pub litellm_rust_gateway_trusted_proxies: Option<String>,
     rust_log: Option<String>,
 }
 
@@ -23,6 +24,7 @@ impl Default for Settings {
             litellm_config: "config.yaml".into(),
             litellm_python_upstream: None,
             litellm_rust_gateway: false,
+            litellm_rust_gateway_trusted_proxies: None,
             rust_log: None,
         }
     }
@@ -51,7 +53,11 @@ impl Settings {
         {
             return Err(invalid());
         }
-        litellm_gateway::Forward::new(upstream).map_err(|_| invalid())
+        let forward = litellm_gateway::Forward::new(upstream).map_err(|_| invalid())?;
+        match self.litellm_rust_gateway_trusted_proxies.as_deref() {
+            Some(proxies) => forward.with_trusted_proxies(proxies),
+            None => Ok(forward),
+        }
     }
 
     pub fn log_level(&self) -> Level {
@@ -190,6 +196,43 @@ mod tests {
             error.to_string(),
             "LITELLM_RUST_GATEWAY=true requires LITELLM_PYTHON_UPSTREAM to be a valid http:// origin"
         );
+    }
+
+    #[rstest]
+    #[case::absent(None)]
+    #[case::empty(Some(""))]
+    #[case::explicit_trust(Some("127.0.0.2"))]
+    fn trusted_proxy_configuration_keeps_absent_and_empty_distinct(#[case] value: Option<&str>) {
+        let settings: Settings = match value {
+            Some(trusted) => parse(&[
+                ("LITELLM_PYTHON_UPSTREAM", "http://127.0.0.1:4002"),
+                ("LITELLM_RUST_GATEWAY_TRUSTED_PROXIES", trusted),
+            ])
+            .unwrap(),
+            None => parse(&[("LITELLM_PYTHON_UPSTREAM", "http://127.0.0.1:4002")]).unwrap(),
+        };
+
+        assert_eq!(
+            settings.litellm_rust_gateway_trusted_proxies.as_deref(),
+            value
+        );
+        assert!(settings.forwarder().is_ok());
+    }
+
+    #[rstest]
+    #[case::wildcard("*")]
+    #[case::default_route("0.0.0.0/0")]
+    fn invalid_trusted_proxy_configuration_fails_forwarder(#[case] value: &str) {
+        let settings: Settings = parse(&[
+            ("LITELLM_PYTHON_UPSTREAM", "http://127.0.0.1:4002"),
+            ("LITELLM_RUST_GATEWAY_TRUSTED_PROXIES", value),
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            settings.forwarder(),
+            Err(litellm_gateway::Error::TrustedProxies)
+        ));
     }
 
     #[rstest]

@@ -1,0 +1,140 @@
+suite: test opt-in Rust gateway deployment
+templates:
+  - gateway/deployment.yaml
+  - gateway/service.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: leaves HTTP probes and service ports unchanged when disabled
+    set:
+      gateway.metricsServer.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health/liveliness
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_GATEWAY_METRICS_PORT
+            value: "4001"
+          any: true
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 4000
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.ports[0].port
+          value: 4000
+        template: gateway/service.yaml
+
+  - it: passes enabled gateway settings and keeps the private listener off Services
+    set:
+      gateway.extraEnv:
+        - name: LITELLM_RUST_GATEWAY
+          value: "true"
+      gateway.envConfigMaps:
+        - gateway-runtime
+      gateway.metricsServer.enabled: true
+      gateway.metricsServer.port: 4001
+      gateway.collector.enabled: true
+      gateway.collector.address: tcp://127.0.0.1:4102
+      gateway.terminationGracePeriodSeconds: 30
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST_GATEWAY
+            value: "true"
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_GATEWAY_METRICS_PORT
+            value: "4001"
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_COLLECTOR_ADDRESS
+            value: tcp://127.0.0.1:4102
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].configMapRef.name
+          value: gateway-runtime
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health/liveliness
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /health/readiness
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 4000
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 30
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST_GATEWAY_TERMINATION_GRACE_SECONDS
+            value: "30"
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.ports[0].port
+          value: 4000
+        template: gateway/service.yaml
+
+  - it: rejects a metrics port that collides with the default private Python listener
+    template: gateway/deployment.yaml
+    set:
+      gateway.extraEnv:
+        - name: LITELLM_RUST_GATEWAY
+          value: "true"
+      gateway.metricsServer.enabled: true
+      gateway.metricsServer.port: 4002
+    asserts:
+      - failedTemplate:
+          errorPattern: gateway.metricsServer.port must differ from the private Python gateway port
+
+  - it: exports metrics collision metadata when the flag comes from envFrom
+    set:
+      gateway.envConfigMaps:
+        - gateway-runtime
+      gateway.metricsServer.enabled: true
+      gateway.metricsServer.port: 4001
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].configMapRef.name
+          value: gateway-runtime
+        template: gateway/deployment.yaml
+
+  - it: preserves an explicit zero termination grace for enabled-mode rejection
+    set:
+      gateway.extraEnv:
+        - name: LITELLM_RUST_GATEWAY
+          value: "true"
+      gateway.terminationGracePeriodSeconds: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 0
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST_GATEWAY_TERMINATION_GRACE_SECONDS
+            value: "0"
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_GATEWAY_METRICS_PORT
+            value: "4001"
+        template: gateway/deployment.yaml

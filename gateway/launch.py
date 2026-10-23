@@ -63,6 +63,20 @@ def _serve(argv: Sequence[str]) -> None:
 
 
 def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+    gateway_mode: Final = os.environ.get("LITELLM_RUST_GATEWAY")
+    if gateway_mode not in (None, "true", "false"):
+        sys.exit("LiteLLM gateway: LITELLM_RUST_GATEWAY must be exactly 'true' or 'false'")
+    if gateway_mode == "true":
+        from gateway.supervisor import ConfigurationFailure, build_configuration, supervise
+
+        configuration: Final = build_configuration(argv, os.environ, sys.executable)
+        if isinstance(configuration, ConfigurationFailure):
+            sys.exit(f"LiteLLM gateway supervisor: {configuration.reason}")
+        failure: Final = supervise(configuration)
+        if failure is not None:
+            sys.exit(f"LiteLLM gateway supervisor: {failure.reason}")
+        return
+
     settings: Final = DatabaseURLSettings.from_env()
     settings.apply_to_env()
     pooled_url: Final = pool_database_url(settings, PgBouncerSettings(), os.environ)
