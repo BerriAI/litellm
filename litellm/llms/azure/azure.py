@@ -18,7 +18,11 @@ from pydantic import BaseModel
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
+from litellm.litellm_core_utils.logging_utils import (
+    speech_create_params,
+    speech_request_body,
+    track_llm_api_timing,
+)
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -1382,6 +1386,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         aspeech: bool | None = None,
         client=None,
         litellm_params: dict | None = None,
+        stream: bool = False,
     ) -> HttpxBinaryResponseContent:
         max_retries = optional_params.pop("max_retries", 2)
 
@@ -1401,6 +1406,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 logging_obj=logging_obj,
                 client=client,
                 litellm_params=litellm_params,
+                stream=stream,
             )
 
         azure_client: Final[AzureOpenAI] = self.get_azure_openai_client(
@@ -1422,13 +1428,13 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             },
         )
 
-        response: Final = azure_client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=input,
-            **optional_params,
+        params: Final = speech_create_params(model, voice, input, optional_params)
+        raw_response: Final = (
+            azure_client.audio.speech.with_streaming_response.create(**params).__enter__().http_response
+            if stream
+            else azure_client.audio.speech.create(**params).response
         )
-        return HttpxBinaryResponseContent(response=response.response)
+        return HttpxBinaryResponseContent(response=raw_response)
 
     async def async_audio_speech(
         self,
@@ -1446,6 +1452,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj: LiteLLMLoggingObj,
         client=None,
         litellm_params: dict | None = None,
+        stream: bool = False,
     ) -> HttpxBinaryResponseContent:
         azure_client: Final[AsyncAzureOpenAI] = self.get_azure_openai_client(
             api_base=api_base,
@@ -1466,14 +1473,13 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             },
         )
 
-        azure_response: Final = await azure_client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=input,
-            **optional_params,
+        params: Final = speech_create_params(model, voice, input, optional_params)
+        raw_response: Final = (
+            (await azure_client.audio.speech.with_streaming_response.create(**params).__aenter__()).http_response
+            if stream
+            else (await azure_client.audio.speech.create(**params)).response
         )
-
-        return HttpxBinaryResponseContent(response=azure_response.response)
+        return HttpxBinaryResponseContent(response=raw_response)
 
     def get_headers(
         self,

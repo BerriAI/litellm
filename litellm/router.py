@@ -109,6 +109,7 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream, StreamEnd
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     declares_ptu,
@@ -620,6 +621,29 @@ def _extend_trailing_text_block(blocks: Sequence[Mapping[str, object]], text: st
     if last is not None and last.get("type") == "text" and isinstance(last_text := last.get("text"), str):
         return [*blocks[:-1], {**last, "text": f"{last_text}{text}"}]
     return [*blocks, {"type": "text", "text": text}]
+
+
+async def _hold_slot_until_closed(response: object, slot: contextlib.AsyncExitStack) -> None:
+    """Keep a deployment slot held until a streamed binary response ends.
+
+    A buffered response already has its body in hand, so its slot is released right
+    away. A streamed one is still pulling audio from the provider, so the slot is held
+    until the audio is read to the end, the read fails, or the response is closed.
+    """
+    raw: Final = getattr(response, "response", None)
+    if (
+        not isinstance(raw, httpx.Response)
+        or raw.is_stream_consumed
+        or not isinstance(raw.stream, httpx.AsyncByteStream)
+    ):
+        await slot.aclose()
+        return
+
+    async def _release(_: StreamEnd) -> None:
+        with contextlib.suppress(Exception):  # a release error must not mask the stream's own error
+            await slot.aclose()
+
+    raw.stream = OnEndAsyncByteStream(raw.stream, map_error=lambda error: error, on_end=_release)
 
 
 def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
@@ -5667,6 +5691,10 @@ class Router:
 
     async def aspeech(self, model: str, input: str, voice: str | None = None, **kwargs):
         """
+        With stream=True the response comes back at the provider's headers and keeps its
+        deployment slot until it is read to the end or closed, so close a response you stop
+        reading early.
+
         Example Usage:
 
         ```
@@ -5737,7 +5765,10 @@ class Router:
             )
 
             self.total_calls[model_name] += 1
-            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+            async with contextlib.AsyncExitStack() as deployment_slot:
+                await deployment_slot.enter_async_context(
+                    self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span)
+                )
                 response = await litellm.aspeech(
                     **{
                         **data,
@@ -5747,6 +5778,10 @@ class Router:
                         **kwargs,
                     }
                 )
+                # A streamed response returns at the headers with its audio still arriving, so
+                # the slot has to outlive this block or the deployment's max_parallel_requests
+                # would only bound how many syntheses can *start*.
+                await _hold_slot_until_closed(response, deployment_slot.pop_all())
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.aspeech(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)

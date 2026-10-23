@@ -8569,6 +8569,8 @@ def speech(
     custom_llm_provider: str | None = None,
     aspeech: bool | None = None,
     base_url: str | None = None,
+    *,
+    stream: bool = False,
     **kwargs,
 ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
     user: Final = kwargs.get("user", None)
@@ -8581,6 +8583,7 @@ def speech(
         model=model, custom_llm_provider=custom_llm_provider, api_base=api_base or base_url
     )
     kwargs.pop("tags", [])
+    stream_audio: Final = stream is True
 
     optional_params = {}
     if response_format is not None:
@@ -8705,6 +8708,7 @@ def speech(
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
             shared_session=shared_session,
+            stream=stream_audio,
             litellm_params=litellm_params_dict,
         )
     elif custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
@@ -8738,6 +8742,7 @@ def speech(
                 aspeech=aspeech or False,
                 api_base=api_base,
                 api_key=api_key,
+                stream=stream_audio,
                 **kwargs,
             )
         else:
@@ -8785,6 +8790,7 @@ def speech(
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 aspeech=aspeech,
                 litellm_params=litellm_params_dict,
+                stream=stream_audio,
             )
     elif custom_llm_provider == "elevenlabs":
         from litellm.llms.elevenlabs.text_to_speech.transformation import (
@@ -8810,6 +8816,8 @@ def speech(
             litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY] = query_params
 
         litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY] = voice_id
+        if stream_audio:
+            litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_STREAM_KEY] = True
 
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
@@ -8829,6 +8837,7 @@ def speech(
             extra_headers=extra_headers,
             client=client,
             _is_async=aspeech or False,
+            stream=stream_audio,
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
@@ -9030,6 +9039,7 @@ def speech(
             aspeech=aspeech or False,
             api_base=api_base,
             api_key=api_key,
+            stream=stream_audio,
             **kwargs,
         )
 

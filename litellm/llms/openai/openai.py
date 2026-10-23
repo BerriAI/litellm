@@ -30,7 +30,11 @@ from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
+from litellm.litellm_core_utils.logging_utils import (
+    speech_create_params,
+    speech_request_body,
+    track_llm_api_timing,
+)
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator, MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.utils import (
@@ -1658,6 +1662,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         aspeech: bool | None = None,
         client=None,
         shared_session: Optional["ClientSession"] = None,
+        stream: bool = False,
         litellm_params: Mapping[str, object] | None = None,
     ) -> HttpxBinaryResponseContent:
         if aspeech is not None and aspeech is True:
@@ -1675,6 +1680,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 logging_obj=logging_obj,
                 client=client,
                 shared_session=shared_session,
+                stream=stream,
                 litellm_params=litellm_params,
             )
 
@@ -1699,14 +1705,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        response: Final = sync_client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=input,
-            **optional_params,
+        params: Final = speech_create_params(model, voice, input, optional_params)
+        raw_response: Final = (
+            sync_client.audio.speech.with_streaming_response.create(**params).__enter__().http_response
+            if stream
+            else sync_client.audio.speech.create(**params).response
         )
-        speech_response: Final = HttpxBinaryResponseContent(response=response.response)
-        set_provider_response_headers_in_hidden_params(speech_response, response.response.headers)
+        speech_response: Final = HttpxBinaryResponseContent(response=raw_response)
+        set_provider_response_headers_in_hidden_params(speech_response, raw_response.headers)
         return speech_response
 
     async def async_audio_speech(
@@ -1724,6 +1730,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj: LiteLLMLoggingObj,
         client=None,
         shared_session: Optional["ClientSession"] = None,
+        stream: bool = False,
         litellm_params: Mapping[str, object] | None = None,
     ) -> HttpxBinaryResponseContent:
         openai_client: Final = cast(
@@ -1749,14 +1756,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        response: Final = await openai_client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=input,
-            **optional_params,
+        params: Final = speech_create_params(model, voice, input, optional_params)
+        raw_response: Final = (
+            (await openai_client.audio.speech.with_streaming_response.create(**params).__aenter__()).http_response
+            if stream
+            else (await openai_client.audio.speech.create(**params)).response
         )
-        speech_response: Final = HttpxBinaryResponseContent(response=response.response)
-        set_provider_response_headers_in_hidden_params(speech_response, response.response.headers)
+        speech_response: Final = HttpxBinaryResponseContent(response=raw_response)
+        set_provider_response_headers_in_hidden_params(speech_response, raw_response.headers)
         return speech_response
 
 
