@@ -10097,7 +10097,7 @@ def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
         "stop_reason" in choice or "token_ids" in choice or "provider_specific_fields" in choice
         for choice in chunk.choices
     ):
-        return orjson.dumps(model_dump_with_preserved_fields(chunk))
+        return json.dumps(model_dump_with_preserved_fields(chunk), separators=(",", ":"))
 
     if isinstance(chunk, ModelResponseStream):
         serialized_chunk: Final = _fast_serialize_simple_model_response_stream(chunk)
