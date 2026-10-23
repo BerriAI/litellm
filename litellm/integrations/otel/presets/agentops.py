@@ -76,9 +76,11 @@ def agentops_preset(
 
 def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
     """Factory for the ``agentops`` exporter kind: a lazy-auth OTLP/HTTP exporter."""
+
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
         OTLPSpanExporter,
     )
+    from requests import PreparedRequest, Session
 
     class _LazyAuthAgentOpsExporter(OTLPSpanExporter):
         """OTLP/HTTP exporter that mints the AgentOps JWT on its first export.
@@ -89,7 +91,8 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
         """
 
         def __init__(self, *, endpoint: str | None, api_key: str | None) -> None:
-            super().__init__(endpoint=endpoint)
+            self._agentops_session = Session()
+            super().__init__(endpoint=endpoint, session=self._agentops_session)
             self._agentops_api_key = api_key
             self._auth_resolved = False
 
@@ -101,11 +104,15 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
                 return
             try:
                 token: Final = _fetch_agentops_jwt(self._agentops_api_key).get("token")
-                if token:
-                    # ``_session`` is the requests.Session the base exporter
-                    # POSTs through; updating its Authorization header is how the
-                    # minted JWT reaches every subsequent export.
-                    self._session.headers["Authorization"] = f"Bearer {token}"
+                if not token:
+                    return
+
+                def authorize(request: PreparedRequest) -> PreparedRequest:
+                    authorized: Final = request.copy()
+                    authorized.headers["Authorization"] = f"Bearer {token}"
+                    return authorized
+
+                self._agentops_session.auth = authorize
             except Exception as e:
                 verbose_logger.debug("AgentOps JWT fetch failed: %s", e)
 
