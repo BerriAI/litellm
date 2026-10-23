@@ -1368,7 +1368,7 @@ class MCPRequestHandler:
 
         if auth is None:
             return None
-        refreshed = auth.model_copy()
+        refreshed: Final = auth.model_copy(update={"requires_fresh_policy": True})
         if (auth.mcp_admitted_user_subject or auth.is_session_token) and auth.user_id:
             # A session credential (``lite login`` or a redeemed ID-JAG) has no key row, its authority is
             # sealed in the token: refresh the live user policy and keep the token's team, routes and models.
@@ -1386,7 +1386,12 @@ class MCPRequestHandler:
             refreshed.project_id = current.project_id
             refreshed.user_id = current.user_id
             refreshed.access_group_ids = current.access_group_ids
-        refreshed.requires_fresh_policy = True
+        else:
+            return refreshed
+        if refreshed.mcp_toolset_id is not None:
+            from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
+
+            return await apply_toolset_scope(refreshed, refreshed.mcp_toolset_id)
         return refreshed
 
     @staticmethod
