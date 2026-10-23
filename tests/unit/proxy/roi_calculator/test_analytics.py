@@ -145,3 +145,45 @@ def test_email_normalization_rejects_private_or_unusable_addresses() -> None:
     assert normalize_email("123+alice@users.noreply.github.com") == ""
     assert normalize_email("alice") == ""
     assert normalize_email("") == ""
+
+
+def test_branch_costs_are_independent_of_identity_and_never_count_reused_branches_twice() -> None:
+    from litellm.types.roi_calculator import ROIBranchSpend
+
+    base: Final = _pull(emails=())
+    pulls: Final[tuple[ROIPullRecord, ...]] = (
+        {**base, "number": 1, "source_repo": "gitlab.com/group/repo", "source_branch": "feature"},
+        {**base, "number": 2, "source_repo": "gitlab.com/group/repo", "source_branch": "reused"},
+        {**base, "number": 3, "source_repo": "gitlab.com/group/repo", "source_branch": "reused"},
+        {**base, "number": 4, "source_repo": "gitlab.com/group/repo", "source_branch": "missing"},
+        {**base, "number": 5, "source_repo": "gitlab.com/group/repo", "source_branch": "free"},
+        {
+            **_pull(emails=(), estimate_status="error", hours=None),
+            "number": 6,
+            "source_repo": "gitlab.com/group/repo",
+            "source_branch": "pending",
+        },
+    )
+    report: Final[ROIReport] = {
+        **_report(pulls),
+        "branch_spend": (
+            ROIBranchSpend(repo="gitlab.com/group/repo", branch="feature", spend=12, requests=2),
+            ROIBranchSpend(repo="gitlab.com/group/repo", branch="reused", spend=7, requests=1),
+            ROIBranchSpend(repo="gitlab.com/group/repo", branch="free", spend=0, requests=1),
+            ROIBranchSpend(repo="gitlab.com/group/repo", branch="pending", spend=9, requests=1),
+        ),
+    }
+    result: Final = summarize(report, EMPTY_IDENTITY_MAP)
+    costs: Final = {pull["number"]: pull["branch_cost"] for pull in result["pulls"]}
+    assert costs[1].spend == 12
+    assert costs[2].status == costs[3].status == "ambiguous"
+    assert costs[2].spend is None
+    assert costs[4].spend is None and costs[4].status == "unattributed"
+    assert costs[5].spend == 0 and costs[5].status == "matched"
+    assert result["branch_metrics"].cost_per_hour == 12 / 8
+    assert result["branch_metrics"].unlinked_spend == 16
+    assert result["branch_metrics"].matched_pulls == 3
+    assert result["branch_metrics"].spend == 12
+    assert result["metrics"]["matched_spend"] == 0
+    incomplete: Final = summarize({**report, "unavailable_repos": ("other/repo",)}, EMPTY_IDENTITY_MAP)
+    assert incomplete["branch_metrics"].cost_per_hour is None

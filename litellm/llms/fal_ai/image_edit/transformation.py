@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -23,6 +24,8 @@ from litellm.types.utils import FileTypes, ImageResponse
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 DEFAULT_BASE_URL: Final[str] = "https://fal.run"
 EDIT_SUFFIX: Final[str] = "/edit"
 SUPPORTED_OPENAI_PARAMS: Final[tuple[str, ...]] = ("background", "mask", "n", "quality", "size")
@@ -163,7 +166,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         logging_obj: "LiteLLMLoggingObj",
     ) -> ImageResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _JSON_VALUE.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Fal AI image edit response: {e}",
@@ -171,5 +174,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
         model_response: Final = ImageResponse()
-        model_response.data = list(fal_images_to_image_objects(response_json.get("images", ())))
+        model_response.data = list(
+            fal_images_to_image_objects(_JSON_OBJECT.validate_python(response_json).get("images", ()))
+        )
         return model_response

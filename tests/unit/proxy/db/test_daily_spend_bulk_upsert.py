@@ -13,6 +13,7 @@ from litellm.proxy.db.daily_spend_bulk_upsert import (
     merge_by_conflict_key,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
 
 TAG_TABLE = DAILY_SPEND_TABLES["tag"]
 USER_TABLE = DAILY_SPEND_TABLES["user"]
@@ -146,8 +147,12 @@ def test_non_tag_tables_carry_no_request_id_column():
 class _RecordingDb:
     def __init__(self) -> None:
         self.statements: list[tuple[str, tuple[object, ...]]] = []
+        self.session_settings: list[tuple[str, tuple[object, ...]]] = []
 
     async def execute_raw(self, query: str, *args: object) -> int:
+        if query == ROLLUP_LOCK_TIMEOUT_SQL:
+            self.session_settings.append((query, args))
+            return 0
         self.statements.append((query, args))
         return len(args)
 

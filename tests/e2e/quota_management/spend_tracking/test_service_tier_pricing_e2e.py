@@ -36,7 +36,7 @@ from cost_rows import (
 )
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import unwrap
-from e2e_metadata import Capability, Domain, Mode, Provider, Subject, meta
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     AnthropicMessagesBody,
@@ -184,6 +184,15 @@ class TestServiceTierPricing:
         assert_total_is_sum_of_components(row)
 
     @pytest.mark.covers("quota_management.spend_tracking.service_tier_stream.records_served_tier")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_streamed_call_records_and_bills_the_served_tier(
         self, client: SpendClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -232,6 +241,15 @@ class TestServiceTierPricing:
         assert_total_is_sum_of_components(row)
 
     @pytest.mark.covers("llm.chat_completions.openai.service_tier.stream.echoes_served_tier")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(STREAM_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_every_streamed_chunk_carries_the_served_tier(
         self, client: SpendClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -262,6 +280,15 @@ class TestServiceTierPricing:
         )
 
     @pytest.mark.covers("quota_management.spend_tracking.service_tier_stream.responses_records_served_tier")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(STREAM_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_responses_stream_records_the_served_tier(
         self, client: SpendClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -308,6 +335,15 @@ class TestServiceTierPricing:
         assert_fresh_tokens_billed_at(row, INPUT_RATE_FOR_PRICING_BASIS[pricing_basis])
 
     @pytest.mark.covers("quota_management.spend_tracking.service_tier_stream.messages_records_served_tier")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.MESSAGES,
+            providers=(Provider.OPENAI,),
+            models=(STREAM_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_messages_stream_records_the_served_tier(
         self, client: SpendClient, resources: ResourceManager, scoped_key: str
     ) -> None:

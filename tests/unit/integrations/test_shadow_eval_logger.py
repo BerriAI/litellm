@@ -1522,7 +1522,7 @@ class TestShadowPipeline:
 
         monkeypatch.setattr(
             auth_checks,
-            "_virtual_key_max_budget_check",
+            "virtual_key_max_budget_check",
             AsyncMock(side_effect=BudgetExceededError(current_cost=11.0, max_budget=10.0)),
         )
         router = _router()
