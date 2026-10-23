@@ -656,4 +656,6 @@ class GenericGuardrailAPI(CustomGuardrail):
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.during_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
         ]
