@@ -12,12 +12,13 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import accumulate, count, pairwise
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from itertools import accumulate, chain, count, pairwise
+from operator import itemgetter
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, cast
 
 import aiohttp
 from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
@@ -58,11 +59,12 @@ from litellm.types.guardrails import (
     PiiEntityType,
     PresidioPerRequestConfig,
 )
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
     PresidioAnalyzeResponseItem,
 )
-from litellm.types.utils import GuardrailStatus, Message, StreamingChoices
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, GuardrailStatus, Message, StreamingChoices
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -234,6 +236,74 @@ def _resolve_overlapping_spans(analyze_results: Sequence[PresidioAnalyzeResponse
         len(detections),
     )
     return tuple(_collapse_run(detections[first:last]) for first, last in pairwise(boundaries) if first < last)
+
+
+_LITERAL_TOKEN: Final = re.compile(r"<[^<>\s]+_\d+>")
+
+_ToolCall: TypeAlias = ChatCompletionToolCallChunk | ChatCompletionMessageToolCall
+
+
+@dataclass(frozen=True, slots=True)
+class _TextSlot:
+    index: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolCallSlot:
+    index: int
+
+
+def _literal_tokens(text: str) -> frozenset[str]:
+    return frozenset(text[match.start() : match.end()] for match in _LITERAL_TOKEN.finditer(text))
+
+
+def _free_token(entity_type: str, numbers: Iterator[int], held: Mapping[str, str], reserved: frozenset[str]) -> str:
+    candidates: Final = (f"<{entity_type}_{number}>" for number in numbers)
+    return next(token for token in candidates if token not in held and token not in reserved)
+
+
+def _tool_call_arguments(tool_call: _ToolCall) -> str | None:
+    match tool_call:
+        case {"function": {"arguments": str() as arguments}}:
+            return arguments
+        case ChatCompletionMessageToolCall(function=Function(arguments=str() as arguments)):
+            return arguments
+        case _:
+            return None
+
+
+def _set_tool_call_arguments(tool_call: _ToolCall, arguments: str) -> None:
+    match tool_call:
+        case {"function": function}:
+            function["arguments"] = arguments
+        case ChatCompletionMessageToolCall(function=Function() as function):
+            function.arguments = arguments
+        case _:
+            pass
+
+
+def _conversation_segments(
+    texts: Sequence[str], arguments: Sequence[str | None], tool_call_text_offsets: Sequence[int]
+) -> Iterator[tuple[_TextSlot | _ToolCallSlot, str]]:
+    """
+    Every text and tool call argument string in the order the conversation holds them,
+    so masking an earlier message never depends on the turns appended after it.
+    """
+    offsets: Final = (
+        tool_call_text_offsets if len(tool_call_text_offsets) == len(arguments) else (len(texts),) * len(arguments)
+    )
+    keyed: Final = sorted(
+        chain(
+            (((index, 1), _TextSlot(index), text) for index, text in enumerate(texts)),
+            (
+                ((offset, 0), _ToolCallSlot(index), source)
+                for index, (offset, source) in enumerate(zip(offsets, arguments))
+                if source is not None
+            ),
+        ),
+        key=itemgetter(0),
+    )
+    return ((slot, source) for _, slot, source in keyed)
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -859,6 +929,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         analyze_results: Any,
         request_data: dict | None,
         masked_entity_count: dict[str, int],
+        reserved_tokens: frozenset[str] = frozenset(),
     ) -> str:
         # output_parse_pii is True — we need sequentially numbered
         # tokens and a pii_tokens mapping for later unmasking.
@@ -880,8 +951,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         runs: Final = _resolve_overlapping_spans(analyze_results)
         # Every message and content part numbers its runs from 1 into this one map, so a
-        # token another part already holds for a different value takes a spare number.
-        # No token in the map is numbered above its size, so spares start above both.
+        # token another part already holds for a different value, or one the request already
+        # carries as literal text, takes a spare number that is neither held nor reserved.
         spare_numbers: Final = count(max(len(pii_tokens), len(runs)) + 1)
 
         for seq, run in reversed(tuple(enumerate(runs, start=1))):
@@ -889,8 +960,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             numbered = f"<{run.entity_type}_{seq}>"
             replacement = (
                 numbered
-                if pii_tokens.get(numbered, original) == original
-                else f"<{run.entity_type}_{next(spare_numbers)}>"
+                if numbered not in reserved_tokens and pii_tokens.get(numbered, original) == original
+                else _free_token(run.entity_type, spare_numbers, pii_tokens, reserved_tokens)
             )
             pii_tokens[replacement] = original
             new_text = new_text[: run.start] + replacement + new_text[run.end :]
@@ -904,6 +975,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         output_parse_pii: bool,
         masked_entity_count: dict[str, int],
         request_data: dict | None = None,
+        reserved_tokens: frozenset[str] = frozenset(),
     ) -> str:
         """
         Send analysis results to the Presidio anonymizer endpoint to get redacted text
@@ -923,7 +995,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return self._finalize_presidio_anonymize_simple(redacted_text, masked_entity_count)
 
             return self._finalize_presidio_anonymize_numbered_tokens(
-                text, analyze_results, request_data, masked_entity_count
+                text, analyze_results, request_data, masked_entity_count, reserved_tokens
             )
         except Exception as e:
             # Sanitize exception to avoid leaking the original text (which may
@@ -1004,6 +1076,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         output_parse_pii: bool,
         presidio_config: PresidioPerRequestConfig | None,
         request_data: dict,
+        reserved_tokens: frozenset[str] = frozenset(),
     ) -> str:
         """
         Calls Presidio Analyze + Anonymize endpoints for PII Analysis + Masking
@@ -1041,6 +1114,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     output_parse_pii=output_parse_pii,
                     masked_entity_count=masked_entity_count,
                     request_data=request_data,
+                    reserved_tokens=reserved_tokens,
                 )
                 return anonymized_text
             return redacted_text["text"]
@@ -1786,27 +1860,40 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
         """
         texts: Final = inputs.get("texts", [])
+        tool_calls: Final = inputs.get("tool_calls") or ()
+        segments: Final = tuple(
+            _conversation_segments(
+                texts, tuple(map(_tool_call_arguments, tool_calls)), inputs.get("tool_call_text_offsets", ())
+            )
+        )
 
         metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Final = metadata.get("pii_tokens", {})
 
-        new_texts: Final = []
-        if input_type == "response" and (
-            self._callback_role == "restore"
-            or (self._callback_role is None and not self.apply_to_output and pii_tokens)
-        ):
-            for text in texts:
-                new_texts.append(self._unmask_pii_text(text, pii_tokens))
-        else:
-            for text in texts:
-                modified_text = await self.check_pii(
-                    text=text,
+        reserved: Final = accumulate(map(_literal_tokens, (source for _, source in segments)), frozenset[str].union)
+        rewritten: Final = (
+            [self._unmask_pii_text(source, pii_tokens) for _, source in segments]
+            if input_type == "response"
+            and (
+                self._callback_role == "restore"
+                or (self._callback_role is None and not self.apply_to_output and pii_tokens)
+            )
+            else [
+                await self.check_pii(
+                    text=source,
                     output_parse_pii=self.output_parse_pii,
                     presidio_config=None,
                     request_data=request_data or {},
+                    reserved_tokens=reserved_tokens,
                 )
-                new_texts.append(modified_text)
-        inputs["texts"] = new_texts
+                for (_, source), reserved_tokens in zip(segments, reserved)
+            ]
+        )
+        by_slot: Final = dict(zip((slot for slot, _ in segments), rewritten))
+        inputs["texts"] = [by_slot[_TextSlot(index)] for index in range(len(texts))]
+        for index, tool_call in enumerate(tool_calls):
+            if _ToolCallSlot(index) in by_slot:
+                _set_tool_call_arguments(tool_call, by_slot[_ToolCallSlot(index)])
         return inputs
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
