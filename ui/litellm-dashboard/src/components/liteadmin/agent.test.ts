@@ -69,13 +69,16 @@ const completion = (
   ],
 });
 
-function transport(responses: ChatCompletion[], statuses: number | readonly number[] = 200) {
+type ModelResponse = ChatCompletion | ((request: ChatCompletionCreateParamsNonStreaming) => ChatCompletion);
+
+function transport(responses: ModelResponse[], statuses: number | readonly number[] = 200) {
   const requests: ChatCompletionCreateParamsNonStreaming[] = [];
   const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
     requests.push(JSON.parse(String(init?.body)) as ChatCompletionCreateParamsNonStreaming);
     const response = responses[requests.length - 1];
     if (!response) throw new Error("Unexpected model request");
-    return json(response, typeof statuses === "number" ? statuses : statuses[requests.length - 1]);
+    const result = typeof response === "function" ? response(requests[requests.length - 1]) : response;
+    return json(result, typeof statuses === "number" ? statuses : statuses[requests.length - 1]);
   });
   return {
     requests,
@@ -86,6 +89,14 @@ function transport(responses: ChatCompletion[], statuses: number | readonly numb
       fetch: fetchImpl,
     }),
   };
+}
+
+function chartSourceId(request: ChatCompletionCreateParamsNonStreaming): string {
+  const message = request.messages.at(-1);
+  expect(message?.role).toBe("tool");
+  const result: Record<string, unknown> = JSON.parse(String(message?.content));
+  if (typeof result.source_id !== "string") throw new Error("Usage lookup did not return a chart source");
+  return result.source_id;
 }
 
 const options = () =>
@@ -100,6 +111,7 @@ const options = () =>
     confirm: vi.fn(async (_action: LiteAdminAction) => true),
     onResult: vi.fn<(action: LiteAdminAction, result: ActionResult) => void>(),
     onMessage: vi.fn<(message: string) => void>(),
+    onChart: vi.fn<LiteAdminOptions["onChart"]>(),
   }) satisfies LiteAdminOptions;
 
 function deferred<Value>() {
@@ -312,22 +324,23 @@ describe("fixed management operations", () => {
       expect(query.get("start_date")).toBe(dates.start_date);
       expect(query.get("end_date")).toBe(dates.end_date);
       expect(query.get("api_key_limit")).toBe("20");
-      expect(model.requests[1].messages.at(-1)).toMatchObject({
-        role: "tool",
-        content: JSON.stringify({
-          operation: name,
-          success: true,
-          result: {
-            totals: { total_spend: 12, total_api_requests: 30, total_tokens: 800 },
-            daily: [{ date: dates.start_date, ...metrics }],
-            breakdown_limit: 20,
-            top_models: [{ name: "chat-model", ...metrics }],
-            top_providers: [{ name: "model-provider", ...metrics }],
-            top_entities: [{ name: "production", ...metrics }],
-            top_api_keys: [],
-          },
-        }),
-      });
+      const result = model.requests[1].messages.at(-1);
+      expect(result?.role).toBe("tool");
+      const expectedResult = {
+        operation: name,
+        success: true,
+        source_id: expect.any(String),
+        result: {
+          totals: { total_spend: 12, total_api_requests: 30, total_tokens: 800 },
+          daily: [{ date: dates.start_date, ...metrics }],
+          breakdown_limit: 20,
+          top_models: [{ name: "chat-model", ...metrics }],
+          top_providers: [{ name: "model-provider", ...metrics }],
+          top_entities: [{ name: "production", ...metrics }],
+          top_api_keys: [],
+        },
+      };
+      expect(JSON.parse(String(result?.content))).toEqual(expectedResult);
       expect(input.confirm).not.toHaveBeenCalled();
     },
   );
@@ -412,6 +425,7 @@ describe("usage access", () => {
     expect(input.confirm).not.toHaveBeenCalled();
     expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("Done");
     expect(model.requests[0].tools?.map((tool) => (tool.type === "function" ? tool.function.name : null))).toEqual([
+      "render_usage_chart",
       "get_usage_data",
       "get_team_usage_data",
       "get_tag_usage_data",
@@ -485,6 +499,120 @@ describe("usage access", () => {
         message: "The gateway could not complete this lookup.",
       }),
     });
+  });
+});
+
+describe("usage charts", () => {
+  it.each(["global", "user"] as const)(
+    "should derive a %s chart from the fetched usage source and then return the answer",
+    async (scope) => {
+      const access =
+        scope === "global"
+          ? ({ mode: "usage", scope: { type: "global" } } as const)
+          : ({ mode: "usage", scope: { type: "user", userId: "signed-in-user" } } as const);
+      const input = { ...options(), access };
+      managementFetch.mockImplementation(async () =>
+        json({
+          results: [
+            {
+              date: dates.start_date,
+              metrics: { spend: 15, api_requests: 30, total_tokens: 800 },
+              breakdown: {
+                models: {
+                  "smaller-model": { metrics: { spend: 5, api_requests: 10, total_tokens: 200 } },
+                  "larger-model": { metrics: { spend: 10, api_requests: 20, total_tokens: 600 } },
+                },
+              },
+            },
+          ],
+          metadata: { total_spend: 15 },
+        }),
+      );
+      const args = scope === "global" ? { ...dates, user_id: null } : dates;
+      const model = transport([
+        completion([call("get_usage_data", args)]),
+        (request) =>
+          completion([call("render_usage_chart", { source_id: chartSourceId(request), view: "model_spend" })]),
+        completion([], "The larger model accounts for two thirds of spend."),
+      ]);
+
+      await runLiteAdmin(input, model.client);
+
+      const expectedChart = {
+        kind: "bar",
+        title: "Spend by model",
+        period: `${dates.start_date} to ${dates.end_date} (UTC)`,
+        scope: scope === "global" ? "Gateway usage" : "Your usage",
+        unit: "usd",
+        total: 15,
+        data: [
+          { label: "larger-model", value: 10 },
+          { label: "smaller-model", value: 5 },
+        ],
+        note: undefined,
+      };
+      expect(input.onChart).toHaveBeenCalledExactlyOnceWith(expectedChart);
+      expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("The larger model accounts for two thirds of spend.");
+      expect(managementFetch).toHaveBeenCalledTimes(1);
+      expect(input.confirm).not.toHaveBeenCalled();
+      const query = new URL(String(managementFetch.mock.calls[0][0])).searchParams;
+      expect(query.get("user_id")).toBe(scope === "user" ? "signed-in-user" : null);
+      expect(JSON.parse(String(model.requests[2].messages.at(-1)?.content))).toMatchObject({
+        success: true,
+        chart: { total: 15 },
+      });
+    },
+  );
+
+  it("should reject an unknown source without fetching data or showing a chart", async () => {
+    const input = options();
+    const model = transport([
+      completion([call("render_usage_chart", { source_id: "not-fetched", view: "daily_spend" })]),
+      completion([], "I need to look up usage first."),
+    ]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(input.onChart).not.toHaveBeenCalled();
+    expect(managementFetch).not.toHaveBeenCalled();
+    expect(JSON.parse(String(model.requests[1].messages.at(-1)?.content))).toMatchObject({ success: false });
+    expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("I need to look up usage first.");
+  });
+
+  it("should reject a source from a previous turn even when the session is unchanged", async () => {
+    managementFetch.mockImplementation(async () =>
+      json({ results: [{ date: dates.start_date, metrics: { spend: 8, api_requests: 2, total_tokens: 100 } }] }),
+    );
+    const input = options();
+    const first = transport([completion([call("get_usage_data", { ...dates, user_id: null })]), completion()]);
+    await runLiteAdmin(input, first.client);
+    const earlierSource = chartSourceId(first.requests[1]);
+    const next = transport([
+      completion([call("render_usage_chart", { source_id: earlierSource, view: "daily_spend" })]),
+      completion(),
+    ]);
+
+    await runLiteAdmin(input, next.client);
+
+    expect(input.onChart).not.toHaveBeenCalled();
+    expect(managementFetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(next.requests[1].messages.at(-1)?.content))).toMatchObject({ success: false });
+  });
+
+  it("should explain an empty lookup without rendering a fabricated chart", async () => {
+    managementFetch.mockImplementation(async () => json({ results: [] }));
+    const input = options();
+    const model = transport([
+      completion([call("get_usage_data", { ...dates, user_id: null })]),
+      (request) => completion([call("render_usage_chart", { source_id: chartSourceId(request), view: "daily_spend" })]),
+      completion([], "There is no recorded usage for this period."),
+    ]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(input.onChart).not.toHaveBeenCalled();
+    expect(JSON.parse(String(model.requests[2].messages.at(-1)?.content))).toMatchObject({ success: false });
+    expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("There is no recorded usage for this period.");
   });
 });
 

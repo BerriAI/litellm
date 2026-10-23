@@ -4,6 +4,13 @@ import { apiClient } from "@/components/networking";
 import { ApiError } from "@/lib/http/client";
 import type { components } from "@/lib/http/schema";
 import { generatedKey, projectToolResult, type ResultKind } from "./toolResults";
+import {
+  buildUsageChart,
+  usageChartRequestSchema,
+  usageChartSource,
+  type UsageChart,
+  type UsageChartSource,
+} from "./usageChart";
 
 export interface LiteAdminAction {
   id: string;
@@ -27,6 +34,7 @@ export interface OperationContext {
   beforeTool: () => void;
   confirm: (action: LiteAdminAction) => Promise<boolean>;
   onResult: (action: LiteAdminAction, result: ActionResult) => void;
+  onChart: (chart: UsageChart) => void;
 }
 
 type Schemas = components["schemas"];
@@ -111,11 +119,31 @@ const requestLogsFields = {
 };
 
 export function createLiteAdminOperations(context: OperationContext) {
+  const usageSources = new Map<string, UsageChartSource>();
   const active = () => {
     context.signal.throwIfAborted();
     context.assertCurrent();
   };
   const auth = { accessToken: context.accessToken, signal: context.signal };
+  const chartDefinition = {
+    name: "render_usage_chart",
+    description:
+      "Show one chart with the answer using the source_id of a successful usage lookup in this turn. Choose daily_spend for spend over time, model_spend or provider_spend for cost comparisons, daily_requests or daily_tokens for trends, or token_breakdown for input/output/cache analysis. Values come directly from that lookup. Follow with a short explanation, not a duplicate table. A later chart replaces the earlier chart for this answer. Read-only.",
+    parameters: usageChartRequestSchema,
+    function: (rawArgs: unknown) => {
+      active();
+      context.beforeTool();
+      const args = usageChartRequestSchema.parse(rawArgs);
+      const source = usageSources.get(args.source_id);
+      if (!source) return { success: false, message: "Fetch usage first and use the source_id from that result." };
+      const chart = buildUsageChart(source, args.view);
+      if (!chart)
+        return { success: false, message: "No recorded data is available for this chart. Explain that in text." };
+      context.onChart(chart);
+      return { success: true, chart };
+    },
+  };
+  const renderChart = zodFunction(chartDefinition);
   const operation =
     (mode: "read" | "write" | "delete", kind: ResultKind, extraArguments?: Record<string, unknown>) =>
     <Schema extends z.ZodType<Record<string, unknown>>>(
@@ -178,10 +206,18 @@ export function createLiteAdminOperations(context: OperationContext) {
           }
           const key = name === "key_create" || name === "user_create" ? generatedKey(outcome.value) : undefined;
           if (action) context.onResult(action, { status: "completed", ...(key ? { key } : {}) });
+          const result = projectToolResult(kind, outcome.value, [context.accessToken, ...(key ? [key] : [])]);
+          let reportScope: "Gateway usage" | "All teams" | "All tags" = "Gateway usage";
+          if (name === "get_team_usage_data") reportScope = "All teams";
+          if (name === "get_tag_usage_data") reportScope = "All tags";
+          const source = kind === "usage" ? usageChartSource(result, args, context.access, reportScope) : undefined;
+          const sourceId = source ? crypto.randomUUID() : undefined;
+          if (source && sourceId) usageSources.set(sourceId, source);
           return {
             operation: name,
             success: true,
-            result: projectToolResult(kind, outcome.value, [context.accessToken, ...(key ? [key] : [])]),
+            result,
+            ...(sourceId ? { source_id: sourceId } : {}),
           };
         },
       };
@@ -191,6 +227,7 @@ export function createLiteAdminOperations(context: OperationContext) {
   if (context.access.mode === "usage" && context.access.scope.type === "user") {
     const userId = context.access.scope.userId;
     return [
+      renderChart,
       operation("read", "usage")(
         "get_usage_data",
         "View your dated usage totals, daily trends, and top models, providers and keys with prompt, completion, cache-read and cache-creation token counts when available. Do not add cache counts to total_tokens",
@@ -207,6 +244,7 @@ export function createLiteAdminOperations(context: OperationContext) {
   }
 
   const usageOperations = [
+    renderChart,
     operation("read", "usage")(
       "get_usage_data",
       "View dated global or user usage totals, daily trends, and top models, providers and keys with prompt, completion, cache-read and cache-creation token counts when available. Do not add cache counts to total_tokens",

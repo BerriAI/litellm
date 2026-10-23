@@ -5,7 +5,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
   type ComponentProps,
@@ -14,7 +13,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { History, Plus, X } from "lucide-react";
+import { History, RotateCcw, X } from "lucide-react";
 import { z } from "zod";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useDisableLiteAdmin } from "@/app/(dashboard)/hooks/useDisableLiteAdmin";
@@ -31,7 +30,6 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cva.config";
 import { hasProxyWideSpendView, isProxyAdminRole } from "@/utils/roles";
 import { getPreferredLiteAdminModel, MAX_INPUT_LENGTH, resolveInferenceTarget } from "./agent";
@@ -42,8 +40,6 @@ import { LiteAdminHomeComposer } from "./LiteAdminHomeComposer";
 import { useLiteAdmin, type ConversationEntry, type LiteAdminSession } from "./useLiteAdmin";
 
 type ManagementSession = Omit<LiteAdminSession, "inferenceBaseUrl">;
-type ChatPhase = ReturnType<typeof useLiteAdmin>["phase"];
-type ChatTab = { id: number; phase: ChatPhase };
 type LiteAdminState = {
   open: boolean;
   toggle: () => void;
@@ -55,6 +51,11 @@ type LiteAdminState = {
   usageContainer: HTMLDivElement | null;
   setUsageContainer: (container: HTMLDivElement | null) => void;
 };
+
+function getComposerContainer(state: LiteAdminState | null, open: boolean): HTMLDivElement | null {
+  if (open) return null;
+  return state?.usageContainer ?? state?.homeContainer ?? null;
+}
 
 const LiteAdminContext = createContext<LiteAdminState | null>(null);
 function useLiteAdminSession() {
@@ -178,7 +179,7 @@ export function LiteAdminHome() {
         </div>
         <Button variant="ghost" size="sm" onClick={show} className="text-muted-foreground">
           <History className="size-3.5" />
-          Recent chats
+          Open conversation
         </Button>
       </div>
       <div ref={setHomeContainer} />
@@ -279,7 +280,7 @@ function Destination({
 }) {
   const [approved, setApproved] = useState(false);
   if (target?.baseUrl && (!target.requiresConsent || approved)) {
-    return <LiteAdminChats session={{ ...session, inferenceBaseUrl: target.baseUrl }} open={open} close={close} />;
+    return <LiteAdminChat session={{ ...session, inferenceBaseUrl: target.baseUrl }} open={open} close={close} />;
   }
   return (
     <Panel
@@ -336,7 +337,7 @@ function Panel({
   children: ReactNode;
 }) {
   const state = useContext(LiteAdminContext);
-  const homeContainer = !open ? state?.usageContainer ?? state?.homeContainer : null;
+  const homeContainer = getComposerContainer(state, open);
   const ref = useRef<HTMLDivElement>(null);
   return (
     <Dialog
@@ -367,110 +368,6 @@ function Panel({
   );
 }
 
-function LiteAdminChats({ session, open, close }: { session: LiteAdminSession; open: boolean; close: () => void }) {
-  const [tabs, setTabs] = useState<{ chats: ChatTab[]; activeId: number; nextId: number }>({
-    chats: [{ id: 1, phase: "idle" }],
-    activeId: 1,
-    nextId: 2,
-  });
-  const reviewRef = useRef<HTMLDivElement>(null);
-  const activeTabRef = useRef<HTMLButtonElement>(null);
-  const focusAfterClose = useRef(false);
-  useLayoutEffect(() => {
-    if (!focusAfterClose.current) return;
-    focusAfterClose.current = false;
-    activeTabRef.current?.focus();
-  });
-  const addChat = () => {
-    setTabs((current) => ({
-      chats: [...current.chats, { id: current.nextId, phase: "idle" }],
-      activeId: current.nextId,
-      nextId: current.nextId + 1,
-    }));
-  };
-  const closeChat = (id: number) => {
-    if (tabs.chats.some((chat) => chat.id === id && chat.phase === "applying")) return;
-    focusAfterClose.current = true;
-    setTabs((current) => {
-      const closing = current.chats.find((chat) => chat.id === id);
-      if (!closing || closing.phase === "applying") return current;
-      const remaining = current.chats.filter((chat) => chat.id !== id);
-      const next = remaining.find((chat) => chat.id > id) ?? remaining.at(-1);
-      if (!next) {
-        return {
-          chats: [{ id: current.nextId, phase: "idle" }],
-          activeId: current.nextId,
-          nextId: current.nextId + 1,
-        };
-      }
-      return { ...current, chats: remaining, activeId: current.activeId === id ? next.id : current.activeId };
-    });
-  };
-  const updatePhase = useCallback((id: number, phase: ChatPhase) => {
-    setTabs((current) => {
-      if (!current.chats.some((chat) => chat.id === id && chat.phase !== phase)) return current;
-      return { ...current, chats: current.chats.map((chat) => (chat.id === id ? { ...chat, phase } : chat)) };
-    });
-  }, []);
-  return (
-    <Tabs
-      value={tabs.activeId}
-      onValueChange={(id) => {
-        if (typeof id === "number") setTabs((current) => ({ ...current, activeId: id }));
-      }}
-      className="contents"
-    >
-      <Panel open={open} close={close} initialFocus={reviewRef} composer={null}>
-        <PanelHeader>
-          <Button variant="ghost" size="icon-sm" aria-label="New chat" title="New chat" onClick={addChat}>
-            <Plus className="size-4" />
-          </Button>
-        </PanelHeader>
-        <TabsList
-          aria-label={`${ARIA_AGENT_LABEL} chats`}
-          className="h-auto w-full shrink-0 justify-start overflow-x-auto rounded-none border-b bg-transparent p-2"
-        >
-          {tabs.chats.map((tab) => (
-            <div key={tab.id} className="flex shrink-0 items-center">
-              <TabsTrigger
-                ref={tabs.activeId === tab.id ? activeTabRef : undefined}
-                value={tab.id}
-                aria-label={`Chat ${tab.id}`}
-                title={tab.phase === "review" ? "Approval needed" : undefined}
-                className="h-8 flex-none"
-              >
-                Chat {tab.id}
-                {tab.phase !== "idle" && <span aria-hidden className="size-1.5 rounded-full bg-info" />}
-              </TabsTrigger>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label={`Close Chat ${tab.id}`}
-                title={tab.phase === "applying" ? "Wait for this change to finish" : `Close Chat ${tab.id}`}
-                disabled={tab.phase === "applying"}
-                onClick={() => closeChat(tab.id)}
-              >
-                <X className="size-3" />
-              </Button>
-            </div>
-          ))}
-        </TabsList>
-        {tabs.chats.map((tab) => (
-          <LiteAdminChat
-            key={tab.id}
-            id={tab.id}
-            session={session}
-            active={tabs.activeId === tab.id}
-            open={open}
-            reviewRef={reviewRef}
-            onPhaseChange={updatePhase}
-          />
-        ))}
-      </Panel>
-    </Tabs>
-  );
-}
-
 function useForegroundReviewFocus(
   entries: ConversationEntry[],
   foreground: boolean,
@@ -485,27 +382,13 @@ function useForegroundReviewFocus(
   }, [foreground, pendingReviewId, reviewRef]);
 }
 
-function LiteAdminChat({
-  id,
-  session,
-  active,
-  open,
-  reviewRef,
-  onPhaseChange,
-}: {
-  id: number;
-  session: LiteAdminSession;
-  active: boolean;
-  open: boolean;
-  reviewRef: RefObject<HTMLDivElement | null>;
-  onPhaseChange: (id: number, phase: ChatPhase) => void;
-}) {
+function LiteAdminChat({ session, open, close }: { session: LiteAdminSession; open: boolean; close: () => void }) {
   const state = useContext(LiteAdminContext);
   const chat = useLiteAdmin(session);
   const [input, setInput] = useState("");
   const [model, setModel] = useState<string | null>(null);
-  useForegroundReviewFocus(chat.entries, active && open, reviewRef);
-  useEffect(() => onPhaseChange(id, chat.phase), [id, chat.phase, onPhaseChange]);
+  const reviewRef = useRef<HTMLDivElement>(null);
+  useForegroundReviewFocus(chat.entries, open, reviewRef);
   const modelQuery = {
     queryKey: ["liteadmin-models", session.accessToken, session.managementBaseUrl, session.inferenceBaseUrl],
     queryFn: async ({ signal }: { signal: AbortSignal }) => {
@@ -530,7 +413,7 @@ function LiteAdminChat({
         }))
         .sort((a, b) => a.model_group.localeCompare(b.model_group));
     },
-    enabled: active && (open || Boolean(state?.homeContainer || state?.usageContainer)),
+    enabled: open || Boolean(state?.homeContainer || state?.usageContainer),
     select: (available: ModelGroup[]) =>
       available.filter((item) => isModeCompatibleWithEndpoint(item.mode, EndpointType.CHAT)),
   };
@@ -542,13 +425,19 @@ function LiteAdminChat({
   const hasValidInput = selectedModel && input.trim() && !tooLong;
   const submitDisabled = busy || models.isError || !hasValidInput;
   const send = (message: string) => {
-    if (busy || models.isError || !selectedModel || !message.trim() || message.trim().length > MAX_INPUT_LENGTH) return;
+    const invalidMessage = !message.trim() || message.trim().length > MAX_INPUT_LENGTH;
+    const canSend = !busy && !models.isError && !invalidMessage;
+    if (!canSend || !selectedModel) return;
     state?.show();
     void chat.send(message, selectedModel);
     setInput("");
   };
-  if (!active) return null;
-  const homeContainer = !open ? state?.usageContainer ?? state?.homeContainer : null;
+  const startOver = () => {
+    if (chat.phase === "applying") return;
+    chat.reset();
+    setInput("");
+  };
+  const homeContainer = getComposerContainer(state, open);
   const composerProps = {
     value: input,
     onChange: setInput,
@@ -570,7 +459,19 @@ function LiteAdminChat({
     />
   );
   return (
-    <TabsContent value={id} className="flex min-h-0 flex-1 flex-col">
+    <Panel open={open} close={close} initialFocus={reviewRef} composer={composer}>
+      <PanelHeader>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={chat.phase === "applying" || (chat.entries.length === 0 && !input)}
+          onClick={startOver}
+          className="text-muted-foreground"
+        >
+          <RotateCcw className="size-3.5" />
+          Start over
+        </Button>
+      </PanelHeader>
       <LiteAdminConversation
         entries={chat.entries}
         thinking={chat.phase === "thinking"}
@@ -581,8 +482,7 @@ function LiteAdminChat({
         onQuestion={send}
         questionsDisabled={busy || models.isError || !selectedModel}
       />
-      {homeContainer ? createPortal(composer, homeContainer) : composer}
-    </TabsContent>
+    </Panel>
   );
 }
 

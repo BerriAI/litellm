@@ -216,6 +216,7 @@ interface AssistantBubbleProps {
   isStreaming: boolean;
   isTypingIndicator: boolean;
   mcpEvents?: ChatMessage["mcpEvents"];
+  actions?: React.ReactNode;
 }
 
 function AssistantBubble({
@@ -225,6 +226,7 @@ function AssistantBubble({
   isStreaming,
   isTypingIndicator,
   mcpEvents,
+  actions,
 }: AssistantBubbleProps) {
   const [reasoningKey, setReasoningKey] = useState(0);
   const prevStreamingRef = useRef<boolean>(isStreaming);
@@ -275,7 +277,7 @@ function AssistantBubble({
         {stoppedSuffix && <span className="text-muted-foreground italic"> [stopped]</span>}
       </BubbleContent>
 
-      <CopyButton text={mainContent} />
+      {actions ?? <CopyButton text={mainContent} />}
       {mcpEvents && mcpEvents.length > 0 && (
         <div className="mt-2 max-w-full">
           <MCPEventsDisplay events={mcpEvents} />
@@ -425,6 +427,7 @@ interface Props {
 
 interface ChatMessageContentProps {
   message: ChatMessage;
+  actions?: React.ReactNode;
   allowImages?: boolean;
   isStreaming?: boolean;
   isLastMessage?: boolean;
@@ -437,6 +440,7 @@ export function ChatMessageContent({
   isStreaming = false,
   isLastMessage = true,
   onEditMessage,
+  actions,
 }: ChatMessageContentProps) {
   if (message.role === "user") {
     return <UserBubble message={message} onEdit={onEditMessage} isStreaming={isStreaming} />;
@@ -454,6 +458,7 @@ export function ChatMessageContent({
       isStreaming={isStreaming}
       isTypingIndicator={isLastMessage && isStreaming && message.content === ""}
       mcpEvents={message.mcpEvents}
+      actions={actions}
     />
   );
 }

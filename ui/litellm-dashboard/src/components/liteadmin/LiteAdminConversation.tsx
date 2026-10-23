@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import type { ActionEntry, ConversationEntry } from "./useLiteAdmin";
 import { AriaAvatar } from "./AriaAvatar";
+import { AriaAnswer } from "./AriaAnswer";
 import { ARIA_AGENT_LABEL } from "./aria-brand";
 
 const ACTION_STATUS: Record<ActionEntry["status"], string> = {
@@ -59,24 +60,20 @@ export function LiteAdminConversation({
           <MessageScroller.Content className="flex flex-col gap-6 p-4 sm:p-6" aria-busy={thinking}>
             {entries.map((entry) => (
               <MessageScroller.Item key={entry.id} messageId={entry.id}>
-                {entry.kind === "message" && (
-                  <article
-                    aria-label={entry.message.role === "user" ? "Your question" : `${ARIA_AGENT_LABEL} answer`}
-                    className="space-y-2"
-                  >
-                    <p
-                      className={`text-xs font-medium text-muted-foreground ${entry.message.role === "user" ? "text-right" : ""}`}
-                    >
-                      {entry.message.role === "user" ? "You" : ARIA_AGENT_LABEL}
-                    </p>
-                    <ChatMessageContent
-                      message={entry.message}
-                      allowImages={false}
-                      isLastMessage={false}
-                      isStreaming={false}
-                    />
-                  </article>
-                )}
+                {entry.kind === "message" &&
+                  (entry.message.role === "assistant" ? (
+                    <AriaAnswer message={entry.message} chart={entry.chart} question={entry.question} />
+                  ) : (
+                    <article aria-label="Your question" className="space-y-2">
+                      <p className="text-right text-xs font-medium text-muted-foreground">You</p>
+                      <ChatMessageContent
+                        message={entry.message}
+                        allowImages={false}
+                        isLastMessage={false}
+                        isStreaming={false}
+                      />
+                    </article>
+                  ))}
                 {entry.kind === "action" && (
                   <ActionCard entry={entry} open={open} reviewRef={reviewRef} onAnswer={onAnswer} />
                 )}
