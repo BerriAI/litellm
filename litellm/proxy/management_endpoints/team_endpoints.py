@@ -6124,7 +6124,10 @@ async def list_team_v2(
     sort_direction: Final = "desc" if str(sort_order).lower() == "desc" else "asc"
     nullable_sort: Final = sort_by in ("max_budget", "tpm_limit", "rpm_limit")
     order_by: Final = (
-        ({sort_by: {"sort": sort_direction, "nulls": "last"}}, {"team_id": "asc"})
+        (
+            {sort_by: {"sort": sort_direction, "nulls": "first" if sort_direction == "desc" else "last"}},
+            {"team_id": "asc"},
+        )
         if nullable_sort
         else ({sort_by: sort_direction}, {"team_id": "asc"})
         if sort_by in ("spend", "updated_at")
