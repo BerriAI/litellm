@@ -418,12 +418,7 @@ class ContextCachingEndpoints(VertexBase):
             headers.update(extra_headers)
 
         if client is None or not isinstance(client, HTTPHandler):
-            _params: Final = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    timeout = httpx.Timeout(timeout)
-                _params["timeout"] = timeout
-            client = HTTPHandler(**_params)
+            client = HTTPHandler(timeout=httpx.Timeout(timeout) if isinstance(timeout, float | int) else timeout)
         else:
             client = client
 

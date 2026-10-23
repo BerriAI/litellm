@@ -18,6 +18,7 @@ import certifi
 import httpx
 from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
+from httpx._config import DEFAULT_LIMITS
 from httpx._types import CertTypes, RequestFiles
 from httpx._utils import get_environment_proxies
 
@@ -42,6 +43,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -72,7 +74,7 @@ _RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes
 
 _IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
 
-_HttpxTransportT = TypeVar("_HttpxTransportT", HTTPTransport, AsyncHTTPTransport)
+_HttpxTransportT: Final = TypeVar("_HttpxTransportT", httpx.BaseTransport, httpx.AsyncBaseTransport)
 
 HTTPEventHooks: TypeAlias = Mapping[str, list[Callable[..., object]]]
 
@@ -81,6 +83,31 @@ def http2_enabled() -> bool:
     from litellm.secret_managers.main import str_to_bool
 
     return litellm.http2 is True or str_to_bool(os.getenv("LITELLM_HTTP2", "False")) is True
+
+
+def http2_disabled() -> bool:
+    from litellm.secret_managers.main import str_to_bool
+
+    return litellm.http2 is False or str_to_bool(os.getenv("LITELLM_HTTP2")) is False
+
+
+def _resolve_http2(provider_default: bool, ssl_verify: VerifyTypes | None) -> bool:
+    if http2_enabled():
+        return True
+    return provider_default and not http2_disabled() and not isinstance(ssl_verify, ssl.SSLContext)
+
+
+def _aiohttp_env_proxies_disabled() -> bool:
+    from litellm.secret_managers.main import str_to_bool
+
+    return litellm.disable_aiohttp_trust_env or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRUST_ENV", "False")) is True
+
+
+_AIOHTTP_EQUIVALENT_LIMITS: Final = httpx.Limits(
+    max_connections=AIOHTTP_CONNECTOR_LIMIT if AIOHTTP_CONNECTOR_LIMIT > 0 else None,
+    max_keepalive_connections=None,
+    keepalive_expiry=AIOHTTP_KEEPALIVE_TIMEOUT,
+)
 
 
 def _environment_proxy_mounts(
@@ -279,9 +306,7 @@ def _prepare_request_data_and_content(
 
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
-# Key: tuple of (cafile, ssl_security_level, ssl_ecdh_curve)
-# Value: ssl.SSLContext
-_ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None], ssl.SSLContext]] = {}
+_ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, bool], ssl.SSLContext]] = {}
 
 
 def _create_ssl_context(
@@ -374,6 +399,7 @@ def get_ssl_verify(
 
 def get_ssl_configuration(
     ssl_verify: VerifyTypes | None = None,
+    http2: bool = False,
 ) -> bool | str | ssl.SSLContext:
     """
     Unified SSL configuration function that handles ssl_context and ssl_verify logic.
@@ -422,7 +448,7 @@ def get_ssl_configuration(
 
     if ssl_verify is not False:
         # Create cache key from configuration parameters
-        cache_key: Final = (cafile, ssl_security_level, ssl_ecdh_curve)
+        cache_key: Final = (cafile, ssl_security_level, ssl_ecdh_curve, http2)
 
         # Check if we have a cached SSL context for this configuration
         if cache_key not in _ssl_context_cache:
@@ -633,6 +659,7 @@ class AsyncHTTPHandler:
         shared_session: Optional["ClientSession"] = None,
         transport: httpx.AsyncBaseTransport | None = None,
         follow_redirects: bool = True,
+        http2: bool = False,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -640,6 +667,7 @@ class AsyncHTTPHandler:
         self.shared_session = shared_session
         self.transport = transport
         self.follow_redirects = follow_redirects
+        self.http2 = http2
         self._owns_client = True
         self._client = self.create_client(
             timeout=timeout,
@@ -682,8 +710,11 @@ class AsyncHTTPHandler:
                 follow_redirects=self.follow_redirects,
                 trust_env=False,
             )
+        use_http2: Final = _resolve_http2(self.http2, ssl_verify)
+        replaces_aiohttp: Final = use_http2 and AsyncHTTPHandler.should_use_aiohttp_transport()
+        limits: Final = _AIOHTTP_EQUIVALENT_LIMITS if replaces_aiohttp else DEFAULT_LIMITS
         # Get unified SSL configuration
-        ssl_config: Final = get_ssl_configuration(ssl_verify)
+        ssl_config: Final = get_ssl_configuration(ssl_verify, http2=use_http2)
 
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
@@ -697,14 +728,23 @@ class AsyncHTTPHandler:
             ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
             shared_session=shared_session,
+            http2=use_http2,
+            cert=cert,
+            limits=limits,
         )
 
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers: Final = get_default_headers()
+        trust_env: Final = not (replaces_aiohttp and _aiohttp_env_proxies_disabled())
 
         return httpx.AsyncClient(
             transport=transport,
-            mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert),
+            mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(
+                transport, verify=ssl_config, cert=cert, http2=use_http2, limits=limits
+            )
+            if trust_env
+            else None,
+            limits=limits,
             event_hooks=event_hooks,
             timeout=timeout,
             verify=ssl_config,
@@ -712,7 +752,8 @@ class AsyncHTTPHandler:
             headers=default_headers,
             cookies=blocked_cookie_jar(),
             follow_redirects=self.follow_redirects,
-            http2=http2_enabled(),
+            http2=use_http2,
+            trust_env=trust_env,
         )
 
     async def close(self):
@@ -1202,7 +1243,10 @@ class AsyncHTTPHandler:
         ssl_context: ssl.SSLContext | None = None,
         ssl_verify: bool | None = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> LiteLLMAiohttpTransport | AsyncHTTPTransport | None:
+        http2: bool = False,
+        cert: CertTypes | None = None,
+        limits: httpx.Limits = DEFAULT_LIMITS,
+    ) -> LiteLLMAiohttpTransport | AsyncHTTPTransport | AsyncHTTP2ConnectionSpread | None:
         """
         - Creates a transport for httpx.AsyncClient
             - if litellm.force_ipv4 is True, it will return AsyncHTTPTransport with local_address="0.0.0.0"
@@ -1220,7 +1264,7 @@ class AsyncHTTPHandler:
         #########################################################
         # AIOHTTP TRANSPORT is off by default
         #########################################################
-        if AsyncHTTPHandler.should_use_aiohttp_transport():
+        if not http2 and AsyncHTTPHandler.should_use_aiohttp_transport():
             return AsyncHTTPHandler.create_aiohttp_transport(
                 ssl_context=ssl_context,
                 ssl_verify=ssl_verify,
@@ -1230,7 +1274,12 @@ class AsyncHTTPHandler:
         #########################################################
         # HTTPX TRANSPORT is used when aiohttp is not installed
         #########################################################
-        return AsyncHTTPHandler._create_httpx_transport()
+        return AsyncHTTPHandler._create_httpx_transport(
+            http2=http2,
+            verify=ssl_context if ssl_context is not None else ssl_verify is not False,
+            cert=cert,
+            limits=limits,
+        )
 
     _create_async_transport = create_async_transport
 
@@ -1377,28 +1426,52 @@ class AsyncHTTPHandler:
     _create_aiohttp_transport = create_aiohttp_transport
 
     @staticmethod
-    def _create_httpx_transport() -> AsyncHTTPTransport | None:
+    def _create_httpx_transport(
+        http2: bool = False,
+        verify: ssl.SSLContext | bool = True,
+        cert: CertTypes | None = None,
+        limits: httpx.Limits = DEFAULT_LIMITS,
+    ) -> AsyncHTTPTransport | AsyncHTTP2ConnectionSpread | None:
         """
         Creates an AsyncHTTPTransport
 
+        - If HTTP/2 is on, it spreads requests over as many HTTP/2 connections as the stream limit needs
         - If force_ipv4 is True, it will create an AsyncHTTPTransport with local_address set to "0.0.0.0"
-        - [Default] If force_ipv4 is False, it will return None
+        - [Default] Otherwise it will return None
         """
+        local_address: Final = _IPV4_LOCAL_ADDRESS if litellm.force_ipv4 else None
+        if http2 or http2_enabled():
+            return AsyncHTTP2ConnectionSpread(
+                lambda lane_limits: AsyncHTTPTransport(
+                    local_address=local_address, verify=verify, cert=cert, http2=True, limits=lane_limits
+                ),
+                limits,
+            )
         if litellm.force_ipv4:
-            return AsyncHTTPTransport(local_address=_IPV4_LOCAL_ADDRESS, http2=http2_enabled())
-        else:
-            return None
+            return AsyncHTTPTransport(local_address=local_address, verify=verify, cert=cert, limits=limits)
+        return None
 
     @staticmethod
     def create_httpx_proxy_mounts(
-        transport: LiteLLMAiohttpTransport | AsyncHTTPTransport | None,
+        transport: LiteLLMAiohttpTransport | AsyncHTTPTransport | AsyncHTTP2ConnectionSpread | None,
         verify: VerifyTypes,
         cert: CertTypes | None,
-    ) -> Mapping[str, AsyncHTTPTransport | None] | None:
-        if not isinstance(transport, AsyncHTTPTransport):
+        http2: bool = False,
+        limits: httpx.Limits = DEFAULT_LIMITS,
+    ) -> Mapping[str, httpx.AsyncBaseTransport | None] | None:
+        if not isinstance(transport, (AsyncHTTPTransport, AsyncHTTP2ConnectionSpread)):
             return None
+        if http2 or http2_enabled():
+            return _environment_proxy_mounts(
+                lambda proxy_url: AsyncHTTP2ConnectionSpread(
+                    lambda lane_limits: AsyncHTTPTransport(
+                        proxy=proxy_url, verify=verify, cert=cert, http2=True, limits=lane_limits
+                    ),
+                    limits,
+                )
+            )
         return _environment_proxy_mounts(
-            lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2_enabled())
+            lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, limits=limits)
         )
 
     _create_httpx_proxy_mounts = create_httpx_proxy_mounts
@@ -1424,8 +1497,9 @@ class HTTPHandler:
         self._client = self.create_client() if client is None else client
 
     def create_client(self) -> httpx.Client:
+        use_http2: Final = http2_enabled()
         # Get unified SSL configuration
-        ssl_config: Final = get_ssl_configuration(self.ssl_verify)
+        ssl_config: Final = get_ssl_configuration(self.ssl_verify, http2=use_http2)
 
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
@@ -1434,17 +1508,19 @@ class HTTPHandler:
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers: Final = get_default_headers() if not self.disable_default_headers else None
 
+        transport: Final = self._create_sync_transport(verify=ssl_config, cert=cert, http2=use_http2)
+
         # Create a client with a connection pool
         return httpx.Client(
-            transport=self._create_sync_transport(),
-            mounts=self._create_sync_proxy_mounts(verify=ssl_config, cert=cert),
+            transport=transport,
+            mounts=self._create_sync_proxy_mounts(transport, verify=ssl_config, cert=cert, http2=use_http2),
             timeout=self.timeout if self.timeout is not None else _DEFAULT_TIMEOUT,
             verify=ssl_config,
             cert=cert,
             headers=default_headers,
             cookies=blocked_cookie_jar(),
             follow_redirects=self.follow_redirects,
-            http2=http2_enabled(),
+            http2=use_http2,
         )
 
     @property
@@ -1719,27 +1795,29 @@ class HTTPHandler:
         except Exception:
             pass
 
-    def _create_sync_transport(self) -> HTTPTransport | None:
+    @staticmethod
+    def _create_sync_transport(verify: VerifyTypes, cert: CertTypes | None, http2: bool) -> HTTPTransport | None:
         """
         Create an HTTP transport with IPv4 only if litellm.force_ipv4 is True.
-        Otherwise, return None.
+        Otherwise, return litellm.sync_transport or None.
 
         Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         if litellm.force_ipv4:
-            return HTTPTransport(local_address=_IPV4_LOCAL_ADDRESS, http2=http2_enabled())
-        else:
-            return getattr(litellm, "sync_transport", None)
+            return HTTPTransport(local_address=_IPV4_LOCAL_ADDRESS, verify=verify, cert=cert, http2=http2)
+        return getattr(litellm, "sync_transport", None)
 
     @staticmethod
     def _create_sync_proxy_mounts(
+        transport: httpx.BaseTransport | None,
         verify: VerifyTypes,
         cert: CertTypes | None,
-    ) -> Mapping[str, HTTPTransport | None] | None:
-        if not litellm.force_ipv4:
+        http2: bool,
+    ) -> Mapping[str, httpx.BaseTransport | None] | None:
+        if transport is None or transport is getattr(litellm, "sync_transport", None):
             return None
         return _environment_proxy_mounts(
-            lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2_enabled())
+            lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2)
         )
 
 
