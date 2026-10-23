@@ -24,7 +24,7 @@ def _merged(existing: ToolDiscoveryQueueItem | None, item: ToolDiscoveryQueueIte
 
 def aggregate_tool_discoveries(items: Iterable[ToolDiscoveryQueueItem]) -> tuple[ToolDiscoveryQueueItem, ...]:
     """Collapse items to one per tool_name, summing call_count, in first-seen order."""
-    by_name: dict[str, ToolDiscoveryQueueItem] = {}  # mutable-ok: single pass fold keyed by tool_name
+    by_name: Final[dict[str, ToolDiscoveryQueueItem]] = {}  # mutable-ok: single pass fold keyed by tool_name
     for item in items:
         if not (tool_name := item.get("tool_name", "")):
             continue
