@@ -6,6 +6,7 @@ use litellm_inference::Error;
 use litellm_inference_tokenize::{Tokenize, TokenizeCall};
 use litellm_llms_types::formats::tokenize::TokenizeResponse;
 use pyo3::{
+    exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::PyDict,
@@ -27,12 +28,19 @@ impl TokenizePythonHost {
         Self { view }
     }
 
-    fn map_failure(&self, py: Python<'_>, error: PyErr) -> PyResult<PyErr> {
+    fn map_failure(&self, py: Python<'_>, error: PyErr) -> PyErr {
+        if !error.is_instance_of::<PyException>(py) {
+            return error;
+        }
         let mapped = py
-            .import(MODULE)?
-            .getattr("map_failure")?
-            .call1((error.value(py), self.view.request(py)?))?;
-        Ok(PyErr::from_value(mapped))
+            .import(MODULE)
+            .and_then(|module| module.getattr("map_failure"))
+            .and_then(|map| map.call1((error.value(py), self.view.request(py)?)))
+            .and_then(|mapped| mapped.extract::<Py<PyBaseException>>().map_err(PyErr::from));
+        match mapped {
+            Ok(mapped) => PyErr::from_value(mapped.into_bound(py).into_any()),
+            Err(_) => error,
+        }
     }
 }
 
@@ -45,10 +53,8 @@ impl PythonBinding for TokenizePythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<TokenizeCall, InvokeError<Error>> {
-        project_request(py, &mut self.view, arguments).map_err(|error| {
-            let mapped = self.map_failure(py, error).unwrap_or_else(|error| error);
-            InvokeError::Python(mapped)
-        })
+        project_request(py, &mut self.view, arguments)
+            .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
     }
 
     fn encode_response(
@@ -83,7 +89,7 @@ impl PythonBinding for TokenizePythonHost {
             }
             other => route_error_to_pyerr(other),
         };
-        self.map_failure(py, native)
+        Ok(self.map_failure(py, native))
     }
 
     fn host_error(error: &PyErr) -> Error {

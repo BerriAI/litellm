@@ -443,6 +443,7 @@ jobs:
               tests/test_litellm_rust/messages/test_dispatch.py
               tests/test_litellm_rust/ocr/test_dispatch.py
               tests/test_litellm_rust/responses/test_dispatch.py
+              tests/test_litellm_rust/tokenize
               tests/unit/compression
               tests/unit/harness
               tests/unit/rust_bridge
@@ -546,6 +547,7 @@ jobs:
               tests/unit/proxy/image_endpoints
               tests/unit/proxy/ocr_endpoints
               tests/unit/proxy/search_endpoints
+              tests/unit/proxy/tokenize_endpoints
               tests/unit/proxy/vector_store_endpoints
               tests/unit/proxy/a2a
               tests/unit/proxy/credential_endpoints

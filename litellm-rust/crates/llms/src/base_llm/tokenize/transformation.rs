@@ -7,12 +7,6 @@ use crate::{Error, ErrorDetail};
 use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 
 pub trait BaseTokenizeConfig: Sync {
-    fn secret_names(&self) -> Vec<&'static str>;
-
-    fn secret_param_names(&self) -> &'static [&'static str] {
-        &[]
-    }
-
     fn get_supported_tokenize_params(&self) -> &'static [&'static str];
 
     fn map_tokenize_params(
@@ -63,6 +57,12 @@ pub trait BaseTokenizeConfig: Sync {
         model: &str,
         response_json: Value,
     ) -> Result<TokenizeResponse, Error>;
+
+    fn secret_names(&self) -> Vec<&'static str>;
+
+    fn secret_param_names(&self) -> &'static [&'static str] {
+        &[]
+    }
 }
 
 pub fn decode_params<T: DeserializeOwned>(params: &Map<String, Value>) -> Result<T, Error> {

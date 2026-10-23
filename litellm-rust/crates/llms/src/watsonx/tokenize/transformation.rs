@@ -65,21 +65,6 @@ struct WatsonxTokenizeResult {
 pub struct WatsonxTokenizeConfig;
 
 impl BaseTokenizeConfig for WatsonxTokenizeConfig {
-    fn secret_names(&self) -> Vec<&'static str> {
-        API_BASE_ENV
-            .iter()
-            .chain(API_KEY_ENV)
-            .chain(PROJECT_ENV)
-            .chain(SPACE_ENV)
-            .copied()
-            .chain(["WATSONX_TOKEN", "WATSONX_ZENAPIKEY", "WATSONX_IAM_URL"])
-            .collect()
-    }
-
-    fn secret_param_names(&self) -> &'static [&'static str] {
-        &["token", "zen_api_key"]
-    }
-
     fn get_supported_tokenize_params(&self) -> &'static [&'static str] {
         &[
             "project_id",
@@ -215,6 +200,21 @@ impl BaseTokenizeConfig for WatsonxTokenizeConfig {
             token_ids: None,
             tokens: Some(response.result.tokens),
         })
+    }
+
+    fn secret_names(&self) -> Vec<&'static str> {
+        API_BASE_ENV
+            .iter()
+            .chain(API_KEY_ENV)
+            .chain(PROJECT_ENV)
+            .chain(SPACE_ENV)
+            .copied()
+            .chain(["WATSONX_TOKEN", "WATSONX_ZENAPIKEY", "WATSONX_IAM_URL"])
+            .collect()
+    }
+
+    fn secret_param_names(&self) -> &'static [&'static str] {
+        &["token", "zen_api_key"]
     }
 }
 

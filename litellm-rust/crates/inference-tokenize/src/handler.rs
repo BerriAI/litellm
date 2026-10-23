@@ -2,14 +2,13 @@ use std::time::Duration;
 
 use litellm_host::{
     interceptors::{
-        Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext,
-        ResultSource, WireRequest,
+        Cost, ExecutionFacts, Interceptors, ProviderIdentity, RequestContext, ResultSource,
+        WireRequest,
     },
-    lifecycle::{CallEvent, ExecutionEvent},
     observation::ObservationSender,
 };
 use litellm_http::{request::string_headers, transport::Error as TransportError};
-use litellm_inference::provider::ResolvedProvider;
+use litellm_inference::{context::CallContext, provider::ResolvedProvider};
 use litellm_llms::base_llm::{auth::resolve_auth, tokenize::transformation::BaseTokenizeConfig};
 use litellm_llms_types::formats::tokenize::TokenizeResponse;
 use litellm_secrets::source::Secrets;
@@ -26,6 +25,7 @@ pub(crate) async fn execute(
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<TokenizeResponse, Error> {
+    let context = CallContext::new(interceptors, observers.cloned().into());
     let env_lookup = |key: &str| secrets.get(key);
     let supported_params = config.get_supported_tokenize_params();
     let params: Map<String, Value> = call
@@ -92,24 +92,15 @@ pub(crate) async fn execute(
         }
         .into());
     }
-    let raw = RawResponse { body: text };
-    if let Some(observers) = observers {
-        observers.emit(CallEvent::Execution(
-            ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
-        ));
-    }
-    interceptors
-        .after_provider_response(raw.clone())
-        .await
-        .map_err(Error::post_call)?;
-    let json = serde_json::from_str(&raw.body).map_err(|error| {
+    context.response_received(&text).await?;
+    let json = serde_json::from_str(&text).map_err(|error| {
         Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
             "tokenize response JSON",
             error,
         ))
     })?;
     let response = config.transform_tokenize_response(provider.model, json)?;
-    interceptors
+    context
         .result_ready(ExecutionFacts {
             provider: ProviderIdentity {
                 model: provider.model.into(),

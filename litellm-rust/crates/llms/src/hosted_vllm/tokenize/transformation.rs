@@ -37,10 +37,6 @@ struct HostedVllmTokenizeResponse {
 pub struct HostedVllmTokenizeConfig;
 
 impl BaseTokenizeConfig for HostedVllmTokenizeConfig {
-    fn secret_names(&self) -> Vec<&'static str> {
-        vec!["HOSTED_VLLM_API_KEY", "HOSTED_VLLM_API_BASE"]
-    }
-
     fn get_supported_tokenize_params(&self) -> &'static [&'static str] {
         &["add_special_tokens"]
     }
@@ -121,6 +117,10 @@ impl BaseTokenizeConfig for HostedVllmTokenizeConfig {
             token_ids: Some(response.tokens),
             tokens: response.token_strs,
         })
+    }
+
+    fn secret_names(&self) -> Vec<&'static str> {
+        vec!["HOSTED_VLLM_API_KEY", "HOSTED_VLLM_API_BASE"]
     }
 }
 

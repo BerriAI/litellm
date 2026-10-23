@@ -6,6 +6,14 @@ pub enum Error {
     InvalidConfiguration(#[source] ErrorDetail),
     #[error("credential acquisition failed: {0}")]
     CredentialAcquisition(#[source] ErrorDetail),
+    #[error("credential request failed: {source}")]
+    CredentialRequest {
+        status: Option<u16>,
+        #[source]
+        source: ErrorDetail,
+    },
+    #[error("invalid credential response: {0}")]
+    InvalidCredentialResponse(#[source] ErrorDetail),
     #[error("credential caller failed: {0}")]
     EmptyCallerCredential(&'static str),
     #[error("{0}")]

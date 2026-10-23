@@ -109,11 +109,9 @@ async fn acquire_token(config: &WatsonxIamConfig, http: &Client) -> Result<Cache
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(|error| {
-            Error::CredentialAcquisition(ErrorDetail::failed(
-                "Watsonx IAM token request",
-                error.without_url(),
-            ))
+        .map_err(|error| Error::CredentialRequest {
+            status: error.status().map(|status| status.as_u16()),
+            source: ErrorDetail::failed("Watsonx IAM token request", error.without_url()),
         })?
         .json::<IamTokenResponse>()
         .await
@@ -128,7 +126,7 @@ async fn acquire_token(config: &WatsonxIamConfig, http: &Client) -> Result<Cache
 }
 
 fn invalid_token_response() -> Error {
-    Error::CredentialAcquisition(ErrorDetail::InvalidType {
+    Error::InvalidCredentialResponse(ErrorDetail::InvalidType {
         field: "Watsonx IAM token response".into(),
         expected: "a nonempty access_token and positive expires_in",
     })
@@ -257,7 +255,7 @@ mod tests {
             .access_token(&config(&server, "api-key"), &http)
             .await
             .unwrap_err();
-        assert!(matches!(error, Error::CredentialAcquisition(_)));
+        assert!(matches!(error, Error::InvalidCredentialResponse(_)));
         assert!(!error.to_string().contains("sensitive-value"));
         assert!(!error.to_string().contains("api-key"));
     }
@@ -279,7 +277,13 @@ mod tests {
             .mount_as_scoped(&server)
             .await;
         let error = service.access_token(&config, &http).await.unwrap_err();
-        assert!(matches!(error, Error::CredentialAcquisition(_)));
+        assert!(matches!(
+            error,
+            Error::CredentialRequest {
+                status: Some(401),
+                ..
+            }
+        ));
         assert!(error.to_string().contains("401"));
         assert!(!format!("{error:?}").contains("secret-"));
         drop(failure);
