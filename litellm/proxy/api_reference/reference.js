@@ -77,7 +77,6 @@ import { groupSchema } from "./route-categories.mjs";
         proxyUrl: "",
         defaultHttpClient: { targetKey: "shell", clientKey: "curl" },
         setPageTitle: ({ title }) => `${title} · ${config.title}`,
-        onLoaded: () => referenceContent.removeAttribute("aria-busy"),
       };
       const updatePicker = (group) => {
         for (const button of buttons) {
@@ -103,7 +102,6 @@ import { groupSchema } from "./route-categories.mjs";
         content: initialGroup.schema,
       });
       const selectGroup = (group) => {
-        referenceContent.setAttribute("aria-busy", "true");
         updatePicker(group);
         reference.updateConfiguration({
           ...baseOptions,
