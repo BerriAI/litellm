@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>{{TITLE}} · API reference</title>
+    <link rel="icon" href="{{ASSET_BASE}}/logo-blue.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="{{ASSET_BASE}}/style.css" />
+    <script id="reference-config" type="application/json">
+      {{CONFIG}}
+    </script>
+    <script defer src="{{ASSET_BASE}}/vendor/scalar-1.76.0.js"></script>
+    <script type="module" src="{{ASSET_BASE}}/reference.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#reference-content">Skip to API reference</a>
+    <header class="masthead">
+      <a
+        class="brand"
+        data-link="referenceUrl"
+        href="#"
+        aria-label="LiteLLM API reference home"
+      >
+        <img
+          src="{{ASSET_BASE}}/logo-white.svg"
+          alt="LiteLLM"
+          width="134"
+          height="26"
+        />
+        <span class="brand-divider" aria-hidden="true">/</span>
+        <span class="eyebrow">API REFERENCE</span>
+      </a>
+      <nav aria-label="Resources">
+        <a href="https://docs.litellm.ai/"
+          >Documentation <span aria-hidden="true">↗</span></a
+        >
+        <a class="github-link" href="https://github.com/BerriAI/litellm"
+          >GitHub <span aria-hidden="true">↗</span></a
+        >
+        <a class="dashboard-link" data-link="uiUrl" href="#"
+          >Dashboard <span aria-hidden="true">↗</span></a
+        >
+      </nav>
+    </header>
+    <nav class="category-bar" aria-label="Route categories">
+      <span class="eyebrow category-label">EXPLORE THE API</span>
+      <div
+        class="category-picker"
+        role="group"
+        aria-label="Choose route category"
+      >
+        <button type="button" data-category="ai" aria-pressed="true" disabled>
+          <span>AI Routes</span
+          ><span class="category-count" data-count="ai"></span>
+        </button>
+        <button
+          type="button"
+          data-category="management"
+          aria-pressed="false"
+          disabled
+        >
+          <span>Management Routes</span
+          ><span class="category-count" data-count="management"></span>
+        </button>
+        <button type="button" data-category="mcp" aria-pressed="false" disabled>
+          <span>MCP Routes</span
+          ><span class="category-count" data-count="mcp"></span>
+        </button>
+      </div>
+    </nav>
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <div class="eyebrow hero-eyebrow">
+          <span class="status-dot" aria-hidden="true"></span> THE API FOR YOUR
+          AI STACK
+        </div>
+        <h1 id="hero-title">
+          ONE API.<br />EVERY MODEL.<span class="hero-arrow" aria-hidden="true"
+            >↗</span
+          >
+        </h1>
+        <p>Build with any model. Manage it all in one place.</p>
+        <a class="explore-link" href="#reference-content"
+          >Explore the API <span aria-hidden="true">↓</span></a
+        >
+      </div>
+      <div class="hero-console">
+        <span class="corner corner-top" aria-hidden="true">+</span>
+        <span class="corner corner-bottom" aria-hidden="true">+</span>
+        <div class="console-top">
+          <span class="eyebrow">YOUR FIRST REQUEST</span
+          ><span class="console-language">cURL</span>
+        </div>
+        <div class="console-code">
+          <code
+            ><span class="code-accent">curl</span>
+            <span id="request-url">/v1/models</span>
+            <span class="code-muted">\</span><br />
+            <span class="code-muted">-H</span>
+            <span class="code-string"
+              >"Authorization: Bearer $LITELLM_API_KEY"</span
+            ></code
+          >
+        </div>
+        <div class="console-bottom">
+          <span>Start by listing your available models.</span
+          ><button
+            id="copy-request"
+            type="button"
+            aria-label="Copy example request"
+          >
+            Copy <span aria-hidden="true">⧉</span>
+          </button>
+        </div>
+        <div
+          class="gateway-diagram"
+          aria-label="Your app connects through LiteLLM to any model"
+        >
+          <div class="diagram-node">
+            <span class="diagram-symbol" aria-hidden="true">⌘</span
+            ><span>YOUR APP</span>
+          </div>
+          <div class="diagram-connector" aria-hidden="true"><i></i></div>
+          <div class="diagram-node diagram-gateway">
+            <span class="diagram-symbol" aria-hidden="true">↗</span
+            ><span>LITELLM</span>
+          </div>
+          <div class="diagram-connector" aria-hidden="true"><i></i></div>
+          <div class="diagram-node">
+            <span class="diagram-symbol" aria-hidden="true">✳</span
+            ><span>ANY MODEL</span>
+          </div>
+        </div>
+      </div>
+      <div class="hero-footer">
+        <span class="eyebrow"
+          >OPENAI COMPATIBLE <span aria-hidden="true">/</span> BUILT FOR
+          DEVELOPERS</span
+        ><span class="eyebrow" id="api-version"></span>
+      </div>
+    </section>
+    <div class="reference-bar">
+      <div>
+        <span class="eyebrow">REFERENCE</span
+        ><span class="reference-title" id="category-title">AI Routes</span
+        ><span class="category-description" id="category-description"
+          >Build with models, media, and agents.</span
+        >
+      </div>
+      <div class="reference-links">
+        <label class="reference-sort"
+          >Sidebar order
+          <select id="sidebar-order">
+            <option value="recommended">Recommended</option>
+            <option value="alpha">A–Z</option>
+          </select>
+        </label>
+        <a data-link="schemaUrl" href="#"
+          >OpenAPI JSON <span aria-hidden="true">↓</span></a
+        ><a data-link="docsUrl" href="#"
+          >Swagger UI <span aria-hidden="true">↗</span></a
+        >
+      </div>
+    </div>
+    <div id="lazy-notice" class="notice" hidden>
+      Some additional endpoint groups are available in
+      <a data-link="docsUrl" href="#">Swagger UI</a> on this deployment.
+    </div>
+    <main
+      id="reference-content"
+      tabindex="-1"
+      aria-label="Interactive API reference"
+    >
+      <div id="reference-status" class="reference-status" role="status">
+        Loading your API reference…
+      </div>
+      <div id="scalar-reference"></div>
+    </main>
+    <noscript
+      ><p class="notice">
+        Enable JavaScript to explore the interactive reference, or
+        <a href="https://docs.litellm.ai/">read the documentation</a>.
+      </p></noscript
+    >
+  </body>
+</html>

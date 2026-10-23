@@ -621,6 +621,7 @@ from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
     ui_discovery_endpoints_router,
 )
+from litellm.proxy.docs_reference import mount_api_reference
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.google_endpoints.endpoints import router as google_router
@@ -2914,6 +2915,7 @@ def mount_swagger_ui():
 
 
 mount_swagger_ui()
+mount_api_reference(app)
 
 docs_url: Final = get_docs_url()
 root_redirect_url: Final[str | None] = os.getenv("ROOT_REDIRECT_URL")
