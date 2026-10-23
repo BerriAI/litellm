@@ -126,6 +126,9 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
     try:
         if not is_otel_v2_enabled():
             return
+        if app.middleware_stack is not None:
+            verbose_logger.debug("Skipping OTel V2 FastAPI instrumentation after the middleware stack was built")
+            return
 
         # Lazy: only the V2-enabled path needs the optional
         # ``opentelemetry-instrumentation-fastapi`` package, which is not part of the

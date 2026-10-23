@@ -317,6 +317,9 @@ class _RequestedIdGenerator(RandomIdGenerator):
     the tracer's id generator, so the request rides on a context variable instead.
     """
 
+    def is_trace_id_random(self) -> bool:
+        return _requested_trace_id.get() is None
+
     def generate_trace_id(self) -> int:
         requested: Final = _requested_trace_id.get()
         return super().generate_trace_id() if requested is None else requested

@@ -2,6 +2,8 @@
 
 import asyncio
 import contextvars
+import gzip
+import os
 import threading
 import time
 from base64 import b64encode
@@ -5067,3 +5069,288 @@ class TestArizeProjectRouting:
         monkeypatch.setenv("ARIZE_PROJECT_NAME", "gateway-prod")
 
         assert self._forwarded_projects() == {"gateway-prod"}
+
+
+def _export_header_probe(api: str, signal: str, endpoint: str, headers: str | None) -> None:
+    from opentelemetry.sdk.metrics import MeterProvider
+
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+
+    config: Final = OpenTelemetryV2Config(
+        exporter="http/json" if api == "v2-json" else "otlp_http", endpoint=endpoint, headers=headers
+    )
+    tracing: Final = TracerProvider()
+    legacy: Final = (
+        OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="otlp_http", endpoint=endpoint, headers=headers),
+            tracer_provider=tracing,
+        )
+        if api == "v1"
+        else None
+    )
+    try:
+        if signal == "metrics":
+            reader: Final = legacy._get_metric_reader() if legacy else otel_providers.build_metric_reader(config)
+            metrics: Final = MeterProvider(metric_readers=(reader,))
+            try:
+                metrics.get_meter("header-isolation").create_counter("header_probe").add(1)
+                assert metrics.force_flush()
+            finally:
+                metrics.shutdown()
+        elif signal == "logs":
+            logs: Final = legacy._get_log_exporter() if legacy else otel_providers.build_log_exporter(config)
+            try:
+                assert logs.export(()).name == "SUCCESS"
+            finally:
+                logs.shutdown()
+        elif legacy:
+            processor: Final = legacy._get_span_processor()
+            try:
+                assert processor.span_exporter.export(()).name == "SUCCESS"
+            finally:
+                processor.shutdown()
+        else:
+            spans: Final = otel_providers.build_span_exporter(config)
+            try:
+                assert spans.export(()).name == "SUCCESS"
+            finally:
+                spans.shutdown()
+    finally:
+        tracing.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("api", "signal"),
+    (
+        ("v1", "traces"),
+        ("v1", "metrics"),
+        ("v1", "logs"),
+        ("v2", "traces"),
+        ("v2", "metrics"),
+        ("v2", "logs"),
+        ("v2-json", "traces"),
+    ),
+)
+@pytest.mark.parametrize("signal_headers", (False, True))
+def test_http_destinations_do_not_inherit_other_accounts_headers(
+    monkeypatch, requests_mock, api: str, signal: str, signal_headers: bool
+) -> None:
+    variable: Final = f"OTEL_EXPORTER_OTLP_{signal.upper()}_HEADERS" if signal_headers else "OTEL_EXPORTER_OTLP_HEADERS"
+    operator_headers: Final = "Authorization=Bearer%20operator-key,x-operator-key=operator-only"
+    monkeypatch.setenv(variable, operator_headers)
+    for account, configured in (("tenant-a", "a-key"), ("tenant-b", "b-key"), ("operator", None)):
+        endpoint: Final = f"https://{account}.example.test"
+        captured: Final = requests_mock.post(f"{endpoint}/v1/{signal}", content=b"")
+
+        _export_header_probe(api, signal, endpoint, f"x-tenant-key={configured}" if configured else None)
+
+        assert captured.request_history, f"{account} never exported {signal}"
+        for request in captured.request_history:
+            credentials: Final = {
+                name.lower(): value
+                for name, value in request.headers.items()
+                if name.lower() in {"authorization", "x-operator-key", "x-tenant-key"}
+            }
+            assert credentials == (
+                {"x-tenant-key": configured}
+                if configured
+                else {"authorization": "Bearer operator-key", "x-operator-key": "operator-only"}
+            )
+        assert os.environ[variable] == operator_headers
+
+
+@pytest.mark.parametrize("protocol", ("otlp_http", "http/json"))
+def test_headerless_tenant_destination_does_not_receive_operator_credentials(monkeypatch, requests_mock, protocol):
+    from types import SimpleNamespace
+
+    import requests
+    from opentelemetry.exporter.otlp.proto.http import _common
+
+    session: Final = requests.Session()
+    session.auth = requests.auth.HTTPBasicAuth("TEST_ONLY_USER", "TEST_ONLY_PASSWORD")
+    session.headers["x-session-marker"] = "TEST_ONLY_SESSION"
+    monkeypatch.setenv("OTEL_PYTHON_EXPORTER_OTLP_HTTP_TRACES_CREDENTIAL_PROVIDER", "TEST_ONLY_PROVIDER")
+    monkeypatch.setattr(_common, "entry_points", lambda **kwargs: (SimpleNamespace(load=lambda: lambda: session),))
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer%20operator-key")
+    captured: Final = requests_mock.post("https://tenant.example.test/v1/traces", content=b"")
+    processor: Final = otel_providers._destination_processor(
+        OtelDestination(endpoint="https://tenant.example.test", headers={}, protocol=protocol)
+    )
+    assert processor is not None
+    provider: Final = TracerProvider()
+    provider.add_span_processor(processor)
+    try:
+        emit(provider, "headerless-tenant")
+        assert provider.force_flush()
+        assert captured.request_history
+        assert all("Authorization" not in request.headers for request in captured.request_history)
+        assert all("x-session-marker" not in request.headers for request in captured.request_history)
+    finally:
+        provider.shutdown()
+
+
+@pytest.mark.parametrize("api", ("v2", "v2-json"))
+def test_isolated_headers_keep_the_exporters_content_type_and_compression(monkeypatch, requests_mock, api):
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "Content-Type=operator-only,Content-Encoding=operator-only")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION", "gzip")
+    captured: Final = requests_mock.post("https://tenant.example.test/v1/traces", content=b"")
+
+    _export_header_probe(api, "traces", "https://tenant.example.test", "x-tenant-key=tenant-key")
+
+    assert len(captured.request_history) == 1
+    request: Final = captured.last_request
+    assert request.headers["Content-Type"] == ("application/json" if api == "v2-json" else "application/x-protobuf")
+    assert request.headers["Content-Encoding"] == "gzip"
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION")
+
+    _export_header_probe(api, "traces", "https://tenant.example.test", "x-tenant-key=tenant-key")
+
+    assert gzip.decompress(request.body) == (captured.last_request.body or b"")
+
+
+@pytest.mark.parametrize("api", ("v2", "v2-json"))
+@pytest.mark.parametrize("header", ("Authorization", "AUTHORIZATION", "authorization"))
+def test_tenant_authorization_replaces_operator_authorization(monkeypatch, requests_mock, api, header):
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer%20operator-key")
+    captured: Final = requests_mock.post("https://tenant.example.test/v1/traces", content=b"")
+
+    _export_header_probe(api, "traces", "https://tenant.example.test", f"{header}=Bearer tenant-key")
+
+    assert len(captured.request_history) == 1
+    assert captured.last_request.headers["Authorization"] == "Bearer tenant-key"
+    assert "Bearer operator-key" not in captured.last_request.headers.values()
+
+
+@pytest.mark.parametrize("protocol", ("otlp_http", "http/json"))
+def test_session_defaults_cannot_restore_excluded_operator_headers(monkeypatch, requests_mock, protocol):
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+    from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter
+    from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
+
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer%20operator-key,x-operator-key=operator-only")
+    captured: Final = requests_mock.post("https://tenant.example.test/v1/traces", content=b"")
+    headers: Final = {"x-tenant-key": "tenant-key"}
+    tls: Final = resolve_otlp_http_tls("TRACES", headers)
+    assert tls.session is not None
+    tls.session.headers.update({"AUTHORIZATION": "Bearer operator-key", "X-Operator-Key": "operator-only"})
+    exporter_type: Final = OTLPJsonSpanExporter if protocol == "http/json" else OTLPSpanExporter
+    exporter: Final = exporter_type(
+        endpoint="https://tenant.example.test/v1/traces", headers=headers, session=tls.session
+    )
+    try:
+        assert exporter.export(()).name == "SUCCESS"
+        assert len(captured.request_history) == 1
+        assert captured.last_request.headers["x-tenant-key"] == "tenant-key"
+        assert "Authorization" not in captured.last_request.headers
+        assert "x-operator-key" not in captured.last_request.headers
+    finally:
+        exporter.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("api", "signal"),
+    (("v1", "traces"), ("v1", "logs"), ("v1", "metrics"),
+     ("v2", "traces"), ("v2", "logs"), ("v2", "metrics"), ("v2-json", "traces")),
+)
+@pytest.mark.parametrize("requests_ca", ("REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"))
+@pytest.mark.parametrize("collector_ca", ("signal", "global", "SSL_CERT_FILE", "ssl_verify"))
+@pytest.mark.parametrize("tenant", (False, True))
+def test_explicit_collector_ca_precedes_requests_environment(
+    monkeypatch, requests_mock, tmp_path, api: str, signal: str, requests_ca: str, collector_ca: str, tenant: bool
+) -> None:
+    certificate_path: Final = tmp_path / "collector-ca.pem"
+    certificate_path.write_text("TEST_ONLY_CA")
+    certificate: Final = str(certificate_path)
+    for variable in ("REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE", "SSL_VERIFY",
+                     "OTEL_EXPORTER_OTLP_CERTIFICATE", f"OTEL_EXPORTER_OTLP_{signal.upper()}_CERTIFICATE"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setattr(litellm, "ssl_verify", True)
+    monkeypatch.setenv(requests_ca, "/corporate/global-ca.pem")
+    if collector_ca == "ssl_verify":
+        monkeypatch.setattr(litellm, "ssl_verify", certificate)
+    else:
+        variable: Final = (
+            f"OTEL_EXPORTER_OTLP_{signal.upper()}_CERTIFICATE" if collector_ca == "signal"
+            else "OTEL_EXPORTER_OTLP_CERTIFICATE" if collector_ca == "global" else collector_ca
+        )
+        monkeypatch.setenv(variable, certificate)
+        if collector_ca == "signal":
+            monkeypatch.setenv("OTEL_EXPORTER_OTLP_CERTIFICATE", "/collector/generic-ca.pem")
+    monkeypatch.setenv(f"OTEL_EXPORTER_OTLP_{signal.upper()}_CLIENT_CERTIFICATE", "/collector/client.pem")
+    monkeypatch.setenv(f"OTEL_EXPORTER_OTLP_{signal.upper()}_CLIENT_KEY", "/collector/client.key")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example.invalid:8080")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer%20TEST_ONLY_OPERATOR")
+    captured: Final = requests_mock.post(f"https://collector.example.invalid/v1/{signal}", content=b"")
+
+    _export_header_probe(api, signal, "https://collector.example.invalid", "x-tenant-key=TEST_ONLY" if tenant else None)
+
+    assert captured.request_history
+    for request in captured.request_history:
+        assert request.verify == certificate
+        assert request.cert == ("/collector/client.pem", "/collector/client.key")
+        assert request.proxies["https"] == "http://proxy.example.invalid:8080"
+        assert request.headers.get("Authorization") == (None if tenant else "Bearer TEST_ONLY_OPERATOR")
+        assert request.headers.get("x-tenant-key") == ("TEST_ONLY" if tenant else None)
+
+
+@pytest.mark.parametrize(
+    ("api", "signal"),
+    (
+        ("v1", "traces"),
+        ("v1", "logs"),
+        ("v1", "metrics"),
+        ("v2", "traces"),
+        ("v2", "logs"),
+        ("v2", "metrics"),
+        ("v2-json", "traces"),
+    ),
+)
+@pytest.mark.parametrize("global_provider", (False, True))
+@pytest.mark.parametrize("tenant", (False, True))
+def test_collector_tls_preserves_operator_credential_provider_without_tenant_leakage(
+    monkeypatch, requests_mock, api: str, signal: str, global_provider: bool, tenant: bool
+) -> None:
+    from types import SimpleNamespace
+
+    import requests
+    from opentelemetry.exporter.otlp.proto.http import _common
+
+    session: Final = requests.Session()
+    session.auth = requests.auth.HTTPBasicAuth("TEST_ONLY_USER", "TEST_ONLY_PASSWORD")
+    session.headers["x-session-marker"] = "TEST_ONLY_SESSION"
+    provider_variable: Final = (
+        "OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER" if global_provider
+        else f"OTEL_PYTHON_EXPORTER_OTLP_HTTP_{signal.upper()}_CREDENTIAL_PROVIDER"
+    )
+    monkeypatch.setenv(provider_variable, "TEST_ONLY_PROVIDER")
+    monkeypatch.setenv(f"OTEL_EXPORTER_OTLP_{signal.upper()}_CERTIFICATE", "/collector/collector-ca.pem")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/corporate/global-ca.pem")
+    monkeypatch.setattr(_common, "entry_points", lambda **kwargs: (SimpleNamespace(load=lambda: lambda: session),))
+    captured: Final = requests_mock.post(f"https://collector.example.invalid/v1/{signal}", content=b"")
+
+    _export_header_probe(api, signal, "https://collector.example.invalid", "x-tenant-key=TEST_ONLY" if tenant else None)
+
+    assert captured.request_history
+    for request in captured.request_history:
+        assert request.verify == "/collector/collector-ca.pem"
+        assert request.headers.get("x-session-marker") == (None if tenant else "TEST_ONLY_SESSION")
+        assert request.headers.get("Authorization") == (
+            None if tenant else "Basic " + b64encode(b"TEST_ONLY_USER:TEST_ONLY_PASSWORD").decode()
+        )
+
+
+@pytest.mark.parametrize("api", ("v1", "v2", "v2-json"))
+@pytest.mark.parametrize("requests_ca", ("REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"))
+def test_requests_environment_ca_remains_fallback(monkeypatch, requests_mock, api: str, requests_ca: str) -> None:
+    for variable in ("REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE", "SSL_VERIFY",
+                     "OTEL_EXPORTER_OTLP_CERTIFICATE", "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setattr(litellm, "ssl_verify", True)
+    monkeypatch.setenv(requests_ca, "/corporate/global-ca.pem")
+    captured: Final = requests_mock.post("https://collector.example.invalid/v1/traces", content=b"")
+
+    _export_header_probe(api, "traces", "https://collector.example.invalid", None)
+
+    assert captured.request_history
+    assert captured.last_request.verify == "/corporate/global-ca.pem"

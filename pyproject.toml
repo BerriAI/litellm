@@ -177,16 +177,17 @@ proxy-runtime = [
     "grpcio==1.78.0",
     "prometheus-client>=0.20.0,<1.0",
     "langfuse>=4.7,<5.0",
-    "opentelemetry-api==1.33.1",
-    "opentelemetry-sdk==1.33.1",
-    "opentelemetry-exporter-otlp==1.33.1",
-    "opentelemetry-instrumentation-fastapi==0.54b1",
+    "opentelemetry-api==1.45.1",
+    "opentelemetry-sdk==1.45.1",
+    "opentelemetry-exporter-otlp==1.45.1",
+    "opentelemetry-exporter-otlp-json-http==0.66b1",
+    "opentelemetry-instrumentation-fastapi==0.66b1",
     "ddtrace>=4.8.2,<5.0",
     "sentry-sdk>=2.21.0,<3.0",
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
     "azure-storage-file-datalake>=12.20.0,<13.0",
-    "pypdf>=6.16.1,<7.0",
+    "pypdf>=6.21.1,<7.0",
     "llm-sandbox>=0.3.39,<1.0",
     "detect-secrets>=1.5.0,<2.0",
 ]
@@ -223,10 +224,11 @@ dev = [
     "types-PyYAML==6.0.12.20250915",
     "botocore-stubs==1.43.14",
     "types-boto3[bedrock,bedrock-agent,bedrock-runtime,kms,s3,sagemaker-runtime,sts]==1.43.30",
-    "opentelemetry-api==1.33.1",
-    "opentelemetry-sdk==1.33.1",
-    "opentelemetry-exporter-otlp==1.33.1",
-    "opentelemetry-instrumentation-fastapi==0.54b1",
+    "opentelemetry-api==1.45.1",
+    "opentelemetry-sdk==1.45.1",
+    "opentelemetry-exporter-otlp==1.45.1",
+    "opentelemetry-exporter-otlp-json-http==0.66b1",
+    "opentelemetry-instrumentation-fastapi==0.66b1",
     "langfuse>=4.7,<5.0",
     "fastapi-offline==1.7.6",
     "fakeredis==2.34.1",
@@ -255,10 +257,11 @@ proxy-dev = [
     "hypercorn==0.17.3",
     "prometheus-client==0.20.0",
     "sentry-sdk==2.21.0",
-    "opentelemetry-api==1.33.1",
-    "opentelemetry-sdk==1.33.1",
-    "opentelemetry-exporter-otlp==1.33.1",
-    "opentelemetry-instrumentation-fastapi==0.54b1",
+    "opentelemetry-api==1.45.1",
+    "opentelemetry-sdk==1.45.1",
+    "opentelemetry-exporter-otlp==1.45.1",
+    "opentelemetry-exporter-otlp-json-http==0.66b1",
+    "opentelemetry-instrumentation-fastapi==0.66b1",
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
     "backports-zstd==1.8.0; python_version < '3.14'",
@@ -280,7 +283,7 @@ ci = [
     "langchain==1.3.9",
     "lunary==1.4.36; python_version == '3.10'",
     "lunary==1.4.37; python_version >= '3.11'",
-    "logfire==4.6.0",
+    "logfire==5.2.0",
     "traceloop-sdk==0.34.0",
     "detect-secrets==1.5.0",
     "PyGithub==2.8.1",
@@ -371,7 +374,8 @@ default-groups = ["dev"]
 required-version = ">=0.10.9"
 exclude-newer = "3 days"
 # TODO: ryan, remove after 2026-10-23, once certifi 2026.10.19 (drops the compromised eMudhra root) clears the 3-day window
-exclude-newer-package = { certifi = "2026-10-20T03:00:00Z" }
+# TODO: Remove brotli after 2026-10-25, once 1.2.1 (fixes PYSEC-2026-4322) clears the 3-day window
+exclude-newer-package = { certifi = "2026-10-20T03:00:00Z", brotli = "2026-10-22T14:05:00Z" }
 
 [tool.uv.sources]
 litellm-proxy-extras = { workspace = true }

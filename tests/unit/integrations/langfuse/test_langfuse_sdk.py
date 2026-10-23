@@ -165,6 +165,30 @@ def test_requested_trace_id_is_the_exported_trace_id_and_the_generation_is_its_r
     assert span.parent is None
 
 
+
+@pytest.mark.parametrize("trace_id", ["0" * 31 + "1", None])
+def test_trace_randomness_flag_matches_the_id_source(channel, trace_id):
+    from opentelemetry.context import Context
+    from litellm.integrations.langfuse.langfuse_sdk import _start_span
+
+    tracing, exporter = channel
+    span = _start_span(
+        tracing.tracer,
+        name="id-source",
+        context=Context(),
+        start_time=CALL_START,
+        trace_id=trace_id,
+        observation_id=None,
+        attributes={},
+    )
+    span.end(end_time=to_unix_nanos(CALL_END))
+    tracing.flush()
+    exported = _only_span(exporter, "id-source")
+    assert exported.context.trace_flags.random_trace_id is (trace_id is None)
+    assert exported.context.trace_flags.sampled
+    if trace_id is not None:
+        assert exported.context.trace_id == int(trace_id, 16)
+
 def test_parent_observation_id_nests_the_generation_under_the_callers_observation(channel):
     tracing, exporter = channel
     _generation(tracing, name="child-gen", parent=PARENT_C).end(CALL_END)
