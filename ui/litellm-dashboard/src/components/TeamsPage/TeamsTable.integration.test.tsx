@@ -163,16 +163,26 @@ describe("sort contract – only backend-sortable columns are sortable", () => {
 
   it("right-aligns Spend / Budget but not Team", () => {
     renderTable();
-    expect(screen.getByRole("columnheader", { name: "Spend / Budget" })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: /Spend\s*\/\s*Budget/ })).toHaveClass("text-right");
     expect(screen.getByRole("columnheader", { name: "Team" })).not.toHaveClass("text-right");
   });
 
-  it("does not make Spend / Budget sortable (the backend rejects sort_by=spend)", () => {
+  it.each([
+    ["Spend or Budget", "Spend", "spend"],
+    ["Spend or Budget", "Budget", "max_budget"],
+    ["Members or Models or Keys", "Members", "members"],
+    ["Members or Models or Keys", "Models", "models"],
+    ["Members or Models or Keys", "Keys", "keys_count"],
+  ])("sorts %s by %s through the API", async (menu, label, field) => {
+    const user = userEvent.setup();
     renderTable();
-    expect(screen.queryByText("Spend / Budget").closest("button")).toBeNull();
-    // Team and Created are the only sortable headers.
-    expect(screen.getByText("Team").closest("button")).not.toBeNull();
-    expect(screen.getByText("Created").closest("button")).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: `Sort options for ${menu}` }));
+    await user.click(await screen.findByRole("menuitem", { name: `${label} descending` }));
+    await waitFor(() => expect(lastOptions()).toMatchObject({ sortBy: field, sortOrder: "desc" }));
+    expect(mockUseTeamsTable.mock.calls.at(-1)?.[0]).toBe(1);
+    await user.click(screen.getByRole("button", { name: `Sort options for ${menu}` }));
+    await user.click(await screen.findByRole("menuitem", { name: `${label} ascending` }));
+    await waitFor(() => expect(lastOptions()).toMatchObject({ sortBy: field, sortOrder: "asc" }));
   });
 });
 
