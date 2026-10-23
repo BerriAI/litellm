@@ -143,6 +143,7 @@ from litellm.router_utils.reasoning_effort_capability import (
     resolve_chat_reasoning,
 )
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
+from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
 from litellm.types.completion import (
     CompletionDispatchContext,
     _CompletionDispatchResult,
@@ -169,7 +170,6 @@ from litellm.utils import (
     ProviderConfigManager,
     TextChoices,
     TextCompletionResponse,
-    TextCompletionStreamWrapper,
     TranscriptionResponse,
     Usage,
     add_provider_specific_params_to_optional_params,
