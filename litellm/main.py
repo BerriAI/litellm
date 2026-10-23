@@ -7949,6 +7949,7 @@ def text_completion(
             message=f"Unmapped prompt format. Your prompt is neither a list of strings nor a string. prompt={prompt}. File an issue - https://github.com/BerriAI/litellm/issues",
             model=model or "",
             llm_provider=custom_llm_provider or "",
+            body={"type": "invalid_request_error", "param": "prompt"},
         )
 
     kwargs.pop("prompt", None)

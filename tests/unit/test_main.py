@@ -9822,13 +9822,16 @@ async def test_unknown_chat_content_is_a_non_retryable_bad_request(asynchronous:
     from litellm.proxy.common_request_processing import proxy_exception_from_route_error
 
     messages: Final = [{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "future_block"}]}]
-    with pytest.raises(litellm.BadRequestError, match="Invalid user message at index 0") as raised:
-        if asynchronous:
+    if asynchronous:
+        with pytest.raises(litellm.BadRequestError, match="Invalid user message at index 0") as raised:
             await litellm.acompletion(model="hosted_vllm/local-qa", messages=messages, api_key="local-fixture")
-        else:
+    else:
+        with pytest.raises(litellm.BadRequestError, match="Invalid user message at index 0") as raised:
             litellm.completion(model="hosted_vllm/local-qa", messages=messages, api_key="local-fixture")
 
     assert raised.value.status_code == 400
+    assert raised.value.type == "invalid_request_error"
+    assert raised.value.param == "messages[0].content"
     assert not litellm.should_retry(raised.value.status_code)
     mapped: Final = proxy_exception_from_route_error(raised.value)
     assert mapped.type == "invalid_request_error"
@@ -9843,15 +9846,18 @@ async def test_unknown_chat_content_is_a_non_retryable_bad_request(asynchronous:
 async def test_object_text_prompt_is_a_non_retryable_bad_request(asynchronous: bool) -> None:
     from litellm.proxy.common_request_processing import proxy_exception_from_route_error
 
-    with pytest.raises(litellm.BadRequestError, match="Unmapped prompt format") as raised:
-        if asynchronous:
+    if asynchronous:
+        with pytest.raises(litellm.BadRequestError, match="Unmapped prompt format") as raised:
             await litellm.atext_completion(
                 model="hosted_vllm/local-qa", prompt={"not": "a prompt"}, api_key="local-fixture"
             )
-        else:
+    else:
+        with pytest.raises(litellm.BadRequestError, match="Unmapped prompt format") as raised:
             litellm.text_completion(model="hosted_vllm/local-qa", prompt={"not": "a prompt"}, api_key="local-fixture")
 
     assert raised.value.status_code == 400
+    assert raised.value.type == "invalid_request_error"
+    assert raised.value.param == "prompt"
     assert not litellm.should_retry(raised.value.status_code)
     mapped: Final = proxy_exception_from_route_error(raised.value)
     assert mapped.type == "invalid_request_error"
