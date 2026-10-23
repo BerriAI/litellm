@@ -23,7 +23,7 @@ from litellm.types.llms.openai import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
-    from litellm.types.utils import ModelResponse
+    from litellm.types.utils import ModelResponse, Usage
 
 from ..base_utils import (
     map_developer_role_to_system_role,
@@ -418,6 +418,9 @@ class BaseConfig(ABC):
         returning empty choices for Anthropic-native Claude responses).
         """
         return parsed_response
+
+    def transform_response_usage(self, usage: "Usage", response_headers: Mapping[str, str]) -> "Usage":
+        return usage
 
     @abstractmethod
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

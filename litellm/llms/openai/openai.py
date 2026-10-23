@@ -830,6 +830,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     )
                     if stream is True and fake_stream is False:
                         return self.streaming(
+                            provider_config=provider_config,
                             logging_obj=logging_obj,
                             headers=headers,
                             data=data,
@@ -897,6 +898,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             response_object=stringified_response,
                             model_response_object=model_response,
                             _response_headers=headers,
+                            provider_config=provider_config,
                         )
                         if fake_stream is True:
                             return self.mock_streaming(
@@ -1038,6 +1040,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     model_response_object=model_response,
                     hidden_params={"headers": headers},
                     _response_headers=headers,
+                    provider_config=provider_config,
                 )
 
                 # Call agentic completion hooks (e.g., for websearch_interception)
@@ -1101,6 +1104,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         headers=None,
         stream_options: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
+        provider_config: BaseConfig | None = None,
     ):
         data["stream"] = True
         data.update(self.get_stream_options(stream_options=stream_options, api_base=api_base))
@@ -1142,6 +1146,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj=logging_obj,
             stream_options=data.get("stream_options", None),
             _response_headers=headers,
+            provider_config=provider_config,
         )
         return streamwrapper
 
@@ -1215,6 +1220,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     logging_obj=logging_obj,
                     stream_options=data.get("stream_options", None),
                     _response_headers=headers,
+                    provider_config=provider_config,
                 )
                 return streamwrapper
             except openai.UnprocessableEntityError as e:

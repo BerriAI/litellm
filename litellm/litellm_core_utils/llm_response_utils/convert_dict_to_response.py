@@ -4,7 +4,7 @@ import re
 import time
 import traceback
 from collections.abc import Mapping, Sequence
-from typing import Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
@@ -53,6 +53,9 @@ from litellm.types.utils import (
 from litellm.types.utils import Logprobs as TextCompletionLogprobs
 
 from .get_headers import get_response_headers
+
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 _MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
 _CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
@@ -682,6 +685,7 @@ def convert_to_model_response_object(
     hidden_params: dict | None = None,
     _response_headers: dict | None = None,
     convert_tool_call_to_json_mode: bool | None = None,  # used for supporting 'json_schema' on older models
+    provider_config: "BaseConfig | None" = None,
 ):
     additional_headers = get_response_headers(_response_headers)
 
@@ -843,7 +847,17 @@ def convert_to_model_response_object(
 
             if "usage" in response_object and response_object["usage"] is not None:
                 usage_object: Final = litellm.Usage(**response_object["usage"])
-                setattr(model_response_object, "usage", usage_object)
+                transformed_usage: Final = (
+                    provider_config.transform_response_usage(
+                        usage_object,
+                        cast(  # cast-ok: HTTP clients supply string headers; the shared parameter retains its legacy dict type.
+                            Mapping[str, str], _response_headers or {}
+                        ),
+                    )
+                    if provider_config is not None
+                    else usage_object
+                )
+                setattr(model_response_object, "usage", transformed_usage)
             if "created" in response_object:
                 model_response_object.created = safe_convert_created_field(response_object["created"])
 
