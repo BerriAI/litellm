@@ -104,17 +104,22 @@ export function computeTeamModelBadges(
   ];
 }
 
+// react-hook-form reports a dirty array field as `true` or as an array/object of flags.
+function isFieldDirty(dirty: unknown): boolean {
+  if (dirty === true) {
+    return true;
+  }
+  if (dirty === null || typeof dirty !== "object") {
+    return false;
+  }
+  return Object.values(dirty as Record<string, unknown>).some(Boolean);
+}
+
 export function modelsFieldForTeamUpdate(
   dirtyModels: unknown,
   models: string[] | undefined,
 ): { models: string[] } | Record<string, never> {
-  const isDirty =
-    dirtyModels === true ||
-    (Array.isArray(dirtyModels) && dirtyModels.some(Boolean)) ||
-    (dirtyModels !== null &&
-      typeof dirtyModels === "object" &&
-      Object.values(dirtyModels as Record<string, unknown>).some(Boolean));
-  if (!isDirty) {
+  if (!isFieldDirty(dirtyModels)) {
     return {};
   }
   return { models: normalizeTeamModelSelection(models) };
