@@ -10609,6 +10609,141 @@ async def test_clearing_the_member_default_evicts_every_roster_members_cached_me
     assert "standalone-team-123_at-old-cap" in evicted
 
 
+def _backfill_ready_prisma(answer):
+    from types import SimpleNamespace
+
+    existing: Final = _existing_team_with_model_caps({})
+    existing.metadata = {"team_member_budget_id": "member-budget-1"}
+    existing.model_dump.return_value["metadata"] = existing.metadata
+    updated: Final = _existing_team_with_model_caps({})
+    updated.metadata = existing.metadata
+    updated.litellm_model_table = None
+    prisma: Final = MagicMock()
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+    prisma.jsonify_team_object = lambda db_data: db_data
+    prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated)
+    tx: Final = _transaction_over(prisma)
+    tx.query_raw = AsyncMock(side_effect=answer)
+    default_row: Final = {"max_budget": 50.0, "budget_duration": "30d"}
+    prisma.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(**default_row, model_dump=lambda: default_row)
+    )
+    return prisma
+
+
+async def _raise_to_default(prisma):
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    cache.async_delete_cache = AsyncMock()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+    ):
+        return await update_team(
+            data=UpdateTeamRequest(
+                team_id="standalone-team-123", team_member_budget=50.0, team_member_budget_backfill="raise_to_default"
+            ),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_backfill_reports_how_many_members_moved(disable_audit_logging_for_mocked_team):
+    from litellm.proxy._types import TeamMemberBudgetBackfillResult
+
+    async def answer(sql: str, *args: object) -> list[dict[str, object]]:
+        if "GROUP BY b.budget_duration" in sql:
+            return [{"duration": "30d", "members": 1}, {"duration": "7d", "members": 2}]
+        if "b.budget_duration = ANY" in sql:
+            return [{"user_id": "below", "budget_id": "own-below", "budget_duration": "30d"}]
+        if "HAVING COUNT(*) > 1" in sql:
+            return []
+        return [{"members_with_roles": [{"user_id": "below", "role": "user"}]}]
+
+    response: Final = await _raise_to_default(_backfill_ready_prisma(answer))
+
+    assert response["team_member_budget_backfill_result"] == TeamMemberBudgetBackfillResult(
+        moved_to_default=1, skipped_other_reset_period=2
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_team_deleted_while_its_update_waits_for_the_lock_is_not_written(disable_audit_logging_for_mocked_team):
+    from litellm.proxy._types import ProxyException
+
+    async def answer(sql: str, *args: object) -> list[dict[str, object]]:
+        return []
+
+    prisma: Final = _backfill_ready_prisma(answer)
+
+    with pytest.raises(ProxyException) as gone:
+        await _raise_to_default(prisma)
+
+    assert gone.value.code == "404"
+    prisma.db.litellm_teamtable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_backfill_over_the_member_limit_is_refused_without_writing_the_team(
+    disable_audit_logging_for_mocked_team,
+):
+    from types import SimpleNamespace
+
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+    from litellm.proxy.management_helpers.team_member_default_budget import MAX_MEMBER_BUDGETS_MOVED_PER_UPDATE
+
+    existing: Final = _existing_team_with_model_caps({})
+    existing.metadata = {"team_member_budget_id": "member-budget-1"}
+    existing.model_dump.return_value["metadata"] = existing.metadata
+    prisma: Final = MagicMock()
+    over_limit: Final = MAX_MEMBER_BUDGETS_MOVED_PER_UPDATE + 1
+
+    async def answer(sql: str, *args: object) -> list[dict[str, object]]:
+        if "GROUP BY b.budget_duration" in sql:
+            return [{"duration": "30d", "members": over_limit}]
+        return [{"members_with_roles": []}]
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+    ):
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+        prisma.jsonify_team_object = lambda db_data: db_data
+        prisma.db.litellm_teamtable.update = AsyncMock()
+        tx: Final = _transaction_over(prisma)
+        tx.query_raw = AsyncMock(side_effect=answer)
+        prisma.db.litellm_budgettable.find_unique = AsyncMock(
+            return_value=SimpleNamespace(max_budget=50.0, budget_duration="30d")
+        )
+
+        with pytest.raises(ProxyException) as refused:
+            await update_team(
+                data=UpdateTeamRequest(
+                    team_id="standalone-team-123",
+                    team_member_budget=50.0,
+                    team_member_budget_backfill="raise_to_default",
+                ),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+            )
+
+    assert refused.value.code == "422"
+    assert str(over_limit) in refused.value.message
+    prisma.db.litellm_teamtable.update.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_update_team_persists_member_model_budget_to_default_budget_row(
     disable_audit_logging_for_mocked_team,
