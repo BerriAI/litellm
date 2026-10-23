@@ -18,7 +18,7 @@ import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filt
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChevronDown, Plus, Users } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button as UIButton } from "@/components/ui/button";
