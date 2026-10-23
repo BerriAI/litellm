@@ -95,6 +95,27 @@ def test_aistupidlevel_routed_models_support_tools():
     assert "tool_choice" in supported
 
 
+def test_aistupidlevel_routing_modes_are_in_the_model_cost_map(monkeypatch: pytest.MonkeyPatch):
+    """Routing modes carry the router's limits and no fixed price: each request is billed
+    by the routed model's provider to the caller's own key."""
+    cost_map_path = Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json"
+    modes = {k: v for k, v in json.loads(cost_map_path.read_text()).items() if k.startswith("aistupidlevel/")}
+
+    assert "aistupidlevel/auto-coding" in modes
+    for name, info in modes.items():
+        assert info["litellm_provider"] == "aistupidlevel", name
+        assert info["mode"] == "chat", name
+        assert (info["max_input_tokens"], info["max_output_tokens"]) == (262144, 64000), name
+        assert info["supports_function_calling"] is True, name
+        assert info["supports_vision"] is False, name
+        assert not any("cost" in field for field in info), name
+
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **modes})
+    info = litellm.get_model_info(model="aistupidlevel/auto-coding")
+    assert info["max_input_tokens"] == 262144
+    assert info["supports_function_calling"] is True
+
+
 def test_aistupidlevel_is_available_in_add_model_form():
     fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
     providers = json.loads(fields_path.read_text())
