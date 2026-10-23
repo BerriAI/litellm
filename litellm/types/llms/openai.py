@@ -1389,12 +1389,18 @@ class CacheWriteTokensDetails(BaseLiteLLMOpenAIResponseObject):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
+def _is_none(value: object) -> bool:
+    return value is None
+
+
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
     cached_tokens_details: CachedTokensDetails | None = None
-    cache_write_tokens: int | None = None
-    cache_write_tokens_details: CacheWriteTokensDetails | None = None
+    cache_write_tokens: int | None = Field(default=None, exclude_if=_is_none)
+    cache_write_tokens_details: CacheWriteTokensDetails | None = Field(
+        default=None, exclude_if=_is_none
+    )
     image_tokens: int | None = None
     text_tokens: int | None = None
     video_tokens: int | None = None
