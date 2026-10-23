@@ -10151,6 +10151,12 @@ def _format_streaming_sse_chunk(chunk: object) -> str | bytes:
     return f"data: {chunk}\n\n"
 
 
+def _should_emit_openai_done(*, responses_stream_errors: bool, skip_done_frame: bool) -> bool:
+    if responses_stream_errors:
+        return False
+    return not skip_done_frame
+
+
 _SSE_FRAME_DELIMITERS: Final = ("\r\n\r\n", "\n\n", "\r\r")
 _OPENAI_STREAM_DONE_FRAME: Final = "data: [DONE]\n\n"
 _MAX_RAW_SSE_BUFFER_CHARS: Final = 8 * 1024 * 1024
@@ -10380,7 +10386,7 @@ def _make_keepalive_resolver(request_data: Mapping[str, object]) -> Callable[[ob
 async def async_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: dict[str, object],
     request: Request | None = None,
     *,
     responses_stream_errors: bool = False,
@@ -10390,7 +10396,10 @@ async def async_data_generator(
     stream_completed = False
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
-    ends_with_openai_done: Final = not request_data.get("_litellm_skip_openai_stream_done")
+    ends_with_openai_done: Final = _should_emit_openai_done(
+        responses_stream_errors=responses_stream_errors,
+        skip_done_frame=bool(request_data.get("_litellm_skip_openai_stream_done")),
+    )
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
     stream_iterator: Final = _object_stream(
         proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -10576,7 +10585,6 @@ async def async_data_generator(
 
         if error_message is not None:
             yield error_message
-        # OpenAI-compatible streams terminate with data: [DONE]; Google GenAI (?alt=sse) does not.
         if ends_with_openai_done:
             yield _OPENAI_STREAM_DONE_FRAME
     except (asyncio.CancelledError, GeneratorExit):
