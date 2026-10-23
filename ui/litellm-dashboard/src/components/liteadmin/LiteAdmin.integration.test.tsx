@@ -1210,20 +1210,29 @@ describe("Aria Agent in the gateway", () => {
   it("should render a usage-only assistant's Markdown table as accessible headers and cells", async () => {
     session("internal_user");
     const markdown = [
-      "Usage by model:",
+      "## Usage by model",
+      "",
+      "> Spend is shown in USD.",
       "",
       "| Model | Requests | Spend |",
       "| :--- | ---: | ---: |",
       "| primary-model | 12 | $3.40 |",
       "| fallback-model | 5 | $0.60 |",
     ].join("\n");
-    gateway([answer(markdown)]);
+    gateway([answer(markdown), answer("The primary model accounts for $3.40 of your $4.00 spend.")]);
     renderWidget(undefined, false, true);
     const input = await screen.findByRole("textbox", { name: "Message Aria Agent" });
     await waitFor(() => expect(input).toBeEnabled());
     act(() => send("Show my usage by model as a table"));
     const conversation = screen.getByLabelText("Aria Agent conversation");
     const table = await within(conversation).findByRole("table");
+    expect(within(conversation).getByRole("heading", { name: "Usage by model", level: 2 })).toBeInTheDocument();
+    expect(within(conversation).getByRole("article", { name: "Your question" })).toHaveTextContent(
+      "Show my usage by model as a table",
+    );
+    expect(within(conversation).getByRole("article", { name: "Aria Agent answer" })).toHaveTextContent(
+      "Spend is shown in USD.",
+    );
     for (const header of ["Model", "Requests", "Spend"]) {
       expect(within(table).getByRole("columnheader", { name: header })).toBeInTheDocument();
     }
@@ -1238,6 +1247,12 @@ describe("Aria Agent in the gateway", () => {
       }
     }
     expect(within(conversation).queryByText(/\|.*Model.*\|/)).not.toBeInTheDocument();
+    act(() => send("Which model is driving the cost?"));
+    expect(
+      await within(conversation).findByText("The primary model accounts for $3.40 of your $4.00 spend."),
+    ).toBeInTheDocument();
+    expect(within(conversation).getByRole("table")).toBeInTheDocument();
+    expect(within(conversation).getAllByRole("article", { name: "Your question" })).toHaveLength(2);
   });
 
   it("defaults to eligible Sonnet and preserves a manual choice across catalog refresh", async () => {

@@ -70,7 +70,11 @@ function MarkdownCodeRenderer({
 const markdownComponents: Components = {
   code: MarkdownCodeRenderer,
   pre: ({ node, ...props }) => <pre className="max-w-full overflow-x-auto" {...props} />,
+  h1: ({ node, ...props }) => <h1 className="mt-6 mb-2 text-xl font-semibold tracking-tight first:mt-0" {...props} />,
+  h2: ({ node, ...props }) => <h2 className="mt-6 mb-2 text-lg font-semibold tracking-tight first:mt-0" {...props} />,
+  h3: ({ node, ...props }) => <h3 className="mt-5 mb-2 text-base font-semibold tracking-tight first:mt-0" {...props} />,
   p: ({ node, ...props }) => <p className="my-3 first:mt-0 last:mb-0" {...props} />,
+  blockquote: ({ node, ...props }) => <blockquote className="my-3 border-l-2 pl-4 text-muted-foreground" {...props} />,
   ul: ({ node, ...props }) => <ul className="my-3 list-disc space-y-1 pl-5" {...props} />,
   ol: ({ node, ...props }) => <ol className="my-3 list-decimal space-y-1 pl-5" {...props} />,
   table: ({ node, ...props }) => <Table {...props} />,

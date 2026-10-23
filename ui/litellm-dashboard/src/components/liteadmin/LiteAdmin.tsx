@@ -358,7 +358,7 @@ function Panel({
           initialFocus?.current ?? ref.current?.querySelector<HTMLElement>("textarea:enabled") ?? ref.current
         }
         finalFocus={state?.launcherRef}
-        className="bottom-4 right-4 left-auto top-auto flex h-[min(42rem,calc(100dvh-2rem))] translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden p-0 shadow-xl sm:max-w-md"
+        className="flex h-[min(48rem,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 shadow-xl sm:max-w-4xl"
       >
         {children}
         {homeContainer ? createPortal(composer, homeContainer) : composer}
@@ -604,7 +604,6 @@ function LiteAdminComposer({
 }) {
   return (
     <div className={cn("space-y-3", !home && "border-t p-3")}>
-      {!home && <ModelPicker models={models} value={model} onChange={onModelChange} disabled={props.isLoading} />}
       <ModelStatus models={models} />
       {tooLong && <FieldError>Keep your message within {MAX_INPUT_LENGTH.toLocaleString()} characters.</FieldError>}
       {home ? (
@@ -616,10 +615,14 @@ function LiteAdminComposer({
           }
         />
       ) : (
-        <>
-          <ChatComposer {...props} placeholder="Ask Aria…" />
-          <p className="text-xs text-muted-foreground">Use a model you trust with your gateway data.</p>
-        </>
+        <ChatComposer
+          {...props}
+          placeholder="Ask Aria…"
+          className="[&_[data-slot=input-group]]:min-h-0 [&_textarea]:min-h-12"
+          tools={
+            <ModelPicker models={models} value={model} onChange={onModelChange} disabled={props.isLoading} compact />
+          }
+        />
       )}
     </div>
   );
