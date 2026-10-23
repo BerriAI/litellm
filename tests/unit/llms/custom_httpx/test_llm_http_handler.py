@@ -5542,3 +5542,105 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
     sent: Final = received[0]
     assert "safeguards" not in json.loads(sent.content)
     assert "dangerous-tool-use-2026-09-03" not in sent.headers.get("anthropic-beta", ""), dict(sent.headers)
+
+
+class _DroppingByteStream(httpx.AsyncByteStream):
+    """A response body that fails on its first read, the way a dropped connection does."""
+
+    async def __aiter__(self):
+        raise httpx.ReadError("Connection closed.")
+        yield b""  # pragma: no cover - unreachable, makes this an async generator
+
+
+def _google_genai_streaming_logging_obj():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="agenerate_content_stream",
+        start_time=time.time(),
+        litellm_call_id="google-genai-stream-priming",
+        function_id="f",
+    )
+    logging_obj.update_environment_variables(
+        model="gemini-3.8-flash",
+        user="",
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="gemini",
+    )
+    return logging_obj
+
+
+async def _call_google_genai_stream(upstream: httpx.Response):
+    """Drive async_generate_content_handler against `upstream` faked at the HTTP boundary.
+
+    The provider config and the HTTP client are the real ones; only the upstream
+    response is a double, so the error mapping under test is the provider's own.
+    """
+    from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
+
+    transport: Final = httpx.MockTransport(lambda request: upstream)
+    async with httpx.AsyncClient(transport=transport) as async_client:
+        client: Final = AsyncHTTPHandler()
+        await client.close()
+        client.client = async_client
+        return await BaseLLMHTTPHandler().async_generate_content_handler(
+            model="gemini-3.8-flash",
+            contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+            generate_content_provider_config=GoogleGenAIConfig(),
+            generate_content_config_dict={},
+            tools=None,
+            custom_llm_provider="gemini",
+            litellm_params=GenericLiteLLMParams(
+                api_key="test-key",
+                api_base="https://generativelanguage.googleapis.com",
+            ),
+            logging_obj=_google_genai_streaming_logging_obj(),
+            client=client,
+            stream=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_google_genai_async_stream_priming_fails_retriably_when_the_stream_drops_before_its_first_event():
+    """
+    A stream that drops before its first event must fail inside the caller's own retry window.
+
+    The handler returns as soon as the response headers arrive, so without priming the first
+    body read happens in the proxy's data generator, long after the router recorded the call
+    as a success and spent its retry budget.
+    """
+    upstream: Final = httpx.Response(
+        status_code=200,
+        headers={"content-type": "text/event-stream"},
+        stream=_DroppingByteStream(),
+    )
+
+    with pytest.raises(BaseLLMException) as exc_info:
+        await _call_google_genai_stream(upstream)
+
+    # The router retries on this status, so the drop now lands inside its retry loop.
+    assert litellm.should_retry(exc_info.value.status_code)
+
+
+@pytest.mark.asyncio
+async def test_google_genai_async_stream_priming_returns_an_iterator_that_still_yields_the_whole_stream():
+    """Priming must not consume the first event: the consumer sees the entire stream."""
+    from litellm.google_genai.streaming_iterator import (
+        AsyncGoogleGenAIGenerateContentStreamingIterator,
+    )
+
+    upstream: Final = httpx.Response(
+        status_code=200,
+        headers={"content-type": "text/event-stream"},
+        content=b'data: {"first": 1}\n\ndata: {"second": 2}\n\n',
+    )
+
+    iterator = await _call_google_genai_stream(upstream)
+
+    assert isinstance(iterator, AsyncGoogleGenAIGenerateContentStreamingIterator)
+    assert await iterator.__anext__() == b'data: {"first": 1}\n\n'
+    assert await iterator.__anext__() == b'data: {"second": 2}\n\n'
