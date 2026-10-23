@@ -43,7 +43,7 @@ pub(super) async fn execute(
         call.input,
         call.optional_params,
     )?;
-    let authenticated = resolve_auth(&route.auth, environment, &|_| None).await?;
+    let authenticated = resolve_auth(&route.auth, &route.http, environment, &|_| None).await?;
     let wire = interceptors
         .before_provider_request(
             WireRequest {

@@ -56,6 +56,21 @@ impl ApiUrl<Base> {
 }
 
 impl ApiUrl<Complete> {
+    pub fn replace_query_pair(mut self, name: &str, value: &str) -> Self {
+        let preserved: Vec<(String, String)> = self
+            .url
+            .query_pairs()
+            .filter(|(key, _)| key != name)
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        self.url
+            .query_pairs_mut()
+            .clear()
+            .extend_pairs(preserved)
+            .append_pair(name, value);
+        self
+    }
+
     pub fn append_query_pairs<'a>(
         mut self,
         pairs: impl IntoIterator<Item = (&'a str, &'a str)>,
@@ -73,6 +88,29 @@ impl ApiUrl<Complete> {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::missing(
+        "https://example.test?tenant=a",
+        "https://example.test/route?tenant=a&version=new"
+    )]
+    #[case::existing(
+        "https://example.test?version=old&tenant=a",
+        "https://example.test/route?tenant=a&version=new"
+    )]
+    #[case::duplicate(
+        "https://example.test?version=old&version=older",
+        "https://example.test/route?version=new"
+    )]
+    fn replacing_query_pair_keeps_unrelated_parameters(#[case] base: &str, #[case] expected: &str) {
+        let url = ApiUrl::parse(base)
+            .unwrap()
+            .complete_path(&["route"])
+            .unwrap()
+            .replace_query_pair("version", "new")
+            .into_string();
+        assert_eq!(url, expected);
+    }
 
     #[rstest]
     #[case::root("https://example.test", "https://example.test/v1/ocr")]

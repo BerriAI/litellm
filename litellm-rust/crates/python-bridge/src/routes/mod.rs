@@ -7,6 +7,7 @@ pub(crate) mod messages;
 pub(crate) mod ocr;
 pub(crate) mod responses;
 pub(crate) mod token_counter;
+pub(crate) mod tokenize;
 pub(crate) mod traces;
 
 use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall};

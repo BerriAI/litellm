@@ -2613,6 +2613,11 @@ class Router:
         self.aocr = self.factory_function(aocr, call_type="aocr")
         self.ocr = self.factory_function(ocr, call_type="ocr")
 
+        from litellm.tokenize import atokenize, tokenize
+
+        self.atokenize = self.factory_function(atokenize, call_type="atokenize")
+        self.tokenize = self.factory_function(tokenize, call_type="tokenize")
+
         from litellm.search import asearch, search
 
         self.asearch = self.factory_function(asearch, call_type="asearch")
@@ -7822,6 +7827,8 @@ class Router:
             "vector_store_file_delete",
             "aocr",
             "ocr",
+            "atokenize",
+            "tokenize",
             "asearch",
             "search",
             "adecisions",
@@ -7902,6 +7909,7 @@ class Router:
             "generate_content",
             "generate_content_stream",
             "ocr",
+            "tokenize",
             "search",
             "decisions",
             "systemone",
@@ -8073,6 +8081,8 @@ class Router:
                 "agenerate_content_stream",
                 "aocr",
                 "ocr",
+                "atokenize",
+                "tokenize",
                 "adecisions",
                 "asystemone",
                 "aextraction",

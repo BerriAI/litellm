@@ -1,4 +1,4 @@
-use strum::{EnumString, IntoStaticStr};
+use strum::{EnumString, IntoStaticStr, VariantArray};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomLlmProvider<'a> {
@@ -6,7 +6,7 @@ pub struct CustomLlmProvider<'a> {
     pub custom_llm_provider: &'a str,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr, VariantArray)]
 pub enum LlmProviders {
     #[strum(serialize = "anthropic")]
     Anthropic,
@@ -24,6 +24,8 @@ pub enum LlmProviders {
     Deepseek,
     #[strum(serialize = "edenai")]
     Edenai,
+    #[strum(serialize = "hosted_vllm")]
+    HostedVllm,
     #[strum(serialize = "minimax")]
     Minimax,
     #[strum(serialize = "mistral")]
@@ -40,6 +42,10 @@ pub enum LlmProviders {
     Tencent,
     #[strum(serialize = "vertex_ai")]
     VertexAi,
+    #[strum(serialize = "vllm")]
+    Vllm,
+    #[strum(serialize = "watsonx")]
+    Watsonx,
 }
 
 pub fn get_custom_llm_provider<'a>(
@@ -72,7 +78,37 @@ fn strip_custom_llm_provider_prefix<'a>(model: &'a str, custom_llm_provider: &st
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
+
+    #[rstest]
+    #[case::hosted_vllm("hosted_vllm", LlmProviders::HostedVllm)]
+    #[case::vllm("vllm", LlmProviders::Vllm)]
+    #[case::watsonx("watsonx", LlmProviders::Watsonx)]
+    fn tokenize_provider_strings_round_trip(#[case] name: &str, #[case] provider: LlmProviders) {
+        assert_eq!(name.parse::<LlmProviders>().unwrap(), provider);
+        assert_eq!(<&'static str>::from(provider), name);
+    }
+
+    #[rstest]
+    #[case::prefix("hosted_vllm/org/model", None, "org/model", "hosted_vllm")]
+    #[case::explicit("org/model", Some("watsonx"), "org/model", "watsonx")]
+    #[case::matching_prefix("watsonx/org/model", Some("watsonx"), "org/model", "watsonx")]
+    fn tokenize_provider_resolution_preserves_model_paths(
+        #[case] input: &str,
+        #[case] explicit: Option<&str>,
+        #[case] model: &str,
+        #[case] provider: &str,
+    ) {
+        assert_eq!(
+            get_custom_llm_provider(input, explicit),
+            Some(CustomLlmProvider {
+                model,
+                custom_llm_provider: provider
+            })
+        );
+    }
 
     #[test]
     fn gets_custom_llm_provider_from_model_prefix() {

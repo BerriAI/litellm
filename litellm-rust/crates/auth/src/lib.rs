@@ -11,3 +11,5 @@ pub use litellm_auth_aws as aws;
 pub use litellm_auth_azure as azure;
 #[cfg(feature = "gcp")]
 pub use litellm_auth_gcp as gcp;
+#[cfg(feature = "watsonx")]
+pub use litellm_auth_watsonx as watsonx;

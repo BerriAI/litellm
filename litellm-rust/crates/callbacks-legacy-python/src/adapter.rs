@@ -99,6 +99,8 @@ impl LegacyLogging {
             (LoggingOperation::Messages, _) => "anthropic_messages",
             (LoggingOperation::Ocr, false) => "ocr",
             (LoggingOperation::Ocr, true) => "aocr",
+            (LoggingOperation::Tokenize, false) => "tokenize",
+            (LoggingOperation::Tokenize, true) => "atokenize",
         }
     }
 
@@ -108,6 +110,7 @@ impl LegacyLogging {
             LoggingOperation::Responses => "Responses",
             LoggingOperation::Messages => "Messages",
             LoggingOperation::Ocr => "OCR document processing",
+            LoggingOperation::Tokenize => "Tokenization",
         }
     }
 
@@ -117,9 +120,10 @@ impl LegacyLogging {
                 url_route: "/v1/messages",
                 endpoint_type: "anthropic",
             }),
-            LoggingOperation::Completion | LoggingOperation::Responses | LoggingOperation::Ocr => {
-                None
-            }
+            LoggingOperation::Completion
+            | LoggingOperation::Responses
+            | LoggingOperation::Ocr
+            | LoggingOperation::Tokenize => None,
         }
     }
 
@@ -664,6 +668,8 @@ kwargs = {'logger': logger, 'document': document}
     #[case::async_messages(crate::LoggingOperation::Messages, true, "anthropic_messages")]
     #[case::sync_ocr(crate::LoggingOperation::Ocr, false, "ocr")]
     #[case::async_ocr(crate::LoggingOperation::Ocr, true, "aocr")]
+    #[case::sync_tokenize(crate::LoggingOperation::Tokenize, false, "tokenize")]
+    #[case::async_tokenize(crate::LoggingOperation::Tokenize, true, "atokenize")]
     fn operation_selects_the_legacy_setup_and_deployment_hook_contract(
         #[case] operation: crate::LoggingOperation,
         #[case] asynchronous: bool,
@@ -1177,6 +1183,7 @@ assert logger.update['custom_llm_provider'] == 'edenai', logger.update
     #[case::responses(crate::LoggingOperation::Responses, "Responses")]
     #[case::messages(crate::LoggingOperation::Messages, "Messages")]
     #[case::ocr(crate::LoggingOperation::Ocr, "OCR document processing")]
+    #[case::tokenize(crate::LoggingOperation::Tokenize, "Tokenization")]
     fn prepared_arguments_replace_the_legacy_view_without_losing_callback_aliases(
         #[case] operation: crate::LoggingOperation,
         #[case] description: &str,

@@ -40455,6 +40455,33 @@
           ]
         }
       },
+      "/tokenize": {
+        "post": {
+          "description": "Tokenize a string with a configured model, returning its token count and available tokens.",
+          "operationId": "tokenize_tokenize_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "title": "Response Tokenize Tokenize Post"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Tokenize",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
       "/v1/mcp/server/register": {
         "post": {
           "description": "Submit a new MCP server for admin review (non-admin users). Mirrors POST /guardrails/register.",

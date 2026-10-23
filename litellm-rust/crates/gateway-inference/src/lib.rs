@@ -11,6 +11,7 @@ pub mod messages;
 mod ocr;
 mod request;
 mod responses;
+mod tokenize;
 
 use std::sync::Arc;
 
@@ -21,6 +22,7 @@ use litellm_inference_chat::ChatCompletionsRoute;
 use litellm_inference_messages::MessagesRoute;
 use litellm_inference_ocr::OcrRoute;
 use litellm_inference_responses::ResponsesRoute;
+use litellm_inference_tokenize::TokenizeRoute;
 use litellm_inference_transcription::AudioTranscriptionRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
@@ -36,6 +38,7 @@ pub struct Gateway {
     pub messages: MessagesRoute,
     pub ocr: OcrRoute,
     pub responses: ResponsesRoute,
+    pub tokenize: TokenizeRoute,
     pub models: ModelRouter,
     pub secrets: Arc<dyn SecretSource>,
     pub resources: CoreResources,
@@ -71,6 +74,7 @@ impl Gateway {
                 secrets.clone(),
             ),
             messages: MessagesRoute::new(provider.clone(), auth.clone(), secrets.clone()),
+            tokenize: TokenizeRoute::new(provider.clone(), auth.clone(), secrets.clone()),
             responses: ResponsesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
                 &resources.pool,
@@ -93,6 +97,8 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .route("/v1/messages", post(messages::create))
         .route("/ocr", post(ocr::create))
         .route("/v1/ocr", post(ocr::create))
+        .route("/tokenize", post(tokenize::create))
+        .route("/v1/tokenize", post(tokenize::create))
         .route("/chat/completions", post(chat_completions::create))
         .route("/v1/chat/completions", post(chat_completions::create))
         .nest("/engines/{model}", model_routes())

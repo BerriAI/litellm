@@ -3361,6 +3361,7 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-auth-gcp",
  "litellm-auth-types",
+ "litellm-auth-watsonx",
 ]
 
 [[package]]
@@ -3432,6 +3433,22 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "veil",
+]
+
+[[package]]
+name = "litellm-auth-watsonx"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth-types",
+ "litellm-http",
+ "moka",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -3800,6 +3817,7 @@ dependencies = [
  "litellm-inference-messages",
  "litellm-inference-ocr",
  "litellm-inference-responses",
+ "litellm-inference-tokenize",
  "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
@@ -4122,6 +4140,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-inference-tokenize"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-auth",
+ "litellm-core-utils",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-inference-transcription"
 version = "0.1.0"
 dependencies = [
@@ -4230,6 +4270,7 @@ dependencies = [
  "litellm-inference-messages",
  "litellm-inference-ocr",
  "litellm-inference-responses",
+ "litellm-inference-tokenize",
  "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",

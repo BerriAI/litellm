@@ -21,6 +21,7 @@ litellm-inference-responses = { path = "crates/inference-responses" }
 litellm-inference-messages = { path = "crates/inference-messages" }
 litellm-inference-chat = { path = "crates/inference-chat" }
 litellm-inference-ocr = { path = "crates/inference-ocr" }
+litellm-inference-tokenize = { path = "crates/inference-tokenize" }
 litellm-inference-testing = { path = "crates/inference-testing" }
 litellm-gateway-mcp = { path = "crates/gateway-mcp" }
 litellm-gateway = { path = "crates/gateway" }
@@ -39,6 +40,7 @@ litellm-auth-types = { path = "crates/auth-types" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
 litellm-auth-gcp = { path = "crates/auth-gcp" }
+litellm-auth-watsonx = { path = "crates/auth-watsonx" }
 litellm-secrets = { path = "crates/secrets" }
 litellm-secrets-types = { path = "crates/secrets-types" }
 litellm-secrets-aws = { path = "crates/secrets-aws" }

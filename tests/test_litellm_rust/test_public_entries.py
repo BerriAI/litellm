@@ -19,6 +19,7 @@ from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses.entrypoints import NATIVE_ARESPONSES, NATIVE_RESPONSES
 from litellm.rust_bridge.runtime import NoPythonImplementationError
+from litellm.rust_bridge.tokenize.entrypoints import NATIVE_ATOKENIZE, NATIVE_TOKENIZE
 from litellm.types.utils import ModelResponse
 from tests.test_litellm_rust.support.routing import routed
 
@@ -117,6 +118,17 @@ ENTRIES: Final = (
         },
         positional=0,
         python=_messages,
+    ),
+    Entry(
+        route=Route.TOKENIZE,
+        sync=litellm.tokenize,
+        asynchronous=litellm.atokenize,
+        flag="atokenize",
+        sync_binding=_binding(NATIVE_TOKENIZE),
+        async_binding=_binding(NATIVE_ATOKENIZE),
+        arguments={"model": "hosted_vllm/acme/model", "prompt": "hello"},
+        positional=2,
+        python=None,
     ),
     Entry(
         route=Route.OCR,

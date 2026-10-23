@@ -1350,7 +1350,12 @@ def function_setup(
                 if isinstance(search_query, list)
                 else search_query
             )
-        elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
+        elif call_type in (
+            CallTypes.image_edit.value,
+            CallTypes.aimage_edit.value,
+            CallTypes.tokenize.value,
+            CallTypes.atokenize.value,
+        ):
             messages = args[1] if len(args) > 1 else kwargs.get("prompt")
         elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):
             messages = _ocr_document_summary(args[1] if len(args) > 1 else kwargs.get("document"))
