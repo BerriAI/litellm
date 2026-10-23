@@ -137,7 +137,7 @@ export const getOrganizationsTableColumns = ({
   },
   {
     id: "max_budget",
-    accessorFn: (organization) => getOrganizationBudget(organization).max_budget ?? undefined,
+    accessorFn: (organization) => getOrganizationBudget(organization).max_budget ?? Number.POSITIVE_INFINITY,
     sortUndefined: "last",
     sortDescFirst: true,
     meta: { title: "Budget (USD)", numeric: true },
@@ -151,7 +151,9 @@ export const getOrganizationsTableColumns = ({
   {
     id: "models",
     accessorFn: (organization) =>
-      organization.models?.length ? [...organization.models].sort().join(", ") : undefined,
+      organization.models?.length && !organization.models.includes("all-proxy-models")
+        ? [...organization.models].sort().join(", ")
+        : undefined,
     sortUndefined: "last",
     sortDescFirst: false,
     meta: { title: "Models", skeleton: "chips" },
@@ -190,7 +192,7 @@ export const getOrganizationsTableColumns = ({
   ...(["tpm_limit", "rpm_limit"] as const).map(
     (field): ColumnDef<Organization> => ({
       id: field,
-      accessorFn: (organization) => getOrganizationBudget(organization)[field] ?? undefined,
+      accessorFn: (organization) => getOrganizationBudget(organization)[field] ?? Number.POSITIVE_INFINITY,
       sortUndefined: "last",
       sortDescFirst: true,
       enableHiding: false,

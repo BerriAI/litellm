@@ -66,57 +66,79 @@ const baseProps = {
 };
 
 describe("OrganizationsTable", () => {
-  it.each(["max_budget", "tpm_limit", "rpm_limit"])("sorts %s numerically with Unlimited last", async (field) => {
-    const user = userEvent.setup();
-    const organizations = [20, 3, null, 100, 0].map((value, index) =>
-      makeOrganization({
-        organization_id: `org-${index}`,
-        organization_alias: `Value ${value}`,
-        litellm_budget_table: { [field]: value },
-      }),
-    );
-    renderWithProviders(<OrganizationsTable {...baseProps} organizations={organizations} />, {
-      searchParams: { sort_by: field, sort_order: "asc", page_size: "25" },
-    });
-    const names = () =>
-      screen
-        .getAllByRole("row")
-        .slice(1)
-        .map((row) => within(row).getByText(/^Value /).textContent);
-    expect(names()).toEqual(["Value 0", "Value 3", "Value 20", "Value 100", "Value null"]);
-    if (field === "max_budget") {
-      await user.click(screen.getByTestId("sort-header-max_budget"));
-    } else {
-      await user.click(screen.getByRole("button", { name: "Sort options for TPM or RPM" }));
-      await user.click(
-        await screen.findByRole("menuitem", { name: `${field === "tpm_limit" ? "TPM" : "RPM"} descending` }),
+  it.each(["max_budget", "tpm_limit", "rpm_limit"])(
+    "sorts %s numerically with Unlimited as infinity",
+    async (field) => {
+      const user = userEvent.setup();
+      const organizations = [20, 3, null, 100, 0].map((value, index) =>
+        makeOrganization({
+          organization_id: `org-${index}`,
+          organization_alias: `Value ${value}`,
+          litellm_budget_table: { [field]: value },
+        }),
       );
-    }
-    await waitFor(() => expect(names()).toEqual(["Value 100", "Value 20", "Value 3", "Value 0", "Value null"]));
+      renderWithProviders(<OrganizationsTable {...baseProps} organizations={organizations} />, {
+        searchParams: { sort_by: field, sort_order: "asc", page_size: "25" },
+      });
+      const names = () =>
+        screen
+          .getAllByRole("row")
+          .slice(1)
+          .map((row) => within(row).getByText(/^Value /).textContent);
+      expect(names()).toEqual(["Value 0", "Value 3", "Value 20", "Value 100", "Value null"]);
+      if (field === "max_budget") {
+        await user.click(screen.getByTestId("sort-header-max_budget"));
+      } else {
+        await user.click(screen.getByRole("button", { name: "Sort options for TPM or RPM" }));
+        await user.click(
+          await screen.findByRole("menuitem", { name: `${field === "tpm_limit" ? "TPM" : "RPM"} descending` }),
+        );
+      }
+      await waitFor(() => expect(names()).toEqual(["Value null", "Value 100", "Value 20", "Value 3", "Value 0"]));
+    },
+  );
+
+  it.each(["asc", "desc"])("groups both All Proxy Models representations when sorting %s", (direction) => {
+    const organizations = [
+      makeOrganization({ organization_id: "org-empty", organization_alias: "Name Empty", models: [] }),
+      makeOrganization({ organization_id: "org-z", organization_alias: "Name Z", models: ["z"] }),
+      makeOrganization({
+        organization_id: "org-wildcard",
+        organization_alias: "Name Wildcard",
+        models: ["all-proxy-models"],
+      }),
+      makeOrganization({ organization_id: "org-a", organization_alias: "Name A", models: ["a"] }),
+    ];
+    renderWithProviders(<OrganizationsTable {...baseProps} organizations={organizations} />, {
+      searchParams: { sort_by: "models", sort_order: direction },
+    });
+    const names = screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => within(row).getByText(/^Name /).textContent);
+    const models = direction === "asc" ? ["Name A", "Name Z"] : ["Name Z", "Name A"];
+    expect(names).toEqual([...models, "Name Empty", "Name Wildcard"]);
+    expect(screen.getAllByText("All Proxy Models")).toHaveLength(2);
   });
 
   it.each(["models", "members"])("sorts %s by its displayed data", async (field) => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <OrganizationsTable
-        {...baseProps}
-        organizations={[
-          makeOrganization({ organization_id: "org-zed", organization_alias: "Zed", models: ["z"], members: [] }),
-          makeOrganization({
-            organization_id: "org-ace",
-            organization_alias: "Ace",
-            models: ["a"],
-            members: [{ user_id: "1" }, { user_id: "2" }],
-          }),
-          makeOrganization({
-            organization_id: "org-mid",
-            organization_alias: "Mid",
-            models: ["m"],
-            members: [{ user_id: "3" }],
-          }),
-        ]}
-      />,
-    );
+    const organizations = [
+      { organization_id: "org-zed", organization_alias: "Zed", models: ["z"], members: [] },
+      {
+        organization_id: "org-ace",
+        organization_alias: "Ace",
+        models: ["a"],
+        members: [{ user_id: "1" }, { user_id: "2" }],
+      },
+      {
+        organization_id: "org-mid",
+        organization_alias: "Mid",
+        models: ["m"],
+        members: [{ user_id: "3" }],
+      },
+    ].map(makeOrganization);
+    renderWithProviders(<OrganizationsTable {...baseProps} organizations={organizations} />);
     await user.click(screen.getByTestId(`sort-header-${field}`));
     await waitFor(() => expect(bodyRowAliases()).toEqual(["Ace", "Mid", "Zed"]));
     await user.click(screen.getByTestId(`sort-header-${field}`));
