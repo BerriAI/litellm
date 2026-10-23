@@ -1,0 +1,68 @@
+{
+  "source": "Sanitized summary of four real Aria chart conversations stored by the isolated local proxy. No new inference was performed by the exporter.",
+  "started_at": "2026-10-23T21:48:07.868000+00:00",
+  "completed_at": "2026-10-23T21:50:24.452000+00:00",
+  "models": [
+    "gpt-6.1-sol"
+  ],
+  "counts": {
+    "completed_questions": 4,
+    "provider_records": 12,
+    "usage_lookups": 4,
+    "chart_tool_calls": 4,
+    "complete_chart_results": 4,
+    "chart_source_matches": 4,
+    "complete_final_answers": 4,
+    "raw_usage_results_with_original_db_truncation": 3
+  },
+  "questions": [
+    {
+      "question": "How much have I spent this week?",
+      "chart_title": "Daily spend",
+      "chart_view": "daily_spend",
+      "scope": "Gateway usage",
+      "period": "2026-10-19 to 2026-10-23 (UTC)"
+    },
+    {
+      "question": "Which models are costing the most?",
+      "chart_title": "Spend by model",
+      "chart_view": "model_spend",
+      "scope": "Gateway usage",
+      "period": "2026-10-01 to 2026-10-23 (UTC)"
+    },
+    {
+      "question": "How can I reduce my spend?",
+      "chart_title": "Token breakdown",
+      "chart_view": "token_breakdown",
+      "scope": "Gateway usage",
+      "period": "2026-09-24 to 2026-10-23 (UTC)"
+    },
+    {
+      "question": "For user ID aria-live-internal on October 23, 2026, show prompt, completion, cache read, cache creation, and total tokens as a chart and a one-row table.",
+      "chart_title": "Token breakdown",
+      "chart_view": "token_breakdown",
+      "scope": "User aria-live-internal",
+      "period": "2026-10-23 to 2026-10-23 (UTC)"
+    }
+  ],
+  "frozen_internal_usage": {
+    "user_id": "aria-live-internal",
+    "date": "2026-10-23",
+    "prompt_tokens": 14,
+    "completion_tokens": 8,
+    "total_tokens": 22,
+    "api_requests": 1,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0
+  },
+  "frozen_internal_chart_values": {
+    "Prompt": 14,
+    "Completion": 8,
+    "Cache read": 0,
+    "Cache creation": 0
+  },
+  "limitations": "The three global usage lookup strings include the original database truncation marker. Their chart source identifiers and lookup arguments are retained. All four returned chart envelopes and final answers are complete. Provider records are not raw browser packets.",
+  "proof_file": "aria-chart-provider-proof.json",
+  "implementation_commit": "bcce229840dbc71366899c5fad6a7b814cbdb357",
+  "ui_evidence": "Real browser screenshots captured from the local running implementation. Responses were generated with the chart implementation before committing; the final commit also includes regression tests and axis label truncation."
+}
