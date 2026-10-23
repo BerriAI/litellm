@@ -218,7 +218,7 @@ def _get_cached_audio_utils():
     return _audio_utils_module
 
 
-from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper as TextCompletionStreamWrapper
+from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper as _TextCompletionStreamWrapper
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -263,12 +263,16 @@ from litellm.types.utils import (
     SearchProviders,
     SelectTokenizerResponse,
     StreamingChoices,
-    TextChoices,
-    TextCompletionResponse,
     TranscriptionResponse,
     Usage,
     credential_api_key_secret_reference,
     is_litellm_owned_kwarg,
+)
+from litellm.types.utils import (
+    TextChoices as _TextChoices,
+)
+from litellm.types.utils import (
+    TextCompletionResponse as _TextCompletionResponse,
 )
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
@@ -300,9 +304,13 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
+
+TextChoices: TypeAlias = _TextChoices
+TextCompletionResponse: TypeAlias = _TextCompletionResponse
+TextCompletionStreamWrapper: TypeAlias = _TextCompletionStreamWrapper
 
 from litellm import utils as litellm_utils
 
@@ -341,7 +349,10 @@ if TYPE_CHECKING:
 
     # Type stubs for lazy-loaded functions to help mypy understand their types
     # These imports allow mypy to understand the types when these are accessed via __getattr__
-    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type as _exception_type
+
+    exception_type: Final = _exception_type
+
     from litellm.litellm_core_utils.get_litellm_params import (
         get_base_model_from_litellm_call_metadata,
         get_litellm_params,
