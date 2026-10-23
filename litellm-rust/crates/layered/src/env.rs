@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt};
+use std::{collections::BTreeMap, ffi::OsString, fmt};
 
 use crate::Lookup;
 

@@ -7,7 +7,6 @@ repository.workspace = true
 
 [dependencies]
 axum.workspace = true
-envy = "0.4.2"
 http-body-util = "0.1"
 litellm-inference.workspace = true
 litellm-gateway-inference.workspace = true
