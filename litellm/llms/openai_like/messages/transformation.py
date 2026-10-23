@@ -95,9 +95,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         model the cost map does not know (see #40890). Pop them before the
         base transform so no drop warning fires, restore afterwards.
         """
-        params: Final[dict[str, object]] = cast(
-            dict[str, object], anthropic_messages_optional_request_params
-        )
+        params: Final[dict[str, object]] = cast(dict[str, object], anthropic_messages_optional_request_params)
         stashed: Final[dict[str, object]] = {}
         for _key in ("thinking", "output_config", "temperature"):
             if _key in params:
