@@ -24,6 +24,12 @@ pub fn merge<P: Partial>(highest_precedence_first: impl IntoIterator<Item = P>) 
         .unwrap_or_default()
 }
 
+pub fn non_blank(value: Option<&str>) -> Option<String> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+}
+
 pub fn read_env<T>(
     env: &(impl Lookup + ?Sized),
     names: &'static [&'static str],
