@@ -73,7 +73,7 @@ import {
 import { modelMaxBudgetUpdate, StoredModelMaxBudget } from "../key_team_helpers/modelMaxBudgetPayload";
 import {
   computeTeamModelBadges,
-  normalizeTeamModelSelection,
+  modelsFieldForTeamUpdate,
   TeamAccessGroupModelGrant,
   teamPerModelLimitOptions,
   TeamModelBadge,
@@ -719,7 +719,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     return Object.fromEntries(Object.entries(values).filter(([key]) => !unmounted.has(key)));
   };
 
-  const onTeamUpdateSubmit = (values: TeamUpdateFormValues) => handleTeamUpdate(mountedUpdateValues(values));
+  const onTeamUpdateSubmit = (values: TeamUpdateFormValues) =>
+    handleTeamUpdate(mountedUpdateValues(values), form.formState.dirtyFields);
 
   const fetchTeamInfo = async () => {
     try {
@@ -986,7 +987,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     }
   };
 
-  const handleTeamUpdate = async (values: any) => {
+  const handleTeamUpdate = async (values: any, dirtyFields: Record<string, unknown> = {}) => {
     try {
       if (!accessToken) return;
       setIsTeamSaving(true);
@@ -1060,10 +1061,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ? { require_trace_id: values.require_trace_id === true }
           : storedRequireTraceIdMetadata;
 
+      // /team/update uses exclude_unset: omitted fields are preserved. Always
+      // sending models (often []) wipes direct grants on an unrelated save (#43845).
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
-        models: normalizeTeamModelSelection(values.models),
+        ...modelsFieldForTeamUpdate(dirtyFields.models, values.models),
         tpm_limit: numberOrNull(values.tpm_limit),
         rpm_limit: numberOrNull(values.rpm_limit),
         tpd_limit: numberOrNull(values.tpd_limit),

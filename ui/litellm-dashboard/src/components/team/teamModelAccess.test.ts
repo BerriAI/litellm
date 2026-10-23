@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeTeamModelBadges,
+  modelsFieldForTeamUpdate,
   normalizeTeamModelSelection,
   TeamAccessGroupModelGrant,
   teamPerModelLimitOptions,
@@ -87,6 +88,22 @@ describe("computeTeamModelBadges", () => {
       { label: "direct-model", kind: "direct", tooltip: "Granted directly in the team's model list" },
       { label: "haiku", kind: "access-group", tooltip: "Granted via an access group" },
     ]);
+  });
+});
+
+describe("modelsFieldForTeamUpdate", () => {
+  it("omits models when the field is not dirty", () => {
+    expect(modelsFieldForTeamUpdate(undefined, ["gpt-4.1"])).toEqual({});
+    expect(modelsFieldForTeamUpdate(false, ["gpt-4.1"])).toEqual({});
+    expect(modelsFieldForTeamUpdate([false, false], ["gpt-4.1"])).toEqual({});
+  });
+
+  it("includes normalized models when the field is dirty", () => {
+    expect(modelsFieldForTeamUpdate(true, ["gpt-4.1"])).toEqual({ models: ["gpt-4.1"] });
+    expect(modelsFieldForTeamUpdate(true, [])).toEqual({ models: ["no-default-models"] });
+    expect(modelsFieldForTeamUpdate([false, true], ["claude-sonnet-4"])).toEqual({
+      models: ["claude-sonnet-4"],
+    });
   });
 });
 
