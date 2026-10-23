@@ -1,8 +1,13 @@
 package litellm
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
@@ -82,11 +87,110 @@ func resourceLiteLLMTeamMemberCreate(d *schema.ResourceData, m interface{}) erro
 	return resourceLiteLLMTeamMemberRead(d, m)
 }
 
+type teamMemberRoleRow struct {
+	UserID    string `json:"user_id"`
+	UserEmail string `json:"user_email"`
+	Role      string `json:"role"`
+}
+
+type teamMemberBudgetRow struct {
+	MaxBudget *float64 `json:"max_budget"`
+}
+
+type teamMemberMembershipRow struct {
+	UserID             string               `json:"user_id"`
+	LiteLLMBudgetTable *teamMemberBudgetRow `json:"litellm_budget_table"`
+}
+
+// teamMemberInfoAPI is the subset of GET /team/info used to refresh a single member.
+type teamMemberInfoAPI struct {
+	TeamInfo struct {
+		MembersWithRoles []teamMemberRoleRow `json:"members_with_roles"`
+	} `json:"team_info"`
+	TeamMemberships []teamMemberMembershipRow `json:"team_memberships"`
+}
+
 func resourceLiteLLMTeamMemberRead(d *schema.ResourceData, m interface{}) error {
-	// There's no specific endpoint to read a single team member
-	// We might need to read the entire team and find the member
-	// For now, we'll just return the data we have in the state
-	log.Printf("[INFO] Reading team member with ID: %s", d.Id())
+	client := m.(*Client)
+	teamID := d.Get("team_id").(string)
+	userID := d.Get("user_id").(string)
+	if teamID == "" || userID == "" {
+		// Fall back to the composite id "team_id:user_id" used on create/import.
+		if parts := strings.SplitN(d.Id(), ":", 2); len(parts) == 2 {
+			if teamID == "" {
+				teamID = parts[0]
+			}
+			if userID == "" {
+				userID = parts[1]
+			}
+		}
+	}
+
+	log.Printf("[INFO] Reading team member team_id=%s user_id=%s", teamID, userID)
+
+	resp, err := MakeRequest(client, "GET", fmt.Sprintf("/team/info?team_id=%s", url.QueryEscape(teamID)), nil)
+	if err != nil {
+		return fmt.Errorf("error reading team info for member: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		log.Printf("[WARN] Team %s not found, removing team member from state", teamID)
+		d.SetId("")
+		return nil
+	}
+	if err := handleResponse(resp, "reading team info for member"); err != nil {
+		return err
+	}
+
+	var info teamMemberInfoAPI
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return fmt.Errorf("error decoding team info response: %w", err)
+	}
+
+	var found *teamMemberRoleRow
+	for i := range info.TeamInfo.MembersWithRoles {
+		row := &info.TeamInfo.MembersWithRoles[i]
+		if row.UserID == userID {
+			found = row
+			break
+		}
+	}
+	if found == nil {
+		log.Printf("[WARN] User %s not in team %s, removing team member from state", userID, teamID)
+		d.SetId("")
+		return nil
+	}
+
+	d.Set("team_id", teamID)
+	d.Set("user_id", found.UserID)
+	if found.UserEmail != "" {
+		d.Set("user_email", found.UserEmail)
+	}
+	if found.Role != "" {
+		d.Set("role", found.Role)
+	}
+
+	// Always reconcile the per-team budget: if the membership row, its budget
+	// table, or max_budget is gone, clear the attribute so out-of-band removals
+	// show up as drift instead of keeping the stale value in state.
+	var maxBudget *float64
+	for _, membership := range info.TeamMemberships {
+		if membership.UserID != userID {
+			continue
+		}
+		if membership.LiteLLMBudgetTable != nil {
+			maxBudget = membership.LiteLLMBudgetTable.MaxBudget
+		}
+		break
+	}
+	if maxBudget != nil {
+		d.Set("max_budget_in_team", *maxBudget)
+	} else {
+		d.Set("max_budget_in_team", nil)
+	}
+
+	d.SetId(fmt.Sprintf("%s:%s", teamID, userID))
 	return nil
 }
 
@@ -135,6 +239,18 @@ func resourceLiteLLMTeamMemberDelete(d *schema.ResourceData, m interface{}) erro
 	}
 	defer resp.Body.Close()
 
+	// Member or team already gone outside Terraform: treat as destroyed so state can converge.
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		bodyStr := string(body)
+		if isTeamMemberAlreadyGone(resp.StatusCode, bodyStr) {
+			log.Printf("[WARN] Team member already gone (%s): %s", resp.Status, bodyStr)
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("error deleting team member: %s - %s", resp.Status, bodyStr)
+	}
+
 	if err := handleResponse(resp, "deleting team member"); err != nil {
 		return err
 	}
@@ -143,4 +259,22 @@ func resourceLiteLLMTeamMemberDelete(d *schema.ResourceData, m interface{}) erro
 
 	d.SetId("")
 	return nil
+}
+
+// isTeamMemberAlreadyGone reports whether a /team/member_delete error means the
+// member or team was already removed outside Terraform. Only 404s and the
+// proxy's concrete "not found" messages qualify, so unrelated 400 validation
+// errors still fail the destroy.
+func isTeamMemberAlreadyGone(statusCode int, body string) bool {
+	if statusCode == http.StatusNotFound {
+		return true
+	}
+	if statusCode != http.StatusBadRequest {
+		return false
+	}
+	if strings.Contains(body, "User not found in team") {
+		return true
+	}
+	// "Team id=<id> does not exist in db"
+	return strings.Contains(body, "Team id=") && strings.Contains(body, "does not exist in db")
 }
