@@ -2075,6 +2075,17 @@ def completion_cost(
                     )
                 else:
                     additional_costs = None
+                if custom_llm_provider in ("gemini", "vertex_ai", "vertex_ai_beta"):
+                    from litellm.llms.vertex_ai.context_caching.storage_pricing import (
+                        recorded_cache_storage_cost,
+                    )
+
+                    cache_storage_cost = recorded_cache_storage_cost(litellm_logging_obj)
+                    if cache_storage_cost:
+                        additional_costs = {
+                            **(additional_costs or {}),
+                            "gemini_context_cache_storage": cache_storage_cost,
+                        }
 
                 _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 cost_for_built_in_tools = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(

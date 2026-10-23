@@ -21,6 +21,7 @@ from litellm.utils import is_prompt_caching_valid_prompt
 from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
 from .known_cached_contents import KnownCachedContents, known_cached_contents
+from .storage_pricing import cache_storage_price, record_cache_storage
 from .transformation import (
     cached_messages_end_on_supported_turn,
     separate_cached_messages,
@@ -53,6 +54,7 @@ class _CachedContentUsageMetadata(TypedDict):
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _CreatedCachedContent(TypedDict):
     name: ReadOnly[NotRequired[str | None]]
+    createTime: ReadOnly[NotRequired[str | None]]
     expireTime: ReadOnly[NotRequired[str | None]]
     usageMetadata: ReadOnly[NotRequired[_CachedContentUsageMetadata | None]]
 
@@ -393,6 +395,14 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
 
+        # Storage is billed per token-hour for the cache's lifetime; never buy it without a price.
+        if cache_storage_price(model, custom_llm_provider) is None:
+            verbose_logger.debug(
+                "Vertex AI context caching: no cache_storage_cost_per_token_per_hour for %s. Skipping context caching.",
+                model,
+            )
+            return messages, optional_params, None
+
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
 
@@ -487,6 +497,9 @@ class ContextCachingEndpoints(VertexBase):
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
+        record_cache_storage(
+            logging_obj, raw_response_cached, cached_content_request_body.get("ttl"), model, custom_llm_provider
+        )
         self._known_caches.remember(
             KnownCachedContents.scope(
                 url, custom_llm_provider, headers, vertex_project=vertex_project, vertex_location=vertex_location
@@ -556,6 +569,14 @@ class ContextCachingEndpoints(VertexBase):
                 "Vertex AI context caching: cached content is below minimum token "
                 "count (%d). Skipping context caching.",
                 MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+            )
+            return messages, optional_params, None
+
+        # Storage is billed per token-hour for the cache's lifetime; never buy it without a price.
+        if cache_storage_price(model, custom_llm_provider) is None:
+            verbose_logger.debug(
+                "Vertex AI context caching: no cache_storage_cost_per_token_per_hour for %s. Skipping context caching.",
+                model,
             )
             return messages, optional_params, None
 
@@ -654,6 +675,9 @@ class ContextCachingEndpoints(VertexBase):
 
             raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
             _record_cache_creation_tokens(logging_obj, raw_response_cached)
+            record_cache_storage(
+                logging_obj, raw_response_cached, cached_content_request_body.get("ttl"), model, custom_llm_provider
+            )
             self._known_caches.remember(
                 scope, generated_cache_key, raw_response_cached.get("name"), raw_response_cached.get("expireTime")
             )

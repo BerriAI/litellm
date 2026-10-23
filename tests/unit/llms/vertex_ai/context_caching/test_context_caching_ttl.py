@@ -339,8 +339,11 @@ class TestTransformationWithTTL:
     @pytest.mark.parametrize(
         "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
     )
-    def test_transform_with_system_message_and_ttl(self, custom_llm_provider):
-        """Test transformation with system message and TTL"""
+    def test_transform_with_system_message_and_ttl(self, custom_llm_provider, monkeypatch):
+        """Test transformation with system message and TTL (operator allows TTLs above the 1 hour default cap)"""
+        import litellm
+
+        monkeypatch.setattr(litellm, "gemini_context_cache_max_ttl_seconds", 86400, raising=False)
         messages = [
             {
                 "role": "system",
