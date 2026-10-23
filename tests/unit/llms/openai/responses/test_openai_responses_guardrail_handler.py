@@ -3766,7 +3766,10 @@ class TestBuildBlockSseChunks:
     def _payloads(self, chunks):
         import json
 
-        return [json.loads(chunk.decode().removeprefix("data: ").strip()) for chunk in chunks]
+        return [
+            json.loads(next(line.removeprefix(b"data: ") for line in chunk.splitlines() if line.startswith(b"data: ")))
+            for chunk in chunks
+        ]
 
     def test_standalone_block_emits_complete_synthetic_stream(self):
         handler = OpenAIResponsesHandler()
@@ -3800,7 +3803,12 @@ class TestBuildBlockSseChunks:
         block_chunks = OpenAIResponsesHandler().build_block_sse_chunks(
             self._exc(original_response=yielded), stream_started=stream_started, responses_so_far=yielded
         )
+        for chunk, payload in zip(block_chunks, self._payloads(block_chunks)):
+            assert tuple(line for line in chunk.decode().splitlines() if line.startswith("event:")) == (
+                f"event: {payload['type']}",
+            ), chunk
         sse_body = already_sent + b"".join(block_chunks)
+        assert b"data: [DONE]" not in sse_body
         client = openai.OpenAI(
             api_key="sk-test",
             base_url="http://guardrail.test/v1",

@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -763,9 +763,16 @@ def test_restamp_streaming_chunk_rewrites_nested_model_in_guardrail_block_frames
         )[0]
         for frame in frames
     ]
-    events = [json.loads(frame.decode().removeprefix("data: ")) for frame in client_frames]
+    events: Final = [
+        json.loads(next(line.removeprefix(b"data: ") for line in frame.splitlines() if line.startswith(b"data: ")))
+        for frame in client_frames
+    ]
 
     assert all(frame.endswith(b"\n\n") for frame in client_frames)
+    for frame, event in zip(client_frames, events):
+        assert tuple(line for line in frame.decode().splitlines() if line.startswith("event:")) == (
+            f"event: {event['type']}",
+        ), frame
     assert events[-1]["type"] == "response.completed"
     assert events[-1]["response"]["output"][0]["content"][0]["text"] == "Blocked by policy."
     assert {event["response"]["model"] for event in events if "response" in event} == {"client-model"}

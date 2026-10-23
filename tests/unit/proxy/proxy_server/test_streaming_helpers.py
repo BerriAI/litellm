@@ -34,6 +34,7 @@ from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import create_response
+from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
 from litellm.proxy.proxy_server import (
     _apply_streaming_chunk_hooks,
     _fast_serialize_simple_model_response_stream,
@@ -50,9 +51,13 @@ from litellm.proxy.proxy_server import (
     select_data_generator,
 )
 from litellm.types.llms.openai import (
+    ErrorEvent,
+    FunctionCallArgumentsDeltaEvent,
+    OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponseFailedEvent,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
 )
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
@@ -660,6 +665,30 @@ def test_format_streaming_sse_chunk_invalid_empty_string_still_wraps():
     assert result == "data: \n\n"
 
 
+@pytest.mark.parametrize("binary", (False, True), ids=("str", "bytes"))
+@pytest.mark.parametrize(
+    "event_type,header",
+    (
+        ("response.output_text.delta", "event: response.output_text.delta\n"),
+        ("vendor.future_event", "event: vendor.future_event\n"),
+        (None, ""),
+        ("", ""),
+        ("response.completed\nevent: injected", ""),
+        ("response.completed\rdata: injected", ""),
+    ),
+)
+def test_responses_event_headers_preserve_payloads_and_reject_line_injection(
+    binary: bool, event_type: str | None, header: str
+) -> None:
+    state: Final = ResponsesStreamErrorState()
+    state.observe_chunk({"type": event_type, "sequence_number": 7})
+    frame: Final = 'data: {"sequence_number":7,"delta":"héllo\\nworld"}\n\n'
+
+    result: Final = state.mark_emitted(frame.encode() if binary else frame)
+
+    assert result == ((header + frame).encode() if binary else header + frame)
+
+
 # ---------------------------------------------------------------------------
 # async_data_generator
 # ---------------------------------------------------------------------------
@@ -1132,14 +1161,15 @@ async def test_responses_stream_failure_sends_the_failure_hook_replacement(monke
         ]
     )
     failure: Final = ResponseFailedEvent.model_validate_json(
-        next(line.removeprefix("data: ") for line in frames[-2].splitlines() if line.startswith("data: "))
+        next(line.removeprefix("data: ") for line in frames[-1].splitlines() if line.startswith("data: "))
     )
 
     assert _BLOCK_MESSAGE not in "".join(frames)
     assert failure.response.error is not None
     assert failure.response.error["code"] == "permission_error"
     assert "Request blocked by policy" in failure.response.error["message"]
-    assert frames[-1] == "data: [DONE]\n\n"
+    assert len(frames) == 2
+    assert frames[-1].startswith("event: response.failed\n")
 
 
 @pytest.mark.asyncio
@@ -1229,6 +1259,87 @@ _UPSTREAM_BODY: Final = {
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "terminal_model,terminal_type",
+    (
+        (ResponseCompletedEvent, "response.completed"),
+        (ResponseIncompleteEvent, "response.incomplete"),
+        (ResponseFailedEvent, "response.failed"),
+        (ErrorEvent, "error"),
+    ),
+)
+async def test_responses_text_stream_uses_named_sse_events_and_ends_at_its_terminal_event(
+    terminal_model: type[BaseModel], terminal_type: str
+) -> None:
+    response: Final = ResponsesAPIResponse(id="resp_visible", created_at=1, model="test-model", output=[])
+    created: Final = ResponseCreatedEvent.model_validate(
+        {"type": "response.created", "sequence_number": 0, "response": response}
+    )
+    text_delta: Final = OutputTextDeltaEvent.model_validate(
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 1,
+            "item_id": "msg_visible",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "héllo\nworld",
+        }
+    )
+    terminal: Final = terminal_model.model_validate(
+        {
+            "type": terminal_type,
+            "sequence_number": 2,
+            **(
+                {"code": "server_error", "message": "Upstream failed"}
+                if terminal_type == "error"
+                else {"response": response}
+            ),
+        }
+    )
+    events: Final = (("response.created", created), ("response.output_text.delta", text_delta), (terminal_type, terminal))
+
+    async def upstream() -> AsyncIterator[BaseModel]:
+        for _, event in events:
+            yield event
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in select_data_generator(
+                response=upstream(), user_api_key_dict=_user_auth(), request_data={}, responses_stream_errors=True
+            )
+        ]
+    )
+
+    assert frames == tuple(
+        f"event: {event_type}\ndata: {event.model_dump_json(exclude_none=True)}\n\n" for event_type, event in events
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("binary", (False, True), ids=("str", "bytes"))
+async def test_responses_preformatted_sse_keeps_one_event_header_and_no_done(binary: bool) -> None:
+    frame: Final = 'event: response.completed\ndata: {"type":"response.completed","sequence_number":1}\n\n'
+
+    async def upstream() -> AsyncIterator[str | bytes]:
+        yield frame.encode() if binary else frame
+
+    frames: Final = tuple(
+        [
+            item.decode() if isinstance(item, bytes) else item
+            async for item in select_data_generator(
+                response=upstream(),
+                user_api_key_dict=_user_auth(),
+                request_data={"_litellm_raw_sse_stream": True},
+                responses_stream_errors=True,
+            )
+        ]
+    )
+
+    assert frames == (frame,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "terminal,upstream_error,expected_code",
     [
         ("completed", None, None),
@@ -1277,13 +1388,6 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
     upstream_error: Exception | None,
     expected_code: str | None,
 ) -> None:
-    class ToolDelta(BaseModel):
-        type: Literal["response.function_call_arguments.delta"]
-        sequence_number: int
-        item_id: str
-        output_index: int
-        delta: str
-
     class UnserializableTerminal(BaseModel):
         type: Literal["response.completed"]
         sequence_number: int
@@ -1297,9 +1401,11 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
     completed: Final = ResponseCompletedEvent.model_validate(
         {"type": "response.completed", "sequence_number": 2, "response": response}
     )
-    tool_delta: Final = ToolDelta(
-        type="response.function_call_arguments.delta", sequence_number=1, item_id="fc_stream_error",
-        output_index=0, delta='{"path":"partial',
+    tool_delta: Final = FunctionCallArgumentsDeltaEvent.model_validate(
+        {
+            "type": "response.function_call_arguments.delta", "sequence_number": 1, "item_id": "fc_stream_error",
+            "output_index": 0, "delta": '{"path":"partial',
+        }
     )
     original_status: Final = (
         upstream_error.status_code if isinstance(upstream_error, (HTTPException, litellm.AuthenticationError)) else None
@@ -1329,20 +1435,19 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
         )
     ]
     decoded: Final = tuple(frame.decode() if isinstance(frame, bytes) else frame for frame in frames)
-    event_frames: Final = tuple(frame for frame in decoded if frame != "data: [DONE]\n\n")
     payloads: Final = tuple(
         json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
-        for frame in event_frames
+        for frame in decoded
     )
 
-    assert decoded[-1] == "data: [DONE]\n\n"
-    assert len(decoded) == len(event_frames) + 1
+    assert len(decoded) == 3
+    assert tuple(frame.splitlines()[0] for frame in decoded) == tuple(f"event: {payload['type']}" for payload in payloads)
     assert payloads[0]["response"]["id"] == "resp_visible"
     assert payloads[1] == tool_delta.model_dump()
     assert len(payloads) == 3
     if terminal in ("serialization_failure", "upstream_failure"):
         failure: Final = ResponseFailedEvent.model_validate(payloads[-1])
-        assert event_frames[-1].startswith("event: response.failed\n")
+        assert decoded[-1].startswith("event: response.failed\n")
         assert failure.response.id == "resp_visible"
         assert failure.response.status == "failed"
         assert failure.response.error is not None

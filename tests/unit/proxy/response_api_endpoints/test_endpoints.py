@@ -142,8 +142,12 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
     assert result.status_code == 200, result.text
     assert message in result.text
     if path == "/v1/responses":
-        assert frames[-1] == "data: [DONE]", result.text
-        assert frames[-2].startswith("event: response.failed\n"), result.text
+        assert "data: [DONE]" not in result.text, result.text
+        assert frames[-1].startswith("event: response.failed\n"), result.text
+        for frame, event in zip(frames, events):
+            assert tuple(line for line in frame.splitlines() if line.startswith("event:")) == (
+                f"event: {event['type']}",
+            ), result.text
         if partial:
             assert [event["type"] for event in events] == [
                 "response.created",
@@ -4861,11 +4865,15 @@ class TestGuardrailBlockedResponsesShape:
 
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("text/event-stream")
-        frames = _sse_data_frames(response.text)
-        assert frames[-1] == "[DONE]"
-        events = [json.loads(frame) for frame in frames[:-1]]
-        types = [event["type"] for event in events]
+        frames: Final = _sse_data_frames(response.text)
+        assert "[DONE]" not in frames, response.text
+        events: Final = [json.loads(frame) for frame in frames]
+        types: Final = [event["type"] for event in events]
+        assert tuple(line for line in response.text.splitlines() if line.startswith("event:")) == tuple(
+            f"event: {event_type}" for event_type in types
+        ), response.text
         assert "response.created" in types
+        assert types[-1] == "response.completed"
         completed = [event for event in events if event["type"] == "response.completed"]
         assert len(completed) == 1
         completed_response = completed[0]["response"]
@@ -4891,7 +4899,7 @@ class TestGuardrailBlockedResponsesShape:
 
         assert response.status_code == 200, response.text
         frames = _sse_data_frames(response.text)
-        completed = [json.loads(frame) for frame in frames[:-1] if json.loads(frame)["type"] == "response.completed"]
+        completed: Final = [json.loads(frame) for frame in frames if json.loads(frame)["type"] == "response.completed"]
         usage = completed[0]["response"]["usage"]
         assert usage["input_tokens"] == 14
         assert usage["output_tokens"] == 20
