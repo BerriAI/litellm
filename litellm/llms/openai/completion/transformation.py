@@ -13,6 +13,12 @@ from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionR
 from ..chat.gpt_transformation import OpenAIGPTConfig
 from .utils import transform_prompt
 
+# Supported params the SDK's ``completions.create()`` has no keyword for. They go in ``extra_body``
+# so backends that accept them (e.g. vLLM) receive them, instead of the SDK raising a TypeError.
+_BODY_ONLY_PARAMS: Final = frozenset(
+    {"functions", "function_call", "response_format", "tools", "tool_choice", "top_logprobs"}
+)
+
 
 class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
     """
@@ -155,8 +161,12 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         prompt: Final = transform_prompt(messages)
+        body_only: Final = {k: v for k, v in optional_params.items() if k in _BODY_ONLY_PARAMS}
+        params: Final = {k: v for k, v in optional_params.items() if k not in _BODY_ONLY_PARAMS}
+        if body_only:
+            params["extra_body"] = {**(params.get("extra_body") or {}), **body_only}
         return {
             "model": model,
             "prompt": prompt,
-            **optional_params,
+            **params,
         }
