@@ -1557,8 +1557,7 @@ class CustomStreamWrapper:
             if response_obj["logprobs"] is not None:
                 model_response.choices[0].logprobs = response_obj["logprobs"]
 
-            response_usage: Final = stored_attribute(chunk, "usage")
-            if response_usage is not None:
+            if response_obj["usage"] is not None:
                 if isinstance(response_obj["usage"], dict):
                     setattr(
                         model_response,
@@ -1569,11 +1568,11 @@ class CustomStreamWrapper:
                             total_tokens=response_obj["usage"].get("total_tokens", None) or None,
                         ),
                     )
-                elif isinstance(response_usage, Usage):
+                elif isinstance(response_obj["usage"], Usage):
                     setattr(
                         model_response,
                         "usage",
-                        self._transform_response_usage(response_usage),
+                        self._transform_response_usage(Usage.model_validate(response_obj["usage"])),
                     )
                 elif isinstance(response_obj["usage"], BaseModel):
                     setattr(
