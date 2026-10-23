@@ -9,14 +9,14 @@ this preset registers a custom exporter (``kind="agentops"``) that mints the JWT
 worker thread, off any event loop — and caches it for the process lifetime.
 """
 
-from collections.abc import Sequence
 from typing import Final
 
 import httpx
-from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+import requests
+from opentelemetry.sdk.trace.export import SpanExporter
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from requests.auth import AuthBase
 
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.config import (
@@ -24,6 +24,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
+from litellm.integrations.otel.plumbing.otlp_tls import OtlpHttpTls, resolve_otlp_http_tls
 from litellm.integrations.otel.plumbing.providers import register_exporter_factory
 
 _AGENTOPS_ENDPOINT: Final = "https://otlp.agentops.ai/v1/traces"
@@ -74,47 +75,44 @@ def agentops_preset(
     )
 
 
+class _AgentOpsAuth(AuthBase):
+    def __init__(self, api_key: str | None) -> None:
+        self._api_key = api_key
+        self._resolved = False
+        self._token: str | None = None
+
+    def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
+        if not self._resolved:
+            self._resolved = True
+            if self._api_key:
+                try:
+                    token: Final = _fetch_agentops_jwt(self._api_key).get("token")
+                    if isinstance(token, str) and token:
+                        self._token = token
+                except Exception as error:
+                    verbose_logger.debug("AgentOps JWT fetch failed: %s", error)
+        authenticated: Final = request.copy()
+        if self._token:
+            authenticated.headers["Authorization"] = f"Bearer {self._token}"
+        return authenticated
+
+
 def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
-    """Factory for the ``agentops`` exporter kind: a lazy-auth OTLP/HTTP exporter."""
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-        OTLPSpanExporter,
-    )
+    """Authenticate lazily through requests' public session authentication API."""
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-    class _LazyAuthAgentOpsExporter(OTLPSpanExporter):
-        """OTLP/HTTP exporter that mints the AgentOps JWT on its first export.
-
-        ``export`` runs in the ``BatchSpanProcessor`` worker thread, so the
-        blocking token fetch never touches an event loop. The result is cached
-        after the first attempt (success or failure) so it runs at most once.
-        """
-
-        def __init__(self, *, endpoint: str | None, api_key: str | None) -> None:
-            super().__init__(endpoint=endpoint)
-            self._agentops_api_key = api_key
-            self._auth_resolved = False
-
-        def _ensure_authenticated(self) -> None:
-            if self._auth_resolved:
-                return
-            self._auth_resolved = True
-            if not self._agentops_api_key:
-                return
-            try:
-                token: Final = _fetch_agentops_jwt(self._agentops_api_key).get("token")
-                if token:
-                    # ``_session`` is the requests.Session the base exporter
-                    # POSTs through; updating its Authorization header is how the
-                    # minted JWT reaches every subsequent export.
-                    self._session.headers["Authorization"] = f"Bearer {token}"
-            except Exception as e:
-                verbose_logger.debug("AgentOps JWT fetch failed: %s", e)
-
-        def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-            self._ensure_authenticated()
-            return super().export(spans)
+    from litellm.integrations.otel.plumbing.otlp_transport import build_otlp_http_transport
 
     options: Final = spec.options or {}
-    return _LazyAuthAgentOpsExporter(endpoint=spec.endpoint, api_key=options.get("api_key"))
+    tls: Final = resolve_otlp_http_tls("TRACES", isolate_headers=True)
+    session: Final = tls.session or requests.Session()
+    session.auth = _AgentOpsAuth(options.get("api_key"))
+    return OTLPSpanExporter(
+        endpoint=spec.endpoint,
+        _transport=build_otlp_http_transport(
+            "TRACES", OtlpHttpTls(certificate_file=tls.certificate_file, session=session)
+        ),
+    )
 
 
 def _fetch_agentops_jwt(api_key: str) -> dict[str, object]:

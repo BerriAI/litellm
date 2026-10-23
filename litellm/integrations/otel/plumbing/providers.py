@@ -16,9 +16,9 @@ from opentelemetry.metrics import MeterProvider, NoOpMeterProvider
 from opentelemetry.sdk._logs import LoggerProvider as SDKLoggerProvider
 from opentelemetry.sdk._logs.export import (
     BatchLogRecordProcessor,
-    ConsoleLogExporter,
-    InMemoryLogExporter,
-    LogExporter,
+    ConsoleLogRecordExporter,
+    InMemoryLogRecordExporter,
+    LogRecordExporter,
     SimpleLogRecordProcessor,
 )
 from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
@@ -194,7 +194,7 @@ def exporter_transport(kind: str) -> Literal["http", "grpc", "headerless"]:
     return "headerless"
 
 
-def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
+def _exporter_from_spec(spec: ExporterSpec, *, isolate_headers: bool = False) -> SpanExporter:
     kind: Final = (spec.kind or "console").lower()
     factory: Final = _EXPORTER_FACTORIES.get(kind)
     if factory is not None:
@@ -204,7 +204,9 @@ def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
     if kind in _OTLP_HTTP_JSON_KINDS:
         from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter
 
-        tls: Final = resolve_otlp_http_tls("TRACES")
+        tls: Final = resolve_otlp_http_tls(
+            "TRACES", parse_headers(spec.headers), content_type="application/json", isolate_headers=isolate_headers
+        )
         return OTLPJsonSpanExporter(
             endpoint=spec.traces_endpoint or _otlp_traces_endpoint(spec.endpoint),
             headers=parse_headers(spec.headers),
@@ -216,12 +218,13 @@ def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
             OTLPSpanExporter as HTTPExporter,
         )
 
-        http_tls: Final = resolve_otlp_http_tls("TRACES")
+        from litellm.integrations.otel.plumbing.otlp_transport import build_otlp_http_transport
+
+        http_tls: Final = resolve_otlp_http_tls("TRACES", parse_headers(spec.headers), isolate_headers=isolate_headers)
         return HTTPExporter(
             endpoint=spec.traces_endpoint or _otlp_traces_endpoint(spec.endpoint),
             headers=parse_headers(spec.headers),
-            certificate_file=http_tls.certificate_file,
-            session=http_tls.session,
+            _transport=build_otlp_http_transport("TRACES", http_tls),
         )
     if kind in _OTLP_GRPC_KINDS:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
@@ -1013,7 +1016,7 @@ def _destination_processor(destination: "OtelDestination") -> SpanProcessor | No
             headers=destination.header_string(),
             owner=None,
         )
-        return _processor_for(_exporter_from_spec(spec), use_simple=False)
+        return _processor_for(_exporter_from_spec(spec, isolate_headers=True), use_simple=False)
     except Exception as exc:  # noqa: BLE001  # a malformed destination must not break the request or the other destinations
         verbose_logger.debug("OTel V2 fan-out: no processor for %s: %s", destination.endpoint, exc)
         return None
@@ -1186,12 +1189,13 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
             OTLPMetricExporter as HTTPMetricExporter,
         )
 
-        tls: Final = resolve_otlp_http_tls("METRICS")
+        from litellm.integrations.otel.plumbing.otlp_transport import build_otlp_http_transport
+
+        tls: Final = resolve_otlp_http_tls("METRICS", parse_headers(config.headers))
         exporter: object = HTTPMetricExporter(
             endpoint=_otlp_metrics_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
-            certificate_file=tls.certificate_file,
-            session=tls.session,
+            _transport=build_otlp_http_transport("METRICS", tls),
         )
     elif kind in ("otlp_grpc", "grpc"):
         try:
@@ -1233,7 +1237,7 @@ def _otlp_logs_endpoint(endpoint: str | None) -> str | None:
     return endpoint + "/v1/logs"
 
 
-def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
+def build_log_exporter(config: OpenTelemetryV2Config) -> LogRecordExporter:
     """Build a log exporter mirroring the exporter selection of the other signals.
 
     ``console`` (and any unrecognized kind) exports to the console; ``otlp_http``
@@ -1243,18 +1247,19 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
     """
     kind: Final = (config.exporter or "console").lower()
     if kind in ("in_memory", "inmemory", "memory"):
-        return InMemoryLogExporter()
+        return InMemoryLogRecordExporter()
     if kind in ("otlp_http", "http", "http/protobuf", "http/json"):
         from opentelemetry.exporter.otlp.proto.http._log_exporter import (
             OTLPLogExporter as HTTPLogExporter,
         )
 
-        tls: Final = resolve_otlp_http_tls("LOGS")
+        from litellm.integrations.otel.plumbing.otlp_transport import build_otlp_http_transport
+
+        tls: Final = resolve_otlp_http_tls("LOGS", parse_headers(config.headers))
         return HTTPLogExporter(
             endpoint=_otlp_logs_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
-            certificate_file=tls.certificate_file,
-            session=tls.session,
+            _transport=build_otlp_http_transport("LOGS", tls),
         )
     if kind in ("otlp_grpc", "grpc"):
         try:
@@ -1268,24 +1273,24 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
             ) from exc
 
         return GRPCLogExporter(endpoint=config.endpoint, headers=parse_headers(config.headers))
-    return ConsoleLogExporter()
+    return ConsoleLogRecordExporter()
 
 
 def build_logger_provider(
     config: OpenTelemetryV2Config,
-    log_exporter: LogExporter | None = None,
+    log_exporter: LogRecordExporter | None = None,
 ) -> SDKLoggerProvider:
     """Build the :class:`LoggerProvider` GenAI events export through.
 
     ``log_exporter`` is an explicit override (tests inject an
-    ``InMemoryLogExporter``); otherwise the exporter is selected from the config's
+    ``InMemoryLogRecordExporter``); otherwise the exporter is selected from the config's
     exporter kind via :func:`build_log_exporter`. Console and in-memory exporters
     get a Simple processor (synchronous export, which tests rely on), everything
     else a Batch processor — the same split as span processing.
     """
     exporter: Final = log_exporter if log_exporter is not None else build_log_exporter(config)
     provider: Final = SDKLoggerProvider(resource=build_resource(config))
-    use_simple: Final = isinstance(exporter, (ConsoleLogExporter, InMemoryLogExporter))
+    use_simple: Final = isinstance(exporter, (ConsoleLogRecordExporter, InMemoryLogRecordExporter))
     provider.add_log_record_processor(
         SimpleLogRecordProcessor(exporter) if use_simple else BatchLogRecordProcessor(exporter)
     )

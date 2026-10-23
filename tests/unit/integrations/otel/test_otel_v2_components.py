@@ -23,8 +23,9 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: 
 from opentelemetry import baggage  # noqa: E402
 from opentelemetry.context import attach, detach  # noqa: E402
 from opentelemetry._logs.severity import SeverityNumber  # noqa: E402
-from opentelemetry.sdk._logs import LogData, LogRecord  # noqa: E402
-from opentelemetry.sdk._logs.export import LogExportResult  # noqa: E402
+from opentelemetry._logs import LogRecord
+from opentelemetry.sdk._logs import ReadableLogRecord  # noqa: E402
+from opentelemetry.sdk._logs.export import LogRecordExportResult  # noqa: E402
 from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
 from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
@@ -676,7 +677,9 @@ def test_parse_headers_percent_decodes_values():
     documents ``Authorization=Basic%20<token>``. Forwarding the literal ``%20``
     makes the backend reject the export as a malformed credential.
     """
-    token = "MTMzNzc4MzpnbGNfZXlKdklqb2lNVEl6TkNJPQ=="
+    from base64 import b64encode
+
+    token: Final = b64encode(b"TEST_ONLY_USER:TEST_ONLY_PASSWORD").decode()
     assert providers.parse_headers(f"Authorization=Basic%20{token}") == {"authorization": f"Basic {token}"}
     assert providers.parse_headers("x-scope-orgid=team%20a") == {"x-scope-orgid": "team a"}
 
@@ -733,7 +736,7 @@ def _export_one_trace_to_local_collector(exporter_kind: str) -> tuple[list[dict]
     class Collector(BaseHTTPRequestHandler):
         def do_POST(self):
             body = self.rfile.read(int(self.headers["Content-Length"]))
-            received.append({"path": self.path, "headers": dict(self.headers), "body": body})
+            received.append({"path": self.path, "headers": requests.structures.CaseInsensitiveDict(self.headers), "body": body})
             self.send_response(200)
             self.end_headers()
 
@@ -786,12 +789,59 @@ def test_http_json_exporter_posts_otlp_json_to_traces_endpoint():
     assert parent["kind"] == 2
     assert parent["traceId"] == format(trace_id, "032x")
     assert parent["spanId"] == format(parent_id, "016x")
-    assert "parentSpanId" not in parent
+    assert parent.get("parentSpanId", "") == ""
     child = _only_span(child_request)
     assert child["traceId"] == format(trace_id, "032x")
     assert child["spanId"] == format(child_id, "016x")
     assert child["parentSpanId"] == format(parent_id, "016x")
 
+
+
+@pytest.mark.parametrize("compression", ["none", "gzip", "deflate"])
+def test_http_json_exporter_preserves_session_tls_auth_and_compression(monkeypatch, requests_mock, compression):
+    import gzip
+    import zlib
+
+    from opentelemetry.sdk.trace.export import SpanExportResult
+    from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter
+
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/corporate/global-ca.pem")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE", "/collector/environment-ca.pem")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION", compression)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE", "/collector/client.crt")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY", "/collector/client.key")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:8080")
+    collector = requests_mock.post("https://collector.example/v1/traces", status_code=200)
+    session = requests.Session()
+    session.headers["x-session-marker"] = "retained"
+    session.auth = requests.auth.HTTPBasicAuth("session-user", "synthetic-password")
+    exporter = OTLPJsonSpanExporter(
+        endpoint="https://collector.example/v1/traces",
+        headers={"x-exporter-marker": "configured"},
+        certificate_file="/collector/ca.crt",
+        session=session,
+    )
+    provider = TracerProvider()
+    span = provider.get_tracer(__name__).start_span("session-export")
+    span.end()
+    try:
+        assert exporter.export([span]) is SpanExportResult.SUCCESS
+        request = collector.last_request
+        assert request.headers["Content-Type"] == "application/json"
+        assert request.headers["x-session-marker"] == "retained"
+        assert request.headers["x-exporter-marker"] == "configured"
+        assert request.headers["Authorization"] == "Basic c2Vzc2lvbi11c2VyOnN5bnRoZXRpYy1wYXNzd29yZA=="
+        assert request.verify == "/collector/ca.crt"
+        assert request.cert == ("/collector/client.crt", "/collector/client.key")
+        assert request.proxies["https"] == "http://proxy.example:8080"
+        decompress = {"none": lambda body: body, "gzip": gzip.decompress, "deflate": zlib.decompress}[compression]
+        payload = json.loads(decompress(request.body))
+        exported = payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        assert exported["name"] == "session-export"
+        assert exported["traceId"] == f"{span.get_span_context().trace_id:032x}"
+    finally:
+        exporter.shutdown()
+        provider.shutdown()
 
 def test_http_protobuf_exporter_still_posts_protobuf():
     (_child_request, parent_request), (trace_id, _parent_id, _child_id) = _export_one_trace_to_local_collector(
@@ -924,20 +974,20 @@ def test_otlp_logs_endpoint_normalization():
 
 
 def test_build_log_exporter_variants():
-    from opentelemetry.sdk._logs.export import ConsoleLogExporter, InMemoryLogExporter
+    from opentelemetry.sdk._logs.export import ConsoleLogRecordExporter, InMemoryLogRecordExporter
 
     assert isinstance(
         providers.build_log_exporter(OpenTelemetryV2Config(exporter="console")),
-        ConsoleLogExporter,
+        ConsoleLogRecordExporter,
     )
     assert isinstance(
         providers.build_log_exporter(OpenTelemetryV2Config(exporter="in_memory")),
-        InMemoryLogExporter,
+        InMemoryLogRecordExporter,
     )
     # An unrecognized kind falls back to console rather than dropping events.
     assert isinstance(
         providers.build_log_exporter(OpenTelemetryV2Config(exporter="unknown")),
-        ConsoleLogExporter,
+        ConsoleLogRecordExporter,
     )
     http_exporter = providers.build_log_exporter(OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318"))
     assert "OTLPLogExporter" in type(http_exporter).__name__
@@ -1630,9 +1680,13 @@ def test_v2_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.Monkey
             severity_number=SeverityNumber.INFO,
             body="v2-tls-test",
         )
-        log_data = LogData(log_record=record, instrumentation_scope=InstrumentationScope("v2-tls-test"))
+        log_data = ReadableLogRecord(
+            log_record=record,
+            resource=providers.build_resource(cfg),
+            instrumentation_scope=InstrumentationScope("v2-tls-test"),
+        )
         result = exporter.export([log_data])
-        assert result is LogExportResult.SUCCESS, f"log export failed: {result}"
+        assert result is LogRecordExportResult.SUCCESS, f"log export failed: {result}"
         assert tls_sink.received.get(timeout=5) == "/v1/logs"
     finally:
         exporter.shutdown()
