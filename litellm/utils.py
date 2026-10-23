@@ -218,6 +218,7 @@ def _get_cached_audio_utils():
     return _audio_utils_module
 
 
+from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper as _TextCompletionStreamWrapper
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -262,12 +263,16 @@ from litellm.types.utils import (
     SearchProviders,
     SelectTokenizerResponse,
     StreamingChoices,
-    TextChoices,
-    TextCompletionResponse,
     TranscriptionResponse,
     Usage,
     credential_api_key_secret_reference,
     is_litellm_owned_kwarg,
+)
+from litellm.types.utils import (
+    TextChoices as _TextChoices,
+)
+from litellm.types.utils import (
+    TextCompletionResponse as _TextCompletionResponse,
 )
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
@@ -299,9 +304,13 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
+
+TextChoices: TypeAlias = _TextChoices
+TextCompletionResponse: TypeAlias = _TextCompletionResponse
+TextCompletionStreamWrapper: TypeAlias = _TextCompletionStreamWrapper
 
 from litellm import utils as litellm_utils
 
@@ -340,7 +349,8 @@ if TYPE_CHECKING:
 
     # Type stubs for lazy-loaded functions to help mypy understand their types
     # These imports allow mypy to understand the types when these are accessed via __getattr__
-    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    exception_type: Callable[..., Exception]
+
     from litellm.litellm_core_utils.get_litellm_params import (
         get_base_model_from_litellm_call_metadata,
         get_litellm_params,
@@ -7943,88 +7953,6 @@ def register_prompt_template(
             }
 
     return litellm.custom_prompt_dict
-
-
-class TextCompletionStreamWrapper:
-    def __init__(
-        self,
-        completion_stream,
-        model,
-        stream_options: dict | None = None,
-        custom_llm_provider: str | None = None,
-    ):
-        self.completion_stream = completion_stream
-        self.model = model
-        self.stream_options = stream_options
-        self.custom_llm_provider = custom_llm_provider
-
-    def __iter__(self):
-        return self
-
-    def __aiter__(self):
-        return self
-
-    def convert_to_text_completion_object(self, chunk: ModelResponse):
-        try:
-            response: Final = TextCompletionResponse()
-            response["id"] = chunk.get("id", None)
-            response["object"] = "text_completion"
-            response["created"] = chunk.get("created", None)
-            response["model"] = chunk.get("model", None)
-            text_choices: Final = TextChoices()
-            if isinstance(chunk, Choices):  # chunk should always be of type StreamingChoices
-                raise Exception
-
-            if chunk["choices"]:
-                delta: Final = chunk["choices"][0]["delta"]
-                text_choices["text"] = delta["content"]
-                text_choices["reasoning_content"] = delta.get("reasoning_content")
-                text_choices["index"] = chunk["choices"][0]["index"]
-                text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
-                response["choices"] = [text_choices]
-            else:
-                response["choices"] = []
-
-            # only pass usage when stream_options["include_usage"] is True
-            if self.stream_options and self.stream_options.get("include_usage", False) is True:
-                response["usage"] = chunk.get("usage", None)
-
-            return response
-        except Exception as e:
-            raise Exception(f"Error occurred converting to text completion object - chunk: {chunk}; Error: {e}")
-
-    def __next__(self):
-        # model_response = ModelResponse(stream=True, model=self.model)
-        TextCompletionResponse()
-        try:
-            for chunk in self.completion_stream:
-                if chunk == "None" or chunk is None:
-                    raise Exception
-                processed_chunk = self.convert_to_text_completion_object(chunk=chunk)
-                return processed_chunk
-            raise StopIteration
-        except StopIteration:
-            raise StopIteration
-        except Exception as e:
-            exception_type: Final = litellm_utils.exception_type
-            raise exception_type(
-                model=self.model,
-                custom_llm_provider=self.custom_llm_provider or "",
-                original_exception=e,
-                completion_kwargs={},
-                extra_kwargs={},
-            )
-
-    async def __anext__(self):
-        try:
-            async for chunk in self.completion_stream:
-                if chunk == "None" or chunk is None:
-                    raise Exception
-                processed_chunk = self.convert_to_text_completion_object(chunk=chunk)
-                return processed_chunk
-            raise StopIteration
-        except StopIteration:
-            raise StopAsyncIteration
 
 
 def mock_stream_usage_chunk(model_response: ModelResponseStream, model: str, prompt_tokens: int) -> ModelResponseStream:
