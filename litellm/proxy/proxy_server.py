@@ -10093,6 +10093,12 @@ def _fast_serialize_simple_model_response_stream(
 
 
 def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
+    if isinstance(chunk, (ModelResponseStream, TextCompletionResponse)) and any(
+        "stop_reason" in choice or "token_ids" in choice or "provider_specific_fields" in choice
+        for choice in chunk.choices
+    ):
+        return orjson.dumps(model_dump_with_preserved_fields(chunk))
+
     if isinstance(chunk, ModelResponseStream):
         serialized_chunk: Final = _fast_serialize_simple_model_response_stream(chunk)
         if serialized_chunk is not None:
@@ -19663,6 +19669,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "proxy_config_reload_interval_seconds": "Integer",
         "pass_through_endpoints": "PydanticModel",
         "store_model_in_db": "Boolean",
+        "return_wildcard_routes": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
         "disable_requester_ip_address_logging": "Boolean",
         "disable_fallbacks_on_per_model_rate_limits": "Boolean",

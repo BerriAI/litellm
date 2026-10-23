@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast
 import anyio
 import httpx
 from openai.types.chat import ChatCompletionChunk
-from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
+from openai.types.completion import Completion
 from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
@@ -74,6 +74,7 @@ _SYNC_ITER_EXHAUSTED: Final = object()
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
+_PROVIDER_CHOICE_FIELDS: Final = frozenset(("stop_reason", "token_ids", "provider_specific_fields"))
 
 
 def _next_sync_or_exhausted(it: Iterator[object]) -> object:
@@ -102,7 +103,7 @@ def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, o
 
 
 def _prepend_upstream_choice_extras(
-    choice: StreamingChoices, upstream_choice: ChunkChoice, extra_keys: frozenset[str]
+    choice: StreamingChoices, upstream_choice: BaseModel, extra_keys: frozenset[str]
 ) -> None:
     if not extra_keys:
         return
@@ -307,6 +308,7 @@ class CustomStreamWrapper:
         self.system_fingerprint: str | None = None
         self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
+        self._finish_reason_choice: BaseModel | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
@@ -1596,6 +1598,19 @@ class CustomStreamWrapper:
             hidden_params=_provider_hidden_params(chunk, self._provider_response_model),
             delta=prebuilt_delta,
         )
+        upstream_choice: Final = (
+            chunk.choices[0]
+            if isinstance(chunk, (ChatCompletionChunk, ModelResponseStream, Completion, TextCompletionResponse))
+            and chunk.choices
+            else None
+        )
+        if upstream_choice is not None:
+            _prepend_upstream_choice_extras(
+                model_response.choices[0],
+                upstream_choice,
+                frozenset(upstream_choice.model_fields_set).union(upstream_choice.model_extra or ())
+                & _PROVIDER_CHOICE_FIELDS,
+            )
         response_obj: dict[str, Any] = {}
         try:
             # return this for all models
@@ -1607,6 +1622,8 @@ class CustomStreamWrapper:
             )
             if isinstance(dispatch_result, _ProviderChunkEarlyReturn):
                 return dispatch_result.value
+            if upstream_choice is not None and upstream_choice.finish_reason is not None:
+                self._finish_reason_choice = upstream_choice
             response_obj = dispatch_result.response_obj
 
             model_response.model = self.model
@@ -1702,6 +1719,16 @@ class CustomStreamWrapper:
                 response_obj=response_obj,
                 plain_delta_created=plain_delta_created,
             )
+            if (
+                upstream_choice is not None
+                and upstream_choice.finish_reason is not None
+                and result is not None
+                and result.choices
+                and result.choices[0].finish_reason is None
+            ):
+                for field in _PROVIDER_CHOICE_FIELDS:
+                    if field in result.choices[0]:
+                        delattr(result.choices[0], field)
             return result
 
         except StopIteration:
@@ -1899,6 +1926,16 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = _finish_reason
         else:
             model_response.choices[0].finish_reason = "stop"
+
+        if self._finish_reason_choice is not None:
+            _prepend_upstream_choice_extras(
+                model_response.choices[0],
+                self._finish_reason_choice,
+                frozenset(self._finish_reason_choice.model_fields_set).union(
+                    self._finish_reason_choice.model_extra or ()
+                )
+                & _PROVIDER_CHOICE_FIELDS,
+            )
 
         ## if tool use
         if (

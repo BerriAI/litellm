@@ -9775,7 +9775,7 @@ _PRESERVED_NONE_FIELDS: Final[list[tuple[str, str]]] = [
     ("message", "refusal"),
     ("delta", "content"),  # null in streaming chunks
 ]
-_PRESERVED_NONE_CHOICE_FIELDS: Final = ("logprobs",)
+_PRESERVED_NONE_CHOICE_FIELDS: Final = ("logprobs", "stop_reason", "token_ids")
 _PRESERVED_NONE_RESPONSE_FIELDS: Final = ("system_fingerprint",)
 
 
