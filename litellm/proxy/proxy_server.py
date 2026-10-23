@@ -12257,7 +12257,7 @@ async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_a
 async def model_list(
     request: Request = None,  # pyright: ignore[reportArgumentType]  # FastAPI always injects the Request; the None default only serves direct in-process callers
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    return_wildcard_routes: bool | None = False,
+    return_wildcard_routes: bool | None = None,
     team_id: str | None = None,
     include_model_access_groups: bool | None = False,
     only_model_access_groups: bool | None = False,
@@ -12273,6 +12273,9 @@ async def model_list(
     This is just for compatibility with openai projects like aider.
 
     Query Parameters:
+    - return_wildcard_routes: When true, also list wildcard routes such as `openai/*`.
+                    Defaults to `general_settings.return_wildcard_routes`, and an explicit
+                    value on the request wins over it
     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
                     provider's model catalog. When present, the response is Codex's own
                     catalog shape (`{"models": [...]}`) built from the same listing, with
@@ -12301,6 +12304,9 @@ async def model_list(
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
     settings: Final = cast(dict[str, object], general_settings)  # any-ok: legacy settings
+    include_wildcard_routes: Final = (
+        return_wildcard_routes if return_wildcard_routes is not None else settings.get("return_wildcard_routes") is True
+    )
 
     from litellm.llms.anthropic.common_utils import (
         create_anthropic_model_list_response,
@@ -12390,7 +12396,7 @@ async def model_list(
             proxy_model_list=proxy_model_list,
             user_model=None,
             infer_model_from_keys=False,
-            return_wildcard_routes=return_wildcard_routes or False,
+            return_wildcard_routes=include_wildcard_routes,
             llm_router=llm_router,
             model_access_groups=model_access_groups,
             include_model_access_groups=include_model_access_groups or False,
@@ -12458,7 +12464,7 @@ async def model_list(
         team_id=team_id,
         include_model_access_groups=include_model_access_groups or False,
         only_model_access_groups=only_model_access_groups or False,
-        return_wildcard_routes=return_wildcard_routes or False,
+        return_wildcard_routes=include_wildcard_routes,
         user_api_key_cache=user_api_key_cache,
     )
 
