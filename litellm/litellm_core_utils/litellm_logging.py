@@ -51,6 +51,7 @@ from litellm.constants import (
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
+    _base_model_pricing_provider,
     get_usage_object,
     pricing_entry_for_cost_calc,
     select_model_name_for_cost_calc,
@@ -6693,10 +6694,20 @@ class StandardLoggingPayloadSetup:
         if model_cost_name is None:
             model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
         else:
+            # When base_model points at a priced row under a different provider than the deployment's own
+            # transport (e.g. a chatgpt/ subscription deployment priced via an openai/ base_model), completion_cost
+            # already resolves the correct provider for billing. Without the same correction here, get_model_info
+            # rejects the match on provider mismatch and this diagnostic field stays None even though spend is
+            # computed correctly.
+            pricing_provider: Final = (
+                _base_model_pricing_provider(base_model, custom_llm_provider)
+                if base_model is not None and custom_pricing is not True
+                else None
+            )
             try:
                 _model_cost_information: Final = litellm.get_model_info(
                     model=pricing_model_name or model_cost_name,
-                    custom_llm_provider=custom_llm_provider,
+                    custom_llm_provider=pricing_provider or custom_llm_provider,
                     api_base=api_base,
                 )
                 model_cost_information = StandardLoggingModelInformation(
