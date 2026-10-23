@@ -413,7 +413,7 @@ describe("TeamInfoView - member budget reset prompt", () => {
   };
 
   const savedBody = () => vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
-  const promptTitle = "Apply the new $20.00 default to members with a custom budget?";
+  const promptTitle = "Apply the $20.00 default to custom budgets?";
 
   beforeEach(() => {
     seedDefaultMocks();
@@ -514,7 +514,7 @@ describe("TeamInfoView - member budget reset prompt", () => {
     await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
     expect(savedBody().team_member_budget).toBe(Number(value));
     expect(savedBody()).not.toHaveProperty("team_member_budget_backfill");
-    expect(screen.queryByText(/default to members with a custom budget/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/default to custom budgets/)).not.toBeInTheDocument();
   });
 
   it("dismisses a pending prompt when the selected team changes", async () => {

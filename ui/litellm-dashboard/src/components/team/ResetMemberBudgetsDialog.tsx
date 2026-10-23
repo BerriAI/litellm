@@ -52,9 +52,7 @@ function BackfillChoice({ pending, busy, onSave, onDismiss }: BackfillChoiceProp
   return (
     <>
       <DialogHeader>
-        <DialogTitle>
-          Apply the new ${formatNumberWithCommas(pending.newBudget, 2)} default to members with a custom budget?
-        </DialogTitle>
+        <DialogTitle>Apply the ${formatNumberWithCommas(pending.newBudget, 2)} default to custom budgets?</DialogTitle>
       </DialogHeader>
       <RadioGroup value={choice} onValueChange={(value) => setChoice(value as MemberBudgetBackfill)}>
         {backfillOptions(pending.preview, pending.newBudget).map((option) => (

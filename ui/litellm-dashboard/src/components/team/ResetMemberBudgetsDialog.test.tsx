@@ -45,7 +45,7 @@ describe("ResetMemberBudgetsDialog", () => {
     const user = userEvent.setup();
     const { onSave } = renderDialog(state("prompting", preview(2, 1)));
 
-    expect(screen.getByText("Apply the new $1,250.00 default to members with a custom budget?")).toBeInTheDocument();
+    expect(screen.getByText("Apply the $1,250.00 default to custom budgets?")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Keep all custom budgets" })).toBeChecked();
     await user.click(screen.getByRole("button", { name: "Save" }));
 
