@@ -7,7 +7,8 @@ in expected_responses_api_request/.
 import copy
 import json
 import logging
-from collections.abc import Awaitable, Callable
+import math
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from importlib import import_module
 from typing import Final
@@ -20,6 +21,7 @@ import respx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
@@ -1234,30 +1236,43 @@ def test_faked_stream_accepts_a_text_timeout(monkeypatch: pytest.MonkeyPatch) ->
     ]
 
 
+async def _invoke_responses(sync_mode: bool, model: str, pricing: Mapping[str, float]) -> ResponsesAPIResponse:
+    response: Final = (
+        litellm.responses(model=model, input="hi", **pricing)
+        if sync_mode
+        else await litellm.aresponses(model=model, input="hi", **pricing)
+    )
+    assert isinstance(response, ResponsesAPIResponse)
+    return response
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", (True, False))
 @pytest.mark.parametrize("model", ("openai/gpt-5.4-nano", "openai/custom-priced-model-not-in-cost-map"))
 async def test_responses_bills_per_call_custom_pricing_from_usage(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, sync_mode: bool, model: str
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+    model: str,
 ):
-    request.addfinalizer(_invalidate_model_cost_lowercase_map)
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    model_cost: dict[str, object] = getattr(litellm, "model_cost")
+    monkeypatch.setattr(litellm, "model_cost", dict(model_cost))
+    request.addfinalizer(_invalidate_model_cost_lowercase_map)
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post("https://api.openai.com/v1/responses").mock(
         return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_custom_price", model.split("/")[1]))
     )
     pricing: Final = {"input_cost_per_token": 1e-5, "output_cost_per_token": 2e-5}
 
-    response: Final = (
-        litellm.responses(model=model, input="hi", **pricing)
-        if sync_mode
-        else await litellm.aresponses(model=model, input="hi", **pricing)
-    )
+    response: Final = await _invoke_responses(sync_mode, model, pricing)
 
+    assert response.usage is not None
     expected: Final = (
         response.usage.input_tokens * pricing["input_cost_per_token"]
         + response.usage.output_tokens * pricing["output_cost_per_token"]
     )
-    assert response._hidden_params["response_cost"] == pytest.approx(expected)
+    hidden_params: dict[str, float] = getattr(response, "_hidden_params")
+    assert math.isclose(hidden_params["response_cost"], expected)
