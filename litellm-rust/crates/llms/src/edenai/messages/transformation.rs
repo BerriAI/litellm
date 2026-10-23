@@ -1,5 +1,5 @@
 use litellm_auth::{CredentialPlacement, SecretValue};
-use litellm_core_utils::settings::resolve_non_empty;
+use litellm_layered::{Layered, non_blank, read};
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
@@ -27,6 +27,21 @@ const API_KEY_ENV: &str = "EDENAI_API_KEY";
 const API_BASE_ENV: &str = "EDENAI_API_BASE";
 const DEFAULT_BASE: &str = "https://api.edenai.run/v3";
 
+#[derive(Layered)]
+#[expect(dead_code, reason = "only the derived partial is read")]
+struct EdenAiKeys {
+    #[layer(litellm_param = "api_key", env = "EDENAI_API_KEY", read = read::text, secret, setting = "API Key")]
+    api_key: String,
+    #[layer(litellm_param = "api_base", env = "EDENAI_API_BASE", read = read::text, setting = "API Base")]
+    api_base: String,
+}
+
+impl EdenAiKeysPartial {
+    fn env(env: &dyn Fn(&str) -> Option<String>) -> Self {
+        Self::from_env(&env).unwrap_or_default()
+    }
+}
+
 pub struct EdenAIAnthropicMessagesConfig;
 pub const EDENAI_MESSAGES_CONFIG: EdenAIAnthropicMessagesConfig = EdenAIAnthropicMessagesConfig;
 
@@ -40,12 +55,12 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
         _params: &LitellmParams,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        let key = resolve_non_empty(api_key, env, &[API_KEY_ENV]).ok_or(Error::Auth(
-            litellm_auth::Error::MissingApiKey {
+        let key = non_blank(api_key)
+            .or(EdenAiKeysPartial::env(env).api_key)
+            .ok_or(Error::Auth(litellm_auth::Error::MissingApiKey {
                 provider: "Eden AI",
-                environment_variable: API_KEY_ENV,
-            },
-        ))?;
+                environment_variable: EdenAiKeys::API_KEY.env[0],
+            }))?;
         if has_anthropic_credential(&headers) {
             return Ok(ValidatedEnvironment {
                 headers,
@@ -69,7 +84,8 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
         _stream: bool,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        let base = resolve_non_empty(api_base, env, &[API_BASE_ENV])
+        let base = non_blank(api_base)
+            .or(EdenAiKeysPartial::env(env).api_base)
             .unwrap_or_else(|| DEFAULT_BASE.into());
         Ok(complete_messages_url(&base))
     }

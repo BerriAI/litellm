@@ -1,5 +1,5 @@
 use litellm_auth::{CredentialPlacement, SecretValue};
-use litellm_core_utils::settings::resolve_non_empty;
+use litellm_layered::{Layered, non_blank, read};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{DEFAULT_HEADERS, MESSAGES_PATH},
@@ -25,6 +25,21 @@ const API_KEY_ENV: &str = "TENCENT_API_KEY";
 const API_BASE_ENV: &str = "TENCENT_API_BASE";
 const ANTHROPIC_API_BASE_ENV: &str = "TENCENT_ANTHROPIC_API_BASE";
 const DEFAULT_BASE: &str = "https://tokenhub-intl.tencentcloudmaas.com";
+
+#[derive(Layered)]
+#[expect(dead_code, reason = "only the derived partial is read")]
+struct TencentKeys {
+    #[layer(litellm_param = "api_key", env = "TENCENT_API_KEY", read = read::text, secret, setting = "API Key")]
+    api_key: String,
+    #[layer(litellm_param = "api_base", env = ["TENCENT_ANTHROPIC_API_BASE", "TENCENT_API_BASE"], read = read::text, setting = "API Base")]
+    api_base: String,
+}
+
+impl TencentKeysPartial {
+    fn env(env: &dyn Fn(&str) -> Option<String>) -> Self {
+        Self::from_env(&env).unwrap_or_default()
+    }
+}
 
 pub struct TencentAnthropicMessagesConfig;
 pub const TENCENT_MESSAGES_CONFIG: TencentAnthropicMessagesConfig = TencentAnthropicMessagesConfig;
@@ -53,12 +68,12 @@ impl BaseMessagesConfig for TencentAnthropicMessagesConfig {
                 auth: AuthScheme::Forwarded,
             });
         }
-        let key = resolve_non_empty(api_key, env, &[API_KEY_ENV]).ok_or(Error::Auth(
-            litellm_auth::Error::MissingApiKey {
+        let key = non_blank(api_key)
+            .or(TencentKeysPartial::env(env).api_key)
+            .ok_or(Error::Auth(litellm_auth::Error::MissingApiKey {
                 provider: "Tencent",
-                environment_variable: API_KEY_ENV,
-            },
-        ))?;
+                environment_variable: TencentKeys::API_KEY.env[0],
+            }))?;
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::Credential {
@@ -76,7 +91,8 @@ impl BaseMessagesConfig for TencentAnthropicMessagesConfig {
         _stream: bool,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        let base = resolve_non_empty(api_base, env, &[ANTHROPIC_API_BASE_ENV, API_BASE_ENV])
+        let base = non_blank(api_base)
+            .or(TencentKeysPartial::env(env).api_base)
             .unwrap_or_else(|| DEFAULT_BASE.into());
         let base = base.trim_end_matches('/');
         if base.ends_with(MESSAGES_PATH) {

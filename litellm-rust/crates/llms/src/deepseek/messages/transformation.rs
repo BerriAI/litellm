@@ -1,5 +1,5 @@
 use litellm_auth::{CredentialPlacement, SecretValue};
-use litellm_core_utils::settings::resolve_non_empty;
+use litellm_layered::{Layered, non_blank, read};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool},
     providers::anthropic::{DEFAULT_HEADERS, MESSAGES_PATH},
@@ -138,20 +138,37 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
     }
 }
 
+#[derive(Layered)]
+#[expect(dead_code, reason = "only the derived partial is read")]
+struct DeepSeekKeys {
+    #[layer(litellm_param = "api_key", env = "DEEPSEEK_API_KEY", read = read::text, secret, setting = "API Key")]
+    api_key: String,
+    #[layer(
+        litellm_param = "api_base",
+        env = ["DEEPSEEK_ANTHROPIC_API_BASE", "DEEPSEEK_API_BASE"],
+        read = read::text,
+        setting = "API Base"
+    )]
+    api_base: String,
+}
+
+impl DeepSeekKeysPartial {
+    fn env(env: &dyn Fn(&str) -> Option<String>) -> Self {
+        Self::from_env(&env).unwrap_or_default()
+    }
+}
+
 pub fn get_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    resolve_non_empty(api_key, env_lookup, &[DEEPSEEK_API_KEY_ENV])
+    non_blank(api_key).or(DeepSeekKeysPartial::env(env_lookup).api_key)
 }
 
 pub fn get_api_base(api_base: Option<&str>, env_lookup: &dyn Fn(&str) -> Option<String>) -> String {
-    resolve_non_empty(
-        api_base,
-        env_lookup,
-        &[DEEPSEEK_ANTHROPIC_API_BASE_ENV, DEEPSEEK_API_BASE_ENV],
-    )
-    .unwrap_or_else(|| DEFAULT_DEEPSEEK_ANTHROPIC_API_BASE.to_string())
+    non_blank(api_base)
+        .or(DeepSeekKeysPartial::env(env_lookup).api_base)
+        .unwrap_or_else(|| DEFAULT_DEEPSEEK_ANTHROPIC_API_BASE.to_string())
 }
 
 /// Python's `get_complete_url`: a base already ending in the Anthropic messages path is kept,

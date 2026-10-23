@@ -1,5 +1,5 @@
 use litellm_auth::{CredentialPlacement, SecretValue};
-use litellm_core_utils::settings::resolve_non_empty;
+use litellm_layered::{Layered, non_blank, read};
 use litellm_llms_types::formats::responses::ResponsesApiResponse;
 use serde_json::{Map, Value};
 
@@ -15,6 +15,27 @@ use crate::{
 const API_KEY_ENVS: [&str; 2] = ["OPENROUTER_API_KEY", "OR_API_KEY"];
 const API_BASE_ENV: &str = "OPENROUTER_API_BASE";
 const DEFAULT_BASE: &str = "https://openrouter.ai/api/v1";
+
+#[derive(Layered)]
+#[expect(dead_code, reason = "only the derived partial is read")]
+struct OpenRouterKeys {
+    #[layer(
+        litellm_param = "api_key",
+        env = ["OPENROUTER_API_KEY", "OR_API_KEY"],
+        read = read::text,
+        secret,
+        setting = "API Key"
+    )]
+    api_key: String,
+    #[layer(litellm_param = "api_base", env = "OPENROUTER_API_BASE", read = read::text, setting = "API Base")]
+    api_base: String,
+}
+
+impl OpenRouterKeysPartial {
+    fn env(env: &dyn Fn(&str) -> Option<String>) -> Self {
+        Self::from_env(&env).unwrap_or_default()
+    }
+}
 const RESPONSES_PATH: &str = "/responses";
 
 pub struct OpenRouterResponsesApiConfig;
@@ -43,12 +64,12 @@ impl BaseResponsesApiConfig for OpenRouterResponsesApiConfig {
         api_key: Option<&str>,
         lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        let key = resolve_non_empty(api_key, lookup, &API_KEY_ENVS).ok_or(
-            litellm_auth::Error::MissingApiKey {
+        let key = non_blank(api_key)
+            .or(OpenRouterKeysPartial::env(lookup).api_key)
+            .ok_or(litellm_auth::Error::MissingApiKey {
                 provider: "OpenRouter",
-                environment_variable: API_KEY_ENVS[0],
-            },
-        )?;
+                environment_variable: OpenRouterKeys::API_KEY.env[0],
+            })?;
         Ok(ValidatedEnvironment {
             headers: litellm_http::request::with_default_headers(
                 headers,
@@ -66,7 +87,8 @@ impl BaseResponsesApiConfig for OpenRouterResponsesApiConfig {
         api_base: Option<&str>,
         lookup: &dyn Fn(&str) -> Option<String>,
     ) -> String {
-        let base = resolve_non_empty(api_base, lookup, &[API_BASE_ENV])
+        let base = non_blank(api_base)
+            .or(OpenRouterKeysPartial::env(lookup).api_base)
             .unwrap_or_else(|| DEFAULT_BASE.into());
         format!("{}{RESPONSES_PATH}", base.trim_end_matches('/'))
     }
