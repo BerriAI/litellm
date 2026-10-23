@@ -4,17 +4,20 @@ import hashlib
 import json
 import re
 import socket
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
 from base64 import urlsafe_b64encode
+from pathlib import Path
+from typing import Final
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 import requests
 
-from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+from litellm.litellm_core_utils.cli_token_utils import cli_token_lock, is_cli_token_fresh
 from litellm.proxy.client.cli.commands.pkce_login import (
     CallbackCode,
     CallbackDenied,
@@ -706,6 +709,32 @@ def test_fresh_api_key_does_not_renew_a_cleared_or_replaced_login(current):
         is None
     )
     assert http.calls == []
+
+
+@pytest.mark.parametrize(("now", "expected"), [(999_950.0, "sk-cli-old"), (1_000_001.0, None)])
+def test_fresh_api_key_reports_a_lock_failure_without_reading_or_spending_the_refresh_token(
+    capsys: pytest.CaptureFixture[str],
+    now: float,
+    expected: str | None,
+) -> None:
+    Path(cli_token_lock().lock_file).mkdir()
+    http: Final = _FakeHttp({("POST", f"{BASE}/token"): _FakeResponse(200, TOKEN_JSON)})
+    key: Final = _fresh(
+        STORED,
+        lambda _: pytest.fail("Unexpected credential save"),
+        http,
+        reload=lambda: pytest.fail("Credential read without the lock"),
+        now=lambda: now,
+        warn=lambda message: print(message, file=sys.stderr),
+    )
+    assert key == expected
+    assert http.calls == []
+    captured: Final = capsys.readouterr()
+    assert captured.out == ""
+    assert (
+        captured.err
+        == "Could not renew the key: the CLI credential store could not be locked; no refresh was attempted\n"
+    )
 
 
 def test_fresh_api_key_without_refresh_inputs_expires_like_a_classic_key():

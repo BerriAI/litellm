@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
     CredentialNotRecorded,
     CredentialNotSaved,
+    cli_token_lock,
     save_cli_token,
 )
 from litellm.proxy.client.cli import cli
@@ -2179,6 +2180,30 @@ def test_print_token_uses_the_saved_key_when_the_initializer_did_not_get_one(
     )
     assert result.exit_code == 0, result.output
     assert result.output == f"{record.key}\n"
+
+
+@responses.activate
+def test_logout_reports_a_lock_failure_without_revoking_or_clearing_the_credential(
+    isolated_home: Path,
+    secret_vault_factory: type[FakeSecretVault],
+) -> None:
+    _write_home_json(isolated_home, "token.json", _pkce_record(timestamp=1000.0, expires_at=0.0))
+    responses.add(responses.POST, f"{PKCE_BASE_URL}/revoke", json={}, status=200)
+    path: Final = isolated_home / ".litellm" / "token.json"
+    original: Final = path.read_bytes()
+    vault: Final = secret_vault_factory(blob=_secret_blob("https://test.example.com", "sk-fixture-vault"))
+    original_secret: Final = vault.blob
+    Path(cli_token_lock().lock_file).mkdir()
+
+    result: Final = CliRunner().invoke(logout, obj={"secret_vault": vault})
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "Could not lock the CLI credential store. No credential operation was started" in result.stderr
+    assert len(responses.calls) == 0
+    assert path.read_bytes() == original
+    assert vault.blob == original_secret
+    assert vault.reads == 0
+    assert vault.erases == 0
 
 
 def test_print_token_without_a_context_object_reports_no_login_when_nothing_is_stored(isolated_home):
