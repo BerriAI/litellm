@@ -550,6 +550,32 @@ async def test_process_output_response_masks_text_content():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"mcp_tool_name": "get_weather"},
+        {"mcp_tool_call_metadata": {"name": "get_weather", "arguments": {}, "mcp_server_name": "weather"}},
+    ],
+)
+async def test_process_output_response_names_the_tool_like_the_input_scan(request_data):
+    handler = MCPGuardrailTranslationHandler()
+    output_guardrail = MaskingGuardrail()
+    input_guardrail = MockGuardrail()
+    result = CallToolResult(content=[TextContent(type="text", text="sunny")], isError=False)
+
+    await handler.process_output_response(
+        response=result, guardrail_to_apply=output_guardrail, request_data=request_data
+    )
+    await handler.process_input_messages(
+        data={"mcp_tool_name": "get_weather", "mcp_arguments": {}}, guardrail_to_apply=input_guardrail
+    )
+
+    output_names = [tool["function"]["name"] for tool in output_guardrail.last_inputs.get("tools") or []]
+    input_names = [tool["function"]["name"] for tool in input_guardrail.last_inputs.get("tools") or []]
+    assert output_names == input_names == ["get_weather"], (output_names, input_names)
+
+
+@pytest.mark.asyncio
 async def test_process_output_response_masks_dict_shaped_result():
     """A dict-shaped tool result (REST/JSON-RPC payload) must be masked too."""
     handler = MCPGuardrailTranslationHandler()

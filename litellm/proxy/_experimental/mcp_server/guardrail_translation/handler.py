@@ -134,6 +134,42 @@ def _conflicting_rewrite(paths: tuple[JSONLeafPath, ...]) -> HTTPException:
     )
 
 
+def _tool_definition(name: str, description: object, input_schema: object) -> ChatCompletionToolParam:
+    # Map to litellm ChatCompletionToolParam: the openai SDK type has incompatible strict/cache_control.
+    mcp_tool: Final = MCPTool(
+        name=name,
+        description=str(description) if description else "",
+        input_schema=dict(input_schema) if isinstance(input_schema, Mapping) else {},
+    )
+    fn: Final = transform_mcp_tool_to_openai_tool(mcp_tool)["function"]
+    return {
+        "type": "function",
+        "function": ChatCompletionToolParamFunctionChunk(
+            name=fn["name"],
+            description=fn.get("description") or "",
+            parameters=fn.get("parameters")
+            or {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+            strict=fn.get("strict", False) or False,
+        ),
+    }
+
+
+def _executed_tool_name(request_data: Mapping[str, object]) -> str | None:
+    """The executed tool's name, from the logging metadata the call path records before dispatch."""
+    direct: Final = request_data.get("mcp_tool_name") or request_data.get("name")
+    if isinstance(direct, str) and direct:
+        return direct
+    match request_data.get("mcp_tool_call_metadata"):
+        case {"name": str() as logged} if logged:
+            return logged
+        case _:
+            return None
+
+
 class MCPGuardrailTranslationHandler(BaseTranslation):
     """Guardrail translation handler for MCP tool calls (passes a single tool_call to guardrail)."""
 
@@ -152,29 +188,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
             verbose_proxy_logger.debug("MCP Guardrail: mcp_tool_name missing")
             return data
 
-        # Convert MCP input via transform_mcp_tool_to_openai_tool, then map to litellm
-        # ChatCompletionToolParam (openai SDK type has incompatible strict/cache_control).
-        mcp_tool: Final = MCPTool(
-            name=mcp_tool_name,
-            description=mcp_tool_description or "",
-            input_schema=dict(mcp_input_schema) if isinstance(mcp_input_schema, Mapping) else {},
-        )
-        openai_tool: Final = transform_mcp_tool_to_openai_tool(mcp_tool)
-        fn: Final = openai_tool["function"]
-        tool_def: Final[ChatCompletionToolParam] = {
-            "type": "function",
-            "function": ChatCompletionToolParamFunctionChunk(
-                name=fn["name"],
-                description=fn.get("description") or "",
-                parameters=fn.get("parameters")
-                or {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
-                strict=fn.get("strict", False) or False,  # Default to False if None
-            ),
-        }
+        tool_def: Final = _tool_definition(mcp_tool_name, mcp_tool_description, mcp_input_schema)
         description_texts: Final = (str(mcp_tool_description),) if mcp_tool_description else ()
         schema_leaves: Final = _schema_description_leaves(mcp_input_schema)
         argument_leaves: Final = json_string_leaves(mcp_arguments)
@@ -269,8 +283,13 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         originals: Final = (
             tuple(text for _, text in text_blocks) + tuple(text for _, text in structured_leaves) + structured_labels
         )
+        tool_name: Final = _executed_tool_name(request_data or {})
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-            inputs=GenericGuardrailAPIInputs(texts=list(originals)),
+            inputs=(
+                GenericGuardrailAPIInputs(texts=list(originals), tools=[_tool_definition(tool_name, None, None)])
+                if tool_name
+                else GenericGuardrailAPIInputs(texts=list(originals))
+            ),
             request_data=request_data if request_data is not None else {},
             input_type="response",
             logging_obj=litellm_logging_obj,
