@@ -7,6 +7,7 @@ surface and the server-span + shared-provider behavior it produces.
 
 import contextvars
 from datetime import datetime, timezone
+from typing import Final
 
 import pytest
 
@@ -381,8 +382,11 @@ def test_every_traced_response_names_its_own_server_span(monkeypatch):
     assert responses["/crash"].status_code == 500
     assert responses["/stream"].text == "data: first\n\ndata: [DONE]\n\n"
     for path, response in responses.items():
-        context = server_spans[path].context
-        assert response.headers.get_list("traceresponse") == [f"00-{context.trace_id:032x}-{context.span_id:016x}-01"]
+        context: Final = server_spans[path].context
+        assert context.trace_flags.sampled
+        assert response.headers.get_list("traceresponse") == [
+            f"00-{context.trace_id:032x}-{context.span_id:016x}-{context.trace_flags:02x}"
+        ]
 
 
 @pytest.mark.parametrize("path", ["/relayed", "/relayed/health"])
@@ -404,7 +408,9 @@ def test_a_relayed_traceresponse_from_a_restarted_trace_is_linked(monkeypatch, c
     TestClient(_traced_app(monkeypatch, provider)).get("/relayed", headers=caller_headers)
 
     links = _server_spans_by_route(exporter)["/relayed"].links
-    upstream_ids = [f"00-{link.context.trace_id:032x}-{link.context.span_id:016x}-01" for link in links]
+    upstream_ids: Final = [
+        f"00-{link.context.trace_id:032x}-{link.context.span_id:016x}-{link.context.trace_flags:02x}" for link in links
+    ]
     assert upstream_ids == ([_UPSTREAM_TRACERESPONSE] if linked else [])
 
 
@@ -474,12 +480,21 @@ def test_gate_off_responses_carry_no_traceresponse(monkeypatch):
 
 def test_failed_instrumentation_registers_no_response_propagator(monkeypatch):
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
-    app = fastapi.FastAPI()
+    app: Final = fastapi.FastAPI()
+    provider, exporter = _exporting_provider()
 
-    with TestClient(app):
-        instrument_fastapi_app(app)
+    @app.get("/ping")
+    def ping() -> dict[str, bool]:
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        instrument_fastapi_app(app, tracer_provider=provider)
+        response: Final = client.get("/ping")
 
     assert get_global_response_propagator() is None
+    assert response.json() == {"ok": True}
+    assert "traceresponse" not in response.headers
+    assert exporter.get_finished_spans() == ()
 
 
 def test_an_operator_response_propagator_is_kept(monkeypatch):
@@ -545,4 +560,5 @@ def test_the_unhandled_error_helper_names_the_span_it_is_given_in_any_context(mo
 
     headers = contextvars.Context().run(trace_response_headers, span)
 
-    assert headers["traceresponse"] == f"00-{context.trace_id:032x}-{context.span_id:016x}-01"
+    assert context.trace_flags.sampled
+    assert headers["traceresponse"] == f"00-{context.trace_id:032x}-{context.span_id:016x}-{context.trace_flags:02x}"
