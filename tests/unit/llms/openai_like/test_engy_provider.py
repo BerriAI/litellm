@@ -256,7 +256,9 @@ def test_engy_chat_completion_cost_bills_cached_tokens_at_cache_read_rate():
 
 def test_engy_models_are_registered_in_the_cost_map():
     catalog: Final = {name for name, info in litellm.model_cost.items() if info.get("litellm_provider") == "engy"}
-    assert len(catalog) == 8
+    assert len(catalog) == 9
+    assert "engy/deepseek-v4.1-flash" in catalog
+    assert "engy/deepseek-v4.1-flash-1017" in catalog
     assert all(name.startswith("engy/") for name in catalog)
 
     info: Final = litellm.get_model_info(model=ENGY_MODEL)
