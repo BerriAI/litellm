@@ -305,6 +305,25 @@ async fn provider_failures_emit_failure_once(
 }
 
 #[rstest]
+#[tokio::test]
+async fn a_transport_error_does_not_echo_the_provider_url(call: ResponsesCall) {
+    let host = RecordingCall::<Responses>::new(ResponsesCall {
+        api_base: Some(format!("{UNREACHABLE_BASE}/tenant-token-1234")),
+        ..call
+    });
+    let call = host.request.lock().unwrap().take().unwrap();
+
+    let Err(error) = responses_route(no_secrets())
+        .execute(call, &host, None)
+        .await
+    else {
+        panic!("nothing is listening");
+    };
+
+    assert!(!error.to_string().contains("tenant-token-1234"), "{error}");
+}
+
+#[rstest]
 #[case::explicit(true)]
 #[case::from_secrets(false)]
 #[tokio::test]

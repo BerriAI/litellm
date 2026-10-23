@@ -228,6 +228,23 @@ async fn an_upstream_error_keeps_its_status_and_body(
 }
 
 #[rstest]
+#[tokio::test]
+async fn a_transport_error_does_not_echo_the_provider_url(
+    request: AudioTranscriptionRequest<'static>,
+) {
+    let base = format!("{UNREACHABLE_BASE}/tenant-token-1234");
+
+    let error = transcribe(AudioTranscriptionRequest {
+        api_base: Some(&base),
+        ..request
+    })
+    .await
+    .expect_err("nothing is listening");
+
+    assert!(!error.to_string().contains("tenant-token-1234"), "{error}");
+}
+
+#[rstest]
 #[case::not_json(ResponseTemplate::new(200).set_body_string("not json"))]
 #[case::no_output(json_response(json!({"unexpected": true})))]
 #[tokio::test]

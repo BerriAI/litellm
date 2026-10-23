@@ -359,7 +359,7 @@ fn decoded_chunks(
     let bytes: ByteStream = response
         .bytes_stream()
         .inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk))
-        .map_err(std::io::Error::other)
+        .map_err(|error| std::io::Error::other(litellm_http::Error::from(error)))
         .boxed();
     futures_util::stream::try_unfold(decode(bytes), move |mut events| async move {
         let Some(event) = events.try_next().await? else {

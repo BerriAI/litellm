@@ -257,6 +257,20 @@ async fn a_provider_slower_than_the_timeout_fails_the_call(call: MessagesCall) {
 
 #[rstest]
 #[tokio::test]
+async fn a_transport_error_does_not_echo_the_provider_url(call: MessagesCall) {
+    let error = run(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(format!("{UNREACHABLE_BASE}/tenant-token-1234")),
+        ..call
+    })
+    .await
+    .expect_err("nothing is listening");
+
+    assert!(!error.to_string().contains("tenant-token-1234"), "{error}");
+}
+
+#[rstest]
+#[tokio::test]
 async fn the_facade_sends_through_the_injected_http_pool_configuration(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
     let base = upstream.uri();
