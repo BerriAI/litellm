@@ -10566,6 +10566,50 @@ async def test_update_team_clears_explicitly_null_member_model_budget_and_evicts
 
 
 @pytest.mark.asyncio
+async def test_clearing_the_member_default_evicts_every_roster_members_cached_membership(
+    disable_audit_logging_for_mocked_team,
+):
+    """A member on the default caches the default row inside their membership, so clearing its cap must drop
+    that cached copy, or a member already at the old cap stays blocked until the cache expires."""
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    existing: Final = _existing_team_with_model_caps({})
+    existing.metadata = {"team_member_budget_id": "member-budget-1"}
+    existing.model_dump.return_value["metadata"] = existing.metadata
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    cache.async_delete_cache = AsyncMock()
+    updated: Final = _existing_team_with_model_caps({})
+    updated.metadata = existing.metadata
+    updated.litellm_model_table = None
+    prisma: Final = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+    ):
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+        prisma.jsonify_team_object = lambda db_data: db_data
+        prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated)
+        tx: Final = _transaction_over(prisma)
+        tx.query_raw = AsyncMock(return_value=[{"members_with_roles": [{"user_id": "at-old-cap", "role": "user"}]}])
+
+        await update_team(
+            data=UpdateTeamRequest(team_id="standalone-team-123", team_member_budget=None),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+    evicted: Final = {c.args[0] for c in cache.in_memory_cache_for.return_value.delete_cache.call_args_list}
+    assert "standalone-team-123_at-old-cap" in evicted
+
+
+@pytest.mark.asyncio
 async def test_update_team_persists_member_model_budget_to_default_budget_row(
     disable_audit_logging_for_mocked_team,
 ):
@@ -13427,6 +13471,7 @@ async def test_team_member_update_role_change_emits_a_roster_audit_event(monkeyp
     mock_prisma_client.db.litellm_auditlog.create = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     _wire_member_delete_tx(mock_prisma_client)
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
 
     with (
         patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
@@ -13522,6 +13567,7 @@ async def test_team_member_update_role_change_rewrites_the_roster_it_read_under_
     mock_prisma_client.db.litellm_auditlog.create = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     tx = _wire_member_delete_tx(mock_prisma_client)
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
 
     team_info_patch, upsert_patch = _member_update_patches(stale_snapshot)
     with team_info_patch, upsert_patch:

@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import pytest
 from prisma import Json
@@ -186,6 +187,50 @@ async def test_backfill_links_members_sharing_a_plain_custom_budget_to_the_defau
     ]
     shared = await db.db.litellm_budgettable.find_unique(where={"budget_id": shared_budget_id})
     assert shared.max_budget == 20.0
+
+
+async def test_a_moved_member_keeping_their_own_limits_resets_with_the_default(db, resources):
+    default_budget_id = await _seed_team(db, resources, {"own_rpm": _Budget(20.0, rpm_limit=5)})
+    default_reset = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    await db.db.litellm_budgettable.update(
+        where={"budget_id": default_budget_id}, data={"budget_reset_at": default_reset}
+    )
+    await db.db.litellm_budgettable.update(
+        where={"budget_id": resources.tag("own-own_rpm")},
+        data={"budget_reset_at": datetime(2030, 1, 15, tzinfo=timezone.utc)},
+    )
+
+    response = _update_team(
+        db,
+        resources.prefix,
+        {"team_member_budget": _NEW_DEFAULT, "team_member_budget_backfill": "raise_to_default"},
+    )
+
+    assert response.status_code == 200, response.text
+    kept = (await _member_budget(db, resources, "own_rpm")).litellm_budget_table
+    assert (kept.max_budget, kept.rpm_limit, kept.budget_reset_at) == (None, 5, default_reset)
+
+
+async def test_a_member_with_a_model_list_keeps_it_even_when_it_matches_the_default(db, resources):
+    default_budget_id = await _seed_team(db, resources, {"scoped": _Budget(20.0)})
+    for budget_id in (default_budget_id, resources.tag("own-scoped")):
+        await db.db.litellm_budgettable.update(
+            where={"budget_id": budget_id}, data={"allowed_models": ["gpt-5.4-mini"]}
+        )
+
+    response = _update_team(
+        db,
+        resources.prefix,
+        {"team_member_budget": _NEW_DEFAULT, "team_member_budget_backfill": "raise_to_default"},
+    )
+
+    assert response.status_code == 200, response.text
+    scoped = await _member_budget(db, resources, "scoped")
+    assert scoped.budget_id == resources.tag("own-scoped")
+    assert (scoped.litellm_budget_table.max_budget, scoped.litellm_budget_table.allowed_models) == (
+        None,
+        ["gpt-5.4-mini"],
+    )
 
 
 async def test_backfill_over_the_member_cap_rolls_back_the_new_default(db, resources):

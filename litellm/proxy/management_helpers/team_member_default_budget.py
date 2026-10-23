@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
 MAX_MEMBER_BUDGETS_MOVED_PER_UPDATE: Final = 50_000
 
+_ALWAYS_OWN_LIMITS: Final = frozenset({"allowed_models"})
+
 _DEFAULT_BUDGET_COLUMNS: Final = MappingProxyType(
     {
         "team_member_budget": "max_budget",
@@ -52,6 +54,12 @@ _RELINK_TO_DEFAULT_SQL: Final = (
 _CLEAR_MAX_BUDGET_SQL: Final = """
 UPDATE "LiteLLM_BudgetTable" SET max_budget = NULL, updated_by = $2, updated_at = (NOW() AT TIME ZONE 'UTC')
 WHERE budget_id = ANY($1::text[])
+"""
+_ALIGN_RESET_TO_DEFAULT_SQL: Final = """
+UPDATE "LiteLLM_BudgetTable" b
+SET budget_reset_at = (SELECT d.budget_reset_at FROM "LiteLLM_BudgetTable" d WHERE d.budget_id = $2)
+FROM "LiteLLM_TeamMembership" m
+WHERE m.team_id = $1 AND m.user_id = ANY($3::text[]) AND m.budget_id = b.budget_id AND b.budget_id <> $2
 """
 _SHARED_BUDGET_IDS_SQL: Final = """
 SELECT budget_id FROM "LiteLLM_TeamMembership" WHERE budget_id = ANY($1::text[])
@@ -129,7 +137,9 @@ class _BudgetLimits(BaseModel):
     def has_own_limits_beyond(self, default: "_BudgetLimits") -> bool:
         own: Final = _JSON_OBJECT.validate_python(self.model_dump(mode="json"))
         inherited: Final = _JSON_OBJECT.validate_python(default.model_dump(mode="json"))
-        return has_meaningful_budget_limit({field: value for field, value in own.items() if value != inherited[field]})
+        return has_meaningful_budget_limit(
+            {field: value for field, value in own.items() if field in _ALWAYS_OWN_LIMITS or value != inherited[field]}
+        )
 
 
 class _MemberBudgetRef(BaseModel):
@@ -218,8 +228,8 @@ async def move_member_budgets_to_default(
     changed_by: UserAPIKeyAuth,
 ) -> MovedMemberBudgets | TooManyMemberBudgetsToMove:
     """Members compare on their permanent ``max_budget``, and only those resetting on the default's schedule move.
-    A member whose other limits all match the default is linked to the default row, while one holding a limit of its
-    own keeps its row with ``max_budget`` cleared."""
+    A member whose other limits all match the default is linked to the default row. One holding a limit of its own, or
+    any model list, keeps its row with ``max_budget`` cleared and its reset moved onto the default's."""
     if backfill == "none":
         return MovedMemberBudgets(user_ids=(), skipped_other_reset_period=0)
     default: Final = await _budget_tx_db(tx).find_unique(where={"budget_id": default_budget_id})
@@ -292,6 +302,7 @@ async def _move_to_default(
                 team_default_budget_id=default_budget_id,
                 shared_budget_ids=shared,
             )
+    await tx.execute_raw(_ALIGN_RESET_TO_DEFAULT_SQL, team_id, default_budget_id, [ref.user_id for ref in keeping])
 
 
 def _prisma_columns(columns: Mapping[str, object]) -> Mapping[str, object]:

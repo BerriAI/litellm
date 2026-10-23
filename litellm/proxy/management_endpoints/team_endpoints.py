@@ -501,6 +501,10 @@ def _team_membership_db(prisma_client: PrismaClient | None) -> "TableActions[pri
     return TeamMembershipRepository(prisma_client).table
 
 
+def _team_membership_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
+    return tx.litellm_teammembership  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
+
+
 def _user_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_UserTable]":
     return UserRepository(prisma_client).table
 
@@ -1242,7 +1246,7 @@ async def _write_team_update(
 @dataclass(frozen=True, slots=True)
 class _TeamWrite:
     team_row: "prisma_models.LiteLLM_TeamTable | None"
-    linked_member_user_ids: tuple[str, ...]
+    roster_user_ids: tuple[str, ...]
     moved_member_budgets: MovedMemberBudgets | None
 
     def backfill_response(self) -> Mapping[str, TeamMemberBudgetBackfillResult]:
@@ -1255,7 +1259,7 @@ class _TeamWrite:
 
     def changed_member_user_ids(self) -> tuple[str, ...]:
         moved: Final = () if self.moved_member_budgets is None else self.moved_member_budgets.user_ids
-        return tuple(dict.fromkeys((*self.linked_member_user_ids, *moved)))
+        return tuple(dict.fromkeys((*self.roster_user_ids, *moved)))
 
 
 async def _write_team_with_member_default_budget(
@@ -1304,7 +1308,7 @@ async def _write_team_with_member_default_budget(
         team_row: Final = await _write_team_update(_team_tx_db(tx), team_id, team_update_data, max_budget_guard)
     return _TeamWrite(
         team_row=team_row,
-        linked_member_user_ids=member_user_ids if default_budget_write.links_members else (),
+        roster_user_ids=member_user_ids,
         moved_member_budgets=moved if backfill != "none" else None,
     )
 
@@ -2602,7 +2606,7 @@ async def update_team(
                 team_row=await _write_team_update(
                     _team_db(prisma_client), data.team_id, team_update_data, max_budget_guard
                 ),
-                linked_member_user_ids=(),
+                roster_user_ids=(),
                 moved_member_budgets=None,
             )
             if default_budget_write is None
@@ -3958,13 +3962,6 @@ async def team_member_update(
             status_code=400,
             detail={"error": f"User id doesn't exist in team table. Data={data}"},
         )
-    ## find the relevant team membership
-    identified_budget_id: str | None = None
-    for tm in returned_team_info["team_memberships"]:
-        if tm.user_id == received_user_id:
-            identified_budget_id = tm.budget_id
-            break
-
     # If this membership still points at the team's shared default member
     # budget, _upsert_budget_and_membership will clone-on-write so that the
     # update only touches this user (not every member sharing the default).
@@ -3990,11 +3987,14 @@ async def team_member_update(
             if data.role is not None
             else None
         )
+        locked_membership: Final = await _team_membership_tx_db(tx).find_unique(
+            where={"user_id_team_id": {"user_id": received_user_id, "team_id": data.team_id}}
+        )
         await upsert_budget_and_membership(
             tx=tx,
             team_id=data.team_id,
             user_id=received_user_id,
-            existing_budget_id=identified_budget_id,
+            existing_budget_id=locked_membership.budget_id if locked_membership is not None else None,
             user_api_key_dict=user_api_key_dict,
             budget_patch=budget_patch,
             team_default_budget_id=team_default_budget_id,
