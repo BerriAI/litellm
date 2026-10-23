@@ -3,7 +3,7 @@ import copy
 import logging
 from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any
 
 import orjson
 import pytest
@@ -28,7 +28,7 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     async def fake_update_request_status(**_: Any) -> None:
         await asyncio.sleep(0)
 
-    proxy_logger_calls: Dict[str, Any] = {}
+    proxy_logger_calls: dict[str, Any] = {}
 
     async def fake_pre_call_hook(*, user_api_key_dict, data, call_type):  # type: ignore[override]
         proxy_logger_calls["pre_call_input"] = copy.deepcopy(data)
@@ -60,7 +60,7 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
         post_call_response_headers_hook=fake_post_call_response_headers_hook,
     )
 
-    captured_route_request_data: Dict[str, Any] = {}
+    captured_route_request_data: dict[str, Any] = {}
 
     async def fake_route_request(*, data, **kwargs):  # type: ignore[override]
         captured_route_request_data.update(data)
@@ -116,15 +116,106 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     assert pre_call_input["messages"][0]["content"] == "original prompt"
     assert captured_route_request_data["prompt"] == "sanitized prompt"
     assert "messages" not in captured_route_request_data
+    logging_obj = captured_route_request_data.get("litellm_logging_obj")
+    assert logging_obj is not None
+    assert logging_obj.messages == "sanitized prompt"
+    assert logging_obj.model_call_details["prompt"] == "sanitized prompt"
     assert response.headers.get("x-callback-test") == "value"
 
 
-def _image_edit_client(monkeypatch, captured: Dict[str, Any]) -> TestClient:
+@pytest.mark.asyncio
+async def test_image_generation_router_rejection_dispatches_failure_callback(monkeypatch):
+    """Ensure router rejection (budget, cooldown, etc.) triggers failure handlers on litellm_logging_obj."""
+    from unittest.mock import AsyncMock
+
+    async def fake_add_litellm_data_to_request(**kwargs):
+        return kwargs["data"]
+
+    fake_proxy_logger = SimpleNamespace(
+        pre_call_hook=AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data),
+        post_call_failure_hook=AsyncMock(),
+    )
+
+    class RejectingRouter:
+        model_names = ["dall-e-3"]
+        team_public_model_names = []
+
+        def is_recognized_model(self, model: str) -> bool:
+            return True
+
+        async def aimage_generation(self, *args, **kwargs):
+            logging_obj = kwargs.get("litellm_logging_obj")
+            if logging_obj is not None:
+                # Simulate Router.async_get_available_deployment failure handling
+                await logging_obj.dispatch_failure_handlers(
+                    exception=Exception("No deployment available"),
+                    traceback_exception="Traceback...",
+                    prefer_async_handlers=True,
+                )
+            raise Exception("No deployment available")
+
+    rejecting_router = RejectingRouter()
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/images/generations",
+        "headers": [],
+    }
+    body = orjson.dumps({"prompt": "generate a sunset", "model": "dall-e-3"})
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(scope, receive)
+    response = Response()
+    user_api_key = UserAPIKeyAuth()
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.add_litellm_data_to_request",
+        fake_add_litellm_data_to_request,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", rejecting_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", fake_proxy_logger)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
+
+    # Spy on dispatch_failure_handlers in litellm.litellm_core_utils.litellm_logging.Logging
+    dispatched_exceptions = []
+    orig_function_setup = endpoints.litellm.utils.function_setup
+
+    def spy_function_setup(*args, **kwargs):
+        logging_obj, data = orig_function_setup(*args, **kwargs)
+        orig_dispatch = logging_obj.dispatch_failure_handlers
+
+        async def spy_dispatch(*d_args, **d_kwargs):
+            dispatched_exceptions.append(d_kwargs.get("exception"))
+            return await orig_dispatch(*d_args, **d_kwargs)
+
+        logging_obj.dispatch_failure_handlers = spy_dispatch
+        return logging_obj, data
+
+    monkeypatch.setattr("litellm.utils.function_setup", spy_function_setup)
+
+    with pytest.raises(ProxyException, match="No deployment available"):
+        await endpoints.image_generation(
+            request=request,
+            fastapi_response=response,
+            user_api_key_dict=user_api_key,
+        )
+
+    assert len(dispatched_exceptions) == 1
+    assert str(dispatched_exceptions[0]) == "No deployment available"
+
+
+def _image_edit_client(monkeypatch, captured: dict[str, Any]) -> TestClient:
     class CaptureProcessing:
-        def __init__(self, data: Dict[str, Any]) -> None:
+        def __init__(self, data: dict[str, Any]) -> None:
             captured.update(data)
 
-        async def base_process_llm_request(self, **_: Any) -> Dict[str, Any]:
+        async def base_process_llm_request(self, **_: Any) -> dict[str, Any]:
             return {"data": [{"b64_json": "aGk="}]}
 
     monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", CaptureProcessing)
@@ -139,7 +230,7 @@ def _image_edit_client(monkeypatch, captured: Dict[str, Any]) -> TestClient:
 
 def test_image_edit_image_array_alias_is_not_forwarded(monkeypatch):
     """The documented `image[]` alias must reach the provider only as `image`."""
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     response = _image_edit_client(monkeypatch, captured).post(
         "/v1/images/edits",
@@ -155,7 +246,7 @@ def test_image_edit_image_array_alias_is_not_forwarded(monkeypatch):
 
 def test_image_edit_mask_array_alias_is_not_forwarded(monkeypatch):
     """`mask[]` has the same shape as `image[]` and must be dropped the same way."""
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     response = _image_edit_client(monkeypatch, captured).post(
         "/v1/images/edits",
@@ -174,7 +265,7 @@ def test_image_edit_mask_array_alias_is_not_forwarded(monkeypatch):
 
 def test_image_edit_canonical_file_fields_still_reach_the_provider(monkeypatch):
     """Dropping the bracketed aliases must not touch the canonical fields."""
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     response = _image_edit_client(monkeypatch, captured).post(
         "/v1/images/edits",
@@ -193,7 +284,7 @@ def test_image_edit_canonical_file_fields_still_reach_the_provider(monkeypatch):
 
 def test_image_edit_multipart_n_reaches_the_provider_as_an_int(monkeypatch):
     """A multipart `n` must not arrive as the string Starlette parsed it into."""
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     response = _image_edit_client(monkeypatch, captured).post(
         "/v1/images/edits",
@@ -210,7 +301,7 @@ def test_image_edit_multipart_n_reaches_the_provider_as_an_int(monkeypatch):
 
 def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
     """An unparseable `n` still reaches the provider, which rejects it as before."""
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     response = _image_edit_client(monkeypatch, captured).post(
         "/v1/images/edits",
@@ -236,7 +327,7 @@ def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
 def test_image_edit_without_an_optional_field_reaches_the_provider_with_it_set_to_none(
     monkeypatch, files, form, missing
 ):
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     response = _image_edit_client(monkeypatch, captured).post("/v1/images/edits", files=files or None, data=form)
 

@@ -1,6 +1,7 @@
 import asyncio
 import io
 from collections.abc import Sequence
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, get_type_hints
@@ -102,6 +103,7 @@ async def image_generation(
         version,
     )
 
+    start_time: Final = datetime.now()  # noqa: DTZ005  # proxy standard naive datetime for request duration logging
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     data = {"litellm_call_id": litellm_call_id}
     try:
@@ -132,6 +134,15 @@ async def image_generation(
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
+        ### LOGGING OBJECT SETUP ### - ensures router rejected requests are dispatched to failure callbacks
+        logging_obj, data = litellm.utils.function_setup(  # rebind-ok: function_setup returns updated data dict
+            original_function="aimage_generation",
+            rules_obj=litellm.utils.Rules(),
+            start_time=start_time,
+            **data,  # pyright: ignore[reportUnknownArgumentType]  # request payload dict carries dynamic values
+        )
+        data["litellm_logging_obj"] = logging_obj
+
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         prompt_value: Final = data.get("prompt")
         if prompt_value is not None:
@@ -147,7 +158,11 @@ async def image_generation(
 
         messages: Final = data.get("messages")
         if isinstance(messages, list) and messages:
-            data["prompt"] = get_str_from_messages(messages)
+            sanitized_prompt: Final = get_str_from_messages(messages)
+            data["prompt"] = sanitized_prompt
+            logging_obj.messages = sanitized_prompt
+            logging_obj.model_call_details["prompt"] = sanitized_prompt
+            logging_obj.model_call_details["messages"] = sanitized_prompt
         data.pop("messages", None)
 
         ## ROUTE TO CORRECT ENDPOINT ##
