@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
+from urllib.parse import urlsplit
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -55,6 +56,18 @@ def _resolve_responses_api_version(api_base: str | None, litellm_params: Mapping
 
 def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     return MappingProxyType({**litellm_params, "api_version": _resolve_responses_api_version(api_base, litellm_params)})
+
+
+def _get_explicit_v1_responses_url(api_base: str | None) -> str | None:
+    if api_base is None:
+        return None
+    url: Final = httpx.URL(api_base)
+    path: Final = urlsplit(str(url)).path.rstrip("/")
+    if path.endswith("/openai/v1"):
+        return str(url.copy_with(path=f"{path}/responses"))
+    if path.endswith("/openai/v1/responses"):
+        return str(url.copy_with(path=path))
+    return None
 
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -211,10 +224,11 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
         """
         resolved_api_base: Final = BaseAzureLLM.resolve_azure_api_base(api_base)
+        explicit_v1_url: Final = _get_explicit_v1_responses_url(resolved_api_base)
         return BaseAzureLLM.get_base_azure_url(
-            api_base=resolved_api_base,
+            api_base=explicit_v1_url or resolved_api_base,
             litellm_params=_with_responses_api_version(resolved_api_base, litellm_params),
-            route="/openai/responses",
+            route="/openai/v1/responses" if explicit_v1_url is not None else "/openai/responses",
             default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
         )
 
