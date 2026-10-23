@@ -792,14 +792,17 @@ def test_azure_responses_gpt6_effort_levels_follow_the_azure_row(local_model_cos
             )
 
 
-def test_azure_gpt6_astra_keeps_max_on_this_route_whatever_its_row_says(local_model_cost_map: None):
+@pytest.mark.parametrize("supports_max", (False, True))
+def test_azure_gpt6_astra_keeps_max_on_this_route_whatever_its_row_says(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, supports_max: bool
+) -> None:
     """Pinned on purpose: the row-derived test above exempts max by hand, so this one has to fail
     if the gate ever reads the flag. A Foundry gpt-6-astra deployment answered reasoning.effort max
     through /v1/responses with 200, the effort echoed back and reasoning tokens billed, on
-    2026-10-01, while chat refuses the same level, as OpenAI's chat does. The row keeps max off for
-    the adapter and the picker, and this gate still forwards it even under drop_params."""
-    assert litellm.model_cost["azure/gpt-6-astra"]["supports_max_reasoning_effort"] is False
-    kept = AzureOpenAIResponsesAPIConfig().map_openai_params(
+    2026-10-01, while chat refuses the same level, as OpenAI's chat does. This gate forwards it
+    even under drop_params, regardless of the advertised capability."""
+    monkeypatch.setitem(litellm.model_cost["azure/gpt-6-astra"], "supports_max_reasoning_effort", supports_max)
+    kept: Final = AzureOpenAIResponsesAPIConfig().map_openai_params(
         response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": "max"}),
         model="gpt-6-astra",
         drop_params=True,

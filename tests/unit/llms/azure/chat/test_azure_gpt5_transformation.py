@@ -413,9 +413,8 @@ def test_azure_gpt6_astra_forwards_exactly_the_effort_levels_its_map_row_allows(
 ):
     """The azure/ row is the whole contract for a Foundry deployment. A live Foundry gpt-6-astra
     (model gpt-6-astra-2026-09-03) answered reasoning_effort none with a 400 naming low, medium,
-    high and xhigh on 2026-10-01, so its row turns none and minimal off. The row keeps max off too,
-    since chat refuses it, but no gate reads that flag: the Responses route honors max, so chat
-    forwards it for the bridge and a plain chat call gets the provider's own 400."""
+    high and xhigh on 2026-10-01, so its row turns none and minimal off. Max advertises Responses
+    capability; chat forwards it for the bridge and a plain chat call gets the provider's own 400."""
     forwarded: Final = _azure_chat_row_forwards(litellm.model_cost[model], level)
     dropped: Final = config.map_openai_params(
         non_default_params={"reasoning_effort": level},
@@ -449,13 +448,11 @@ def test_azure_gpt6_astra_forwards_exactly_the_effort_levels_its_map_row_allows(
 def test_azure_gpt6_astra_row_turns_none_and_minimal_off(model: str):
     """Pinned on purpose so the row-derived test above cannot go vacuous: a Foundry gpt-6-astra
     deployment refused none on chat and on Responses on 2026-10-01 (400 unsupported_value naming
-    low, medium, high, xhigh), and minimal the same way; max it refused on chat while honoring it
-    on Responses, so the route-blind flag stays off. When Azure adds a level, flip the row and
-    this assertion together."""
+    low, medium, high, xhigh), and minimal the same way. When Azure adds either level, flip the row
+    and this assertion together."""
     row: Final = litellm.model_cost[model]
     assert row["supports_none_reasoning_effort"] is False
     assert row["supports_minimal_reasoning_effort"] is False
-    assert row["supports_max_reasoning_effort"] is False
 
 
 def test_azure_chat_gate_reads_the_foundry_row_when_azure_ai_prefix_survives_provider_remap(
