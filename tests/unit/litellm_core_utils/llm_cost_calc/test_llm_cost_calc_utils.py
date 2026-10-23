@@ -1154,7 +1154,7 @@ def test_get_token_base_cost_off_peak_cache_creation_rate():
 
     inside = _get_token_base_cost(model_info, usage, current_time=inside_window)
     assert inside.cache_creation_rate == 5e-7
-    assert inside.cache_creation_rates_by_ttl["1h"] == 2e-6
+    assert inside.cache_creation_rates_by_ttl["1hr"] == 2e-6
 
     outside = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
     assert outside.cache_creation_rate == 1.25e-6
@@ -1595,7 +1595,7 @@ def test_generic_cost_per_token_tier_1hr_cache_rate_preserves_zero_and_fallback(
         assert costs == pytest.approx((40 * 1.0 + 40 * 0.1 + expected_write_cost, 10 * 2.0))
         assert breakdown.cache_creation_cost == pytest.approx(expected_write_cost)
         assert breakdown.rates is not None
-        assert breakdown.rates.cache_creation_input_token_cost_by_ttl["1h"] == expected_write_rate
+        assert breakdown.rates.cache_creation_input_token_cost_by_ttl["1hr"] == expected_write_rate
     finally:
         litellm.model_cost.pop(model, None)
 
@@ -2021,7 +2021,7 @@ def test_calculate_cache_writing_cost():
         cache_creation_tokens=cache_creation_tokens,
         cache_creation_token_details=cache_creation_token_details,
         cache_creation_cost=cache_creation_cost,
-        cache_creation_cost_by_ttl={"1h": cache_creation_cost_above_1hr},
+        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr},
     )
 
     # Expected calculation:
@@ -2042,7 +2042,7 @@ def test_calculate_cache_writing_cost():
         cache_creation_tokens=cache_creation_tokens_no_details,
         cache_creation_token_details=cache_creation_token_details_none,
         cache_creation_cost=cache_creation_cost_fallback,
-        cache_creation_cost_by_ttl={"1h": cache_creation_cost_above_1hr},
+        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr},
     )
 
     # Expected calculation when no details: 1000 * 5e-06 = 0.005
@@ -2060,7 +2060,7 @@ def test_calculate_cache_writing_cost():
         cache_creation_tokens=500,
         cache_creation_token_details=cache_creation_token_details_partial,
         cache_creation_cost=3e-06,
-        cache_creation_cost_by_ttl={"1h": 6e-06},
+        cache_creation_cost_by_ttl={"1hr": 6e-06},
     )
 
     # Expected calculation: 0 (for None 5m tokens) + (100 * 6e-06) = 0.0006
@@ -2076,7 +2076,7 @@ def test_calculate_cache_writing_cost():
             ephemeral_5m_input_tokens=50, ephemeral_1h_input_tokens=950
         ),
         cache_creation_cost=0.0,
-        cache_creation_cost_by_ttl={"1h": 0.0},
+        cache_creation_cost_by_ttl={"1hr": 0.0},
     )
 
     assert result_zero == 0.0
@@ -2213,7 +2213,7 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
         prompt_base_cost=0.0,
         cache_read_cost=0.0,
         cache_creation_cost=cache_creation_cost,
-        cache_creation_cost_by_ttl={"1h": cache_creation_cost_above_1hr},
+        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr},
     )
 
     # Expected: (100 * 3.75e-06) + (200 * 6e-06) = 0.000375 + 0.0012 = 0.001575
@@ -2990,7 +2990,7 @@ def test_billed_token_rates_follow_the_token_tier_the_breakdown_bills_at(monkeyp
         cache_read_input_token_cost=6e-7,
         cache_read_input_audio_token_cost=6e-7,
         cache_creation_input_token_cost=7.5e-6,
-        cache_creation_input_token_cost_by_ttl={"5m": 7.5e-6, "30m": 7.5e-6, "1h": 7.5e-6, "12h": 7.5e-6},
+        cache_creation_input_token_cost_by_ttl={"1hr": 7.5e-6, "12hr": 7.5e-6},
         output_cost_per_reasoning_token=3e-5,
     )
     assert breakdown.cache_read_cost == pytest.approx(200_000 * rates.cache_read_input_token_cost)
@@ -3821,7 +3821,7 @@ def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_
 
     assert rates.cache_creation_rate == pytest.approx(expected_creation)
     assert rates.cache_creation_rates_by_ttl == pytest.approx(
-        dict.fromkeys(("5m", "30m", "1h", "12h"), expected_creation_1h)
+        dict.fromkeys(("1hr", "12hr"), expected_creation_1h)
     )
 
 
