@@ -138,6 +138,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
 )
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.llms.openai.decisions.routing import explicit_decisions_endpoints
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
     MODEL_INFO_DISCOVERY_PROVIDERS,
@@ -12549,8 +12550,11 @@ class Router:
                         (
                             *(model_group_info.supported_endpoints or ()),
                             *(
-                                deployment_supported_endpoints(
-                                    model_info.get("supported_endpoints"), model, llm_provider
+                                (
+                                    *deployment_supported_endpoints(
+                                        model_info.get("supported_endpoints"), model, llm_provider
+                                    ),
+                                    *explicit_decisions_endpoints(litellm_params.model, llm_provider),
                                 )
                                 if team_may_use_deployment(_configured_model_info(model).get("team_id"), team_id)
                                 else ()

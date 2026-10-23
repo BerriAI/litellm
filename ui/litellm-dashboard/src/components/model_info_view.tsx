@@ -47,6 +47,7 @@ import { Logo } from "@/components/molecules/logo/Logo";
 import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditSubmitValues, type TouchedPricingField } from "./ModelInfoEditForm";
+import { isOpenAIUpstreamModel, serializeOpenAIUpstreamModel } from "./add_model/openai_upstream_format";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -283,7 +284,10 @@ export default function ModelInfoView({
 
       let updatedLitellmParams: Record<string, any> = {
         ...parsedExtraParams,
-        model: values.litellm_model_name,
+        model:
+          values.litellm_model_name && isOpenAIUpstreamModel(values.litellm_model_name, values.custom_llm_provider)
+            ? serializeOpenAIUpstreamModel(values.litellm_model_name, values.upstream_format)
+            : values.litellm_model_name,
         api_base: values.api_base,
         custom_llm_provider: values.custom_llm_provider,
         organization: values.organization,
@@ -388,7 +392,7 @@ export default function ModelInfoView({
       const updatedModelData = {
         ...localModelData,
         model_name: values.model_name,
-        litellm_model_name: values.litellm_model_name,
+        litellm_model_name: updatedLitellmParams.model,
         litellm_params:
           selectedCredentialName === null
             ? localLitellmParams

@@ -38,7 +38,7 @@ export const displayMode = (mode: string | null | undefined): string | undefined
 export const expandModeFilterValues = (modes: readonly string[]): readonly string[] =>
   modes.flatMap((mode) => (mode === DECISIONS_MODE ? DECISION_MODE_VALUES : [mode]));
 
-const isDecisionEntry = (entry: CostMapEntry): boolean =>
+export const isDecisionModel = (entry: Pick<CostMapEntry, "mode" | "supported_endpoints">): boolean =>
   isDecisionMode(entry.mode) || (entry.supported_endpoints ?? []).some((endpoint) => DECISION_ENDPOINTS.has(endpoint));
 
 const parsedEntries = (costMap: unknown): ReadonlyArray<readonly [string, CostMapEntry]> => {
@@ -54,12 +54,12 @@ const parsedEntries = (costMap: unknown): ReadonlyArray<readonly [string, CostMa
 
 export function buildDecisionCatalog(costMap: unknown): DecisionCatalog {
   const entries = parsedEntries(costMap);
-  const decisionEntries = entries.filter(([, entry]) => isDecisionEntry(entry));
+  const decisionEntries = entries.filter(([, entry]) => isDecisionModel(entry));
   const decisionProviders = new Set(decisionEntries.map(([, entry]) => entry.litellm_provider));
   const providers = new Map(
     [...decisionProviders].map((provider) => {
       const providerEntries = entries.filter(([, entry]) => entry.litellm_provider === provider);
-      return [provider, { decisionOnly: providerEntries.every(([, entry]) => isDecisionEntry(entry)) }] as const;
+      return [provider, { decisionOnly: providerEntries.every(([, entry]) => isDecisionModel(entry)) }] as const;
     }),
   );
   return { models: new Set(decisionEntries.map(([key]) => key)), providers };
@@ -106,7 +106,7 @@ export const buildDecisionGarden = (
   proxyProviders: ReadonlySet<string> | null,
 ): readonly DecisionGardenModel[] =>
   parsedEntries(costMap)
-    .filter(([, entry]) => isDecisionEntry(entry))
+    .filter(([, entry]) => isDecisionModel(entry))
     .map(([key, entry]) => ({
       model: key,
       provider: entry.litellm_provider,

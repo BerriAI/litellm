@@ -5,7 +5,9 @@ import { Input } from "@/components/ui/input";
 import { requiredRule } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { MountedFormField, type MountedFormValues } from "../common_components/MountedFormField";
-import { Providers } from "../provider_info_helpers";
+import { Providers, resolveLitellmProviderSlug } from "../provider_info_helpers";
+import UpstreamFormatSelect from "./UpstreamFormatSelect";
+import { parseOpenAIUpstreamFormat } from "./openai_upstream_format";
 
 interface LiteLLMModelNameFieldProps {
   selectedProvider: string | null;
@@ -21,6 +23,10 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   const form = useFormContext<MountedFormValues>();
   const modelValue = useWatch({ control: form.control, name: "model" });
   const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
+  const isCustomModel =
+    selectedModels.includes("custom") || providerModels.length === 0 || typeof modelValue === "string";
+  const isOpenAICustomModel =
+    selectedProvider !== null && resolveLitellmProviderSlug(selectedProvider) === "openai" && isCustomModel;
 
   const handleModelChange = (value: string | string[]) => {
     // Ensure value is always treated as an array
@@ -199,6 +205,18 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
             : "The model name LiteLLM will send to the LLM API"}
         </p>
       </div>
+      {isOpenAICustomModel && (
+        <MountedFormField name="upstream_format" label="Upstream format" className="mb-4">
+          {(control) => (
+            <UpstreamFormatSelect
+              id={control.id}
+              value={parseOpenAIUpstreamFormat(control.value)}
+              onChange={control.onChange}
+              onBlur={control.onBlur}
+            />
+          )}
+        </MountedFormField>
+      )}
     </>
   );
 };

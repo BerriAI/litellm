@@ -1,11 +1,46 @@
 import { describe, expect, it, vi } from "vitest";
 import { prepareModelAddRequest } from "./handle_add_model_submit";
+import { OpenAIUpstreamFormat } from "./openai_upstream_format";
 
 vi.mock("../networking", () => ({
   modelCreateCall: vi.fn(),
 }));
 
 describe("prepareModelAddRequest", () => {
+  it.each([
+    [undefined, "openai/responses/org/model"],
+    [OpenAIUpstreamFormat.Default, "openai/responses/org/model"],
+    [OpenAIUpstreamFormat.SystemOne, "openai/systemone/org/model"],
+    [OpenAIUpstreamFormat.Decisions, "openai/decisions/org/model"],
+  ])("should persist the %s upstream format in the model string only", async (upstream_format, expectedModel) => {
+    const model =
+      upstream_format === undefined || upstream_format === OpenAIUpstreamFormat.Default
+        ? "openai/responses/org/model"
+        : "org/model";
+    const formValues = {
+      model_mappings: [{ public_name: "my-model", litellm_model: model }],
+      custom_llm_provider: "OpenAI",
+      mode: "chat",
+      upstream_format,
+    };
+    const [deployment] = (await prepareModelAddRequest(formValues, "token", null))!;
+
+    expect(deployment.litellmParamsObj.model).toBe(expectedModel);
+    expect(deployment.litellmParamsObj).not.toHaveProperty("upstream_format");
+    expect(deployment.modelInfoObj).toEqual({ mode: "chat" });
+    expect(deployment.modelName).toBe("my-model");
+  });
+
+  it("should replace a routing prefix pasted into Add Model when another format is selected", async () => {
+    const formValues = {
+      model_mappings: [{ public_name: "my-model", litellm_model: "openai/systemone/systemone/org/model" }],
+      custom_llm_provider: "OpenAI",
+      upstream_format: OpenAIUpstreamFormat.Decisions,
+    };
+    const [deployment] = (await prepareModelAddRequest(formValues, "token", null))!;
+    expect(deployment.litellmParamsObj.model).toBe("openai/decisions/systemone/org/model");
+  });
+
   it("returns deployment data for the most basic form", async () => {
     const formValues = {
       model_mappings: [

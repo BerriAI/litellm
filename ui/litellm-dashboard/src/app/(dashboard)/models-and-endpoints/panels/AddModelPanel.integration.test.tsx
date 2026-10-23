@@ -67,6 +67,13 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
         ],
       },
       {
+        provider: "OpenAI_Compatible",
+        provider_display_name: "OpenAI-Compatible Chat Completions",
+        litellm_provider: "openai",
+        default_model_placeholder: "org/model",
+        credential_fields: [{ key: "api_base", label: "API Base", field_type: "text", required: false }],
+      },
+      {
         provider: "Anthropic",
         provider_display_name: "Anthropic",
         litellm_provider: "anthropic",
@@ -175,6 +182,64 @@ const setup = async (searchParams?: string, onUrlUpdate?: OnUrlUpdateFunction) =
 
   return { user, openAdvanced, closeAdvanced, fillRequired, submit, submitExpectingRejection };
 };
+
+describe("AddModelPanel upstream format", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: {} });
+    mockPtuEnabled.mockReturnValue(false);
+    mockAuthorized.mockReturnValue(PROXY_ADMIN);
+  });
+
+  it("should render a provider-default format for custom OpenAI models", async () => {
+    const { fillRequired } = await setup();
+    await fillRequired("org/model");
+
+    expect(screen.getByRole("combobox", { name: "Upstream format" })).toBeInTheDocument();
+    expect(screen.getByText("Default")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["System One", "systemone"],
+    ["OpenAI Decisions", "decisions"],
+  ])("should save the %s selection in the model string", async (label, prefix) => {
+    const { user, fillRequired, submit } = await setup();
+    await fillRequired("org/model");
+    await user.click(screen.getByRole("combobox", { name: "Upstream format" }));
+    await user.click(await screen.findByRole("option", { name: label }));
+    await submit();
+
+    expect(lastCreatedModel()).toMatchObject({
+      model_name: "org/model",
+      litellm_params: { model: `openai/${prefix}/org/model`, custom_llm_provider: "openai" },
+      model_info: { mode: undefined },
+    });
+    expect(lastCreatedModel().litellm_params).not.toHaveProperty("upstream_format");
+  });
+
+  it("should preserve an existing Responses prefix with the default format", async () => {
+    const { fillRequired, submit } = await setup();
+    await fillRequired("openai/responses/org/model");
+    await submit();
+
+    expect(lastCreatedModel().litellm_params.model).toBe("openai/responses/org/model");
+  });
+
+  it("should offer and save the format for the backend's OpenAI-compatible provider ID", async () => {
+    const { user, submit } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByRole("option", { name: /OpenAI-Compatible Chat Completions/ }));
+    await user.type(screen.getByRole("textbox", { name: /LiteLLM Model Name/ }), "org/model");
+    await user.click(screen.getByRole("combobox", { name: "Upstream format" }));
+    await user.click(await screen.findByRole("option", { name: "System One" }));
+    await submit();
+
+    expect(lastCreatedModel().litellm_params).toMatchObject({
+      model: "openai/systemone/org/model",
+      custom_llm_provider: "openai",
+    });
+  });
+});
 
 describe("AddModelPanel submit payload contract", () => {
   beforeEach(() => {
@@ -603,7 +668,7 @@ describe("AddModelPanel decision models", () => {
   it("shows the notice on a chat provider only once one of its decision models is picked", async () => {
     const { user } = await setup();
     await user.click(screen.getByRole("combobox", { name: /provider/i }));
-    await user.click(await screen.findByRole("option", { name: /OpenAI/ }));
+    await user.click(await screen.findByRole("option", { name: /OpenAI$/ }));
     await user.click(await screen.findByPlaceholderText("Select models"));
     await user.click(await screen.findByText("gpt-4o-2024-08-06"));
     expect(decisionNotice()).not.toBeInTheDocument();
@@ -678,7 +743,7 @@ describe("AddModelPanel prefill from the URL", () => {
     const provider = screen.getByRole("combobox", { name: /provider/i });
     await user.clear(provider);
     await user.type(provider, "OpenAI");
-    await user.click(await screen.findByRole("option", { name: /OpenAI/ }));
+    await user.click(await screen.findByRole("option", { name: /OpenAI$/ }));
     await user.click(await screen.findByPlaceholderText("Select models"));
     await user.click(await screen.findByText("gpt-4o-2024-08-06"));
     await submit();

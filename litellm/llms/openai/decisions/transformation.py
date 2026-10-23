@@ -6,6 +6,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, decisions_text
+from litellm.llms.openai.decisions.routing import parse_decisions_model
 from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
@@ -330,11 +331,7 @@ def ir_to_openai_response(
     )
 
 
-class OpenAIDecisionsConfig(BaseDecisionsConfig):
-    path = "/v1/decisions"
-    supports_safety_identifier = True
-    supports_images = True
-
+class OpenAISystemOneConfig(BaseDecisionsConfig):
     def get_default_api_base(self) -> str | None:
         return "https://api.openai.com"
 
@@ -354,6 +351,18 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
         self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
     ) -> str | None:
         return resolve_openai_bearer_token(api_key=api_key, api_base=api_base, litellm_params=litellm_params)
+
+    def canonical_model(self, model: str) -> str:
+        canonical: Final = parse_decisions_model(model)[1]
+        if not canonical:
+            raise ValueError("A model name is required after the Decisions format prefix")
+        return canonical
+
+
+class OpenAIDecisionsConfig(OpenAISystemOneConfig):
+    path = "/v1/decisions"
+    supports_safety_identifier = True
+    supports_images = True
 
     def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
         return False

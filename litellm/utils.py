@@ -9639,7 +9639,14 @@ class ProviderConfigManager:
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
         if provider == LlmProviders.OPENAI:
-            return litellm.OpenAIDecisionsConfig()
+            from litellm.llms.openai.decisions.routing import OpenAIDecisionsFormat, parse_decisions_model
+            from litellm.llms.openai.decisions.transformation import OpenAISystemOneConfig
+
+            return (
+                OpenAISystemOneConfig()
+                if parse_decisions_model(model)[0] == OpenAIDecisionsFormat.SYSTEMONE
+                else litellm.OpenAIDecisionsConfig()
+            )
         if provider == LlmProviders.AZURE_AI:
             return litellm.AzureAIDecisionsConfig()
         return None

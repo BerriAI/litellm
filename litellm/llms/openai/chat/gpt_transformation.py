@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.openai.decisions.routing import parse_decisions_model
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -202,6 +203,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
         return base_params + model_specific_params
+
+    def get_model_cost_key(self, model: str) -> str | None:
+        wire_format, canonical = parse_decisions_model(model.removeprefix("openai/"))
+        if wire_format is None or not canonical:
+            return None
+        return litellm.utils.get_model_cost_key(f"openai/{canonical}") or litellm.utils.get_model_cost_key(canonical)
 
     @staticmethod
     def is_openai_catalog_model(model: str) -> bool:
