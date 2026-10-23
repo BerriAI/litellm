@@ -218,12 +218,13 @@ def _exporter_from_spec(spec: ExporterSpec, *, isolate_headers: bool = False) ->
             OTLPSpanExporter as HTTPExporter,
         )
 
+        from litellm.integrations.otel.plumbing.otlp_transport import build_otlp_http_transport
+
         http_tls: Final = resolve_otlp_http_tls("TRACES", parse_headers(spec.headers), isolate_headers=isolate_headers)
         return HTTPExporter(
             endpoint=spec.traces_endpoint or _otlp_traces_endpoint(spec.endpoint),
             headers=parse_headers(spec.headers),
-            certificate_file=http_tls.certificate_file,
-            session=http_tls.session,
+            _transport=build_otlp_http_transport("TRACES", http_tls),
         )
     if kind in _OTLP_GRPC_KINDS:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
@@ -1188,12 +1189,13 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
             OTLPMetricExporter as HTTPMetricExporter,
         )
 
+        from litellm.integrations.otel.plumbing.otlp_transport import build_otlp_http_transport
+
         tls: Final = resolve_otlp_http_tls("METRICS", parse_headers(config.headers))
         exporter: object = HTTPMetricExporter(
             endpoint=_otlp_metrics_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
-            certificate_file=tls.certificate_file,
-            session=tls.session,
+            _transport=build_otlp_http_transport("METRICS", tls),
         )
     elif kind in ("otlp_grpc", "grpc"):
         try:
@@ -1251,12 +1253,13 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogRecordExporter:
             OTLPLogExporter as HTTPLogExporter,
         )
 
+        from litellm.integrations.otel.plumbing.otlp_transport import build_otlp_http_transport
+
         tls: Final = resolve_otlp_http_tls("LOGS", parse_headers(config.headers))
         return HTTPLogExporter(
             endpoint=_otlp_logs_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
-            certificate_file=tls.certificate_file,
-            session=tls.session,
+            _transport=build_otlp_http_transport("LOGS", tls),
         )
     if kind in ("otlp_grpc", "grpc"):
         try:

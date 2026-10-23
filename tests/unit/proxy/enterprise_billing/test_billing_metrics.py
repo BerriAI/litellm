@@ -12,7 +12,7 @@ import os
 import socket
 import stat
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Final, List, Optional
 
 import pytest
 from opentelemetry.sdk.metrics import MeterProvider
@@ -350,19 +350,30 @@ def _fake_exporter_class(captured: Dict[str, object]) -> type:
     return _FakeExporter
 
 
-def test_meter_provider_wires_client_cert_into_http_exporter(tmp_path, monkeypatch):
-    """Client cert+key authenticate us at the collector's mTLS front end; CA override rides certificate_file."""
-    captured: Dict[str, object] = {}
-
-    monkeypatch.setattr(bm, "OTLPMetricExporter", _fake_exporter_class(captured))
-    config = _config(tmp_path)
-    provider = bm.build_mtls_meter_provider(config)
-    provider.shutdown()
-
-    assert captured["endpoint"] == "https://collector.example:4317/v1/metrics"
-    assert captured["client_certificate_file"] == config.client_cert_path
-    assert captured["client_key_file"] == config.client_key_path
-    assert captured["certificate_file"] == config.ca_cert_path
+@pytest.mark.parametrize("requests_ca", ("REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"))
+def test_meter_provider_preserves_explicit_tls_settings(tmp_path, monkeypatch, requests_mock, requests_ca: str) -> None:
+    monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+    monkeypatch.delenv("CURL_CA_BUNDLE", raising=False)
+    monkeypatch.setenv(requests_ca, "/corporate/global-ca.pem")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE", "/operator/collector-ca.pem")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE", "/operator/client.pem")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY", "/operator/client.key")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example.invalid:8080")
+    captured: Final = requests_mock.post("https://collector.example:4317/v1/metrics", content=b"")
+    config: Final = _config(tmp_path)
+    provider: Final = bm.build_mtls_meter_provider(config)
+    try:
+        bm.BillingMetricsRecorder(provider).record(
+            category=BillableCategory.LLM, route="/chat/completions", status_code=200, model_id=None
+        )
+        assert provider.force_flush()
+        assert captured.request_history
+        for request in captured.request_history:
+            assert request.verify == config.ca_cert_path
+            assert request.cert == (config.client_cert_path, config.client_key_path)
+            assert request.proxies["https"] == "http://proxy.example.invalid:8080"
+    finally:
+        provider.shutdown()
 
 
 def test_load_config_without_ca_is_valid(monkeypatch, tmp_path):

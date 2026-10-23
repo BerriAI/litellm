@@ -805,6 +805,8 @@ def test_http_json_exporter_preserves_session_tls_auth_and_compression(monkeypat
     from opentelemetry.sdk.trace.export import SpanExportResult
     from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter
 
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/corporate/global-ca.pem")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE", "/collector/environment-ca.pem")
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION", compression)
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE", "/collector/client.crt")
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY", "/collector/client.key")

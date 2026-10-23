@@ -24,7 +24,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
+from litellm.integrations.otel.plumbing.otlp_tls import OtlpHttpTls, resolve_otlp_http_tls
 from litellm.integrations.otel.plumbing.providers import register_exporter_factory
 
 _AGENTOPS_ENDPOINT: Final = "https://otlp.agentops.ai/v1/traces"
@@ -101,11 +101,18 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
     """Authenticate lazily through requests' public session authentication API."""
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
+    from litellm.integrations.otel.plumbing.otlp_transport import build_otlp_http_transport
+
     options: Final = spec.options or {}
     tls: Final = resolve_otlp_http_tls("TRACES", isolate_headers=True)
     session: Final = tls.session or requests.Session()
     session.auth = _AgentOpsAuth(options.get("api_key"))
-    return OTLPSpanExporter(endpoint=spec.endpoint, certificate_file=tls.certificate_file, session=session)
+    return OTLPSpanExporter(
+        endpoint=spec.endpoint,
+        _transport=build_otlp_http_transport(
+            "TRACES", OtlpHttpTls(certificate_file=tls.certificate_file, session=session)
+        ),
+    )
 
 
 def _fetch_agentops_jwt(api_key: str) -> dict[str, object]:
