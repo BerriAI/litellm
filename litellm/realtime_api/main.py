@@ -5,8 +5,10 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
+from typing import TYPE_CHECKING, Final, Literal, NoReturn, cast
 
+import httpx
+from pydantic import JsonValue
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -17,6 +19,11 @@ from litellm.constants import (
     request_timeout,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.base_llm.realtime.beta_compat import (
+    beta_transcription_session,
+    ga_transcription_client_secret_request,
+)
+from litellm.llms.base_llm.realtime.transcription_protocol import EMPTY_JSON_OBJECT, json_mapping, json_object
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.xai.common_utils import XAIModelInfo
@@ -77,10 +84,29 @@ def _model_params_with_stored_credentials(model_params: Mapping[str, object]) ->
     return MappingProxyType({**credential_values, **model_params})
 
 
-def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
-    if "model" not in session:
-        return session
-    return {**session, "model": model_name}
+def _with_resolved_session_model(session: Mapping[str, JsonValue], model_name: str) -> Mapping[str, JsonValue]:
+    resolved: Final = {**session, "model": model_name} if "model" in session else session
+    if session.get("type") != "transcription":
+        return resolved
+    flat: Final = (
+        _with_transcription_model(resolved, model_name)
+        if isinstance(session.get("input_audio_transcription"), dict)
+        else resolved
+    )
+    audio: Final = session.get("audio")
+    audio_input: Final = audio.get("input") if isinstance(audio, dict) else None
+    transcription: Final = audio_input.get("transcription") if isinstance(audio_input, dict) else None
+    if not isinstance(audio, dict) or not isinstance(audio_input, dict) or not isinstance(transcription, dict):
+        return flat
+    return {
+        **flat,
+        "audio": {**audio, "input": {**audio_input, "transcription": {**transcription, "model": model_name}}},
+    }
+
+
+def _with_transcription_model(beta_session: Mapping[str, JsonValue], model_name: str) -> Mapping[str, JsonValue]:
+    transcription: Final = json_mapping(beta_session.get("input_audio_transcription"), "input_audio_transcription")
+    return {**beta_session, "input_audio_transcription": {**transcription, "model": model_name}}
 
 
 def _build_litellm_metadata(kwargs: dict) -> dict[str, object]:
@@ -210,22 +236,19 @@ async def acreate_realtime_client_secret(
 @wrapper_client
 async def acreate_realtime_transcription_session(
     model: str | None = None,
-    transcription_session: dict[str, Any] | None = None,
+    transcription_session: Mapping[str, JsonValue] | None = None,
     timeout: float | None = None,
     **kwargs,
 ):
     """
-    Create an ephemeral transcription session via POST
-    /v1/realtime/transcription_sessions.
+    Create an ephemeral transcription session in the beta /v1/realtime/transcription_sessions shape.
 
-    ``transcription_session`` is the upstream request body (input_audio_format,
-    input_audio_transcription, turn_detection, …). ``model`` is a LiteLLM-only
-    routing hint; the provider model lives in
-    ``transcription_session.input_audio_transcription.model``.
+    Providers retired that endpoint, so the session is minted through GA /v1/realtime/client_secrets
+    and translated back. ``model`` is a LiteLLM-only routing hint that also pins the transcription model.
     """
-    req: Final = RealtimeTranscriptionSessionRequest(
-        model=model,
-        **(transcription_session or {}),
+    session: Final = transcription_session or EMPTY_JSON_OBJECT
+    req: Final = RealtimeTranscriptionSessionRequest.model_validate(
+        session if model is None else {**session, "model": model}
     )
     model_name = req.resolved_model() or "gpt-realtime-whisper"
     litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
@@ -259,19 +282,13 @@ async def acreate_realtime_transcription_session(
         litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
-    request_data: Final = req.model_dump(exclude_none=True, exclude={"model"})
-    # Ensure the upstream body's input_audio_transcription.model matches the
-    # authorized routing model. This prevents a caller from supplying an allowed
-    # top-level model for auth while sneaking a different model into the nested
-    # transcription config that gets forwarded to the provider.
-    if isinstance(request_data.get("input_audio_transcription"), dict):
-        request_data["input_audio_transcription"]["model"] = model_name
-    return await base_llm_http_handler.async_realtime_transcription_session_handler(
+    beta_session: Final = _with_transcription_model(session, model_name)
+    ga_client_secret: Final = await base_llm_http_handler.async_realtime_client_secret_handler(
         api_base=resolved_api_base,
         api_key=await _realtime_http_bearer_token(
             custom_llm_provider, resolved_api_key, resolved_api_base, litellm_params
         ),
-        request_data=request_data,
+        request_data=ga_transcription_client_secret_request(beta_session),
         logging_obj=litellm_logging_obj,
         timeout=timeout or request_timeout,
         provider_config=provider_config,
@@ -280,6 +297,9 @@ async def acreate_realtime_transcription_session(
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
     )
+    return httpx.Response(
+        ga_client_secret.status_code, json=beta_transcription_session(json_object(ga_client_secret.text))
+    )
 
 
 @wrapper_client
@@ -287,7 +307,7 @@ async def arealtime_calls(
     openai_ephemeral_key: str,
     sdp_body: bytes,
     model: str | None = None,
-    session: dict[str, object] | None = None,
+    session: Mapping[str, JsonValue] | None = None,
     timeout: float | None = None,
     **kwargs,
 ):
@@ -312,12 +332,11 @@ async def arealtime_calls(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    if session is not None:
-        session = _with_resolved_session_model(session, model_name)
+    resolved_session: Final = None if session is None else _with_resolved_session_model(session, model_name)
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model_name,
-        optional_params={"realtime_calls": True, "session": session},
+        optional_params={"realtime_calls": True, "session": resolved_session},
         litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
@@ -329,7 +348,7 @@ async def arealtime_calls(
         timeout=timeout or request_timeout,
         provider_config=provider_config,
         model=model_name,
-        session_config=session,
+        session_config=resolved_session,
         extra_headers=kwargs.get("extra_headers"),
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,

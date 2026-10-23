@@ -75,9 +75,7 @@ def _realtime_session_reply(raw: str, expires_at: int) -> dict[str, JsonValue]:
 
 def _scripted_openai(client_secret: Mapping[str, JsonValue]) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
-        if request.target.endswith("/v1/realtime/client_secrets") or request.target.endswith(
-            "/v1/realtime/transcription_sessions"
-        ):
+        if request.target.endswith("/v1/realtime/client_secrets"):
             return Reply(body=json.dumps(client_secret).encode())
         if request.target.endswith("/v1/realtime/calls"):
             return Reply(status=CALLS_STATUS, body=ANSWER, content_type="application/sdp")
@@ -191,7 +189,7 @@ def test_openai_prefixed_realtime_aliases_reach_realtime_handlers(gateway: Gatew
     with (
         wire_server(_scripted_openai(_realtime_session_reply(raw, _expires_at()))) as wire,
         wire_server(
-            _scripted_openai(_beta_transcription_reply(transcription_raw, _expires_at()))
+            _scripted_openai(_ga_reply_to_beta_transcription_body(transcription_raw, _expires_at()))
         ) as transcription_wire,
         gateway.scenario() as scenario,
     ):
@@ -227,10 +225,12 @@ def test_openai_prefixed_realtime_aliases_reach_realtime_handlers(gateway: Gatew
         ]
         (session_request,) = transcription_wire.drain()
         assert (session_request.target, session_request.headers["authorization"]) == (
-            f"{scenario_path}/v1/realtime/transcription_sessions",
+            f"{scenario_path}/v1/realtime/client_secrets",
             f"Bearer {DEPLOYMENT_KEY}",
         )
-        assert _json_body(session_request) == _beta_transcription_body(TRANSCRIBE_MODEL), session_request.body
+        assert _json_body(session_request) == _ga_mint_of_beta_transcription_body(TRANSCRIBE_MODEL), (
+            session_request.body
+        )
 
 
 def test_openai_prefixed_transcription_session_reaches_realtime_handler(gateway: Gateway) -> None:
@@ -241,7 +241,7 @@ def test_openai_prefixed_transcription_session_reaches_realtime_handler(gateway:
     raw: Final = _raw_secret()
     scenario_path: Final = f"/{uuid.uuid4().hex}"
     with (
-        wire_server(_scripted_openai(_beta_transcription_reply(raw, _expires_at()))) as wire,
+        wire_server(_scripted_openai(_ga_reply_to_beta_transcription_body(raw, _expires_at()))) as wire,
         gateway.scenario() as scenario,
     ):
         alias: Final = _deployment(scenario, wire, scenario_path, f"openai/{TRANSCRIBE_MODEL}")
@@ -261,7 +261,7 @@ def test_openai_prefixed_transcription_session_reaches_realtime_handler(gateway:
 
         (session_request,) = wire.drain()
         assert (session_request.target, session_request.headers["authorization"]) == (
-            f"{scenario_path}/v1/realtime/transcription_sessions",
+            f"{scenario_path}/v1/realtime/client_secrets",
             f"Bearer {DEPLOYMENT_KEY}",
         )
 
@@ -374,10 +374,6 @@ def test_transcription_client_secret_sends_deployment_model_not_alias_on_mint_an
     spelling: Callable[[str], dict[str, JsonValue]],
     expected_session: dict[str, JsonValue],
 ) -> None:
-    pytest.skip(
-        "BUG: transcription client secret forwards the model group alias as the transcription model, "
-        "and /realtime/calls adds a top-level model to the transcription session"
-    )
     raw: Final = _raw_secret()
     scenario_path: Final = f"/{uuid.uuid4().hex}"
     with (
@@ -400,14 +396,10 @@ def test_transcription_client_secret_sends_deployment_model_not_alias_on_mint_an
 
 
 def test_beta_transcription_session_token_replays_deployment_model_not_alias_at_calls(gateway: Gateway) -> None:
-    pytest.skip(
-        "BUG: a beta transcription_sessions token replays the model group alias as the transcription model "
-        "at /realtime/calls and adds a top-level model"
-    )
     raw: Final = _raw_secret()
     scenario_path: Final = f"/{uuid.uuid4().hex}"
     with (
-        wire_server(_scripted_openai(_beta_transcription_reply(raw, _expires_at()))) as wire,
+        wire_server(_scripted_openai(_ga_reply_to_beta_transcription_body(raw, _expires_at()))) as wire,
         gateway.scenario() as scenario,
     ):
         alias: Final = _deployment(scenario, wire, scenario_path, f"openai/{TRANSCRIBE_MODEL}")
@@ -481,29 +473,58 @@ def test_sdk_calls_create_multipart_forwards_offer_and_merges_client_session(gat
         }, parts["session"]
 
 
+TURN_DETECTION: Final[dict[str, JsonValue]] = {"type": "server_vad", "threshold": 0.5, "silence_duration_ms": 500}
+NOISE_REDUCTION: Final[dict[str, JsonValue]] = {"type": "near_field"}
+INCLUDE: Final[list[JsonValue]] = ["item.input_audio_transcription.logprobs"]
 BETA_TRANSCRIPTION_FIELDS: Final[dict[str, JsonValue]] = {
     "input_audio_format": "pcm16",
-    "turn_detection": {"type": "server_vad", "threshold": 0.5, "silence_duration_ms": 500},
-    "input_audio_noise_reduction": {"type": "near_field"},
-    "include": ["item.input_audio_transcription.logprobs"],
+    "turn_detection": TURN_DETECTION,
+    "input_audio_noise_reduction": NOISE_REDUCTION,
+    "include": INCLUDE,
 }
 
 
+def _transcription_settings(model: str) -> dict[str, JsonValue]:
+    return {"model": model, "language": "en", "prompt": ""}
+
+
 def _beta_transcription_body(model: str) -> dict[str, JsonValue]:
+    return {**BETA_TRANSCRIPTION_FIELDS, "input_audio_transcription": _transcription_settings(model)}
+
+
+def _ga_audio_input(model: str) -> dict[str, JsonValue]:
     return {
-        **BETA_TRANSCRIPTION_FIELDS,
-        "input_audio_transcription": {"model": model, "language": "en", "prompt": ""},
+        "format": {"type": "audio/pcm", "rate": 24000},
+        "transcription": _transcription_settings(model),
+        "turn_detection": TURN_DETECTION,
+        "noise_reduction": NOISE_REDUCTION,
     }
 
 
-def _beta_transcription_reply(raw: str, expires_at: int) -> dict[str, JsonValue]:
+def _ga_mint_of_beta_transcription_body(model: str) -> dict[str, JsonValue]:
+    return {"session": {"type": "transcription", "include": INCLUDE, "audio": {"input": _ga_audio_input(model)}}}
+
+
+def _ga_reply_to_beta_transcription_body(raw: str, expires_at: int) -> dict[str, JsonValue]:
+    return {
+        "value": raw,
+        "expires_at": expires_at,
+        "session": {
+            "type": "transcription",
+            "object": "realtime.transcription_session",
+            "id": "sess_beta_transcription",
+            "include": INCLUDE,
+            "audio": {"input": _ga_audio_input(TRANSCRIBE_MODEL)},
+        },
+    }
+
+
+def _beta_transcription_session(token: str, expires_at: int) -> dict[str, JsonValue]:
     return {
         "id": "sess_beta_transcription",
         "object": "realtime.transcription_session",
-        "modalities": ["audio", "text"],
-        **BETA_TRANSCRIPTION_FIELDS,
-        "input_audio_transcription": {"model": TRANSCRIBE_MODEL, "language": "en", "prompt": ""},
-        "client_secret": {"value": raw, "expires_at": expires_at},
+        **_beta_transcription_body(TRANSCRIBE_MODEL),
+        "client_secret": {"value": token, "expires_at": expires_at},
     }
 
 
@@ -515,7 +536,7 @@ def _mint_transcription_and_redeem(gateway: Gateway, mint_spelling: str) -> tupl
     with (
         wire_server(
             _scripted_openai(
-                _beta_transcription_reply(raw, _expires_at())
+                _ga_reply_to_beta_transcription_body(raw, _expires_at())
                 if is_beta
                 else _transcription_session_reply(raw, _expires_at())
             )
@@ -553,10 +574,12 @@ def _mint_transcription_and_redeem(gateway: Gateway, mint_spelling: str) -> tupl
             mint_request.headers["authorization"],
         ) == (
             "POST",
-            f"{scenario_path}/v1/realtime/{route}",
+            f"{scenario_path}/v1/realtime/client_secrets",
             f"Bearer {DEPLOYMENT_KEY}",
         ), mint_request.headers
-        assert _json_body(mint_request) == request_body, mint_request.body
+        assert _json_body(mint_request) == (_ga_mint_of_beta_transcription_body(name) if is_beta else request_body), (
+            mint_request.body
+        )
         assert (calls_request.target, calls_request.headers["authorization"]) == (
             f"{scenario_path}/v1/realtime/calls",
             f"Bearer {raw}",
@@ -577,7 +600,6 @@ def test_transcription_client_secret_replays_transcription_session_at_calls(
 def test_transcription_session_replayed_at_calls_carries_no_top_level_model(
     gateway: Gateway, mint_spelling: str
 ) -> None:
-    pytest.skip("BUG: /realtime/calls adds a top-level model to a replayed transcription session")
     name, replayed = _mint_transcription_and_redeem(gateway, mint_spelling)
     assert replayed == {"type": "transcription", "audio": {"input": {"transcription": {"model": name}}}}, replayed
 
@@ -589,7 +611,7 @@ def test_beta_transcription_session_forwards_body_with_deployment_model_and_encr
 ) -> None:
     raw: Final = _raw_secret()
     expires_at: Final = _expires_at()
-    scripted: Final = _beta_transcription_reply(raw, expires_at)
+    scripted: Final = _ga_reply_to_beta_transcription_body(raw, expires_at)
     scenario_path: Final = f"/{uuid.uuid4().hex}"
     with wire_server(_scripted_openai(scripted)) as wire, gateway.scenario() as scenario:
         alias: Final = _deployment(scenario, wire, scenario_path, f"openai/{TRANSCRIBE_MODEL}")
@@ -601,17 +623,19 @@ def test_beta_transcription_session_forwards_body_with_deployment_model_and_encr
         token: Final = parsed.client_secret["value"]
         assert isinstance(token, str) and token != raw, created.text
         assert raw not in created.text, created.text
-        assert created.json() == {**scripted, "client_secret": {"value": token, "expires_at": expires_at}}, created.text
+        assert created.json() == _beta_transcription_session(token, expires_at), created.text
         answered: Final = _redeem(gateway, token)
         assert answered.status_code == CALLS_STATUS, answered.text
 
         session_request, calls_request = wire.drain()
         assert (session_request.method, session_request.target) == (
             "POST",
-            f"{scenario_path}/v1/realtime/transcription_sessions",
+            f"{scenario_path}/v1/realtime/client_secrets",
         )
         assert session_request.headers["authorization"] == f"Bearer {DEPLOYMENT_KEY}", session_request.headers
-        assert _json_body(session_request) == _beta_transcription_body(TRANSCRIBE_MODEL), session_request.body
+        assert _json_body(session_request) == _ga_mint_of_beta_transcription_body(TRANSCRIBE_MODEL), (
+            session_request.body
+        )
         assert (calls_request.target, calls_request.headers["authorization"]) == (
             f"{scenario_path}/v1/realtime/calls",
             f"Bearer {raw}",
@@ -626,7 +650,7 @@ def test_beta_transcription_session_routes_on_model_hint_over_smuggled_nested_mo
     allowed_path: Final = f"/{uuid.uuid4().hex}"
     denied_path: Final = f"/{uuid.uuid4().hex}"
     with (
-        wire_server(_scripted_openai(_beta_transcription_reply(raw, _expires_at()))) as wire,
+        wire_server(_scripted_openai(_ga_reply_to_beta_transcription_body(raw, _expires_at()))) as wire,
         gateway.scenario() as scenario,
     ):
         allowed_name: Final = _deployment_named_like_its_model(scenario, gateway, wire, allowed_path)
@@ -648,8 +672,8 @@ def test_beta_transcription_session_routes_on_model_hint_over_smuggled_nested_mo
         assert answered.content == ANSWER, answered.text
 
         session_request, calls_request = wire.drain()
-        assert session_request.target == f"{allowed_path}/v1/realtime/transcription_sessions", session_request.target
-        assert _json_body(session_request) == _beta_transcription_body(allowed_name), session_request.body
+        assert session_request.target == f"{allowed_path}/v1/realtime/client_secrets", session_request.target
+        assert _json_body(session_request) == _ga_mint_of_beta_transcription_body(allowed_name), session_request.body
         assert (calls_request.target, calls_request.headers["authorization"]) == (
             f"{allowed_path}/v1/realtime/calls",
             f"Bearer {raw}",

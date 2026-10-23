@@ -983,10 +983,10 @@ async def test_route_request_realtime_transcription_session_resolves_credentials
         ]
     )
     with patch(
-        "litellm.realtime_api.main.base_llm_http_handler.async_realtime_transcription_session_handler",
+        "litellm.realtime_api.main.base_llm_http_handler.async_realtime_client_secret_handler",
         new_callable=AsyncMock,
     ) as mock_handler:
-        mock_handler.return_value = httpx.Response(200, json={"client_secret": {"value": "ephemeral"}})
+        mock_handler.return_value = httpx.Response(200, json={"value": "ephemeral"})
         await _invoke_realtime_route(
             {"model": "openai/gpt-realtime"},
             router,

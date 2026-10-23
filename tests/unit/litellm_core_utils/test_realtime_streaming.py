@@ -99,9 +99,16 @@ def test_remap_beta_session_to_ga_normalizes_modalities_and_audio():
     assert out["audio"]["output"]["voice"] == "alloy"
 
 
+def test_remap_beta_session_to_ga_names_g711_formats_the_way_ga_accepts_them():
+    out = RealTimeStreaming._remap_beta_session_to_ga({"input_audio_format": "g711_ulaw", "output_audio_format": "g711_alaw"})
+
+    assert out["audio"]["input"]["format"] == {"type": "audio/pcmu"}
+    assert out["audio"]["output"]["format"] == {"type": "audio/pcma"}
+
+
 def test_remap_beta_session_to_ga_preserves_ga_audio_format_dicts():
     input_format = {"type": "audio/pcm", "rate": 24000}
-    output_format = {"type": "audio/G711-ulaw", "rate": 8000}
+    output_format = {"type": "audio/pcmu"}
 
     out = RealTimeStreaming._remap_beta_session_to_ga(
         {
