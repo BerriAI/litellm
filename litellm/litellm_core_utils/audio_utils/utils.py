@@ -142,6 +142,9 @@ BARE_ISO_639_1_TO_BCP47: Final = {
     "ru": "ru-RU",
     "hi": "hi-IN",
     "ar": "ar-SA",
+    "tr": "tr-TR",
+    "nl": "nl-NL",
+    "pl": "pl-PL",
 }
 
 

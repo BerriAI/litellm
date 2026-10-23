@@ -873,6 +873,51 @@ def test_gemini_session_update_includes_input_audio_transcription_default():
     assert setup["setup"]["inputAudioTranscription"] == {}
 
 
+def test_gemini_session_update_forwards_transcription_language_hint():
+    """GA ``audio.input.transcription.language`` becomes ``inputAudioTranscription.languageCodes``."""
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "type": "realtime",
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "transcription": {"model": "gpt-4o-mini-transcribe", "language": "tr"},
+                },
+                "output": {"format": {"type": "audio/pcm", "rate": 24000}},
+            },
+        },
+    }
+
+    result = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-2.5-flash",
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(result[0])["setup"]
+    assert setup["inputAudioTranscription"] == {"languageCodes": ["tr-TR"]}
+
+
+def test_gemini_session_update_transcription_without_language_keeps_default():
+    """A transcription config without ``language`` still enables transcription with no hint."""
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {"input_audio_transcription": {"model": "whisper-1"}},
+    }
+
+    result = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-2.5-flash",
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(result[0])["setup"]
+    assert setup["inputAudioTranscription"] == {}
+
+
 def test_gemini_tool_call_emits_response_created_preamble():
     """Verify response.created is emitted before tool call events when response_id is None."""
     config = GeminiRealtimeConfig()
