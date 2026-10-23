@@ -287,6 +287,9 @@ async fn python_serves_websocket_messages(
 #[allow(clippy::result_large_err)]
 async fn forwarded_websocket_preserves_handshake_headers_and_control_frames() {
     timeout(Duration::from_secs(5), async {
+        const WEBSOCKET_EXTENSION: &str =
+            "permessage-deflate; client_no_context_takeover; server_no_context_takeover";
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let python = listener.local_addr().unwrap();
         let (seen_sender, seen_receiver) = oneshot::channel();
@@ -301,6 +304,10 @@ async fn forwarded_websocket_preserves_handshake_headers_and_control_frames() {
                     response
                         .headers_mut()
                         .insert(SEC_WEBSOCKET_PROTOCOL, HeaderValue::from_static("chat"));
+                    response.headers_mut().insert(
+                        "sec-websocket-extensions",
+                        HeaderValue::from_static(WEBSOCKET_EXTENSION),
+                    );
                     Ok(response)
                 },
             )
@@ -338,6 +345,7 @@ async fn forwarded_websocket_preserves_handshake_headers_and_control_frames() {
             .header(AUTHORIZATION, "Bearer gateway-key")
             .header(ORIGIN, "https://client.example")
             .header(SEC_WEBSOCKET_PROTOCOL, "chat, superchat")
+            .header("sec-websocket-extensions", WEBSOCKET_EXTENSION)
             .header(SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==")
             .header(SEC_WEBSOCKET_VERSION, "13")
             .header(UPGRADE, "websocket")
@@ -352,6 +360,10 @@ async fn forwarded_websocket_preserves_handshake_headers_and_control_frames() {
             response.headers().get(SEC_WEBSOCKET_PROTOCOL).unwrap(),
             "chat"
         );
+        assert_eq!(
+            response.headers().get("sec-websocket-extensions").unwrap(),
+            WEBSOCKET_EXTENSION
+        );
         let (uri, headers) = timeout(Duration::from_secs(2), seen_receiver)
             .await
             .unwrap()
@@ -362,6 +374,10 @@ async fn forwarded_websocket_preserves_handshake_headers_and_control_frames() {
         assert_eq!(
             headers.get(SEC_WEBSOCKET_PROTOCOL).unwrap(),
             "chat, superchat"
+        );
+        assert_eq!(
+            headers.get("sec-websocket-extensions").unwrap(),
+            WEBSOCKET_EXTENSION
         );
         assert_eq!(headers.get(CONNECTION).unwrap(), "upgrade");
         assert!(!headers.contains_key("x-hop"));
