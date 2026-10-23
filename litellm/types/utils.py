@@ -2603,12 +2603,10 @@ class TextCompletionResponse(OpenAIObject):
             created = created
 
         model = model
-        if usage is not None:
+        if usage:
             usage = usage
-        elif not stream:
-            usage = Usage()
         else:
-            usage = None
+            usage = Usage()
 
         super().__init__(
             id=id,
