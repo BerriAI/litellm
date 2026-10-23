@@ -104,3 +104,4 @@ def test_add_provider_affinity_header_does_nothing_without_config_or_session():
         )
         == {}
     )
+
