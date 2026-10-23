@@ -8,8 +8,9 @@ use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::to_py;
 use litellm_inference_ocr::provider_config;
-use litellm_llms::base_llm::ocr::settings::OcrSettings;
-use pyo3::prelude::*;
+use litellm_layered::merge;
+use litellm_llms::base_llm::ocr::settings::{OcrKeysPartial, OcrSettings};
+use pyo3::{exceptions::PyValueError, prelude::*};
 
 use super::NativeCall;
 
@@ -55,9 +56,21 @@ fn ocr_settings(py: Python<'_>) -> PyResult<OcrSettings> {
 }
 
 fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
-    Ok(OcrSettings {
-        enable_azure_ad_token_refresh: snapshot.read(&ENABLE_AZURE_AD_TOKEN_REFRESH)?,
-        ..OcrSettings::from_environment(&ProcessEnvironment)
+    Ok(OcrSettings::from(merge([
+        OcrKeysPartial::from_env(&ProcessEnvironment)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+        globals(snapshot)?,
+    ])))
+}
+
+fn globals(snapshot: &Snapshot<'_>) -> PyResult<OcrKeysPartial> {
+    Ok(OcrKeysPartial {
+        request_timeout: None,
+        max_download_bytes: None,
+        poll_timeout: None,
+        document_intelligence_api_version: None,
+        document_intelligence_dpi: None,
+        enable_azure_ad_token_refresh: Some(snapshot.read(&ENABLE_AZURE_AD_TOKEN_REFRESH)?),
     })
 }
 

@@ -20,6 +20,7 @@ use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{ClientVariant, HttpClientPool, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
+use litellm_llms::base_llm::ocr::settings::{OcrKeysPartial, OcrSettings};
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
@@ -34,6 +35,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
             .or_else(|| std::env::var(name).ok())
     };
     let http_settings = http::http_settings(&lookup, &config.litellm_settings)?;
+    let ocr = OcrSettings::from(OcrKeysPartial::from_env(&lookup)?);
     let http = Resolution::from(&http_settings).config;
     let client = pool.client(&http, ClientVariant::Provider)?;
     let secrets = Arc::new(secrets::ConfigSecrets::new(
@@ -44,6 +46,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     Ok(Arc::new(Gateway::new(
         resources,
         http,
+        ocr,
         secrets,
         ModelRouter::from_model_list(&config.model_list),
     )?))

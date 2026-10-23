@@ -38,3 +38,4 @@ serde_yaml_ng = "0.10.0"
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tower = { version = "0.5", features = ["util"] }
+wiremock.workspace = true

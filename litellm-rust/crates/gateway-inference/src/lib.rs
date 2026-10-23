@@ -53,6 +53,7 @@ impl Gateway {
     pub fn new(
         resources: CoreResources,
         http: HttpClientConfig,
+        ocr: OcrSettings,
         secrets: Arc<dyn SecretSource>,
         models: ModelRouter,
     ) -> Result<Self, litellm_http::Error> {
@@ -77,7 +78,7 @@ impl Gateway {
                 &http,
                 UrlPolicy::default(),
                 auth,
-                OcrSettings::default(),
+                ocr,
                 secrets.clone(),
             )?),
             models,

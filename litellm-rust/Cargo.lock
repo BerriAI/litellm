@@ -3759,6 +3759,7 @@ dependencies = [
  "tower-sessions-moka-store",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -4184,6 +4185,7 @@ dependencies = [
  "litellm-framer",
  "litellm-host",
  "litellm-http",
+ "litellm-layered",
  "litellm-llms-types",
  "litellm-python-compat",
  "litellm-router-types",

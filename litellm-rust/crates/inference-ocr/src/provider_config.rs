@@ -155,7 +155,7 @@ impl OcrConfigKind {
             LlmProviders::AzureAi => (None, Some("AZURE_AI_API_BASE")),
             _ => (None, None),
         };
-        let secret = |name: &str| secrets.truthy(name);
+        let secret = |name: &str| secrets.get(name).filter(|value| !value.is_empty());
         let dynamic_api_key = credentials.dynamic_api_key.or_else(|| {
             credentials.api_key.clone().or_else(|| {
                 preferred_api_key_env
