@@ -12207,7 +12207,7 @@ class Router:
                     model_info_name,
                     e,
                 )
-                fallback: ModelMapInfo = {
+                fallback: Final[ModelMapInfo] = {
                     "key": model_info_name,
                     "max_tokens": None,
                     "max_input_tokens": None,
