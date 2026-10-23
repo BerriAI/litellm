@@ -1083,8 +1083,10 @@ def print_token(ctx: click.Context):
         click.echo(keychain_unreadable_notice(vault), err=True)
         sys.exit(1)
 
+    stored_key: Final = token_data.get("key")
+    fresh_stored_key: Final = stored_key if isinstance(stored_key, str) and is_cli_token_fresh(token_data) else None
     api_key: Final = (
-        ctx_obj.get("api_key")
+        ctx_obj.get("api_key") or fresh_stored_key
         if issued_for_this_server and ctx_obj.get("api_key_from_token_file")
         else fresh_api_key(
             token_data,

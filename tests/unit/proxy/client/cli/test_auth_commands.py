@@ -3,6 +3,7 @@ import os
 import stat
 import time
 from pathlib import Path
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
@@ -33,6 +34,7 @@ from litellm.proxy.client.cli.commands.auth import (
     whoami,
 )
 from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
+from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 
 
 @pytest.fixture
@@ -2150,6 +2152,33 @@ def test_print_token_reads_the_connection_from_the_context_object(
     assert result.exit_code == expected_exit_code
     assert result.stdout == expected_stdout
     assert result.stderr == expected_stderr
+
+
+def test_print_token_uses_the_saved_key_when_the_initializer_did_not_get_one(
+    isolated_home: Path,
+    secret_vault_factory: type[FakeSecretVault],
+) -> None:
+    vault: Final = secret_vault_factory()
+    record: Final = CliTokenRecord(
+        base_url="https://test.example.com",
+        key="sk-fixture-reloaded",
+        timestamp=1000.0,
+        expires_at=1e20,
+        refresh_token="fixture-refresh",
+    )
+    assert save_cli_token(record, vault=vault) == SecretStored()
+    result: Final = CliRunner().invoke(
+        print_token,
+        obj={
+            "base_url": record.base_url,
+            "api_key": None,
+            "api_key_from_token_file": True,
+            "base_url_explicit": True,
+            "secret_vault": vault,
+        },
+    )
+    assert result.exit_code == 0, result.output
+    assert result.output == f"{record.key}\n"
 
 
 def test_print_token_without_a_context_object_reports_no_login_when_nothing_is_stored(isolated_home):
