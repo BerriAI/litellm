@@ -7820,6 +7820,9 @@ def _server_credential_occupies_authorization(server: MCPServer) -> bool:
     ``Authorization``; ``api_key`` sends it in ``X-API-Key``; ``upstream_token_header`` moves either.
     A signer-injected ``Authorization`` would replace such a credential upstream.
     """
+    if server.is_byok:
+        # A BYOK server's stored authentication_token is never sent upstream; the caller's own credential is.
+        return False
     if not server.authentication_token or server.auth_type not in _STATIC_CREDENTIAL_AUTH_TYPES:
         return False
     default_slot: Final = "X-API-Key" if server.auth_type == MCPAuth.api_key else "Authorization"
