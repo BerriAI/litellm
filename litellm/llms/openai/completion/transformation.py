@@ -13,6 +13,34 @@ from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionR
 from ..chat.gpt_transformation import OpenAIGPTConfig
 from .utils import transform_prompt
 
+OPENAI_TEXT_COMPLETION_PARAMS: Final = frozenset(
+    {
+        "model",
+        "prompt",
+        "best_of",
+        "echo",
+        "frequency_penalty",
+        "logit_bias",
+        "logprobs",
+        "max_tokens",
+        "n",
+        "presence_penalty",
+        "seed",
+        "stop",
+        "stream",
+        "stream_options",
+        "suffix",
+        "temperature",
+        "top_p",
+        "user",
+        "extra_headers",
+        "extra_query",
+        "extra_body",
+        "timeout",
+        "max_retries",
+    }
+)
+
 
 class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
     """
@@ -155,8 +183,18 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         prompt: Final = transform_prompt(messages)
-        return {
+        result: Final[dict[str, object]] = {  # mutable-ok: completion request payload
             "model": model,
             "prompt": prompt,
-            **optional_params,
         }
+        result.update(optional_params)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # optional_params is an untyped dict
+        extra_body: Final[dict[str, object]] = {}  # mutable-ok: completion extra body
+        user_extra: Final = result.pop("extra_body", None)
+        if isinstance(user_extra, (dict, Mapping)):
+            extra_body.update(user_extra)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # extra_body is untyped
+        for param in list(result.keys()):
+            if param not in OPENAI_TEXT_COMPLETION_PARAMS:
+                extra_body[param] = result.pop(param)
+        if extra_body:
+            result["extra_body"] = extra_body
+        return result
