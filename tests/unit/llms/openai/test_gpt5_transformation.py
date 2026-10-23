@@ -1388,8 +1388,8 @@ def test_gpt5_6_forwards_reasoning_effort_max_for_the_responses_bridge(config: O
     """A chat request carrying tools or a reasoning summary is converted to /v1/responses further
     down main.py, and that surface accepts max. This runs before litellm has decided to bridge, so
     refusing max here would break the cursor thinking-max shape that works today. Plain chat
-    completions still answer max with a provider 400, and the capability list below is what keeps
-    the level out of the picker."""
+    completions still answer max with a provider 400, so the advertised capability does not imply
+    support on every endpoint."""
     params = config.map_openai_params(
         non_default_params={"reasoning_effort": "max"},
         optional_params={},
@@ -1400,15 +1400,15 @@ def test_gpt5_6_forwards_reasoning_effort_max_for_the_responses_bridge(config: O
 
 
 @pytest.mark.parametrize("model", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
-def test_gpt5_6_never_advertises_reasoning_effort_max(model: str):
-    """/v1/chat/completions answers max with "Unsupported value: 'reasoning_effort' does not support
-    'max' with this model. Supported values are: 'none', 'low', 'medium', 'high', and 'xhigh'", so no
-    gpt-5.6 entry asserts supports_max_reasoning_effort and the advertised set stops at xhigh."""
+def test_gpt5_6_advertises_max_when_its_catalog_row_declares_it(model: str) -> None:
+    """Capability discovery includes Responses-only efforts, while the provider owns endpoint
+    admission; the generic alias may declare a different set than named variants."""
     from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
-    resolved = resolve_supported_reasoning_efforts(litellm.get_model_info(model), deployment_is_mapped=True)
+    model_info: Final = litellm.get_model_info(model)
+    resolved: Final = resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
     assert resolved is not None
-    assert "max" not in resolved
+    assert ("max" in resolved) is (model_info["supports_max_reasoning_effort"] is True)
     assert "xhigh" in resolved
 
 

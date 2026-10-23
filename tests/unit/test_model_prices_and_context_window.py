@@ -253,6 +253,31 @@ def test_azure_gpt_6_1_sol_rows_accept_the_same_reasoning_efforts_as_the_openai_
     assert resolve_supported_reasoning_efforts(prices[row], deployment_is_mapped=True) == openai_efforts
 
 
+@pytest.mark.parametrize("model", ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"))
+def test_gpt_provider_rows_advertise_the_same_max_effort_as_bedrock(
+    prices: Mapping[str, Mapping[str, object]], model: str, local_model_cost_map: None
+) -> None:
+    counterpart: Final = litellm.get_model_info(f"bedrock_mantle/openai.{model}")
+    pattern: Final = re.compile(
+        rf"(?:azure/(?:us/|eu/)?|azure_ai/|chatgpt/)?{re.escape(model)}(?:-\d{{4}}-\d{{2}}-\d{{2}})?"
+    )
+    rows: Final = tuple(key for key in prices if pattern.fullmatch(key))
+    assert rows
+    assert {key: prices[key].get("supports_max_reasoning_effort") for key in rows} == dict.fromkeys(
+        rows, counterpart["supports_max_reasoning_effort"]
+    )
+    assert {key: litellm.get_model_info(key)["supports_max_reasoning_effort"] for key in rows} == dict.fromkeys(
+        rows, counterpart["supports_max_reasoning_effort"]
+    )
+    assert {
+        key: "max"
+        in (resolve_supported_reasoning_efforts(litellm.get_model_info(key), deployment_is_mapped=True) or ())
+        for key in rows
+    } == dict.fromkeys(
+        rows, "max" in (resolve_supported_reasoning_efforts(counterpart, deployment_is_mapped=True) or ())
+    )
+
+
 # https://ai.google.dev/gemini-api/docs/models/deep-research-preview-04-2026
 @pytest.mark.parametrize("model", ["gemini/deep-research-preview-04-2026", "gemini/deep-research-max-preview-04-2026"])
 def test_gemini_deep_research_previews_accept_the_documented_input_window(prices: dict, model: str):
