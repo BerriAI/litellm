@@ -133,9 +133,9 @@ class SAPUserMessage(LiteLLMBaseModel):
     content: str | TextContent | ImageContent | list[TextContent | ImageContent]
 
 
-class ReasoningBlock(
+class ReasoningBlock(  # frozen-ok: adding model_config would override LiteLLMBaseModel's defer_build setting
     LiteLLMBaseModel
-):  # frozen-ok: adding model_config would override LiteLLMBaseModel's defer_build setting
+):
     content: str | None = None
     signature: str | None = None
 
@@ -144,8 +144,10 @@ class SAPAssistantMessage(LiteLLMBaseModel):
     role: Literal["assistant"] = "assistant"
     content: str | TextContent | list[TextContent] = ""
     refusal: str = ""
-    tool_calls: list[MessageToolCall] = Field(default=[])
-    reasoning_content: list[ReasoningBlock] | None = None
+    tool_calls: list[MessageToolCall] = Field(  # mutable-ok: pydantic field; callers append tool calls to this list
+        default=[]
+    )
+    reasoning_content: list[ReasoningBlock] | None = None  # mutable-ok: list of reasoning blocks from SAP wire format
 
 
 class SAPToolChatMessage(LiteLLMBaseModel):

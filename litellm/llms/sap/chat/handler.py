@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # untyped dict keys are casted explicitly
 
 import httpx
 
@@ -32,7 +32,9 @@ def _now_ts() -> int:
     return int(time.time())
 
 
-def normalize_choice(choice: dict[str, object]) -> dict[str, object]:
+def normalize_choice(
+    choice: dict[str, object],  # mutable-ok: wire dicts from httpx JSON; callers own them
+) -> dict[str, object]:  # mutable-ok: wire dicts from httpx JSON; callers own them
     """Normalize a single choice dict (message or delta shape) in isolation."""
     for key in ("message", "delta"):
         carrier = choice.get(key)
@@ -41,15 +43,18 @@ def normalize_choice(choice: dict[str, object]) -> dict[str, object]:
         reasoning_content = carrier.get("reasoning_content")
         if not isinstance(reasoning_content, list):
             continue
-        thinking_blocks: Final[
-            list[dict[str, object]]
-        ] = [  # mutable-ok: consumed immediately by the two carrier assignments below; never escapes as mutable
+        thinking_blocks: list[dict[str, object]] = [  # mutable-ok: consumed immediately below; never escapes as mutable
             {
                 "type": "thinking",
-                "thinking": item.get("content") or "",
-                "signature": item.get("signature"),
+                "thinking": cast(dict[str, object], item).get("content")  # cast-ok: isinstance(item, dict) guard below
+                or "",
+                "signature": cast(dict[str, object], item).get(  # cast-ok: isinstance(item, dict) guard below
+                    "signature"
+                ),
             }
-            for item in reasoning_content
+            for item in cast(  # cast-ok: isinstance(reasoning_content, list) guard above
+                list[object], reasoning_content
+            )
             if isinstance(item, dict)
         ]
         carrier["thinking_blocks"] = thinking_blocks
@@ -59,24 +64,28 @@ def normalize_choice(choice: dict[str, object]) -> dict[str, object]:
     return choice
 
 
-def normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:
+def normalize_reasoning_content(
+    raw: dict[str, object],  # mutable-ok: wire dicts from httpx JSON; callers own them
+) -> dict[str, object]:  # mutable-ok: wire dicts from httpx JSON; callers own them
     """Transform reasoning_content from SAP Orchestration format [{"content": ..., "signature": ...}] to Optional[str] and a thinking_blocks list."""
-    choices: Final[list[object]] = list(
-        raw.get("choices") or []
-    )  # mutable-ok: intermediate wire list, immediately consumed by the comprehension below
-    normalized_choices: Final[
-        list[dict[str, object]]
-    ] = [  # mutable-ok: wire list passed to pydantic model_validate via normalized_result
-        normalize_choice(choice) for choice in choices if isinstance(choice, dict)
+    choices: Final[list[object]] = list(  # mutable-ok: wire list from httpx JSON
+        cast(list[object], raw.get("choices") or [])  # cast-ok: wire JSON; choices is always a list
+    )
+    normalized_choices: Final[list[dict[str, object]]] = [  # mutable-ok: wire list passed to pydantic model_validate
+        normalize_choice(cast(dict[str, object], choice))  # cast-ok: isinstance(choice, dict) guard below
+        for choice in choices
+        if isinstance(choice, dict)
     ]
-    normalized_result: Final[dict[str, object]] = {
+    normalized_result: Final[dict[str, object]] = {  # mutable-ok: wire dict consumed by pydantic model_validate
         **raw,
         "choices": normalized_choices,
-    }  # mutable-ok: wire dict consumed by pydantic model_validate
+    }
     return normalized_result
 
 
-def denormalize_reasoning_content(message: dict[str, object]) -> dict[str, object]:
+def denormalize_reasoning_content(
+    message: dict[str, object],  # mutable-ok: wire dicts from httpx JSON; callers own them
+) -> dict[str, object]:  # mutable-ok: wire dicts from httpx JSON; callers own them
     """Inverse of normalize_reasoning_content: rebuild list[ReasoningBlock] from thinking_blocks.
 
     LiteLLM normalizes SAP's reasoning_content list into a str + thinking_blocks before
@@ -89,13 +98,21 @@ def denormalize_reasoning_content(message: dict[str, object]) -> dict[str, objec
     """
     if message.get("role") != "assistant":
         return message
-    thinking_blocks = message.get("thinking_blocks")
+    thinking_blocks: Final = message.get("thinking_blocks")
     if isinstance(thinking_blocks, list):
-        reasoning_content: Final[
-            list[dict[str, str | None]]
-        ] = [  # mutable-ok: wire list passed to validate_dict which expects list[ReasoningBlock]
-            {"content": block.get("thinking") or "", "signature": block.get("signature")}
-            for block in thinking_blocks
+        reasoning_content: Final[list[dict[str, str | None]]] = [  # mutable-ok: wire list passed to validate_dict
+            {
+                "content": str(
+                    cast(dict[str, object], block).get("thinking") or ""  # cast-ok: isinstance(block, dict) guard below
+                ),
+                "signature": cast(  # cast-ok: narrows to str|None
+                    str | None,
+                    cast(dict[str, object], block).get(  # cast-ok: isinstance(block, dict) guard; narrows dict
+                        "signature"
+                    ),
+                ),
+            }
+            for block in cast(list[object], thinking_blocks)  # cast-ok: isinstance(thinking_blocks, list) guard above
             if isinstance(block, dict)
         ]
         return {k: v for k, v in message.items() if k not in ("thinking_blocks", "reasoning_content")} | {
@@ -121,18 +138,22 @@ class _StreamParser:
     """Normalize orchestration streaming events into OpenAI-like chunks."""
 
     @staticmethod
-    def _from_orchestration_result(evt: dict) -> OpenAIChatCompletionChunk | None:
+    def _from_orchestration_result(evt: dict[str, object]) -> OpenAIChatCompletionChunk | None:
         """
         Accepts orchestration_result shape and maps it to an OpenAI-like *chunk*.
         """
-        orc: Final = evt.get("orchestration_result") or {}
+        orc: Final[dict[str, object]] = cast(  # cast-ok: wire JSON; orchestration_result is always a dict
+            dict[str, object], evt.get("orchestration_result") or {}
+        )
         if not orc:
             return None
 
         return OpenAIChatCompletionChunk.model_validate(
             normalize_reasoning_content(
                 {
-                    "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
+                    "id": orc.get("id")
+                    or cast(str | None, evt.get("request_id"))  # cast-ok: wire JSON string field
+                    or "stream-chunk",
                     "object": orc.get("object") or "chat.completion.chunk",
                     "created": orc.get("created") or evt.get("created") or _now_ts(),
                     "model": orc.get("model") or "unknown",
@@ -142,14 +163,16 @@ class _StreamParser:
                             "delta": choice.get("delta") or {},
                             "finish_reason": choice.get("finish_reason"),
                         }
-                        for choice in (orc.get("choices") or [])
+                        for choice in cast(  # cast-ok: wire JSON; choices is always list[dict]
+                            list[dict[str, object]], orc.get("choices") or []
+                        )
                     ],
                 }
             )
         )
 
     @staticmethod
-    def to_openai_chunk(event_obj: dict) -> OpenAIChatCompletionChunk | None:
+    def to_openai_chunk(event_obj: dict[str, object]) -> OpenAIChatCompletionChunk | None:
         """
         Accepts:
           - {"final_result": <openai-style CHUNK>}   (IMPORTANT: this is just another chunk, NOT terminal)
@@ -169,7 +192,11 @@ class _StreamParser:
             # ensure it looks like an OpenAI chunk
             if "object" not in fr:
                 fr["object"] = "chat.completion.chunk"
-            return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(fr))
+            return OpenAIChatCompletionChunk.model_validate(
+                normalize_reasoning_content(
+                    cast(dict[str, object], fr)  # cast-ok: final_result wire JSON is always a dict
+                )
+            )
 
         # Orchestration incremental delta
         if "orchestration_result" in event_obj:
@@ -177,7 +204,11 @@ class _StreamParser:
 
         # Already an OpenAI-like chunk
         if "choices" in event_obj and "object" in event_obj:
-            return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(event_obj))
+            return OpenAIChatCompletionChunk.model_validate(
+                normalize_reasoning_content(
+                    cast(dict[str, object], event_obj)  # cast-ok: "choices" and "object" keys confirm dict shape
+                )
+            )
 
         # Unknown / heartbeat / metrics
         return None
@@ -324,7 +355,12 @@ class AsyncSAPStreamIterator:
 # -------------------------------
 class GenAIHubOrchestration(BaseLLMHTTPHandler):
     def _add_stream_param_to_request_body(self, data: dict, provider_config: BaseConfig, fake_stream: bool):
-        if data.get("config", {}).get("stream", None) is not None:
+        if (
+            cast(  # cast-ok: config is always a dict when present
+                dict[str, object], data.get("config") or {}
+            ).get("stream")
+            is not None
+        ):
             data["config"]["stream"]["enabled"] = True
         else:
             data["config"]["stream"] = {"enabled": True}

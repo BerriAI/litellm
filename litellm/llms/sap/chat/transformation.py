@@ -107,7 +107,7 @@ def _messages_to_sap_template(messages: list[AllMessageValues]) -> list:
     template: Final = []
     for message in messages:
         folded_message = _fold_message_cache_control(message)
-        denormalized_message = denormalize_reasoning_content(folded_message)
+        denormalized_message = denormalize_reasoning_content(dict(folded_message))
         message_role_class = _message_role_mapping(str(denormalized_message["role"]))
         validated_message = validate_dict(denormalized_message, message_role_class)
         template.append(validated_message)
@@ -412,7 +412,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        response = ModelResponse.model_validate(normalize_reasoning_content(raw_response.json()["final_result"]))
+        response: Final[ModelResponse] = ModelResponse.model_validate(
+            normalize_reasoning_content(raw_response.json()["final_result"])
+        )
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```
@@ -421,7 +423,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         response_format: Final = optional_params.get("response_format", {})
         if response_format.get("type") in ("json_object", "json_schema"):
             if model.startswith("anthropic"):
-                response = self._strip_markdown_json(response)
+                return self._strip_markdown_json(response)
 
         return response
 
