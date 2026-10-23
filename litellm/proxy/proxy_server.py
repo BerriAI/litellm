@@ -19663,6 +19663,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "proxy_config_reload_interval_seconds": "Integer",
         "pass_through_endpoints": "PydanticModel",
         "store_model_in_db": "Boolean",
+        "return_wildcard_routes": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
         "disable_requester_ip_address_logging": "Boolean",
         "disable_fallbacks_on_per_model_rate_limits": "Boolean",

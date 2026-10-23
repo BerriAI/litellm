@@ -716,6 +716,53 @@ def test_config_list_exposes_config_reload_interval(client, auth_as, mock_prisma
     assert entry["field_default_value"] == 30
 
 
+@pytest.mark.parametrize("enabled", (True, False))
+def test_config_list_exposes_and_saves_wildcard_routes_toggle(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[object]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+) -> None:
+    from pydantic import TypeAdapter
+
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import ConfigList, LitellmUserRoles
+
+    table: Final = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _seed_settings_store(monkeypatch, {})
+    monkeypatch.setattr(ps, "general_settings", ps.proxy_config.settings)
+    entries: Final = TypeAdapter(list[ConfigList])
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        before: Final = client.get("/config/list", params={"config_type": "general_settings"})
+        assert before.status_code == 200, before.text
+        toggle: Final = next(
+            entry for entry in entries.validate_json(before.content) if entry.field_name == "return_wildcard_routes"
+        )
+        assert toggle.field_type == "Boolean"
+        assert toggle.field_value is None
+        assert toggle.editable is True
+
+        saved: Final = client.post(
+            "/config/field/update",
+            json={"field_name": "return_wildcard_routes", "field_value": enabled, "config_type": "general_settings"},
+        )
+        assert saved.status_code == 200, saved.text
+        persisted: Final = TypeAdapter(dict[str, bool]).validate_json(
+            table.upsert.call_args.kwargs["data"]["create"]["param_value"]
+        )
+        assert persisted == {"return_wildcard_routes": enabled}
+
+        after: Final = client.get("/config/list", params={"config_type": "general_settings"})
+        assert after.status_code == 200, after.text
+        updated: Final = next(
+            entry for entry in entries.validate_json(after.content) if entry.field_name == "return_wildcard_routes"
+        )
+        assert updated.field_value is enabled
+
+
 def test_config_field_update_accepts_config_reload_interval(client, auth_as, mock_prisma, monkeypatch):
     """POST /config/field/update accepts proxy_config_reload_interval_seconds and persists
     it to the DB general_settings row for all pods to pick up."""
