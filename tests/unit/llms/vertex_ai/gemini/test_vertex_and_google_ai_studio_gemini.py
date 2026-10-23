@@ -24,8 +24,11 @@ from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
     _log_gemini_sampling_params_deprecated,
+    normalize_gemini_speech_config,
+    reject_unknown_gemini_tts_voice_keys,
 )
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
@@ -102,6 +105,242 @@ GEMINI_3_IMAGE_SIZE_MAPPINGS: Final[tuple[tuple[str, str, str], ...]] = (
     ("3168x1344", "21:9", "2K"),
     ("6336x2688", "21:9", "4K"),
 )
+
+
+@pytest.mark.parametrize(
+    "speech_config",
+    (
+        {"name": "aLlOy"},
+        {"speech_config": {"voice_name": "aLlOy"}},
+        {"voice_config": {"prebuilt_voice_config": {"voice_name": "aLlOy"}}},
+    ),
+)
+def test_gemini_structured_speech_config_maps_openai_voice_names(speech_config: Mapping[str, object]) -> None:
+    assert normalize_gemini_speech_config(speech_config) == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES["alloy"]}}
+    }
+
+
+@pytest.mark.parametrize(
+    "speaker",
+    (
+        {"speakerAlias": "Ryan", "speakerId": "alloy"},
+        {"speaker_alias": "Ryan", "speaker_id": "alloy"},
+    ),
+)
+def test_gemini_speech_config_accepts_cloud_tts_speaker_entries(speaker: Mapping[str, object]) -> None:
+    speech_config: Final = {
+        "multi_speaker_voice_config": {
+            "speaker_voice_configs": [speaker, {"speaker": "Katie", "voice_config": {"voice_name": "Leda"}}]
+        }
+    }
+
+    assert normalize_gemini_speech_config(speech_config) == {
+        "multiSpeakerVoiceConfig": {
+            "speakerVoiceConfigs": [
+                {
+                    "speaker": "Ryan",
+                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES["alloy"]}},
+                },
+                {"speaker": "Katie", "voiceConfig": {"voiceName": "Leda"}},
+            ]
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("voice", "expected"),
+    (
+        (
+            {
+                "languageCode": "en-US",
+                "modelName": "gemini-2.5-flash-tts",
+                "multiSpeakerVoiceConfig": {"speakerVoiceConfigs": [{"speakerAlias": "Ryan", "speakerId": "Umbriel"}]},
+            },
+            {
+                "languageCode": "en-US",
+                "multiSpeakerVoiceConfig": {
+                    "speakerVoiceConfigs": [
+                        {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Umbriel"}}}
+                    ]
+                },
+            },
+        ),
+        (
+            {"model_name": "gemini-2.5-flash-tts", "voice_config": {"prebuilt_voice_config": {"voice_name": "Leda"}}},
+            {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}}},
+        ),
+        ({"speech_config": {"modelName": "gemini-2.5-flash-tts", "language_code": "fr-FR"}}, {"languageCode": "fr-FR"}),
+    ),
+)
+def test_gemini_speech_config_drops_cloud_tts_model_name(
+    voice: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    assert normalize_gemini_speech_config(voice) == expected
+
+
+def test_gemini_speech_config_drops_non_string_keys_without_adding_voice():
+    speech_config: Final = {
+        "speech_config": {
+            "language_code": "fr-FR",
+            "voice_config": {"prebuilt_voice_config": {"voice_name": "Leda", 1: "discard"}},
+        },
+        "format": "pcm16",
+    }
+
+    assert normalize_gemini_speech_config(speech_config) == {
+        "languageCode": "fr-FR",
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}},
+    }
+
+
+def test_gemini_speech_config_keeps_only_speech_config_fields():
+    speech_config: Final = {
+        "voice": "Kore",
+        "metadata": {"source": "studio"},
+        "speech_config": {"language_code": "fr-FR", "style": "calm"},
+    }
+
+    assert normalize_gemini_speech_config(speech_config) == {
+        "languageCode": "fr-FR",
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}},
+    }
+
+
+@pytest.mark.parametrize(
+    "voice, unknown_keys",
+    [
+        ({"name": "Kore", "style": "calm"}, "style"),
+        ({"speech_config": {"voice": "Kore", "pitch": 2}}, "pitch"),
+        ({"speechConfig": {"voiceConfig": {}}, "tone": "x", "pitch": 2}, "pitch, tone"),
+        ({"speechConfig": {"voiceName": "Kore"}, "speech_config": {"style": "calm"}}, "speech_config"),
+    ],
+)
+def test_unknown_gemini_tts_voice_keys_are_rejected_without_drop_params(voice, unknown_keys):
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"voice keys {unknown_keys}\\."):
+        reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, False, "vertex_ai")
+
+    reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, True, "vertex_ai")
+
+
+def test_chat_audio_speech_config_unknown_keys_are_rejected_unless_dropped():
+    audio: Final = {"format": "pcm16", "speech_config": {"voice_name": "Kore", "style": "calm"}}
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="voice keys style\\."):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"audio": audio},
+            optional_params={},
+            model="gemini-2.5-flash-preview-tts",
+            drop_params=False,
+        )
+
+    dropped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": audio},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=True,
+    )
+    assert dropped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+    voice_only: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"voice": "Kore", "format": "pcm16", "style": "calm"}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=False,
+    )
+    assert voice_only["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+
+def test_chat_audio_speech_config_unknown_keys_follow_global_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    dropped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"format": "pcm16", "speech_config": {"voice_name": "Kore", "style": "calm"}}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=False,
+    )
+
+    assert dropped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+
+def _chat_speech_config(speech_config: Mapping[str, object], drop_params: bool) -> object:
+    return VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"format": "pcm16", "speech_config": speech_config}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=drop_params,
+    )["speechConfig"]
+
+
+def test_chat_audio_drop_params_strips_unknown_fields_inside_speaker_voices():
+    speech_config: Final = {
+        "multi_speaker_voice_config": {
+            "speaker_voice_configs": [
+                {"speaker": "Joe", "voice_config": {"prebuilt_voice_config": {"voice_name": "Puck", "pitch": 2}}},
+                {"speaker_alias": "Jane", "speaker_id": "Kore", "style": "calm"},
+            ],
+            "turn_order": "alternate",
+        }
+    }
+
+    assert _chat_speech_config(speech_config, drop_params=True) == {
+        "multiSpeakerVoiceConfig": {
+            "speakerVoiceConfigs": [
+                {"speaker": "Joe", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}},
+                {"speaker": "Jane", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+            ]
+        }
+    }
+
+
+GEMINI_VOICE_CONFIG: Final = {
+    "voice": "Kore",
+    "prebuiltVoiceConfig": {"voiceName": "Kore"},
+    "replicatedVoiceConfig": {"mimeType": "audio/wav", "voiceSampleAudio": "UklGRg=="},
+}
+
+
+@pytest.mark.parametrize(
+    "speech_config",
+    [
+        {"voiceConfig": GEMINI_VOICE_CONFIG, "languageCode": "fr-FR"},
+        {
+            "voice_config": {
+                "voice": "Kore",
+                "prebuilt_voice_config": {"voice_name": "Kore"},
+                "replicated_voice_config": {"mime_type": "audio/wav", "voice_sample_audio": "UklGRg=="},
+            },
+            "language_code": "fr-FR",
+        },
+    ],
+)
+def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(speech_config: dict[str, object]):
+    assert _chat_speech_config(speech_config, drop_params=True) == {
+        "voiceConfig": GEMINI_VOICE_CONFIG,
+        "languageCode": "fr-FR",
+    }
+
+
+def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
+    mapped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=False,
+    )
+
+    assert mapped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+
+def test_unknown_voice_key_error_stays_bounded_for_large_voice_objects():
+    voice: Final = {"name": "Kore", **{f"{index:04d}{'x' * 1000}": index for index in range(2000)}}
+
+    with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+        reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, False, "vertex_ai")
+
+    assert "and 1990 more" in excinfo.value.message
+    assert len(excinfo.value.message) < 1500
 
 
 def test_top_logprobs():
@@ -1894,7 +2133,9 @@ def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
     assert [(call.function.name, json.loads(call.function.arguments)) for call in tool_calls] == [
         ("get_weather", {"location": "Lima, Peru"})
     ]
-    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["tool_calls"]
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices and chunk.choices[0].finish_reason] == [
+        "tool_calls"
+    ]
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -3036,6 +3277,14 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
 
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
+
+        async def dispatch_attempt_failure_handlers(
+            self, exception: Exception, traceback_exception: str
+        ) -> None:
+            return None
+
+        def attempt_scoped_copy(self) -> "DummyLogging":
+            return self
 
     async def failing_make_call(client=None, **kwargs):
         raise VertexAIError(status_code=400, message="bad input", headers={})
