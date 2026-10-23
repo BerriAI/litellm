@@ -2349,20 +2349,20 @@ class LiteLLMCompletionResponsesConfig:
             return ""
         if isinstance(content, str):
             return content
-        if not isinstance(content, list):
-            raise ValueError(f"Invalid content type: {type(content)}")
-        content_list: Final[list[str | dict[str, object]]] = []  # mutable-ok: accumulator
-        for item in content:
-            if isinstance(item, str):
-                if item != "":
-                    content_list.append(item)
-                continue
-            if isinstance(item, dict):
-                part = LiteLLMCompletionResponsesConfig._chat_completion_part_from_responses_dict_item(item)
-                if part is not None:
-                    content_list.append(part)
-        # Prefer content="" over [] — empty text-item lists are flagged invalid.
-        return content_list if content_list else ""
+        if isinstance(content, list):
+            content_list: Final[list[str | dict[str, object]]] = []  # mutable-ok: accumulator
+            for item in content:
+                if isinstance(item, str):
+                    if item != "":
+                        content_list.append(item)
+                    continue
+                if isinstance(item, dict):
+                    part = LiteLLMCompletionResponsesConfig._chat_completion_part_from_responses_dict_item(item)
+                    if part is not None:
+                        content_list.append(part)
+            # Prefer content="" over [] — empty text-item lists are flagged invalid.
+            return content_list if content_list else ""
+        raise ValueError(f"Invalid content type: {type(content)}")
 
     @staticmethod
     def _get_chat_completion_request_content_type(
