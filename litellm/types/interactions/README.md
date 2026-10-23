@@ -11,8 +11,9 @@ https://ai.google.dev/static/api/interactions.openapi.json
 
 The compliance tests in `tests/unit/interactions/test_openapi_compliance.py` read the snapshot at
 `tests/unit/interactions/interactions.openapi.json`, so a PR never depends on Google's live spec. The scheduled
-`interactions-spec-canary` workflow runs those tests against the live spec once a day, and a red run there means
-the spec moved in a way these types no longer cover
+`interactions-spec-canary` workflow runs those tests against the live spec once a day (`--interactions-spec-url`),
+files the issue "Interactions spec canary is red" on a red run and closes it once a run is green again. A red run
+means the spec moved in a way these types no longer cover
 
 When that happens, refresh the snapshot and regenerate the types from it:
 
@@ -28,10 +29,13 @@ uv tool run --from datamodel-code-generator==0.66.0 datamodel-codegen \
     --base-class litellm.types.llms.base.LiteLLMBaseModel
 ```
 
-The generator names inline enums by order of appearance (`Status`, `Status1`, `Status2`, ...), so a regeneration
-can rename them. The compliance tests resolve each status enum through its model's `status` field, but
+The pin is the same `datamodel-code-generator` version `scripts/generate_trace_types.py` uses. The generator names
+inline enums by order of appearance (`Status`, `Status1`, `Status2`, ...), so a regeneration can rename them. The
+compliance tests resolve each status enum through its model's `status` field, but
 `tests/unit/interactions/test_background_cost_polling.py` and
-`tests/unit/proxy/hooks/test_proxy_track_cost_callback.py` import `Status1` by name and need the new name. The
+`tests/unit/proxy/hooks/test_proxy_track_cost_callback.py` import `Status1` by name and need the new name, and
+`litellm/types/interactions/__init__.py` exports the interaction status enum as `InteractionStatus`, which has to
+point at the enum the regenerated `Interaction.status` carries (a compliance test checks their members match). The
 spec has grown a lot since the 2025-12-16 generation (agents, triggers, credentials, environments), so a
 regeneration today is a review-sized change rather than a refresh
 

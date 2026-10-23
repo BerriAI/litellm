@@ -4,15 +4,15 @@ OpenAPI compliance tests for Google Interactions API.
 Validates that our SDK requests/responses match the OpenAPI spec snapshot in
 interactions.openapi.json, taken from https://ai.google.dev/static/api/interactions.openapi.json
 (litellm/types/interactions/README.md says how to refresh it). The scheduled
-interactions-spec-canary workflow runs the same tests against the live spec with
-LITELLM_INTERACTIONS_SPEC_SOURCE=live, so a change Google makes shows up there, not in every PR.
+interactions-spec-canary workflow runs the same tests against the live spec by passing
+--interactions-spec-url, so a change Google makes shows up there, not in every PR.
 
 Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 """
 
 import json
-import os
 import re
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Final, get_args
@@ -21,10 +21,17 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 from openapi_core import OpenAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 OPENAPI_SPEC_SNAPSHOT: Final = Path(__file__).with_name("interactions.openapi.json")
+SPEC_URL_OPTION: Final = TypeAdapter(str | None)
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedSpec:
+    source: str
+    spec: Dict[str, Any]
 
 
 def _status_enum_of(model: type[BaseModel]) -> type[Enum]:
@@ -33,12 +40,17 @@ def _status_enum_of(model: type[BaseModel]) -> type[Enum]:
     return next(candidate for candidate in candidates if isinstance(candidate, type) and issubclass(candidate, Enum))
 
 
-def _load_openapi_spec_dict() -> Dict[str, Any]:
-    if os.environ.get("LITELLM_INTERACTIONS_SPEC_SOURCE") == "live":
-        response: Final = httpx.get(OPENAPI_SPEC_URL, timeout=30.0)
-        response.raise_for_status()
-        return response.json()
-    return json.loads(OPENAPI_SPEC_SNAPSHOT.read_text())
+def _requested_spec_url(request: pytest.FixtureRequest) -> str | None:
+    return SPEC_URL_OPTION.validate_python(request.config.getoption("interactions_spec_url"))
+
+
+def _load_openapi_spec(live_url: str | None) -> LoadedSpec:
+    if live_url is None:
+        return LoadedSpec(source=str(OPENAPI_SPEC_SNAPSHOT), spec=json.loads(OPENAPI_SPEC_SNAPSHOT.read_text()))
+    with httpx.Client(transport=httpx.HTTPTransport(retries=3), timeout=30.0) as client:
+        response: Final = client.get(live_url)
+    response.raise_for_status()
+    return LoadedSpec(source=str(response.url), spec=response.json())
 
 
 def _model_create_request_schema(spec_dict: Dict[str, Any]) -> Dict[str, Any]:
@@ -68,15 +80,31 @@ def _declared_type_value(variant_schema: Dict[str, Any]) -> Any:
 
 
 @pytest.fixture(scope="module")
-def spec_dict() -> Dict[str, Any]:
-    """Load raw spec dict for manual validation."""
-    return _load_openapi_spec_dict()
+def loaded_spec(request: pytest.FixtureRequest) -> LoadedSpec:
+    return _load_openapi_spec(_requested_spec_url(request))
+
+
+@pytest.fixture(scope="module")
+def spec_dict(loaded_spec: LoadedSpec) -> Dict[str, Any]:
+    return loaded_spec.spec
 
 
 @pytest.fixture(scope="module")
 def openapi_spec(spec_dict: Dict[str, Any]) -> OpenAPI:
     """Load the OpenAPI spec as an OpenAPI object."""
     return OpenAPI.from_dict(spec_dict)
+
+
+def test_spec_comes_from_the_requested_source(loaded_spec: LoadedSpec, request: pytest.FixtureRequest) -> None:
+    assert loaded_spec.source == (_requested_spec_url(request) or str(OPENAPI_SPEC_SNAPSHOT))
+
+
+def test_interaction_status_export_carries_the_interaction_models_statuses() -> None:
+    from litellm.types.interactions import InteractionStatus, generated
+
+    exported: Final = frozenset(member.value for member in InteractionStatus)
+    modelled: Final = frozenset(member.value for member in _status_enum_of(generated.Interaction))
+    assert exported == modelled, sorted(exported ^ modelled)
 
 
 class TestRequestCompliance:
@@ -257,10 +285,6 @@ class TestResponseCompliance:
         ["Interaction", "InteractionStatusUpdate", "CreateModelInteractionParams", "CreateAgentInteractionParams"],
     )
     def test_status_enum_values(self, spec_dict, schema_name):
-        """Every status the spec can return on a schema litellm models is a member of the enum its
-        generated model carries, the enum the cost-polling status sets are checked against. The enum
-        is resolved through the model's status field because the generator numbers inline enums by
-        order of appearance, so a regeneration can rename them."""
         from litellm.types.interactions import generated
 
         schema = spec_dict["components"]["schemas"][schema_name]

@@ -20,7 +20,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      issues: write
+    outputs:
+      compliance: ${{ steps.compliance.outcome }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -40,28 +41,49 @@ jobs:
         run: .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy --no-install-project
 
       - name: Run the compliance tests against Google's live spec
-        env:
-          LITELLM_INTERACTIONS_SPEC_SOURCE: live
+        id: compliance
         run: |
           uv run --no-sync pytest tests/unit/interactions/test_openapi_compliance.py \
+            --interactions-spec-url=https://ai.google.dev/static/api/interactions.openapi.json \
             --tb=short -vv -p no:rerunfailures -p no:pytest-retry \
             --allow-hosts=127.0.0.1,::1,localhost,ai.google.dev
 
-      - name: Open or update the tracking issue when a scheduled run is red
-        if: failure() && github.event_name == 'schedule'
+  tracking-issue:
+    name: tracking-issue
+    needs: interactions-spec-canary
+    if: always() && github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: File the tracking issue on a red compliance step, close it on a green one
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          COMPLIANCE_OUTCOME: ${{ needs.interactions-spec-canary.outputs.compliance }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
             const title = "Interactions spec canary is red";
-            const runUrl = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            const outcome = process.env.COMPLIANCE_OUTCOME;
+            const runUrl = process.env.RUN_URL;
             const query = `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:title "${title}"`;
             const { data: found } = await github.rest.search.issuesAndPullRequests({ q: query, per_page: 1 });
-            if (found.total_count > 0) {
-              await github.rest.issues.createComment({ ...context.repo, issue_number: found.items[0].number, body: `Still red: ${runUrl}` });
+            const open = found.items[0];
+            if (outcome === "success") {
+              if (open === undefined) return;
+              await github.rest.issues.createComment({ ...context.repo, issue_number: open.number, body: `Green again: ${runUrl}` });
+              await github.rest.issues.update({ ...context.repo, issue_number: open.number, state: "closed" });
+              return;
+            }
+            if (outcome !== "failure") return;
+            if (open !== undefined) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: open.number, body: `Still red: ${runUrl}` });
               return;
             }
             await github.rest.issues.create({
               ...context.repo,
               title,
+              assignees: ["mateo-berri"],
               body: `The scheduled run of tests/unit/interactions/test_openapi_compliance.py against Google's live Interactions spec failed: ${runUrl}\n\nlitellm/types/interactions/README.md says how to refresh the snapshot and regenerate the types.`,
             });
