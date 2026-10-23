@@ -187,11 +187,11 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
             "model": model,
             "prompt": prompt,
         }
-        result.update(optional_params)  # pyright: ignore[reportUnknownMemberType]  # optional_params is an untyped dict
+        result.update(optional_params)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # optional_params is an untyped dict
         extra_body: Final[dict[str, object]] = {}  # mutable-ok: completion extra body
         user_extra: Final = result.pop("extra_body", None)
         if isinstance(user_extra, (dict, Mapping)):
-            extra_body.update(user_extra)  # pyright: ignore[reportUnknownMemberType]  # extra_body is untyped
+            extra_body.update(user_extra)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # extra_body is untyped
         for param in list(result.keys()):
             if param not in OPENAI_TEXT_COMPLETION_PARAMS:
                 extra_body[param] = result.pop(param)
