@@ -16,6 +16,7 @@ import {
   DataTableFilterDrawer,
   DataTableFilterField,
   DataTableSortHeader,
+  DataTableMultiSortHeader,
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +32,7 @@ import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { deriveKeyModelScope } from "../key_scope";
+import { KEY_RATE_LIMIT_SORT_FIELDS } from "../key_team_helpers/key_sorting";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
@@ -278,17 +280,21 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "last_active",
         accessorKey: "last_active",
-        header: "Last Active",
+        meta: { title: "Last Active" },
+        header: ({ column }) => <DataTableSortHeader column={column} title="Last Active" />,
         size: 130,
-        enableSorting: false,
+        enableSorting: true,
+        sortDescFirst: false,
         cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Unknown" />,
       },
       {
         id: "expires",
         accessorKey: "expires",
-        header: "Expires",
+        meta: { title: "Expires" },
+        header: ({ column }) => <DataTableSortHeader column={column} title="Expires" />,
         size: 120,
-        enableSorting: false,
+        enableSorting: true,
+        sortDescFirst: false,
         cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
       },
       {
@@ -299,6 +305,16 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         size: 100,
         enableSorting: true,
         cell: (info) => <MoneyCell value={info.getValue() as number | null} decimals={4} />,
+      },
+      {
+        id: "total_spend",
+        accessorKey: "total_spend",
+        meta: { title: "Lifetime Spend", numeric: true },
+        header: ({ column }) => <DataTableSortHeader column={column} title="Lifetime Spend" />,
+        size: 130,
+        enableSorting: true,
+        sortDescFirst: true,
+        cell: (info) => <MoneyCell value={info.getValue() as number | null | undefined} showZero />,
       },
       {
         id: "max_budget",
@@ -327,9 +343,11 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "budget_reset_at",
         accessorKey: "budget_reset_at",
-        header: "Budget Reset",
+        meta: { title: "Budget Reset" },
+        header: ({ column }) => <DataTableSortHeader column={column} title="Budget Reset" />,
         size: 130,
-        enableSorting: false,
+        enableSorting: true,
+        sortDescFirst: false,
         cell: (info) => <DateCell value={info.getValue() as string | null} fallback="Never" />,
       },
       {
@@ -428,7 +446,8 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       },
       {
         id: "rate_limits",
-        header: "Rate Limits",
+        meta: { title: "Rate Limits" },
+        header: ({ table }) => <DataTableMultiSortHeader table={table} fields={KEY_RATE_LIMIT_SORT_FIELDS} />,
         size: 140,
         enableSorting: false,
         cell: ({ row }) => {
