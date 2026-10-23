@@ -393,4 +393,15 @@ describe("ClientUsagePanel", () => {
     expect(dailyActivityExportCall).not.toHaveBeenCalled();
     expect(userListCall).not.toHaveBeenCalled();
   });
+  it("should recover a newer model export by refreshing the cached summary on retry", async () => {
+    const user = userEvent.setup();
+    function StaleSummaryPanel() {
+      const [summary, setSummary] = useState({ ...agent, spend: 12 });
+      return <ClientUsagePanel {...defaultProps} agent={summary} onRetry={() => setSummary(agent)} />;
+    }
+    renderWithProviders(<StaleSummaryPanel />);
+    expect(await screen.findByText(/Model usage does not match these client totals/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry model breakdown" }));
+    expect(await screen.findByText("test-model")).toBeInTheDocument();
+  });
 });

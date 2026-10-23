@@ -82,14 +82,15 @@ export default function ClientUsagePanel({
 }: ClientUsagePanelProps) {
   const label = client === "claude-desktop" ? "Claude Desktop" : "Claude Code";
   const scopedRequest = Boolean(userId || teamId) && !accessError;
-  const personUsage = useClientUsage({
+  const personRequest = {
     accessToken,
     startTime,
     endTime,
     userId,
     teamId,
     client: scopedRequest ? client : null,
-  });
+  };
+  const personUsage = useClientUsage(personRequest);
   const allUsersEnabled = canChooseUser && !scopedRequest && !accessError;
   const teamLabel = teams.find((team) => team.value === teamId)?.label ?? teamId;
   const personLabel = members.find((member) => member.value === userId)?.label ?? "Selected user";
@@ -131,6 +132,15 @@ export default function ClientUsagePanel({
   const modelResults = scopedRequest ? toDailyData(personUsage.data) : agentModels.results;
   const chartLoading = scopedRequest ? personUsage.loading : agentModels.loading;
   const chartError = scopedRequest ? personUsage.error : agentModels.error;
+
+  const canFilterPerson = canChooseUser && !teamId && !accessError;
+  const canRetry = !accessError && (scopedRequest || canChooseUser);
+  const ready = !pending && !error;
+  const retryModels = () => {
+    void summaryQuery.refetch();
+    onRetry?.();
+    agentModels.reload();
+  };
 
   return (
     <Sheet
@@ -199,7 +209,7 @@ export default function ClientUsagePanel({
               />
             </div>
           )}
-          {canChooseUser && !teamId && !accessError && (
+          {canFilterPerson && (
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <label htmlFor="client-usage-user" className="text-xs font-medium text-muted-foreground">
@@ -223,7 +233,7 @@ export default function ClientUsagePanel({
             <div role="alert" className="rounded-lg border p-4">
               <p className="font-medium">Could not load client usage</p>
               <p className="mt-1 text-muted-foreground">{error}</p>
-              {!accessError && (scopedRequest || canChooseUser) && (
+              {canRetry && (
                 <Button
                   className="mt-3"
                   variant="outline"
@@ -241,10 +251,10 @@ export default function ClientUsagePanel({
               )}
             </div>
           )}
-          {!pending && !error && !summary && (
+          {ready && !summary && (
             <p className="rounded-lg border p-4 text-muted-foreground">No {label} usage recorded in this date range.</p>
           )}
-          {!pending && !error && summary && (
+          {ready && summary && (
             <>
               <div className="grid grid-cols-3 divide-x overflow-hidden rounded-xl border bg-card py-4">
                 <SummaryStat label="Spend" value={formatUsd(summary.spend)} />
@@ -272,7 +282,7 @@ export default function ClientUsagePanel({
                       <p role="status" className="text-xs text-muted-foreground">
                         {chartError}
                       </p>
-                      <Button variant="outline" size="sm" className="mt-3" onClick={agentModels.reload}>
+                      <Button variant="outline" size="sm" className="mt-3" onClick={retryModels}>
                         Retry model breakdown
                       </Button>
                     </div>

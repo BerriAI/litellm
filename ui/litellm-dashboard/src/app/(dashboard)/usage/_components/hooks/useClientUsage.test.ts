@@ -138,21 +138,17 @@ describe("useClientUsage", () => {
       { initialProps },
     );
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(vi.mocked(uiSpendLogsCall).mock.calls[0][0].params).toEqual({
+    const teamParams = {
       team_id: "engineering",
       sort_by: "startTime",
       sort_order: "desc",
       group_by_session: false,
-    });
+    };
+    expect(vi.mocked(uiSpendLogsCall).mock.calls[0][0].params).toEqual(teamParams);
     rerender({ userId: "user-1" });
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(vi.mocked(uiSpendLogsCall).mock.calls[1][0].params).toEqual({
-      team_id: "engineering",
-      user_id: "user-1",
-      sort_by: "startTime",
-      sort_order: "desc",
-      group_by_session: false,
-    });
+    const memberParams = { ...teamParams, user_id: "user-1" };
+    expect(vi.mocked(uiSpendLogsCall).mock.calls[1][0].params).toEqual(memberParams);
   });
 
   it("should ignore an old response when switching teams", async () => {

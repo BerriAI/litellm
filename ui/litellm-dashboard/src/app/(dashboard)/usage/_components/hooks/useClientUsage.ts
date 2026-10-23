@@ -37,7 +37,8 @@ export function useClientUsage({ accessToken, startTime, endTime, userId, teamId
 
   useEffect(() => {
     if (!enabled) return;
-    if (!accessToken || (!userId && !teamId) || !client) return;
+    if (!accessToken || !client) return;
+    if (!userId && !teamId) return;
     let cancelled = false;
     const scope = { userId, teamId, client, startTime: new Date(start), endTime: new Date(end) };
     const request = {

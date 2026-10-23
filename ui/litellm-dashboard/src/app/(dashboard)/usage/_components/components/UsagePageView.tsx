@@ -168,14 +168,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   // For non-admins or "my-usage" view, always pass their own user_id
   const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : urlParams.user;
 
-  const clientScope = resolveClientUsageScope({
+  const clientScopeInput = {
     userId: userID,
     userRole,
     teams,
     requestedTeamId: urlParams.client_team,
     requestedUserId: urlParams.client_user ?? (urlParams.client_team ? null : effectiveUserId),
     ownUsage: usageView === "my-usage",
-  });
+  };
+  const clientScope = resolveClientUsageScope(clientScopeInput);
   const clientTeamId = usageView === "my-usage" ? null : urlParams.client_team || null;
   const clientUserId = clientScope.scope?.userId ?? (clientTeamId ? urlParams.client_user || null : null);
   const canViewTeamClients = clientScope.administeredTeams.length > 0;
@@ -189,7 +190,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   };
 
   const { isLoading: organizationsLoading } = useOrganizations();
-  const accessSettled = !authorizationLoading && userRole !== null && !organizationsLoading && !teamsLoading;
+  const authorizationSettled = !authorizationLoading && userRole !== null;
+  const accessSettled = authorizationSettled && !organizationsLoading && !teamsLoading;
   useEffect(() => {
     if (!accessSettled) return;
     const cleanup = cleanUsageUrl(urlParams, { allowedViews, isAdmin, canViewTeamClients });
@@ -272,9 +274,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   // Tag data is deployment-wide with no per-user dimension, so Top agents only appears where the
   // rest of the page is deployment-wide too: an admin's global view with no user selected.
   const showTopAgents = isAdmin && usageView === "global" && effectiveUserId === null;
-  const needsAgentSummary =
-    showTopAgents ||
-    (isAdmin && selectedClient !== null && clientUserId === null && clientTeamId === null && !clientScope.error);
+  const globalClientScope = clientUserId === null && clientTeamId === null && !clientScope.error;
+  const globalClientSelected = isAdmin && selectedClient !== null && globalClientScope;
+  const needsAgentSummary = showTopAgents || globalClientSelected;
   const tagDailyRequest = useMemo<DailyActivityRequest | null>(
     () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime, entityIds: null } : null),
     [accessToken, startTime, endTime],

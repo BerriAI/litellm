@@ -212,26 +212,22 @@ export const cleanUsageUrl = (params: UsageUrlParams, access: UsageUrlAccess): U
   const invalidTab =
     params.tab !== null &&
     (!TABBED_VIEWS.includes(view) || !isUsageTab(params.tab) || (!access.isAdmin && params.tab === "errors"));
+  const panelOpen = CLIENT_USAGE_VIEWS.includes(view) && params.client !== null;
+  const canFilterClientUser = access.isAdmin || Boolean(access.canViewTeamClients && params.client_team);
   const panelDates = clientDateParams(params);
-  const panelDateCleanup =
-    CLIENT_USAGE_VIEWS.includes(view) && params.client !== null
-      ? invalidDatePatch(panelDates)
-      : Object.fromEntries(
-          Object.entries(panelDates)
-            .filter(([, value]) => value !== null)
-            .map(([key]) => [key, null]),
-        );
+  const panelDateCleanup = panelOpen
+    ? invalidDatePatch(panelDates)
+    : Object.fromEntries(
+        Object.entries(panelDates)
+          .filter(([, value]) => value !== null)
+          .map(([key]) => [key, null]),
+      );
   const patch: UsageUrlPatch = {
     ...asClientDatePatch(panelDateCleanup),
     ...(params.view !== null && !isUsageOption(params.view) ? { view: null } : {}),
     ...(invalidTab ? { tab: null } : {}),
     ...(!CLIENT_USAGE_VIEWS.includes(view) && params.client !== null ? { client: null } : {}),
-    ...((!CLIENT_USAGE_VIEWS.includes(view) ||
-      params.client === null ||
-      (!access.isAdmin && !(access.canViewTeamClients && params.client_team))) &&
-    params.client_user !== null
-      ? { client_user: null }
-      : {}),
+    ...((!panelOpen || !canFilterClientUser) && params.client_user !== null ? { client_user: null } : {}),
     ...((!CLIENT_USAGE_VIEWS.includes(view) || params.client === null) && params.client_team !== null
       ? { client_team: null }
       : {}),
