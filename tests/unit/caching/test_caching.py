@@ -250,6 +250,13 @@ def test_semantic_cache_key_reads_tenant_identity_from_litellm_metadata():
     assert key_a == key_a_in_litellm_params
 
 
+@pytest.mark.parametrize("cache_type", ["disk", "not-a-cache"])
+def test_cache_rejects_unsupported_type(cache_type: str) -> None:
+    cache_params: Final = {"type": cache_type}
+    with pytest.raises(ValueError, match=f"Unsupported cache type '{cache_type}'. Supported types: local, redis,"):
+        Cache(**cache_params)
+
+
 def test_semantic_cache_scope_rejects_unknown_value():
     with pytest.raises(ValueError, match="'team' is not a valid SemanticCacheScope"):
         _semantic_cache(semantic_cache_scope="team")
