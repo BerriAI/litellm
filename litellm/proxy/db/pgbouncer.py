@@ -46,12 +46,13 @@ import tempfile
 import threading
 import time
 import urllib.parse
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from types import MappingProxyType
-from typing import Final
+from types import FrameType, MappingProxyType
+from typing import Final, NoReturn
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -75,6 +76,7 @@ PGBOUNCER_CA_NAME: Final = "server-ca.pem"
 PGBOUNCER_RESTART_DELAY_SECONDS: Final = 1.0
 PGBOUNCER_READY_TIMEOUT_SECONDS: Final = 15.0
 PGBOUNCER_STOP_GRACE_SECONDS: Final = 10.0
+PGBOUNCER_MANAGED_SHUTDOWN_SECONDS: Final = 30.0
 PGBOUNCER_UNPRIVILEGED_USER: Final = "nobody"
 PGBOUNCER_MIN_VERSION: Final = (1, 19)
 PGBOUNCER_MAX_PASSWORD_BYTES: Final = 2048
@@ -396,6 +398,8 @@ class PgBouncerTokenRefresher:
             token: Final = self._source.mint()
         except Exception as mint_error:
             return PgBouncerError(f"could not mint a {label} for the in-container pgbouncer: {mint_error!r}")
+        if self._stopping.is_set():
+            return self._fallback_seconds
         if len(token.encode()) >= PGBOUNCER_MAX_PASSWORD_BYTES:
             return PgBouncerError(
                 f"the {label} is {len(token.encode())} bytes long, but PgBouncer's auth file holds passwords of at "
@@ -440,10 +444,16 @@ class PgBouncerTokenRefresher:
         )
         return outcome
 
-    def stop(self) -> None:
+    def request_stop(self) -> None:
         self._stopping.set()
+
+    def stop(self, deadline: float | None = None) -> None:
+        self.request_stop()
         if self._thread is not None:
-            self._thread.join()
+            if deadline is None:
+                self._thread.join()
+            else:
+                self._thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
 def _port_open(port: int) -> bool:
@@ -487,15 +497,27 @@ def pgbouncer_version(binary: str) -> tuple[int, int] | PgBouncerError:
     return int(found[1]), int(found[2])
 
 
-def _end(process: subprocess.Popen[bytes]) -> None:
+def _end(process: subprocess.Popen[bytes], deadline: float | None = None) -> None:
     if process.poll() is not None:
         return
     process.terminate()
     try:
-        process.wait(timeout=PGBOUNCER_STOP_GRACE_SECONDS)
+        remaining: Final = None if deadline is None else max(0.0, deadline - time.monotonic())
+        timeout: Final = (
+            PGBOUNCER_STOP_GRACE_SECONDS
+            if remaining is None
+            else max(0.0, min(PGBOUNCER_STOP_GRACE_SECONDS, remaining - 1.0))
+        )
+        process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait()
+        if deadline is None:
+            process.wait()
+        else:
+            try:
+                process.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                pass
 
 
 class PgBouncerProcess:
@@ -537,6 +559,12 @@ class PgBouncerProcess:
         with self._lock:
             return None if self._process is None else self._process.pid
 
+    @contextmanager
+    def owned_pid_guard(self) -> Generator[int | None, None, None]:
+        with self._lock:
+            process: Final = self._process
+            yield None if process is None or process.poll() is not None else process.pid
+
     def _spawn(self) -> subprocess.Popen[bytes] | PgBouncerError | None:
         """Start a child, or None once ``stop`` ran; both take the lock so no child can slip in after a stop.
 
@@ -572,7 +600,7 @@ class PgBouncerProcess:
             f"within {self.ready_timeout_seconds:.0f}s"
         )
 
-    def start(self) -> PgBouncerError | None:
+    def start(self, deadline: float | None = None) -> PgBouncerError | None:
         """Spawn PgBouncer, wait until it listens on port and unix socket, then supervise it from a daemon thread."""
         process: Final = self._spawn()
         if process is None:
@@ -581,7 +609,7 @@ class PgBouncerProcess:
             return process
         not_ready: Final = self._wait_ready(process)
         if not_ready is not None:
-            self.stop()
+            self.stop(deadline)
             return not_ready
         self._watch(process)
         return None
@@ -631,12 +659,12 @@ class PgBouncerProcess:
             if self._process is not None:
                 self._process.send_signal(signal.SIGHUP)
 
-    def stop(self) -> None:
+    def stop(self, deadline: float | None = None) -> None:
         with self._lock:
             self._stopping.set()
             process: Final = self._process
         if process is not None:
-            _end(process)
+            _end(process, deadline)
 
 
 def install_pgbouncer_token(
@@ -653,6 +681,10 @@ def _install_upstream_password(
     pooler: PgBouncerProcess,
     token_auth: DatabaseTokenAuth | None,
     upstream_url: str,
+    startup_cleanup: ExitStack,
+    refresher_factory: Callable[
+        [PgBouncerTokenSource, Callable[[str], None]], PgBouncerTokenRefresher
+    ] = PgBouncerTokenRefresher,
 ) -> PgBouncerTokenRefresher | None | PgBouncerError:
     if token_auth is None:
         if plan.upstream_password is None:
@@ -662,10 +694,11 @@ def _install_upstream_password(
             )
         write_userlist(plan.userlist(plan.upstream_password), runtime_dir, run_as_user)
         return None
-    refresher: Final = PgBouncerTokenRefresher(
+    refresher: Final = refresher_factory(
         PgBouncerTokenSource(auth=token_auth, endpoint=parse_iam_endpoint_from_url(upstream_url)),
         functools.partial(install_pgbouncer_token, plan, runtime_dir, run_as_user, pooler),
     )
+    startup_cleanup.callback(_stop_managed_refresher, refresher)
     failed: Final = refresher.start()
     if failed is not None:
         return failed
@@ -683,11 +716,130 @@ def _only_in_this_process(action: Callable[[], None]) -> Callable[[], None]:
     return run
 
 
+def _raise_for_startup_signal(signum: int, _frame: FrameType | None) -> NoReturn:
+    raise SystemExit(128 + signum)
+
+
+@contextmanager
+def pgbouncer_startup_signals(enabled: bool) -> Generator[None, None, None]:
+    if not enabled:
+        yield
+        return
+    previous_term: Final = signal.getsignal(signal.SIGTERM)
+    previous_int: Final = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGTERM, _raise_for_startup_signal)
+    try:
+        signal.signal(signal.SIGINT, _raise_for_startup_signal)
+        try:
+            yield
+        finally:
+            signal.signal(signal.SIGINT, previous_int)
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+
+
+def _stop_managed_pooler(pooler: PgBouncerProcess) -> None:
+    pooler.stop(time.monotonic() + PGBOUNCER_STOP_GRACE_SECONDS)
+
+
+def _stop_managed_refresher(refresher: PgBouncerTokenRefresher) -> None:
+    refresher.stop(time.monotonic() + PGBOUNCER_STOP_GRACE_SECONDS)
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedPgBouncerRuntime:
+    pooled_url: str = field(repr=False)
+    pooler: PgBouncerProcess
+    refresher: PgBouncerTokenRefresher | None
+    runtime_dir: Path
+
+    @contextmanager
+    def owned_pid_guard(self) -> Generator[int | None, None, None]:
+        with self.pooler.owned_pid_guard() as pid:
+            yield pid
+
+    def stop(self, deadline: float | None = None) -> None:
+        if self.refresher is not None:
+            self.refresher.request_stop()
+        try:
+            self.pooler.stop(deadline)
+        finally:
+            try:
+                if self.refresher is not None:
+                    self.refresher.stop(deadline)
+            finally:
+                shutil.rmtree(self.runtime_dir, ignore_errors=True)
+
+
+def start_managed_pgbouncer(
+    settings: PgBouncerSettings,
+    upstream_url: str,
+    token_auth: DatabaseTokenAuth | None = None,
+    refresher_factory: Callable[
+        [PgBouncerTokenSource, Callable[[str], None]], PgBouncerTokenRefresher
+    ] = PgBouncerTokenRefresher,
+) -> ManagedPgBouncerRuntime | PgBouncerError:
+    version: Final = pgbouncer_version(settings.binary)
+    if isinstance(version, PgBouncerError):
+        return version
+    if version < PGBOUNCER_MIN_VERSION:
+        return PgBouncerError(
+            f"PgBouncer {version[0]}.{version[1]} keeps running after failing to bind its TCP port, so the proxy "
+            f"cannot tell it apart from another listener; {PGBOUNCER_MIN_VERSION[0]}.{PGBOUNCER_MIN_VERSION[1]} "
+            "or newer is required"
+        )
+    with ExitStack() as startup_cleanup:
+        runtime_dir: Final = Path(tempfile.mkdtemp(prefix="litellm-pgbouncer-"))
+        startup_cleanup.callback(shutil.rmtree, runtime_dir, ignore_errors=True)
+        run_as_user: Final = PGBOUNCER_UNPRIVILEGED_USER if os.geteuid() == 0 else None
+        plan: Final = plan_pgbouncer(upstream_url, settings, runtime_dir, run_as_user)
+        if isinstance(plan, PgBouncerError):
+            return plan
+        ini_path: Final = write_pgbouncer_ini(plan, runtime_dir, run_as_user)
+        if isinstance(ini_path, PgBouncerError):
+            return ini_path
+        pooler: Final = PgBouncerProcess(
+            argv=(settings.binary, str(ini_path)),
+            port=settings.port,
+            socket_path=unix_socket_path(runtime_dir, settings.port),
+        )
+        startup_cleanup.callback(_stop_managed_pooler, pooler)
+        refresher_result: Final = _install_upstream_password(
+            plan,
+            runtime_dir,
+            run_as_user,
+            pooler,
+            token_auth,
+            upstream_url,
+            startup_cleanup,
+            refresher_factory,
+        )
+        if isinstance(refresher_result, PgBouncerError):
+            return refresher_result
+        failed: Final = pooler.start(time.monotonic() + PGBOUNCER_STOP_GRACE_SECONDS)
+        if failed is not None:
+            return failed
+        runtime: Final = ManagedPgBouncerRuntime(
+            pooled_url=plan.pooled_url,
+            pooler=pooler,
+            refresher=refresher_result,
+            runtime_dir=runtime_dir,
+        )
+        startup_cleanup.pop_all()
+        return runtime
+
+
+def _stop_managed_runtime_before_exit(runtime: ManagedPgBouncerRuntime, timeout_seconds: float) -> None:
+    runtime.stop(time.monotonic() + timeout_seconds)
+
+
 def start_in_container_pgbouncer(
     settings: PgBouncerSettings,
     upstream_url: str,
     token_auth: DatabaseTokenAuth | None = None,
     register_exit_hook: Callable[[Callable[[], None]], object] = atexit.register,
+    *,
+    shutdown_timeout_seconds: float | None = None,
 ) -> str | PgBouncerError:
     """Start the pooler for ``upstream_url`` and return the loopback URL the workers must use.
 
@@ -698,46 +850,21 @@ def start_in_container_pgbouncer(
     ``nobody``. With ``token_auth`` the password on ``upstream_url`` is ignored:
     the pooler mints its own tokens and renews them for as long as it runs.
     """
-    version: Final = pgbouncer_version(settings.binary)
-    if isinstance(version, PgBouncerError):
-        return version
-    if version < PGBOUNCER_MIN_VERSION:
-        return PgBouncerError(
-            f"PgBouncer {version[0]}.{version[1]} keeps running after failing to bind its TCP port, so the proxy "
-            f"cannot tell it apart from another listener; {PGBOUNCER_MIN_VERSION[0]}.{PGBOUNCER_MIN_VERSION[1]} "
-            "or newer is required"
-        )
-    runtime_dir: Final = Path(tempfile.mkdtemp(prefix="litellm-pgbouncer-"))
-    register_exit_hook(_only_in_this_process(lambda: shutil.rmtree(runtime_dir, ignore_errors=True)))
-    run_as_user: Final = PGBOUNCER_UNPRIVILEGED_USER if os.geteuid() == 0 else None
-    plan: Final = plan_pgbouncer(upstream_url, settings, runtime_dir, run_as_user)
-    if isinstance(plan, PgBouncerError):
-        return plan
-    ini_path: Final = write_pgbouncer_ini(plan, runtime_dir, run_as_user)
-    if isinstance(ini_path, PgBouncerError):
-        return ini_path
-    pooler: Final = PgBouncerProcess(
-        argv=(settings.binary, str(ini_path)),
-        port=settings.port,
-        socket_path=unix_socket_path(runtime_dir, settings.port),
+    runtime: Final = start_managed_pgbouncer(settings, upstream_url, token_auth)
+    if isinstance(runtime, PgBouncerError):
+        return runtime
+    cleanup: Final = (
+        runtime.stop
+        if shutdown_timeout_seconds is None
+        else functools.partial(_stop_managed_runtime_before_exit, runtime, shutdown_timeout_seconds)
     )
-    refresher: Final = _install_upstream_password(plan, runtime_dir, run_as_user, pooler, token_auth, upstream_url)
-    if isinstance(refresher, PgBouncerError):
-        return refresher
-    failed: Final = pooler.start()
-    if failed is not None:
-        if refresher is not None:
-            refresher.stop()
-        return failed
-    register_exit_hook(_only_in_this_process(pooler.stop))
-    if refresher is not None:
-        register_exit_hook(_only_in_this_process(refresher.stop))
+    register_exit_hook(_only_in_this_process(cleanup))
     verbose_proxy_logger.info(
         "In-container pgbouncer (pid %s) listening on %s:%s; capping this pod at %s upstream database connections%s.",
-        pooler.pid,
+        runtime.pooler.pid,
         PGBOUNCER_LISTEN_ADDR,
         settings.port,
         settings.max_db_connections,
         "" if token_auth is None else f" and renewing its {token_auth.label} before each one expires",
     )
-    return plan.pooled_url
+    return runtime.pooled_url
