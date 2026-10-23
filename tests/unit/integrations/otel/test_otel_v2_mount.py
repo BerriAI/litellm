@@ -382,7 +382,7 @@ def test_every_traced_response_names_its_own_server_span(monkeypatch):
     assert responses["/stream"].text == "data: first\n\ndata: [DONE]\n\n"
     for path, response in responses.items():
         context = server_spans[path].context
-        assert response.headers.get_list("traceresponse") == [f"00-{context.trace_id:032x}-{context.span_id:016x}-01"]
+        assert response.headers.get_list("traceresponse") == [f"00-{context.trace_id:032x}-{context.span_id:016x}-{context.trace_flags:02x}"]
 
 
 @pytest.mark.parametrize("path", ["/relayed", "/relayed/health"])
@@ -472,13 +472,20 @@ def test_gate_off_responses_carry_no_traceresponse(monkeypatch):
     assert "traceresponse" not in TestClient(app).get("/ping").headers
 
 
-def test_failed_instrumentation_registers_no_response_propagator(monkeypatch):
+def test_started_app_keeps_serving_without_registering_a_response_propagator(monkeypatch):
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
     app = fastapi.FastAPI()
 
-    with TestClient(app):
-        instrument_fastapi_app(app)
+    @app.get("/running")
+    def running():
+        return {"ok": True}
 
+    with TestClient(app) as client:
+        instrument_fastapi_app(app)
+        response = client.get("/running")
+
+    assert response.json() == {"ok": True}
+    assert "traceresponse" not in response.headers
     assert get_global_response_propagator() is None
 
 
@@ -545,4 +552,4 @@ def test_the_unhandled_error_helper_names_the_span_it_is_given_in_any_context(mo
 
     headers = contextvars.Context().run(trace_response_headers, span)
 
-    assert headers["traceresponse"] == f"00-{context.trace_id:032x}-{context.span_id:016x}-01"
+    assert headers["traceresponse"] == f"00-{context.trace_id:032x}-{context.span_id:016x}-{context.trace_flags:02x}"

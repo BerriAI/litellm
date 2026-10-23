@@ -2043,7 +2043,7 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
     ],
 )
 def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
-    monkeypatch: pytest.MonkeyPatch, api_host: str | None, expected_endpoint: str
+    monkeypatch: pytest.MonkeyPatch, api_host: str | None, expected_endpoint: str, requests_mock
 ) -> None:
     """The exporter must post to Langtrace's complete /api/trace path with the key in x-api-key,
     without leaking it into the process-wide OTEL_EXPORTER_OTLP_TRACES_HEADERS."""
@@ -2069,8 +2069,12 @@ def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
         assert type(logger) is OpenTelemetry and logger.callback_name == "langtrace"
         exporter: Final = logger._get_span_processor().span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
-        assert exporter._endpoint == expected_endpoint
-        assert exporter._headers == {"x-api-key": api_key}
+        from opentelemetry.sdk.trace.export import SpanExportResult
+
+        collector: Final = requests_mock.post(expected_endpoint, status_code=200)
+        assert exporter.export([]) is SpanExportResult.SUCCESS
+        assert collector.call_count == 1
+        assert collector.last_request.headers["x-api-key"] == api_key
         assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
     finally:
         logging_module._in_memory_loggers.clear()
@@ -8019,14 +8023,14 @@ def test_payload_without_guardrail_cost_is_unchanged(logging_obj):
     assert payload["cost_breakdown"] is None
 
 
-_AWS_SECRET = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY"
-_GEMINI_KEY = "AIzaSyC0000000000000000000000000000000"
+_AWS_SECRET = "TEST_ONLY_AWS_SECRET_NOT_A_CREDENTIAL"
+_GEMINI_KEY = "TEST_ONLY_GEMINI_KEY_NOT_A_CREDENTIAL"
 
 
 def test_empty_api_base_does_not_dump_call_state(logging_obj):
     """Direct (non-HTTP) providers pass api_base='', which used to echo model_call_details."""
     logging_obj.model_call_details["litellm_params"] = {
-        "api_key": "sk-proj-hunter2hunter2hunter2hunter2",
+        "api_key": "sk-TEST_ONLY_API_KEY_NOT_A_CREDENTIAL",
         "aws_secret_access_key": _AWS_SECRET,
     }
 
@@ -8039,7 +8043,7 @@ def test_empty_api_base_does_not_dump_call_state(logging_obj):
 
     assert "litellm_call_id" not in curl_command
     assert _AWS_SECRET not in curl_command
-    assert "hunter2" not in curl_command
+    assert "sk-TEST_ONLY_API_KEY_NOT_A_CREDENTIAL" not in curl_command
 
 
 def test_pre_call_redacts_and_masks_raw_request(logging_obj):
