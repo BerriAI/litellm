@@ -1,0 +1,619 @@
+{
+  "source": "Read-only export of existing isolated LiteLLM spend logs after the stated UTC cutoff. This exporter never makes inference calls.",
+  "cutoff_utc": "2026-10-23T21:33:08+00:00",
+  "format_note": "Stored provider records, not raw browser or chat API response captures. Aria calls chat.completions.runTools; the provider adapter used OpenAI Responses. The actual stored output items are preserved.",
+  "redactions": "Allowlisted user/assistant/tool messages, function names/arguments, provider output, IDs, dates and usage only. System prompts, tool definitions, metadata and credentials excluded; secret-like identifiers in text redacted.",
+  "frozen_internal_usage": {
+    "user_id": "aria-live-internal",
+    "date": "2026-10-23",
+    "prompt_tokens": 14,
+    "completion_tokens": 8,
+    "total_tokens": 22,
+    "api_requests": 1,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0
+  },
+  "records": [
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDRlM2Y3YTNhZjk5NGQ0YzAwNmFkYmQyYTQ1NzgwODdkMWE2MzNhNjRjZTJhYjI1ZTU=",
+      "start_time": "2026-10-23T21:33:24.180000+00:00",
+      "end_time": "2026-10-23T21:33:26.116000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "How much have I spent this week?"
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDRlM2Y3YTNhZjk5NGQ0YzAwNmFkYmQyYTQ1NzgwODdkMWE2MzNhNjRjZTJhYjI1ZTU=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792791204,
+        "output": [
+          {
+            "id": "fc_04e3f7a3af994d4c006adbd2a5614887d1963f1d23e20ee29b",
+            "type": "function_call",
+            "status": "completed",
+            "name": "get_usage_data",
+            "call_id": "call_26T0kXTi1dQVd89KvnxUK6ma",
+            "arguments": "{\"start_date\":\"2026-10-19\",\"end_date\":\"2026-10-23\",\"user_id\":null}"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 1432,
+          "completion_tokens": 40,
+          "total_tokens": 1472,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1429,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 1432,
+        "completion_tokens": 40,
+        "total_tokens": 1472,
+        "spend_usd": 0.0005489000000000001
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDk2MjdhNzJiMzZmNWU1OTAwNmFkYmQyYTYzZDgwODdkMWE4OTM4N2ZlMDY3MGUxOTI=",
+      "start_time": "2026-10-23T21:33:26.155000+00:00",
+      "end_time": "2026-10-23T21:33:29.007000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "How much have I spent this week?"
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_26T0kXTi1dQVd89KvnxUK6ma",
+                "type": "function",
+                "function": {
+                  "name": "get_usage_data",
+                  "arguments": "{\"start_date\":\"2026-10-19\",\"end_date\":\"2026-10-23\",\"user_id\":null}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_26T0kXTi1dQVd89KvnxUK6ma",
+            "content": "{\"operation\":\"get_usage_data\",\"success\":true,\"result\":{\"totals\":{\"total_spend\":0.042165600000000004,\"total_api_requests\":28,\"total_tokens\":33780,\"total_prompt_tokens\":32309,\"total_completion_tokens\":1471,\"total_cache_read_input_tokens\":22176,\"total_cache_creation_input_tokens\":10008,\"total_successful_requests\":22,\"total_failed_requests\":6,\"total_api_keys\":7,\"api_key_limit\":20},\"daily\":[{\"date\":\"2026-10-23\",\"spend\":0.042165600000000004,\"api_requests\":28,\"total_tokens\":33780,\"prompt_tokens\":32309,\"completion_tokens\":1471,\"cache_read_input_tokens\":22176,\"cache_creation_input_tokens\":10008}],\"breakdown_limit\":20,\"top_models\":[{\"name\":\"openai/gpt-6.1-sol\",\"spend\":0.042165600000000004,\"api_requests\":23,\"total_tok... (litellm_truncated skipped 1170 chars. Truncation is a DB storage safeguard. Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.). To increase the truncation limit, set `MAX_STRING_LENGTH_PROMPT_IN_DB` in your env.) ...ed]\",\"spend\":0.00012,\"api_requests\":2,\"total_tokens\":40,\"prompt_tokens\":31,\"completion_tokens\":9,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000096,\"api_requests\":2,\"total_tokens\":20,\"prompt_tokens\":13,\"completion_tokens\":7,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000096,\"api_requests\":1,\"total_tokens\":20,\"prompt_tokens\":13,\"completion_tokens\":7,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"alias\":\"Aria isolated budget verification\",\"spend\":0,\"api_requests\":1,\"total_tokens\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0,\"api_requests\":2,\"total_tokens\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}]}}"
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDk2MjdhNzJiMzZmNWU1OTAwNmFkYmQyYTYzZDgwODdkMWE4OTM4N2ZlMDY3MGUxOTI=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792791206,
+        "output": [
+          {
+            "id": "rs_09627a72b36f5e59006adbd2a722f487d18945062afc102129",
+            "type": "reasoning",
+            "content": []
+          },
+          {
+            "id": "msg_09627a72b36f5e59006adbd2a7d3c887d19ce2da21f8287993",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "This week so far (**October 19–23, 2026, UTC**), gateway-wide spend is **$0.0422 USD**—about **4.2 cents**—across 28 requests.\n\nThis is the global total, not a user-filtered personal total."
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 2495,
+          "completion_tokens": 102,
+          "total_tokens": 2597,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1429,
+            "cache_write_tokens": 1063,
+            "cache_creation_tokens": 1063,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 37,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 2495,
+        "completion_tokens": 102,
+        "total_tokens": 2597,
+        "spend_usd": 0.0038264
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMGNhMWUyNWJiYThlZjc0YzAwNmFkYmQyYjU4MmIwODdkMTk1MzdmMTc1OGU4Njc1ZmI=",
+      "start_time": "2026-10-23T21:33:41.407000+00:00",
+      "end_time": "2026-10-23T21:33:43.326000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Which models are costing the most?"
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMGNhMWUyNWJiYThlZjc0YzAwNmFkYmQyYjU4MmIwODdkMTk1MzdmMTc1OGU4Njc1ZmI=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792791221,
+        "output": [
+          {
+            "id": "fc_0ca1e25bba8ef74c006adbd2b6972087d1af6a537447bd3549",
+            "type": "function_call",
+            "status": "completed",
+            "name": "get_usage_data",
+            "call_id": "call_U7VPHS17Loq89n7gUxloglEr",
+            "arguments": "{\"start_date\":\"2026-10-01\",\"end_date\":\"2026-10-23\",\"user_id\":null}"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 1431,
+          "completion_tokens": 40,
+          "total_tokens": 1471,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1428,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 1431,
+        "completion_tokens": 40,
+        "total_tokens": 1471,
+        "spend_usd": 0.0005488
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDVjODcxNWNhZTQzOWIyMDAwNmFkYmQyYjc3NzY0ODdkMWIyMTJjYjI2YzYxMDNkOGM=",
+      "start_time": "2026-10-23T21:33:43.378000+00:00",
+      "end_time": "2026-10-23T21:33:46.895000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Which models are costing the most?"
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_U7VPHS17Loq89n7gUxloglEr",
+                "type": "function",
+                "function": {
+                  "name": "get_usage_data",
+                  "arguments": "{\"start_date\":\"2026-10-01\",\"end_date\":\"2026-10-23\",\"user_id\":null}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_U7VPHS17Loq89n7gUxloglEr",
+            "content": "{\"operation\":\"get_usage_data\",\"success\":true,\"result\":{\"totals\":{\"total_spend\":0.0465409,\"total_api_requests\":30,\"total_tokens\":37849,\"total_prompt_tokens\":36236,\"total_completion_tokens\":1613,\"total_cache_read_input_tokens\":25034,\"total_cache_creation_input_tokens\":11071,\"total_successful_requests\":24,\"total_failed_requests\":6,\"total_api_keys\":7,\"api_key_limit\":20},\"daily\":[{\"date\":\"2026-10-23\",\"spend\":0.0465409,\"api_requests\":30,\"total_tokens\":37849,\"prompt_tokens\":36236,\"completion_tokens\":1613,\"cache_read_input_tokens\":25034,\"cache_creation_input_tokens\":11071}],\"breakdown_limit\":20,\"top_models\":[{\"name\":\"openai/gpt-6.1-sol\",\"spend\":0.0465409,\"api_requests\":25,\"total_tokens\":37833,\"prompt_tokens\":36220,... (litellm_truncated skipped 1127 chars. Truncation is a DB storage safeguard. Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.). To increase the truncation limit, set `MAX_STRING_LENGTH_PROMPT_IN_DB` in your env.) ...ed]\",\"spend\":0.00012,\"api_requests\":2,\"total_tokens\":40,\"prompt_tokens\":31,\"completion_tokens\":9,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000096,\"api_requests\":2,\"total_tokens\":20,\"prompt_tokens\":13,\"completion_tokens\":7,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000096,\"api_requests\":1,\"total_tokens\":20,\"prompt_tokens\":13,\"completion_tokens\":7,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"alias\":\"Aria isolated budget verification\",\"spend\":0,\"api_requests\":1,\"total_tokens\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0,\"api_requests\":2,\"total_tokens\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}]}}"
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDVjODcxNWNhZTQzOWIyMDAwNmFkYmQyYjc3NzY0ODdkMWIyMTJjYjI2YzYxMDNkOGM=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792791223,
+        "output": [
+          {
+            "id": "msg_05c8715cae439b20006adbd2b8544087d1b75c24656e96d918",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "### Model costs — October 1–23, 2026 (UTC)\n\n| Model | Recorded spend | Share of spend | Requests |\n|---|---:|---:|---:|\n| **openai/gpt-6.1-sol** | **$0.04654** | **100%** | 25 |\n| anthropic/claude-sonnet-5-5 | $0.00 | 0% | 3 |\n\n**GPT-6.1-sol accounts for all recorded costs** this month—about **4.65 cents**. All reported spending occurred on October 23."
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 2482,
+          "completion_tokens": 131,
+          "total_tokens": 2613,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1428,
+            "cache_write_tokens": 1051,
+            "cache_creation_tokens": 1051,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 2482,
+        "completion_tokens": 131,
+        "total_tokens": 2613,
+        "spend_usd": 0.0040863
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMGNmNDQzM2RkOGY2ZjRlYTAwNmFkYmQyY2QyM2ZjODdkMWJkYTQzY2ViM2U5MGQ5NWI=",
+      "start_time": "2026-10-23T21:34:04.808000+00:00",
+      "end_time": "2026-10-23T21:34:07.073000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "How can I reduce my spend?"
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMGNmNDQzM2RkOGY2ZjRlYTAwNmFkYmQyY2QyM2ZjODdkMWJkYTQzY2ViM2U5MGQ5NWI=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792791245,
+        "output": [
+          {
+            "id": "fc_0cf4433dd8f6f4ea006adbd2ce4c3887d181cbf31e83d38211",
+            "type": "function_call",
+            "status": "completed",
+            "name": "get_usage_data",
+            "call_id": "call_MrPZjbTfw2QnMIHOPO28HxBh",
+            "arguments": "{\"start_date\":\"2026-10-01\",\"end_date\":\"2026-10-23\",\"user_id\":null}"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 1431,
+          "completion_tokens": 40,
+          "total_tokens": 1471,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1428,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 1431,
+        "completion_tokens": 40,
+        "total_tokens": 1471,
+        "spend_usd": 0.0005488
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMGQ3N2QyM2Q3ZTNmNWViMTAwNmFkYmQyY2Y0Mzk4ODdkMWE1OWZkZjQ2Mjk1ZTgzZTY=",
+      "start_time": "2026-10-23T21:34:07.111000+00:00",
+      "end_time": "2026-10-23T21:34:14.117000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "How can I reduce my spend?"
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_MrPZjbTfw2QnMIHOPO28HxBh",
+                "type": "function",
+                "function": {
+                  "name": "get_usage_data",
+                  "arguments": "{\"start_date\":\"2026-10-01\",\"end_date\":\"2026-10-23\",\"user_id\":null}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_MrPZjbTfw2QnMIHOPO28HxBh",
+            "content": "{\"operation\":\"get_usage_data\",\"success\":true,\"result\":{\"totals\":{\"total_spend\":0.051176000000000006,\"total_api_requests\":32,\"total_tokens\":41933,\"total_prompt_tokens\":40149,\"total_completion_tokens\":1784,\"total_cache_read_input_tokens\":27890,\"total_cache_creation_input_tokens\":12122,\"total_successful_requests\":26,\"total_failed_requests\":6,\"total_api_keys\":7,\"api_key_limit\":20},\"daily\":[{\"date\":\"2026-10-23\",\"spend\":0.051176000000000006,\"api_requests\":32,\"total_tokens\":41933,\"prompt_tokens\":40149,\"completion_tokens\":1784,\"cache_read_input_tokens\":27890,\"cache_creation_input_tokens\":12122}],\"breakdown_limit\":20,\"top_models\":[{\"name\":\"openai/gpt-6.1-sol\",\"spend\":0.051176000000000006,\"api_requests\":27,\"total_tok... (litellm_truncated skipped 1170 chars. Truncation is a DB storage safeguard. Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.). To increase the truncation limit, set `MAX_STRING_LENGTH_PROMPT_IN_DB` in your env.) ...ed]\",\"spend\":0.00012,\"api_requests\":2,\"total_tokens\":40,\"prompt_tokens\":31,\"completion_tokens\":9,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000096,\"api_requests\":2,\"total_tokens\":20,\"prompt_tokens\":13,\"completion_tokens\":7,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000096,\"api_requests\":1,\"total_tokens\":20,\"prompt_tokens\":13,\"completion_tokens\":7,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"alias\":\"Aria isolated budget verification\",\"spend\":0,\"api_requests\":1,\"total_tokens\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0,\"api_requests\":2,\"total_tokens\":0,\"prompt_tokens\":0,\"completion_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}]}}"
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMGQ3N2QyM2Q3ZTNmNWViMTAwNmFkYmQyY2Y0Mzk4ODdkMWE1OWZkZjQ2Mjk1ZTgzZTY=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792791247,
+        "output": [
+          {
+            "id": "msg_0d77d23d7e3f5eb1006adbd2d0555487d184a0e7011a4a5cc0",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "Your gateway’s reported spend for **October 1–23, 2026 is $0.0512 across 32 requests**, all recorded on October 23. At this volume, absolute savings will be small.\n\nThe best places to focus:\n\n1. **Test a lower-cost model for routine tasks.** All reported spend comes from `openai/gpt-6.1-sol`. Compare a cheaper option on representative tasks, retaining the current model where quality requires it.\n2. **Reduce input size.** Prompt tokens account for **96% of your 41,933 tokens**. Trim repeated instructions, shorten conversation history, and retrieve only relevant document excerpts.\n3. **Preserve effective caching.** The report already shows **27,890 cache-read tokens**. Keep reusable prompt prefixes stable; compare cache-creation costs with reuse before expanding caching.\n4. **Investigate failed requests.** **6 of 32 requests failed (19%)**. Review request logs for avoidable retries or configuration errors; this report doesn’t show whether failures incurred charges.\n5. **Set budget guardrails.** Have an administrator configure appropriate key or team budgets to limit unexpected growth. Budgets control future usage; they don’t reduce per-request cost.\n\n**Start with the workload behind your highest-spend key—it accounts for about 99% of reported spend.** I have read-only access, so I can analyze usage but can’t change models or budgets."
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 2494,
+          "completion_tokens": 299,
+          "total_tokens": 2793,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1428,
+            "cache_write_tokens": 1063,
+            "cache_creation_tokens": 1063,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 2494,
+        "completion_tokens": 299,
+        "total_tokens": 2793,
+        "spend_usd": 0.005796300000000001
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDI5MGYyZmRjNzM2MDQ5NTAwNmFkYmQyZTE0NWE4ODdkMTk5MTdhMjliMzE5OGFiODQ=",
+      "start_time": "2026-10-23T21:34:25.087000+00:00",
+      "end_time": "2026-10-23T21:34:27.050000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "For user ID aria-live-internal on October 23, 2026, show prompt, completion, cache read, cache creation, and total tokens in one table row."
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDI5MGYyZmRjNzM2MDQ5NTAwNmFkYmQyZTE0NWE4ODdkMTk5MTdhMjliMzE5OGFiODQ=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792791265,
+        "output": [
+          {
+            "id": "fc_0290f2fdc7360495006adbd2e2713c87d184528c63b49f9d14",
+            "type": "function_call",
+            "status": "completed",
+            "name": "get_usage_data",
+            "call_id": "call_wwlo7drVOPUzbeOpKf68aTsS",
+            "arguments": "{\"start_date\":\"2026-10-23\",\"end_date\":\"2026-10-23\",\"user_id\":\"aria-live-internal\"}"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 1459,
+          "completion_tokens": 43,
+          "total_tokens": 1502,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1417,
+            "cache_write_tokens": 39,
+            "cache_creation_tokens": 39,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 1459,
+        "completion_tokens": 43,
+        "total_tokens": 1502,
+        "spend_usd": 0.0006752
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMGU3N2E3MTJiNjk3YWY2YjAwNmFkYmQyZTMzMTMwODdkMWJhN2JiMmNiNzE0YzE4NzM=",
+      "start_time": "2026-10-23T21:34:27.076000+00:00",
+      "end_time": "2026-10-23T21:34:29.446000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "For user ID aria-live-internal on October 23, 2026, show prompt, completion, cache read, cache creation, and total tokens in one table row."
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_wwlo7drVOPUzbeOpKf68aTsS",
+                "type": "function",
+                "function": {
+                  "name": "get_usage_data",
+                  "arguments": "{\"start_date\":\"2026-10-23\",\"end_date\":\"2026-10-23\",\"user_id\":\"aria-live-internal\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_wwlo7drVOPUzbeOpKf68aTsS",
+            "content": "{\"operation\":\"get_usage_data\",\"success\":true,\"result\":{\"totals\":{\"total_spend\":0.000108,\"total_api_requests\":1,\"total_tokens\":22,\"total_prompt_tokens\":14,\"total_completion_tokens\":8,\"total_cache_read_input_tokens\":0,\"total_cache_creation_input_tokens\":0,\"total_successful_requests\":1,\"total_failed_requests\":0,\"total_api_keys\":1,\"api_key_limit\":20},\"daily\":[{\"date\":\"2026-10-23\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}],\"breakdown_limit\":20,\"top_models\":[{\"name\":\"openai/gpt-6.1-sol\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}],\"top_providers\":[{\"name\":\"openai\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}],\"top_entities\":[],\"top_api_keys\":[{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}]}}"
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMGU3N2E3MTJiNjk3YWY2YjAwNmFkYmQyZTMzMTMwODdkMWJhN2JiMmNiNzE0YzE4NzM=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792791267,
+        "output": [
+          {
+            "id": "msg_0e77a712b697af6b006adbd2e43a0087d18ca7fcce64c4ea33",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "| User ID | Date (UTC) | Prompt tokens | Completion tokens | Cache read tokens | Cache creation tokens | Total tokens |\n|---|---|---:|---:|---:|---:|---:|\n| aria-live-internal | 2026-10-23 | 14 | 8 | 0 | 0 | 22 |"
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 1869,
+          "completion_tokens": 79,
+          "total_tokens": 1948,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1456,
+            "cache_write_tokens": 410,
+            "cache_creation_tokens": 410,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 1869,
+        "completion_tokens": 79,
+        "total_tokens": 1948,
+        "spend_usd": 0.0019666
+      }
+    }
+  ],
+  "inference_ui_commit": "68663700992b638c4b6df245e375abf57be13168",
+  "rendering_ui_commit": "7e59e0628fc7c9537b9d0138e0a02cfa37a48203",
+  "rendering_note": "The existing four live answers were rendered again for screenshots at the rendering commit. That commit only changes Markdown table header wrapping and padding; no new inference was required.",
+  "storage_limitations": {
+    "tool_results_with_original_db_truncation_markers": 3,
+    "final_answers_with_db_truncation_markers": 0,
+    "note": "The first three tool-result strings contain the original LiteLLM DB storage truncation marker. They are preserved as stored and are not claimed to be complete JSON payloads. Function names and arguments, all four final answers, and the fourth internal-user tool result are complete in these records."
+  }
+}
