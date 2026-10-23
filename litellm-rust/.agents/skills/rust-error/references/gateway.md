@@ -31,9 +31,14 @@ Do not reach into a nested enum's variants from the gateway. When a new nested f
 
 ## Render by surface and framing
 
-Rendering is separate from classification. The surface picks the envelope, which is why `gateway_inference::Error` has both `body(request_id)` for the Anthropic shape and `openai_response()` for the OpenAI shape, and the moment picks the framing: a JSON body before the headers went out, an `event: error` SSE frame from `sse_frame()` after. Both framings render the same `body()`, so a streaming failure and a JSON failure of the same error agree on everything but framing
+Rendering is separate from classification. The surface picks the envelope and the moment picks the framing, a JSON body before the headers went out and an `event: error` SSE frame after. Both framings of one surface render the same envelope, so a streaming failure and a JSON failure of the same error agree on everything but framing
 
-Two rules hold for every surface. The error `type` string is derived from the status, so a new failure never names its own type. A provider body already in the surface's shape passes through untouched and anything else has its message extracted, with the body bounded by `truncate_error_body` when the error was built, see [boundaries](boundaries.md)
+| Surface | JSON | SSE |
+|---|---|---|
+| Anthropic, `/v1/messages` | `body(request_id)` | `sse_frame()` |
+| OpenAI, chat, responses and the rest | `openai_response()` | `openai_sse_frame()` |
+
+Two rules hold for both. The error `type` string is derived from the status by `error_type()`, so a new failure never names its own type, and the message of anything that is not a provider answer is the `litellm_error::Report` of the error. The Anthropic envelope passes a provider body already in its shape through untouched and extracts the message from anything else. The OpenAI envelope always wraps, because that is what the Python proxy returns there
 
 ## Every way in uses the same Error
 
@@ -41,14 +46,10 @@ A request can fail before the handler runs, in the handler, or after the headers
 
 - An extractor sets `type Rejection = Error`, so a bad body is the surface's envelope rather than axum's plain text
 - A path the gateway knows but does not serve returns `Error::Unsupported(path)` from one handler, so the client gets a 501 in the surface's envelope rather than a bare 404
-- A stream that fails after its headers went out hands `Error::from(error).sse_frame()` to `litellm_host_http::Sse::new`. `litellm_host_http::Error<E>` separates `Call(E)`, the route's own error, from `Protocol`, a host bug, and the `From` maps the second to `Internal`
+- A stream that fails after its headers went out hands the surface's SSE frame of `Error::from(error)` to `litellm_host_http::Sse::new`. `litellm_host_http::Error<E>` separates `Call(E)`, the route's own error, from `Protocol`, a host bug, and the `From` maps the second to `Internal`
 
 The axum hooks behind each line are in [`rust-gateway`](../../rust-gateway/SKILL.md)
 
-## Known gaps
-
-`InvalidBody(String)` and `Internal(String)` flatten their cause into a string, against [messages and causes](messages-and-causes.md). A new variant carries the typed cause
-
 ## Testing
 
-`status()` and `body()` are pure, so unit tests call them on errors built the way production builds them, one `#[case]` per fault, as `status_follows_who_is_at_fault` and `body_follows_the_anthropic_exception_mapping` in `crates/gateway-inference/src/error.rs` do. Assert the status and the fields the surface promises, not the whole body. Driving a whole router belongs to the gateway crate's own tests, see [`rust-gateway`](../../rust-gateway/references/testing.md)
+`status()` and `body()` are pure, so unit tests call them on errors built the way production builds them, one `#[case]` per fault, as `status_follows_who_is_at_fault` and `body_follows_the_anthropic_exception_mapping` in `crates/gateway-inference/src/error.rs` do. Assert the status and the fields the surface promises, not the whole body, except where passing the body through untouched is the contract. Driving a whole router belongs to the gateway crate's own tests, see [`rust-gateway`](../../rust-gateway/references/testing.md)

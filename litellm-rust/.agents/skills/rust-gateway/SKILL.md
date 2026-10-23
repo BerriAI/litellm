@@ -5,7 +5,7 @@ description: Add or change an HTTP route, extractor, response envelope, stream o
 
 # Rust gateway
 
-`crates/gateway` mounts endpoint routers and serves the listener. `crates/gateway-inference` owns the inference endpoints, `gateway-mcp`, `gateway-ui`, `gateway-management` and `gateway-auth` own theirs. Each crate's `AGENTS.md` says what belongs in it. Read the reference for the part you are touching
+`crates/gateway` mounts endpoint routers and serves the listener. `crates/gateway-inference`, `gateway-mcp` and `gateway-ui` own their endpoints, `gateway-auth` is the inbound authentication middleware and `gateway-management` holds management logic that has no router yet. A crate's `AGENTS.md`, where it has one, says what belongs in it. Read the reference for the part you are touching
 
 - [surfaces](references/surfaces.md)
   - Each API surface mirrors the envelope the Python proxy returns there, so the shapes differ on purpose

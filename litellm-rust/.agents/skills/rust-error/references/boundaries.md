@@ -1,13 +1,18 @@
 # Boundaries
 
-An error becomes text for someone else in exactly two places, and both are explicit mappings. Nothing else formats an error for a client
+A boundary is where an error becomes something another program reads: an HTTP response, a Python exception, a stored or logged message. Each boundary has one mapping function per error type it receives, and nothing outside those functions formats an error for someone else
 
-| Boundary | File | Reference |
+| Boundary | Mapping | Reference |
 |---|---|---|
-| Gateway HTTP response | `crates/gateway-inference/src/error.rs` | [gateway](gateway.md) |
-| Python bridge | `crates/python-bridge/src/errors.rs` and `crates/python-bridge/src/routes/ocr/errors.rs` | [pyo3](pyo3.md) |
+| Inference HTTP response | `Error::status()` and its renderers in `crates/gateway-inference/src/error.rs` | [gateway](gateway.md) |
+| Other gateway surfaces | the `IntoResponse` of each `crates/gateway-*` crate's `Error` | [gateway](gateway.md) |
+| Python bridge, inference and OCR routes | `route_error_to_pyerr` in `crates/python-bridge/src/errors.rs` and `to_pyerr` in `crates/python-bridge/src/routes/ocr/errors.rs` | [pyo3](pyo3.md) |
+| Python bridge, everything else | one `From<Error> for PyErr` or `*_to_pyerr` per crate error, all in `crates/python-bridge` | [pyo3](pyo3.md) |
+| Python host runtime | `From<Error> for PyErr` in `crates/host-python/src/error.rs` | [pyo3](pyo3.md) |
 
-Both ask a nested error the same questions in the same order
+## Asking the nested error
+
+The inference gateway and the Python bridge's route mapping both receive a nested route error, and both ask it the same questions in the same order
 
 ```rust
 if let Some((status, body)) = error.upstream_response() { the provider's status and body pass through }
@@ -22,18 +27,12 @@ The two boundaries are not identical. The gateway has variants of its own for bo
 
 ## What reaches the client
 
-`to_string()` of our error is what a client sees for anything that is not a provider answer. That is why messages are written for a reader, causes are rendered once and reqwest URLs are stripped on entry
+A boundary renders anything that is not a provider answer with `litellm_error::Report`, so the reader sees every layer of the chain once. That is why messages are written for a reader, each layer leaves its cause to `source()`, and reqwest URLs are stripped on entry. A boundary that must not show the chain, such as the bridge's TLS settings error that names the setting but not the file, renders fixed text of its own and says so in its test
 
-Provider bodies are passed through, so bound them. Build `Error::upstream` with `truncate_error_body(&text)` from `litellm_http::request`, which caps the body at 256 characters
+Provider bodies are passed through, so they are bounded where they enter our types. `litellm_http::Error::upstream(status, body)` keeps the first 256 characters and marks the cut, so no caller can forget
 
-```rust
-if !status.is_success() {
-    return Err(litellm_http::Error::upstream(status.as_u16(), truncate_error_body(&text)).into());
-}
-```
-
-Never format `Debug` of an error into a response or a Python exception
+Never format `Debug` of an error into a response or a Python exception. A type whose sources may hold secrets derives `veil::Redact`, so its `Debug` is safe to log
 
 ## Logging
 
-Propagate with context, and let the terminal handler own the one log or trace event for a failed call. Do not log at every `?`. Diagnostic tracing excludes raw error strings and bodies, see [`rust-tracing`](../../rust-tracing/SKILL.md)
+Propagate with context, and let the terminal handler own the one log or trace event for a failed call. Do not log at every `?`, and do not log an error you also return. Diagnostic tracing excludes raw error strings and bodies, see [`rust-tracing`](../../rust-tracing/SKILL.md)

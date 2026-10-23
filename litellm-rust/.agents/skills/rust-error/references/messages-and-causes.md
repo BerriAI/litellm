@@ -9,7 +9,6 @@ Every message template is written once, in the variant's `#[error(...)]`. A call
 Error::Network("WebSocket handshake returned a wrong Sec-WebSocket-Accept".into())
 Error::Request(format!("bad header {name}"))
 Error::Signature(error.to_string())
-Error::AwsSignableRequest(format!("{name} is not visible ASCII"))
 
 // the call site names what happened, the variant owns the words
 Repr::Handshake(HandshakeFault::Accept).into()
@@ -17,84 +16,95 @@ Error::signature(error)
 Error::NonAsciiHeader { name }
 ```
 
-When a check fails for a distinct reason, that reason is a variant or a field, never a string inside a generic variant
+When a check fails for a distinct reason, that reason is a variant or a field, never a string inside a generic variant. A `Message(String)` variant, or a `From<String>` / `From<&str>` into an error, is the hole every stringly call site goes through, so neither exists
 
 Format arguments can call functions and reach into fields, so a hand-written `Display` is rarely needed
 
 ```rust
-#[error("could not read {}: {cause}", path.display())]
+#[error("could not read {}", path.display())]
 #[error("invalid model: {provider} has no model {model:?} - use one of: {}", supported.join(", "))]
 ```
 
-Keep messages short and lowercase unless Python parity pins the exact text. Do not end them with a period, since a reporter may append `: {cause}`
+Keep messages short and lowercase, with no trailing period, unless Python parity pins the exact text. A reporter appends `: {cause}` after them. Never format `Debug` (`{:?}`) of an error, or of a type with no `Display`, into a message
+
+## The cause is the source, never the message
+
+This is the rule from the [`std::error::Error` docs](https://doc.rust-lang.org/std/error/trait.Error.html): an error's `Display` describes that layer only, and the error underneath is returned by `source()`. thiserror wires `source()` from a field marked `#[source]`, a `#[from]` field, or a field named `source`
+
+```rust
+// prints the cause twice under any reporter
+#[error("could not read {}: {source}", path.display())]
+Read { path: PathBuf, source: io::Error },
+#[error("invalid JSON: {0}")]
+Json(#[from] serde_json::Error),
+
+// this layer's words, the cause is the source
+#[error("could not read {}", path.display())]
+Read { path: PathBuf, source: io::Error },
+#[error("invalid JSON")]
+Json(#[from] serde_json::Error),
+```
+
+| Field | thiserror does | Use for |
+|---|---|---|
+| `source: E` or `#[source] cause: E` | exposes it as `source()` | a cause with context fields next to it |
+| `#[from] E` | implies `#[source]` and adds `From` | context-free wrapping, see [conversions](conversions.md) |
+| `#[error(transparent)]` | forwards both `Display` and `source()` to the inner value | nesting another of our errors that adds no text |
+| no attribute, any other name | nothing, the field is plain data | facts the message renders, such as a path or a status |
+
+`#[error(transparent)]` is an invisible layer, not an extra chain node, so a transparent wrapper's `source()` is the inner value's `source()`
+
+A field that holds an error but is neither rendered nor a source hides that error from every reader. Every error-typed field is a source
 
 ## Keep causes typed
 
-Store the lower-level error itself, never its string
+Store the lower-level error itself, never its string, and never drop it with `map_err(|_| ...)`
 
-| Flattening loses | Because |
+| Flattening or dropping loses | Because |
 |---|---|
-| `source()` | a `String` has no cause |
+| the chain | a `String` has no `source()` |
 | downcasting | the type is gone |
 | redaction | `reqwest::Error`'s `Display` includes the request URL, which can carry credentials in the path or query |
 
-If the cause is not `Clone` and the error must be, wrap the cause in `Arc` or make the crate's error opaque. Do not stringify to get `Clone`
+If the cause is not `Clone` and the error must be, hold it as `litellm_error::Source`, a cloneable `Arc<dyn Error + Send + Sync>` that is transparent to `Display`, `source()` and `downcast_ref`, or make the crate's error opaque. Do not stringify or drop a cause to get `Clone` or `PartialEq`
 
 ```rust
 // loses the type and leaks the URL
 .map_err(|error| Error::Network(error.to_string()))
+// loses everything
+.map_err(|_| Error::Transport)
 
 // keeps the cause, the From impl strips the URL
 .map_err(litellm_http::Error::from)
 ```
 
+A cause that must not be shown at all, such as a secret manager's response, is still a source. The type derives [`veil::Redact`](https://docs.rs/veil) with `#[redact]` on the field, so `Debug` hides it, and the boundary decides how much of the chain to show, see [boundaries](boundaries.md)
+
 ## Strip reqwest URLs on entry
 
-Call `without_url()` where a `reqwest::Error` enters our type, which in practice is `From<reqwest::Error> for litellm_http::Error`. Once it is inside, every later `Display`, `Debug` or chain walk is safe from that URL
+Every `reqwest::Error` enters our types through `From<reqwest::Error> for litellm_http::Error`, which calls `without_url()`. A crate that talks HTTP holds `litellm_http::Error`, never `reqwest::Error`, so every later `Display`, `Debug` or chain walk is safe from that URL
 
 `without_url()` only removes the URL reqwest attached. It does not scrub headers, response bodies, provider messages, file paths or anything a variant stores next to it. Those need their own policy, see [boundaries](boundaries.md)
 
-## Render each cause once
+## Rendering
 
-Either the variant's message includes the cause or `source()` returns it, never both, or a reporter that walks the chain prints it twice. This is the rule from the [`std::error::Error` docs](https://doc.rust-lang.org/std/error/trait.Error.html)
-
-Our boundaries (the gateway error body and the Python bridge) render with `to_string()` and never walk the chain. So in this workspace a leaf variant puts its cause in its message and stores it in a field named `cause`, with no `#[source]`. thiserror treats a field named `source` as the source even without the attribute, so the name matters. `litellm_llms::ErrorDetail`, the auth, inference and OCR errors all follow this
-
-| Field | thiserror does | Use for |
-|---|---|---|
-| `cause: io::Error` rendered in `#[error]` | nothing, `source()` stays `None` | leaf foreign causes, the default here |
-| `source: io::Error` or `#[source]` | exposes it as `source()` | causes the message does not mention |
-| `#[from] io::Error` | implies `#[source]` and adds `From` | context-free wrapping, message must not mention it |
-| `#[error(transparent)]` | forwards both `Display` and `source()` to the inner value | wrapping another of our errors that adds no text |
+Anything that shows an error to someone else renders the whole chain with `litellm_error::Report`, which writes each layer once joined by `: `, the single-line form of the unstable [`std::error::Report`](https://doc.rust-lang.org/std/error/struct.Report.html). `to_string()` of an error is only its top layer and is never what a client, a Python exception or a log line shows
 
 ```rust
-// prints the reqwest error twice under a chain-walking reporter
-#[error("request failed: {source}")]
-Request { source: reqwest::Error },
-
-// leaf, rendered once in the message
-#[error("could not read {}: {cause}", path.display())]
-Read { path: PathBuf, cause: io::Error },
-
-// nested, adds no text of its own
-#[error(transparent)]
-Http(litellm_http::Error),
+let message = litellm_error::Report::new(&error).to_string();
+// "could not reach the provider: error sending request: client error (Connect): tcp connect error: Connection refused"
 ```
-
-`#[error(transparent)]` is an invisible layer, not an extra chain node. A transparent wrapper's `source()` is the inner value's `source()`, so a transparent wrapper over a leaf has no source at all
-
-`reqwest::Error` keeps the useful part of its message in its own source chain (the hyper and io errors), so the private `Chain` helper in `crates/http/src/error.rs` renders `reqwest::Error` plus its sources into one message. Every reqwest error enters our types in that crate, so that is the only place it is needed
 
 ## #[from] limits
 
 `#[from]` only works on a variant whose only fields are the source and an optional backtrace. A variant that needs context such as a path, a phase or a `TlsSource` takes its cause through an explicit `map_err` or a named constructor
 
 ```rust
-std::fs::read(&path).map_err(|cause| Repr::Read {
+std::fs::read(&path).map_err(|source| Repr::Read {
     path: path.clone(),
     tls_source: TlsSource::CaBundle,
-    cause,
+    source,
 })?;
 ```
 
-`#[backtrace]` and automatic `provide()` need a nightly compiler and are not used here. `std::backtrace::Backtrace` itself is stable, but do not add a field of that type to a derived error without checking how thiserror treats it
+`#[backtrace]` and automatic `provide()` need a nightly compiler and are not used here

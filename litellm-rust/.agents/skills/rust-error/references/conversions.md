@@ -43,7 +43,7 @@ One `io::Error` can mean "reading the CA bundle failed" or "resolving the media 
 
 ```rust
 .map_err(Repr::Resolve)?
-.map_err(|cause| Repr::Read { path, tls_source, cause })?
+.map_err(|source| Repr::Read { path, tls_source, source })?
 ```
 
 Do not drop meaningful context just to use `?`
@@ -71,9 +71,9 @@ All four inference routes classify a header the signer computes the same way, be
 |---|---|---|
 | has nothing to add | nest in one transparent variant and delegate predicates | `Self::Http(error) => error.is_request()` |
 | changes what the failure means | translate to an upper variant, keep the cause attached when it helps | computed header -> `Unsupported` |
-| knows something the lower one does not | a variant with the extra fields plus the cause | `Read { path, tls_source, cause }` |
+| knows something the lower one does not | a variant with the extra fields plus the cause as its source | `Read { path, tls_source, source }` |
 
-Never re-declare a lower crate's variants in the upper type with an upper-layer name and a 1:1 mapping function. OCR once did that for every media download failure, `MediaError::BlockedUrl => Error::BlockedDocumentUrl` and so on, which doubled every change and let the two lists drift. `litellm_inference::Error`'s `From<litellm_llms::Error>` still maps six same-named variants one to one. It predates this rule and is the shape to migrate away from, not to copy
+Never re-declare a lower crate's variants in the upper type with an upper-layer name and a 1:1 mapping function. OCR once did that for every media download failure, `MediaError::BlockedUrl => Error::BlockedDocumentUrl` and so on, which doubled every change and let the two lists drift.
 
 ## Third-party and host faults
 
@@ -86,3 +86,7 @@ Converting a fault from a crate we do not own into a string variant is still fla
 // keeps the cause typed
 .map_err(|error| Error::InvalidRequest(ErrorDetail::invalid("header", error)))
 ```
+
+## Through a foreign error type
+
+A trait we implement for another crate sometimes forces its error type on us, such as `io::Error` from a body stream or `sqlx::Error` from a driver. Wrap ours as that type's source (`io::Error::other(error)`, `azure_core::Error::new(kind, error)`) and recover it with `downcast_ref` on the other side, never `with_message(error.to_string())` or `from_msg`. The error must come back out as the same value it went in as, so one failure classifies the same way on every path

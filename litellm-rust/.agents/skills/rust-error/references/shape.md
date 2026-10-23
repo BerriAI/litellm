@@ -4,6 +4,8 @@
 
 A crate's errors live in `src/error.rs` and are re-exported from `lib.rs` as `Error`. A caller of any public function in the crate should only ever see `Result<_, crate::Error>`, so one `?` and one set of predicates cover the whole crate
 
+This deliberately departs from the advice to put an error type next to each unit of fallibility ([Sabrina Jewson, "Modular Errors"](https://sabrinajewson.org/blog/errors)). Our callers do not branch on which function failed, they ask the predicates in [classification](classification.md), and the boundaries map one type per crate. Splitting by function would multiply those predicates and mappings without giving any caller a decision it lacks. Layering, the other half of that advice, is kept: each crate nests the one below it, see [conversions](conversions.md)
+
 That one type takes one of two forms
 
 | Form | Use when | Example |
@@ -30,8 +32,8 @@ pub struct Error(Arc<Repr>);
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Repr {
-    #[error("could not reach the provider: {}", Chain(.0))]
-    Connect(reqwest::Error),
+    #[error("could not reach the provider")]
+    Connect(#[source] reqwest::Error),
     #[error("upstream request failed with status {status}: {body}")]
     Status { status: u16, body: String },
 }
@@ -42,6 +44,8 @@ Start with the public enum. Move to opaque when a variant needs a non-`Clone` th
 In the opaque form other crates cannot name a variant, so they cannot build an error with their own message. Public constructors exist only for errors another crate genuinely produces, take typed data and never a message, as in `Error::upstream(status, body)`, `Error::computed_header(name)`, `Error::unsignable_body()` and `Error::signature(cause)`
 
 `Arc` makes cloning a refcount bump, so `Repr` never has to be `Clone`. `Box<Repr>` is enough when the goal is only a small `Result`. `Arc` is for when callers clone
+
+Every crate here is internal to the workspace, so do not mark errors or variants `#[non_exhaustive]`. It only forces a wildcard arm on the other workspace crates and turns off the exhaustiveness check that makes a new variant visit every `match`. When the variants must be free to change, use the opaque form
 
 ## What else may sit next to Error
 
@@ -95,3 +99,5 @@ Split into a separate type only when different functions fail in disjoint ways a
 Name a split type after what went wrong, not after the function that returns it. `ConnectError` reads better than `OpenSessionError`, and a unit struct is fine for a single failure mode
 
 A split type still converts into the crate's `Error` when a caller further up needs one `Result` type
+
+A utility crate whose modules are unrelated, such as `core-utils`, has no crate-wide failure, so each module that can fail owns one error next to its code instead of a `src/error.rs`. The rest of this skill applies to each of them
