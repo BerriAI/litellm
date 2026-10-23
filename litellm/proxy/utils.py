@@ -90,7 +90,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
 
@@ -1518,6 +1518,11 @@ class _CallbackCapabilities:
     has_iterator_override: bool = False
     has_streaming_chunk_override: bool = False
     has_guardrail: bool = False
+    # True when any CustomGuardrail is configured for a response-side hook
+    # (not exclusively pre_call / pre_mcp_call). Used by streaming fast paths.
+    has_streaming_guardrail: bool = False
+    # True when any CustomGuardrail can run on during_call.
+    has_during_call_guardrail: bool = False
     has_pre_call_override: bool = False
     has_content_enforcer: bool = False
     has_moderation_override: bool = False
@@ -1539,6 +1544,76 @@ def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
 
 def _overrides_moderation_hook(callback: CustomLogger) -> bool:
     return _overrides_hook(callback, "async_moderation_hook")
+
+
+_PRE_CALL_ONLY_HOOKS: Final = frozenset(
+    {
+        GuardrailEventHooks.pre_call.value,
+        GuardrailEventHooks.pre_mcp_call.value,
+    }
+)
+
+
+def _normalize_guardrail_hook_name(hook: object) -> str:
+    if isinstance(hook, GuardrailEventHooks):
+        return hook.value
+    return str(hook)
+
+
+def _guardrail_configured_hooks(guardrail: CustomGuardrail) -> frozenset[str] | None:
+    """Return the hook names this guardrail is configured for.
+
+    ``None`` means unrestricted (``event_hook`` unset), which matches every
+    lifecycle event — including response / streaming hooks.
+    """
+    event_hook: Final = guardrail.event_hook
+    if event_hook is None:
+        return None
+    if isinstance(event_hook, Mode):
+        hooks: Final[set[str]] = set()  # mutable-ok: local accumulator, frozen before return
+        for tag_value in event_hook.tags.values():
+            if isinstance(tag_value, list):
+                hooks.update(_normalize_guardrail_hook_name(value) for value in tag_value)
+            else:
+                hooks.add(_normalize_guardrail_hook_name(tag_value))
+        if event_hook.default:
+            default_list: Final = event_hook.default if isinstance(event_hook.default, list) else [event_hook.default]
+            hooks.update(_normalize_guardrail_hook_name(value) for value in default_list)
+        return frozenset(hooks)
+    if isinstance(event_hook, list):
+        return frozenset(_normalize_guardrail_hook_name(hook) for hook in event_hook)
+    return frozenset({_normalize_guardrail_hook_name(event_hook)})
+
+
+def _guardrail_affects_streaming(guardrail: CustomGuardrail) -> bool:
+    """True unless the guardrail is request-only (``pre_call`` / ``pre_mcp_call``).
+
+    Streaming fast-path gates must not treat a purely pre-call guardrail as a
+    reason to pay the per-chunk ``async_post_call_streaming_hook`` path.
+    """
+    hooks: Final = _guardrail_configured_hooks(guardrail)
+    if hooks is None:
+        return True
+    return bool(hooks - _PRE_CALL_ONLY_HOOKS)
+
+
+def _guardrail_affects_during_call(guardrail: CustomGuardrail) -> bool:
+    """True if this guardrail can run on during_call / during_mcp_call events.
+
+    MCP tool calls reach ``during_call_hook``, which remaps to
+    ``during_mcp_call``. That capability must keep the hook live so
+    MCP-only guardrails are not skipped by the early return.
+    """
+    hooks: Final = _guardrail_configured_hooks(guardrail)
+    if hooks is None:
+        return True
+    return bool(
+        hooks
+        & {
+            GuardrailEventHooks.during_call.value,
+            GuardrailEventHooks.during_mcp_call.value,
+        }
+    )
 
 
 _LISTED_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
@@ -3236,6 +3311,8 @@ class ProxyLogging:
         has_iterator_override = False
         has_streaming_chunk_override = False
         has_guardrail = False
+        has_streaming_guardrail = False  # rebind-ok: set while scanning callbacks below
+        has_during_call_guardrail = False  # rebind-ok: set while scanning callbacks below
         has_pre_call_override = False
         has_content_enforcer = False
         has_moderation_override = False
@@ -3257,6 +3334,8 @@ class ProxyLogging:
                 continue
             if isinstance(resolved, CustomGuardrail):
                 has_guardrail = True
+                has_streaming_guardrail = has_streaming_guardrail or _guardrail_affects_streaming(resolved)
+                has_during_call_guardrail = has_during_call_guardrail or _guardrail_affects_during_call(resolved)
             elif _overrides_moderation_hook(resolved):
                 has_moderation_override = True
             # Use the same leaf-class ``__dict__`` check as the other hook
@@ -3271,7 +3350,12 @@ class ProxyLogging:
             if "async_post_call_streaming_iterator_hook" in cls_attrs:
                 has_iterator_override = True
                 iterator_overrides.append((resolved, "override"))
-            elif "apply_guardrail" in cls_attrs and not getattr(resolved, "use_native_lifecycle_hooks", False):
+            elif (
+                "apply_guardrail" in cls_attrs
+                and not getattr(resolved, "use_native_lifecycle_hooks", False)
+                and (not isinstance(resolved, CustomGuardrail) or _guardrail_affects_streaming(resolved))
+            ):
+                # pre_call-only guardrails never scan the response stream
                 iterator_overrides.append((resolved, "apply_guardrail"))
             # Walk the MRO for ``async_post_call_streaming_hook`` rather than
             # using the leaf-class ``__dict__`` check used by the other flags:
@@ -3301,6 +3385,8 @@ class ProxyLogging:
             or any(kind == "apply_guardrail" for _, kind in iterator_overrides),
             has_streaming_chunk_override=has_streaming_chunk_override,
             has_guardrail=has_guardrail,
+            has_streaming_guardrail=has_streaming_guardrail,
+            has_during_call_guardrail=has_during_call_guardrail,
             has_pre_call_override=has_pre_call_override,
             has_content_enforcer=has_content_enforcer,
             has_moderation_override=has_moderation_override,
@@ -3336,14 +3422,14 @@ class ProxyLogging:
     @staticmethod
     def has_streaming_callbacks() -> bool:
         caps: Final = ProxyLogging.callback_capabilities()
-        return caps.has_iterator_override or caps.has_streaming_chunk_override or caps.has_guardrail
+        return caps.has_iterator_override or caps.has_streaming_chunk_override or caps.has_streaming_guardrail
 
     @staticmethod
     def has_streaming_chunk_hook_overrides() -> bool:
         """True iff any callback overrides ``async_post_call_streaming_hook``
         (the per-chunk hook, distinct from the iterator wrapper)."""
         caps: Final = ProxyLogging.callback_capabilities()
-        return caps.has_streaming_chunk_override or caps.has_guardrail
+        return caps.has_streaming_chunk_override or caps.has_streaming_guardrail
 
     def needs_iterator_wrap(self) -> bool:
         """Whether ``async_data_generator`` needs to wrap the upstream stream
@@ -3358,11 +3444,11 @@ class ProxyLogging:
         method for the same reason as :py:meth:`needs_iterator_wrap`.
         """
         caps: Final = ProxyLogging.callback_capabilities()
-        return caps.has_streaming_chunk_override or caps.has_guardrail
+        return caps.has_streaming_chunk_override or caps.has_streaming_guardrail
 
     @staticmethod
     def has_during_call_guardrails() -> bool:
-        return ProxyLogging.callback_capabilities().has_guardrail
+        return ProxyLogging.callback_capabilities().has_during_call_guardrail
 
     async def during_call_hook(
         self,
@@ -3371,7 +3457,7 @@ class ProxyLogging:
         call_type: CallTypesLiteral,
     ):
         caps: Final = ProxyLogging.callback_capabilities()
-        if not caps.has_guardrail and not caps.has_moderation_override:
+        if not caps.has_during_call_guardrail and not caps.has_moderation_override:
             return data
         # Step 1: Collect all guardrail tasks to run in parallel
         guardrail_tasks: Final = []
@@ -4295,7 +4381,7 @@ class ProxyLogging:
         # chunk so paying it per chunk for no-op callbacks dominated stream
         # CPU time even after the iterator-chain fix.
         caps: Final = ProxyLogging.callback_capabilities()
-        if not caps.has_streaming_chunk_override and not caps.has_guardrail:
+        if not caps.has_streaming_chunk_override and not caps.has_streaming_guardrail:
             return response
 
         from litellm.proxy.proxy_server import llm_router
@@ -4313,7 +4399,7 @@ class ProxyLogging:
             _cached_guardrail_data: dict | None = None
             _guardrail_data_computed = False
             pipeline_gated: Final = (
-                stream_gated_guardrail_names(data, user_api_key_dict) if caps.has_guardrail else frozenset()
+                stream_gated_guardrail_names(data, user_api_key_dict) if caps.has_streaming_guardrail else frozenset()
             )
 
             for callback in litellm.callbacks:
