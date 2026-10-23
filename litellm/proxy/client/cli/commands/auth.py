@@ -2,12 +2,14 @@ import os
 import sys
 import time
 import webbrowser
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any, Final, Protocol, TypeVar
 from urllib.parse import urlencode
 
 import click
 import requests
+from filelock import Timeout
 from pydantic import ConfigDict, TypeAdapter
 from rich.console import Console
 from rich.table import Table
@@ -35,6 +37,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     CredentialNotSaved,
     SecretSave,
     clear_cli_token,
+    cli_token_lock,
     get_cli_token_file_path,
     is_cli_token_fresh,
     load_cli_token,
@@ -850,6 +853,22 @@ def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: Secr
     show_commands()
 
 
+@contextmanager
+def _locked_credentials() -> Generator[None, None, None]:
+    try:
+        lock: Final = cli_token_lock()
+        lock.acquire()
+    except (OSError, Timeout) as error:
+        raise click.ClickException(
+            "Could not lock the CLI credential store. No credential operation was started"
+        ) from error
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+@_locked_credentials()
 def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) -> SecretSave:
     previous: Final = load_token(vault=vault)
     stored: Final = save_token(record, vault=vault)
@@ -987,6 +1006,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
 
 @click.command(name="logout")
 @click.pass_context
+@_locked_credentials()
 def logout(ctx: click.Context):
     """Logout and clear stored authentication"""
     vault: Final = context_secret_vault(ctx)
