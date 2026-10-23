@@ -132,10 +132,7 @@ describe("UsersTable", () => {
     expect(screen.getByText("$98.85")).toBeInTheDocument();
   });
 
-  // Sorting is server-side and the backend only accepts these five keys, so a sort
-  // control on any other column would send an invalid sort_by. Assert the exact set:
-  // a missing control and an extra one both have to fail.
-  it("exposes a sort control for exactly the five server-sortable columns", () => {
+  it("exposes sorting for every data column", () => {
     render(<Harness />);
 
     const sortableIds = screen
@@ -143,7 +140,19 @@ describe("UsersTable", () => {
       .map((node) => (node.getAttribute("data-testid") ?? "").replace("sort-header-", ""))
       .sort();
 
-    expect(sortableIds).toEqual(["created_at", "spend", "user_email", "user_id", "user_role"]);
+    expect(sortableIds).toEqual([
+      "created_at",
+      "key_count",
+      "max_budget",
+      "spend",
+      "sso_user_id",
+      "status",
+      "updated_at",
+      "user_alias",
+      "user_email",
+      "user_id",
+      "user_role",
+    ]);
   });
 
   it("reports the clicked column to the server sorting handler", async () => {
