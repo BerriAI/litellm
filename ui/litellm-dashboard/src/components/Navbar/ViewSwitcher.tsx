@@ -1,4 +1,6 @@
+import { useTranslation } from "@/i18n/useTranslation";
 import React from "react";
+import type { TFunction } from "i18next";
 import { usePathname } from "next/navigation";
 import {
   DropdownMenu,
@@ -20,10 +22,15 @@ function isRoute(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function activeLabelFor(isChatRoute: boolean, isMoyaiRoute: boolean, pluginLabel: string | undefined): string {
-  if (isChatRoute) return "Chat";
+function activeLabelFor(
+  isChatRoute: boolean,
+  isMoyaiRoute: boolean,
+  pluginLabel: string | undefined,
+  t: TFunction,
+): string {
+  if (isChatRoute) return t("Chat");
   if (isMoyaiRoute) return "Moyai";
-  return pluginLabel ?? "AI Gateway";
+  return pluginLabel ?? t("AI Gateway");
 }
 
 interface ViewSwitcherItem {
@@ -34,6 +41,7 @@ interface ViewSwitcherItem {
 }
 
 export default function ViewSwitcher() {
+  const { t } = useTranslation();
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
   const pathname = usePathname();
@@ -46,10 +54,10 @@ export default function ViewSwitcher() {
   const isMoyaiRoute = isRoute(normalizedPathname, uiHref(MOYAI));
   const isStandaloneRoute = isChatRoute || isMoyaiRoute;
 
-  const activeLabel = activeLabelFor(isChatRoute, isMoyaiRoute, plugins.find((p) => p.name === mode)?.display_name);
+  const activeLabel = activeLabelFor(isChatRoute, isMoyaiRoute, plugins.find((p) => p.name === mode)?.display_name, t);
 
   const modeEntries = [
-    { key: GATEWAY, label: "AI Gateway" },
+    { key: GATEWAY, label: t("AI Gateway") },
     ...plugins.map((p) => ({ key: p.name, label: p.display_name })),
   ];
 
@@ -65,7 +73,7 @@ export default function ViewSwitcher() {
         key: CHAT,
         label: (
           <div className="flex items-center justify-between gap-6 py-0.5">
-            <span className="font-medium">Chat</span>
+            <span className="font-medium">{t("Chat")}</span>
             {isChatRoute && <Check className="size-4 text-info" />}
           </div>
         ),
@@ -76,9 +84,9 @@ export default function ViewSwitcher() {
         disabled: true,
         label: (
           <div className="flex max-w-[220px] flex-col py-0.5">
-            <span className="font-medium">Chat</span>
+            <span className="font-medium">{t("Chat")}</span>
             <span className="whitespace-normal text-xs leading-snug text-muted-foreground">
-              Admins can enable in Settings
+              {t("Admins can enable in Settings")}
             </span>
           </div>
         ),
@@ -103,7 +111,7 @@ export default function ViewSwitcher() {
             <img src={moyaiHead.src} alt="" className="h-4 w-auto" />
             <span className="flex flex-col">
               <span className="font-medium">Moyai</span>
-              <span className="text-xs leading-snug text-muted-foreground">Cloud Coding Agent</span>
+              <span className="text-xs leading-snug text-muted-foreground">{t("Cloud Coding Agent")}</span>
             </span>
           </span>
           {isMoyaiRoute && <Check className="size-4 text-info" />}

@@ -1,3 +1,4 @@
+import LanguageProvider from "@/i18n/LanguageProvider";
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
@@ -29,14 +30,16 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
-          <NuqsAdapter>
-            <ReactQueryProvider>
-              <HotkeysProvider>
-                <AuthProvider>{children}</AuthProvider>
-              </HotkeysProvider>
-              <Toaster />
-            </ReactQueryProvider>
-          </NuqsAdapter>
+          <LanguageProvider>
+            <NuqsAdapter>
+              <ReactQueryProvider>
+                <HotkeysProvider>
+                  <AuthProvider>{children}</AuthProvider>
+                </HotkeysProvider>
+                <Toaster />
+              </ReactQueryProvider>
+            </NuqsAdapter>
+          </LanguageProvider>
         </ThemeProvider>
       </body>
     </html>

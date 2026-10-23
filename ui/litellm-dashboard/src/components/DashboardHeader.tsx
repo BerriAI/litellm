@@ -1,5 +1,7 @@
 "use client";
 
+import LanguageSwitcher from "@/components/LanguageSwitcher";
+import { useTranslation } from "@/i18n/useTranslation";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -40,6 +42,7 @@ export function DashboardHeader({
   navigationTrigger?: ReactNode;
   deploymentHealth?: ReactNode;
 }) {
+  const { t } = useTranslation();
   const { title } = getBreadcrumb(usePathname());
   const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
@@ -66,7 +69,7 @@ export function DashboardHeader({
           </BreadcrumbItem>
           <BreadcrumbSeparator className="max-md:hidden" />
           <BreadcrumbItem className="min-w-0">
-            <BreadcrumbPage className="truncate">{title}</BreadcrumbPage>
+            <BreadcrumbPage className="truncate">{t(title)}</BreadcrumbPage>
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
@@ -85,6 +88,7 @@ export function DashboardHeader({
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}
         <ToolbarSeparator />
+        <LanguageSwitcher />
         <ThemeToggle />
         {deploymentHealth}
         <NotificationsBell accessToken={accessToken} />
@@ -94,15 +98,18 @@ export function DashboardHeader({
         {deploymentHealth}
         <NotificationsBell accessToken={accessToken} />
         <Popover open={!isDesktop && mobileToolsOpen} onOpenChange={setMobileToolsOpen}>
-          <PopoverTrigger render={<Button variant="ghost" size="icon" className="size-11" aria-label="More options" />}>
+          <PopoverTrigger
+            render={<Button variant="ghost" size="icon" className="size-11" aria-label={t("More options")} />}
+          >
             <Ellipsis />
           </PopoverTrigger>
           <PopoverContent align="end" className="max-w-[calc(100vw-2rem)]">
-            <PopoverTitle>Gateway tools</PopoverTitle>
+            <PopoverTitle>{t("Gateway tools")}</PopoverTitle>
             <ViewSwitcher />
             {showWorkerSwitch && <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />}
             <div className="flex flex-wrap items-center gap-2">
               <LiteAdmin />
+              <LanguageSwitcher />
               <ThemeToggle />
               <DocsLink />
               <BlogDropdown />

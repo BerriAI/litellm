@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { I18nextProvider } from "react-i18next";
+import { createDashboardI18n } from "@/i18n";
 import ViewSwitcher from "./ViewSwitcher";
 
 const { mockUsePluginMode, mockUseUISettings, mockUsePathname, state } = vi.hoisted(() => {
@@ -51,6 +53,21 @@ describe("ViewSwitcher", () => {
     state.moyaiUrl = undefined;
     state.pathname = "/ui/";
     state.setMode.mockClear();
+  });
+
+  it.each([
+    ["/ui/chat", "聊天"],
+    ["/ui/moyai", "Moyai"],
+    ["/ui/", "AI 网关"],
+  ])("localizes the active built-in label on %s without changing the product name", (pathname, label) => {
+    state.pathname = pathname;
+    state.enableChatUI = true;
+    render(
+      <I18nextProvider i18n={createDashboardI18n("zh-CN")}>
+        <ViewSwitcher />
+      </I18nextProvider>,
+    );
+    expect(screen.getByRole("button", { name: label, exact: true })).toBeInTheDocument();
   });
 
   it("still renders the selector with a disabled Chat hint when there are no plugins and chat is off", async () => {
