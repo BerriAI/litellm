@@ -61,6 +61,7 @@ RUN apk add --no-cache \
     python-3.13-dev \
     rust \
     openssl \
+    libssl3 \
     openssl-dev \
     nodejs \
     npm \
