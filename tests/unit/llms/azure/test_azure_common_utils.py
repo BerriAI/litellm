@@ -1727,6 +1727,7 @@ def test_azure_v1_api_client_targets_openai_v1_once_whatever_the_api_base_ends_i
         for api_base in (
             "https://test.openai.azure.com",
             "https://test.openai.azure.com/",
+            "https://test.openai.azure.com/openai",
             "https://test.openai.azure.com/openai/v1",
             "https://test.openai.azure.com/openai/v1/",
             "https://test.openai.azure.com/openai/v1/responses",
@@ -1742,6 +1743,16 @@ def test_azure_v1_api_client_targets_openai_v1_once_whatever_the_api_base_ends_i
             "https://gateway.example.com/foundry/openai/openai/v1",
             {"api_version": "v1"},
             "https://gateway.example.com/foundry/openai/openai/v1/responses?api-version=v1",
+        ),
+        (
+            "https://gateway.example.com/foundry/openai",
+            {"api_version": "v1"},
+            "https://gateway.example.com/foundry/openai/openai/v1/responses?api-version=v1",
+        ),
+        (
+            "https://apim.azure-api.net/openai",
+            {"api_version": "v1"},
+            "https://apim.azure-api.net/openai/v1/responses?api-version=v1",
         ),
     ],
 )

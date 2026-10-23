@@ -32,6 +32,7 @@ from litellm.utils import add_path_to_api_base
 azure_ad_cache: Final = DualCache()
 _LAST_OPENAI_PATH_SEGMENT: Final = re.compile(r"^(.*/openai)(?=/|$)")
 _OPENAI_V1_ROUTE_PREFIX: Final = re.compile(r"^/?openai(?:/v1)?(?=/)")
+_AZURE_OWNED_HOST_SUFFIXES: Final = (".azure.com", ".azure-api.net")
 
 
 class _AzureAdTokenJson(TypedDict, total=False):
@@ -898,11 +899,15 @@ class BaseAzureLLM(BaseOpenAILLM):
         )
         base_path: Final = original_url.path.rstrip("/")
 
+        # On Azure's own hosts a trailing /openai is Azure's route, elsewhere it can be a gateway prefix, as in chat
+        follows_chat_route: Final = v1_endpoint is not None and (
+            base_path.endswith("/openai/v1") or not original_url.host.endswith(_AZURE_OWNED_HOST_SUFFIXES)
+        )
         url_with_route: Final = (
             api_base
             if route in api_base or (v1_endpoint is not None and base_path.endswith(f"/openai/v1{v1_endpoint}"))
-            else join_api_base(str(original_url.copy_with(params={})), v1_endpoint)
-            if v1_endpoint is not None and base_path.endswith("/openai/v1")
+            else join_api_base(ensure_api_route(str(original_url.copy_with(params={})), "openai/v1"), v1_endpoint)
+            if follows_chat_route and v1_endpoint is not None
             else add_path_to_api_base(api_base=api_base, ending_path=route)
         )
         parsed_url: Final = httpx.URL(url_with_route)
