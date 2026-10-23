@@ -88,3 +88,86 @@ async def test_async_resolve_file_references_fetches_the_file_metadata_for_both_
         async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(_files_api_metadata)),
     )
     assert resolved == {reference: {"mime_type": "video/mp4", "uri": FILES_URI}}
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_embedding_forwards_timeout_to_batch_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+) -> None:
+    """Regression for #47300: main.embedding must pass timeout into GoogleBatchEmbeddings."""
+    captured: dict[str, object] = {}
+
+    def _fake_batch_embeddings(**kwargs: object) -> litellm.EmbeddingResponse:
+        captured.clear()
+        captured.update(kwargs)
+        response = litellm.EmbeddingResponse()
+        response.data = [{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}]
+        return response
+
+    monkeypatch.setattr(litellm.main.google_batch_embeddings, "batch_embeddings", _fake_batch_embeddings)
+
+    if sync_mode:
+        litellm.embedding(
+            model="gemini/gemini-embedding-001",
+            input=["hello"],
+            api_key="gemini-test-key",
+            timeout=45,
+        )
+    else:
+        await litellm.aembedding(
+            model="gemini/gemini-embedding-001",
+            input=["hello"],
+            api_key="gemini-test-key",
+            timeout=45,
+        )
+
+    assert "timeout" in captured
+    assert captured["timeout"] == 45
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_vertex_ai_embed_content_forwards_timeout_to_batch_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+) -> None:
+    """Regression for #47300: vertex_ai uses_embed_content path must pass timeout."""
+    captured: dict[str, object] = {}
+
+    def _fake_batch_embeddings(**kwargs: object) -> litellm.EmbeddingResponse:
+        captured.clear()
+        captured.update(kwargs)
+        response = litellm.EmbeddingResponse()
+        response.data = [{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}]
+        return response
+
+    monkeypatch.setattr(litellm.main.google_batch_embeddings, "batch_embeddings", _fake_batch_embeddings)
+    # Force the uses_embed_content branch without depending on live model-cost JSON.
+    monkeypatch.setattr(
+        litellm.main,
+        "get_model_info",
+        lambda **_kwargs: {"uses_embed_content": True},
+    )
+
+    if sync_mode:
+        litellm.embedding(
+            model="vertex_ai/gemini-embedding-2",
+            input=["hello"],
+            timeout=45,
+            vertex_project="test-project",
+            vertex_location="us-central1",
+        )
+    else:
+        await litellm.aembedding(
+            model="vertex_ai/gemini-embedding-2",
+            input=["hello"],
+            timeout=45,
+            vertex_project="test-project",
+            vertex_location="us-central1",
+        )
+
+    assert "timeout" in captured
+    assert captured["timeout"] == 45
+    assert captured.get("custom_llm_provider") == "vertex_ai"
