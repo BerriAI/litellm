@@ -5,8 +5,10 @@ retry loop and swaps the payload for OTLP/JSON (enums as integers, ids as hex).
 """
 
 import base64
+import gzip
 import json
-from collections.abc import Mapping, Sequence
+import zlib
+from collections.abc import Mapping, MutableMapping, Sequence
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -14,7 +16,9 @@ import requests
 from google.protobuf.json_format import MessageToDict
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.sdk.trace import ReadableSpan
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 JSON_CONTENT_TYPE: Final = "application/json"
 _HEX_ID_KEYS: Final = frozenset({"traceId", "spanId", "parentSpanId"})
@@ -56,10 +60,65 @@ def _hex_resource_spans(resource: _JsonObject) -> _JsonObject:
 
 
 def encode_spans_json(spans: Sequence[ReadableSpan]) -> bytes:
-    payload: Final[_JsonObject] = MessageToDict(encode_spans(spans), use_integers_for_enums=True)
+    return _encode_trace_request_json(encode_spans(spans))
+
+
+def _encode_trace_request_json(request: ExportTraceServiceRequest) -> bytes:
+    payload: Final[_JsonObject] = MessageToDict(request, use_integers_for_enums=True)
     resource_spans: Final = tuple(_hex_resource_spans(resource) for resource in _objects(payload, "resourceSpans"))
     hexed: Final[_JsonObject] = MappingProxyType({**payload, "resourceSpans": resource_spans})
     return json.dumps(hexed, default=dict, separators=(",", ":")).encode()
+
+
+class _SendOptions(TypedDict, total=False):
+    stream: ReadOnly[bool | None]
+    verify: ReadOnly[bool | str | None]
+    proxies: ReadOnly[MutableMapping[str, str] | None]
+    cert: ReadOnly[str | tuple[str, str] | None]
+    timeout: ReadOnly[float | tuple[float | None, float | None] | None]
+    allow_redirects: ReadOnly[bool]
+
+
+def _json_request_body(body: bytes, compression: str) -> bytes:
+    match compression:
+        case "gzip":
+            return gzip.compress(_json_request_body(gzip.decompress(body), ""))
+        case "deflate":
+            return zlib.compress(_json_request_body(zlib.decompress(body), ""))
+        case _:
+            return _encode_trace_request_json(ExportTraceServiceRequest.FromString(body))
+
+
+class _JsonSession(requests.Session):
+    def __init__(self, session: requests.Session) -> None:
+        super().__init__()
+        self._delegate = session
+        self.headers.clear()
+        self.trust_env = False
+        self.verify = session.verify
+        self.cert = session.cert
+        self.stream = session.stream
+
+    def send(self, request: requests.PreparedRequest, **kwargs: Unpack[_SendOptions]) -> requests.Response:
+        if not isinstance(request.body, bytes):
+            raise ValueError("OTLP protobuf request body must be bytes")
+        body: Final = _json_request_body(request.body, request.headers.get("Content-Encoding", ""))
+        headers: Final = {
+            key: value
+            for key, value in request.headers.items()
+            if key.lower() not in {"content-type", "content-length"}
+        }
+        return self._delegate.request(
+            method=request.method or "POST",
+            url=request.url or "",
+            data=body,
+            headers={**headers, "Content-Type": JSON_CONTENT_TYPE},
+            **kwargs,
+        )
+
+    def close(self) -> None:
+        self._delegate.close()
+        super().close()
 
 
 class OTLPJsonSpanExporter(OTLPSpanExporter):
@@ -70,8 +129,5 @@ class OTLPJsonSpanExporter(OTLPSpanExporter):
         certificate_file: str | None = None,
         session: "requests.Session | None" = None,
     ) -> None:
-        super().__init__(endpoint=endpoint, headers=headers, certificate_file=certificate_file, session=session)
-        self._session.headers["Content-Type"] = JSON_CONTENT_TYPE
-
-    def _serialize_spans(self, spans: Sequence[ReadableSpan]) -> bytes:
-        return encode_spans_json(spans)
+        json_session: Final = _JsonSession(session if session is not None else requests.Session())
+        super().__init__(endpoint=endpoint, headers=headers, certificate_file=certificate_file, session=json_session)
