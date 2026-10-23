@@ -1,4 +1,4 @@
-from typing import Any, Final, cast
+from typing import Any, Final
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -95,20 +95,18 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         model the cost map does not know (see #40890). Pop them before the
         base transform so no drop warning fires, restore afterwards.
         """
-        params: Final[dict[str, object]] = cast(dict[str, object], anthropic_messages_optional_request_params)
+        params: Final[dict[str, object]] = anthropic_messages_optional_request_params
         stashed: Final[dict[str, object]] = {}
         for _key in ("thinking", "output_config", "temperature"):
             if _key in params:
                 stashed[_key] = params.pop(_key)
-        request: Final[dict[str, object]] = cast(
-            dict[str, object],
-            super().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # base returns unparameterized dict
-                model=model,
-                messages=messages,
-                anthropic_messages_optional_request_params=params,
-                litellm_params=litellm_params,
-                headers=headers,
-            ),
+        # base returns an unparameterized dict; annotate at the boundary
+        request: Final[dict[str, object]] = super().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # base signature is unparameterized
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=params,
+            litellm_params=litellm_params,
+            headers=headers,
         )
         if self.supports_cache_control_ttl():
             request.update(stashed)
