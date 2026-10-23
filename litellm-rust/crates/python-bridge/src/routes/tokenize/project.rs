@@ -39,6 +39,10 @@ pub(super) fn project_request(
             .transpose()?
             .unwrap_or_default(),
         optional_params: view.body_params(py, arguments, MODULE)?,
+        deployment_params: argument("_tokenize_deployment_params")?
+            .map(|value| from_py(&value))
+            .transpose()?
+            .unwrap_or_default(),
         timeout: optional_timeout(timeout),
     })
 }

@@ -2615,8 +2615,8 @@ class Router:
 
         from litellm.tokenize import atokenize, tokenize
 
-        self.atokenize = self.factory_function(atokenize, call_type="atokenize")
-        self.tokenize = self.factory_function(tokenize, call_type="tokenize")
+        self.atokenize = self.factory_function(atokenize, call_type="atokenize")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
+        self.tokenize = self.factory_function(tokenize, call_type="tokenize")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
 
         from litellm.search import asearch, search
 
@@ -6191,6 +6191,8 @@ class Router:
         Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
         """
 
+        from litellm.tokenize.routing import deployment_kwargs as tokenize_deployment_kwargs
+
         passthrough_on_no_deployment: Final = kwargs.pop("passthrough_on_no_deployment", False)
         function_name: Final = "_ageneric_api_call_with_fallbacks"
         handler_name: Final[str | None] = getattr(original_generic_function, "__name__", None)
@@ -6230,7 +6232,11 @@ class Router:
             generic_function_name: Final[str] = getattr(original_generic_function, "__name__", "")
 
             response_kwargs: Final = {
-                **data,
+                **(
+                    tokenize_deployment_kwargs(_LITELLM_PARAMS_ADAPTER.validate_python(data))
+                    if handler_name == "atokenize"
+                    else data
+                ),
                 "caching": self.cache_responses,
                 **kwargs,
                 "model": model_name,
@@ -6948,6 +6954,8 @@ class Router:
         Returns:
             The response from the handler function
         """
+        from litellm.tokenize.routing import deployment_kwargs as tokenize_deployment_kwargs
+
         handler_name: Final = original_function.__name__
         metadata_variable_name: Final = get_router_metadata_variable_name(function_name="generic_api_call")
         try:
@@ -6992,7 +7000,11 @@ class Router:
 
             response: Final = original_function(
                 **{
-                    **data,
+                    **(
+                        tokenize_deployment_kwargs(_LITELLM_PARAMS_ADAPTER.validate_python(data))
+                        if handler_name == "tokenize"
+                        else data
+                    ),
                     "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     **kwargs,

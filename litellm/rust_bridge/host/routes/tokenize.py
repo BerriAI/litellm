@@ -20,7 +20,9 @@ _BODY_FIELDS: Final = frozenset(
 )
 
 
-_PROJECTED_FIELDS: Final = frozenset({"model", "prompt", "timeout", "base_url", "extra_headers"})
+_PROJECTED_FIELDS: Final = frozenset(
+    {"model", "prompt", "timeout", "base_url", "extra_headers", "_tokenize_deployment_params"}
+)
 
 
 def body_params(request: Mapping[str, object]) -> Mapping[str, object]:

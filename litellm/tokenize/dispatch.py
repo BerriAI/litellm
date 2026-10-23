@@ -27,7 +27,7 @@ def _bind_request(
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, object] | None = None,
+    extra_headers: Mapping[str, object] | None = None,
     **kwargs: object,  # kwargs-ok: public tokenization accepts provider-specific options
 ) -> Mapping[str, object]:
     return MappingProxyType(
@@ -69,8 +69,9 @@ _ADISPATCH: Final = PublicDispatch(
 
 
 def tokenize(
-    *args: object, **kwargs: object
-) -> TokenizeResponse | Coroutine[object, object, TokenizeResponse]:  # kwargs-ok: public SDK signature
+    *args: object,
+    **kwargs: object,  # kwargs-ok: preserve the public SDK keyword contract
+) -> TokenizeResponse | Coroutine[object, object, TokenizeResponse]:
     if _FLAG.requested(kwargs):
         return atokenize(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(

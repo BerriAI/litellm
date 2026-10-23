@@ -1,3 +1,4 @@
+import asyncio
 from typing import Final
 
 import pytest
@@ -98,8 +99,10 @@ async def test_deployment_hook_rewrites_input_before_native_projection(
     assert server.requests[0].body["prompt"] == "rewritten"
 
 
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_router_resolves_alias_before_tokenization(
     server: RecordingServer,
+    asynchronous: bool,
 ) -> None:
     router: Final = litellm.Router(
         model_list=[
@@ -109,15 +112,26 @@ async def test_router_resolves_alias_before_tokenization(
                     "model": "hosted_vllm/acme/model",
                     "api_base": server.base_url,
                     "api_key": "deployment-key",
+                    "temperature": 0.7,
+                    "max_tokens": 128,
+                    "add_special_tokens": False,
                 },
             }
         ]
     )
-    response: Final = await router.atokenize(model="tokenizer", prompt="Hello world")
+    response: Final = (
+        await router.atokenize(model="tokenizer", prompt="Hello world")
+        if asynchronous
+        else await asyncio.to_thread(router.tokenize, model="tokenizer", prompt="Hello world")
+    )
     assert isinstance(response, TokenizeResponse)
     assert_served_natively(server, response)
     assert server.requests[0].body["model"] == "acme/model"
     assert server.requests[0].headers["authorization"] == "Bearer deployment-key"
+
+    assert server.requests[0].body["add_special_tokens"] is False
+    assert "temperature" not in server.requests[0].body
+    assert "max_tokens" not in server.requests[0].body
 
 
 async def test_upstream_status_remains_a_public_error(server: RecordingServer) -> None:

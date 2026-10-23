@@ -39213,6 +39213,53 @@
           "title": "RegisterGuardrailResponse",
           "type": "object"
         },
+        "TokenizeResponse": {
+          "properties": {
+            "count": {
+              "minimum": 0.0,
+              "title": "Count",
+              "type": "integer"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "token_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Ids"
+            },
+            "tokens": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tokens"
+            }
+          },
+          "required": [
+            "model",
+            "count"
+          ],
+          "title": "TokenizeResponse",
+          "type": "object"
+        },
         "ValidationError": {
           "properties": {
             "ctx": {
@@ -40459,12 +40506,42 @@
         "post": {
           "description": "Tokenize a string with a configured model, returning its token count and available tokens.",
           "operationId": "tokenize_tokenize_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "tokenizer",
+                  "prompt": "Hello world"
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "model": {
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "prompt": {
+                      "title": "Prompt",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "model",
+                    "prompt"
+                  ],
+                  "title": "TokenizeRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
                   "schema": {
-                    "title": "Response Tokenize Tokenize Post"
+                    "$ref": "#/components/schemas/TokenizeResponse"
                   }
                 }
               },

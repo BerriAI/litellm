@@ -32,6 +32,15 @@ pub fn app(model: &str, api_base: &str) -> Router {
     app_with_permissions(model, api_base, litellm_gateway_auth::Permissions::All)
 }
 
+pub fn app_with_deployment(deployment: Deployment) -> Router {
+    configured_deployment_app(
+        deployment,
+        litellm_gateway_auth::Permissions::All,
+        None,
+        None,
+    )
+}
+
 pub fn app_with_permissions(
     model: &str,
     api_base: &str,
@@ -76,6 +85,26 @@ fn configured_app(
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     principal: Option<litellm_gateway_auth::Principal>,
 ) -> Router {
+    configured_deployment_app(
+        Deployment {
+            model: model.into(),
+            api_base: Some(api_base.into()),
+            api_key: Some("test-key".into()),
+            timeout: Some(Duration::from_secs(5)),
+            ..Default::default()
+        },
+        permissions,
+        cache,
+        principal,
+    )
+}
+
+fn configured_deployment_app(
+    deployment: Deployment,
+    permissions: litellm_gateway_auth::Permissions,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    principal: Option<litellm_gateway_auth::Principal>,
+) -> Router {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let http = Resolution::from(&HttpSettings::default()).config;
     let secrets = Arc::new(NoSecrets);
@@ -84,18 +113,7 @@ fn configured_app(
         resources,
         http,
         secrets,
-        [(
-            "public/model".into(),
-            Deployment {
-                model: model.into(),
-                api_base: Some(api_base.into()),
-                api_key: Some("test-key".into()),
-                timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
-        )]
-        .into_iter()
-        .collect(),
+        [("public/model".into(), deployment)].into_iter().collect(),
     )
     .unwrap();
     let gateway = match cache {

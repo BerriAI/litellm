@@ -13,7 +13,7 @@ use litellm_inference::provider::ResolvedProvider;
 use litellm_llms::base_llm::{auth::resolve_auth, tokenize::transformation::BaseTokenizeConfig};
 use litellm_llms_types::formats::tokenize::TokenizeResponse;
 use litellm_secrets::source::Secrets;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{Error, TokenizeRequest, TokenizeRoute};
 
@@ -27,7 +27,15 @@ pub(crate) async fn execute(
     observers: Option<&ObservationSender>,
 ) -> Result<TokenizeResponse, Error> {
     let env_lookup = |key: &str| secrets.get(key);
-    let params = config.map_tokenize_params(provider.model, &call.optional_params)?;
+    let supported_params = config.get_supported_tokenize_params();
+    let params: Map<String, Value> = call
+        .deployment_params
+        .iter()
+        .filter(|(key, _)| supported_params.contains(&key.as_str()))
+        .chain(call.optional_params.iter())
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let params = config.map_tokenize_params(provider.model, &params)?;
     let headers = string_headers("tokenize", Some(call.extra_headers.clone()))?;
     let environment = config.validate_environment(
         headers,
@@ -90,7 +98,10 @@ pub(crate) async fn execute(
             ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
         ));
     }
-    interceptors.after_provider_response(raw.clone()).await?;
+    interceptors
+        .after_provider_response(raw.clone())
+        .await
+        .map_err(Error::post_call)?;
     let json = serde_json::from_str(&raw.body).map_err(|error| {
         Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
             "tokenize response JSON",

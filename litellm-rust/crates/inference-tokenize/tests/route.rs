@@ -176,6 +176,53 @@ async fn hosted_execution_is_lazy_and_applies_hooks_before_dispatch() {
     );
 }
 
+struct FailingPostCall;
+
+impl Interceptors<Error> for FailingPostCall {
+    async fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        _: RequestContext,
+    ) -> Result<WireRequest, Error> {
+        Ok(wire)
+    }
+
+    async fn after_provider_response(&self, _: RawResponse) -> Result<(), Error> {
+        Err(Error::InvalidRequest("post-call callback failed".into()))
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn post_call_failures_are_not_request_failures_and_do_not_replay(route: TokenizeRoute) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"count":1,"tokens":[7]})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = route
+        .execute(
+            TokenizeRequest {
+                model: "hosted_vllm/model".into(),
+                prompt: "hello".into(),
+                api_base: Some(server.uri()),
+                ..Default::default()
+            },
+            &FailingPostCall,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(!error.is_request());
+    let Error::PostCallHook(cause) = error else {
+        panic!("post-call errors must preserve their origin")
+    };
+    assert!(
+        matches!(cause.as_ref(), Error::InvalidRequest(message) if message == &"post-call callback failed".into())
+    );
+}
+
 #[rstest]
 #[case::rate_limit(429)]
 #[case::unavailable(503)]

@@ -18,10 +18,20 @@ pub(crate) async fn create(
     request::authorize_model(&identity, deployment, &body).await?;
     let payload: TokenizePayload = serde_json::from_value(Value::Object(body.clone()))
         .map_err(|error| Error::InvalidBody(error.to_string()))?;
-    let optional_params: Map<String, Value> = deployment
+    let extra_headers: Option<Map<String, Value>> = serde_json::from_value(
+        deployment
+            .litellm_params
+            .extra
+            .get("extra_headers")
+            .cloned()
+            .unwrap_or(Value::Null),
+    )
+    .map_err(|_| Error::InvalidBody("deployment extra_headers must be an object or null".into()))?;
+    let deployment_params = deployment
         .litellm_params
         .extra
         .iter()
+        .filter(|(key, _)| key.as_str() != "extra_headers")
         .map(|(key, value)| (key.clone(), value.clone()))
         .chain(
             deployment
@@ -30,10 +40,10 @@ pub(crate) async fn create(
                 .as_ref()
                 .map(|version| ("api_version".into(), Value::String(version.clone()))),
         )
-        .chain(
-            body.into_iter()
-                .filter(|(key, _)| !matches!(key.as_str(), "model" | "prompt")),
-        )
+        .collect();
+    let optional_params = body
+        .into_iter()
+        .filter(|(key, _)| !matches!(key.as_str(), "model" | "prompt"))
         .collect();
     gateway
         .tokenize
@@ -44,9 +54,10 @@ pub(crate) async fn create(
                 custom_llm_provider: deployment.custom_llm_provider.clone(),
                 api_key: deployment.api_key.clone().map(SecretValue::new),
                 api_base: deployment.api_base.clone(),
+                extra_headers: extra_headers.unwrap_or_default(),
+                deployment_params,
                 optional_params,
                 timeout: deployment.timeout,
-                ..Default::default()
             },
             &(),
             None,
