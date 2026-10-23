@@ -1,10 +1,36 @@
 import { renderHook, act } from "@testing-library/react";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useChatHistory } from "./useChatHistory";
 
 describe("useChatHistory", () => {
   beforeEach(() => {
     localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("creates unique conversation and message IDs without crypto.randomUUID", () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    const { result } = renderHook(() => useChatHistory(null, "http-user"));
+
+    act(() => {
+      result.current.createConversation("test-model");
+    });
+    const conversationId = result.current.currentActiveId!;
+    act(() => {
+      result.current.appendMessage(conversationId, { role: "user", content: "Hello" });
+      result.current.appendMessage(conversationId, { role: "assistant", content: "Hi" });
+    });
+
+    const conversation = result.current.activeConversation!;
+    const ids = [conversation.id, ...conversation.messages.map((message) => message.id)];
+    expect(new Set(ids).size).toBe(3);
+    for (const id of ids) {
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    }
+    expect(conversation.messages.map((message) => message.content)).toEqual(["Hello", "Hi"]);
   });
 
   it("does not leak conversations between different users on the same browser", () => {

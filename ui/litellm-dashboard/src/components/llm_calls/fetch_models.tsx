@@ -27,7 +27,9 @@ const toModelGroup = (item: AvailableModel): ModelGroup => {
   const groupName = (item.model_group || item.id || item.model_name) ?? "";
   return {
     model_group: groupName,
-    ...(item.providers && { providers: item.providers }),
+    ...(Array.isArray(item.providers) && {
+      providers: item.providers.filter((provider) => typeof provider === "string"),
+    }),
     ...(item.mode && { mode: item.mode }),
     ...(item.supports_reasoning === true && { supports_reasoning: true }),
     ...(item.supports_fast_mode === true && { supports_fast_mode: true }),
