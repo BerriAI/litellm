@@ -1,11 +1,15 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
 import React, { useMemo, useState } from "react";
 
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import { DataTable } from "@/components/shared/DataTable";
+import {
+  DataTable,
+  DEFAULT_PAGE_SIZE_OPTIONS,
+  useUrlTableState,
+  type UrlTableStateOptions,
+} from "@/components/shared/DataTable";
 import { toast } from "@/lib/toast";
 import { isProxyAdminRole } from "@/utils/roles";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -18,7 +22,13 @@ import {
 import AccessGroupBudgetModal from "@/app/(dashboard)/models-and-endpoints/components/AccessGroupBudgetModal";
 import { getAccessGroupBudgetColumns } from "@/app/(dashboard)/models-and-endpoints/components/AccessGroupBudgetColumns";
 
-const DEFAULT_SORTING: SortingState = [{ id: "access_group", desc: false }];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["access_group", "deployment_count", "spend"],
+  defaultSort: { id: "access_group", desc: false },
+  defaultPageSize: DEFAULT_PAGE_SIZE_OPTIONS[0],
+  filterColumns: [],
+  keyPrefix: "ag_budgets_",
+};
 
 function EmptyState() {
   return (
@@ -40,7 +50,7 @@ export default function AccessGroupBudgetsPanel() {
   const setBudget = useSetModelAccessGroupBudget();
   const clearBudget = useDeleteModelAccessGroupBudget();
 
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
   const [editing, setEditing] = useState<ModelAccessGroup | null>(null);
   const [clearing, setClearing] = useState<ModelAccessGroup | null>(null);
 
@@ -85,11 +95,13 @@ export default function AccessGroupBudgetsPanel() {
       <DataTable
         data={accessGroups ?? []}
         paginationMode="client"
+        pagination={pagination}
+        onPaginationChange={onPaginationChange}
         columns={columns}
         getRowId={(group) => group.access_group}
         sortingMode="client"
         sorting={sorting}
-        onSortingChange={setSorting}
+        onSortingChange={onSortingChange}
         isLoading={isLoading}
         loadingMessage="Loading model access groups…"
         noDataMessage={<EmptyState />}

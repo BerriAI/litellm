@@ -1,9 +1,13 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { useMemo } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import {
+  DataTable,
+  useUrlTableState,
+  type UrlTableState,
+  type UrlTableStateOptions,
+} from "@/components/shared/DataTable";
 import { AutoRouterIcon } from "@/components/shared/table_cells";
 
 import { getAutoRoutersTableColumns } from "./AutoRoutersTableColumns";
@@ -19,10 +23,20 @@ interface AutoRoutersTableProps {
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
-const DEFAULT_SORTING: SortingState = [
-  { id: "createdAt", desc: true },
-  { id: "name", desc: false },
-];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["name", "createdAt"],
+  defaultSort: { id: "createdAt", desc: true },
+  defaultPageSize: PAGE_SIZE_OPTIONS[0],
+  maxPageSize: Math.max(...PAGE_SIZE_OPTIONS),
+  filterColumns: [],
+  keyPrefix: "auto_routers_",
+};
+
+const byName = (a: AutoRouterRow, b: AutoRouterRow) => a.name.localeCompare(b.name);
+
+export function useAutoRoutersTableState(): UrlTableState {
+  return useUrlTableState(TABLE_STATE_OPTIONS);
+}
 
 function EmptyState({ canModify }: { canModify: boolean }) {
   return (
@@ -47,19 +61,24 @@ export function AutoRoutersTable({
   onRouterClick,
   onDeleteClick,
 }: AutoRoutersTableProps) {
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useAutoRoutersTableState();
   const columns = useMemo(
     () => getAutoRoutersTableColumns({ canModify, onRouterClick, onDeleteClick }),
     [canModify, onRouterClick, onDeleteClick],
   );
+  const routersByName = useMemo(() => [...routers].sort(byName), [routers]);
 
   return (
     <DataTable
-      data={routers}
+      data={routersByName}
       columns={columns}
       getRowId={(router) => router.id}
       sortingMode="client"
-      defaultSorting={DEFAULT_SORTING}
+      sorting={sorting}
+      onSortingChange={onSortingChange}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       pageSizeOptions={PAGE_SIZE_OPTIONS}
       isLoading={isLoading}
       loadingMessage="Loading auto routers…"

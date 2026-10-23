@@ -1,5 +1,6 @@
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders, screen, testQueryClient, waitFor } from "@/../tests/test-utils";
 
@@ -95,7 +96,7 @@ const DEPLOYMENTS = [
   },
 ];
 
-const pageOf = (data: typeof DEPLOYMENTS) => ({
+const pageOf = (data: readonly unknown[]) => ({
   data,
   total_count: data.length,
   current_page: 1,
@@ -127,6 +128,12 @@ const A_FULL_PAGE_AND_TWO_MORE = Array.from({ length: 12 }, (_, index) => ({
   },
 }));
 
+const JUST_CREATED_ROUTER = {
+  ...A_FULL_PAGE_AND_TWO_MORE[0],
+  model_name: "router-13-just-created",
+  model_info: { id: "bulk-13", db_model: true, created_at: "2026-08-13T00:00:00.000000+00:00" },
+};
+
 /** Row order as rendered, header row dropped. */
 const routerNamesInOrder = () =>
   screen
@@ -134,7 +141,7 @@ const routerNamesInOrder = () =>
     .slice(1)
     .map((row) => row.querySelector("span.text-sm.font-medium")?.textContent ?? "");
 
-const renderPanel = (canModify = true) =>
+const renderPanel = (canModify = true, url: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction } = {}) =>
   renderWithProviders(
     <AutoRoutersPanel
       accessToken="token"
@@ -144,7 +151,14 @@ const renderPanel = (canModify = true) =>
       teams={null}
       createScope={canModify ? "unscoped-ok" : "forbidden"}
     />,
+    url,
   );
+
+const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => {
+  const lastCall = onUrlUpdate.mock.calls.at(-1);
+  if (!lastCall) throw new Error("expected a URL update");
+  return lastCall[0].searchParams;
+};
 
 describe("AutoRoutersPanel", () => {
   beforeEach(() => {
@@ -301,6 +315,16 @@ describe("AutoRoutersPanel", () => {
     ]);
   });
 
+  it("breaks created-at ties by name whatever order the proxy returns them in", async () => {
+    modelInfoCall.mockResolvedValue(pageOf([...DEPLOYMENTS].reverse()));
+
+    renderPanel();
+
+    await screen.findByText("tri-tier-router");
+
+    expect(routerNamesInOrder()).toEqual(["tri-tier-router", "support-router", "adaptive-router", "config-router"]);
+  });
+
   // The reported bug: the newest router was rendered last, so it landed on page 2 and read
   // as never created.
   it("puts a just-created router on the first page of a list longer than one page", async () => {
@@ -312,5 +336,62 @@ describe("AutoRoutersPanel", () => {
     // Page one holds the ten newest, so the two oldest are the ones pushed off it.
     expect(screen.queryByRole("button", { name: "router-01-oldest" })).not.toBeInTheDocument();
     expect(routerNamesInOrder()[0]).toBe("router-12-newest");
+  });
+
+  describe("URL state", () => {
+    it("opens on the page named in the URL once the routers load", async () => {
+      modelInfoCall.mockResolvedValue(pageOf(A_FULL_PAGE_AND_TWO_MORE));
+
+      renderPanel(true, { searchParams: "?auto_routers_page=2" });
+
+      expect(await screen.findByRole("button", { name: "router-01-oldest" })).toBeInTheDocument();
+      expect(routerNamesInOrder()).toEqual(["router-2", "router-01-oldest"]);
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+    });
+
+    it("returns to the first page after a create so the new router is in view", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      modelInfoCall.mockResolvedValue(pageOf(A_FULL_PAGE_AND_TWO_MORE));
+      renderPanel(true, { searchParams: "?auto_routers_page=2", onUrlUpdate });
+
+      await screen.findByRole("button", { name: "router-01-oldest" });
+      modelInfoCall.mockResolvedValue(pageOf([...A_FULL_PAGE_AND_TWO_MORE, JUST_CREATED_ROUTER]));
+
+      await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
+      await user.click(await screen.findByRole("button", { name: "Submit auto router" }));
+
+      expect(await screen.findByRole("button", { name: "router-13-just-created" })).toBeInTheDocument();
+      await waitFor(() => expect(lastUrl(onUrlUpdate).has("auto_routers_page")).toBe(false));
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
+    });
+
+    it("sorts by the column and direction named in the URL", async () => {
+      renderPanel(true, { searchParams: "?auto_routers_sort_by=name&auto_routers_sort_order=asc" });
+
+      await screen.findByText("tri-tier-router");
+
+      expect(routerNamesInOrder()).toEqual(["adaptive-router", "config-router", "support-router", "tri-tier-router"]);
+    });
+
+    it("writes the page and the sort column to the URL", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      modelInfoCall.mockResolvedValue(pageOf(A_FULL_PAGE_AND_TWO_MORE));
+      renderPanel(true, { onUrlUpdate });
+
+      await screen.findByRole("button", { name: "router-12-newest" });
+      await user.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate).get("auto_routers_page")).toBe("2"));
+      expect(routerNamesInOrder()).toEqual(["router-2", "router-01-oldest"]);
+
+      await user.click(screen.getByTestId("sort-header-name"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate).get("auto_routers_sort_by")).toBe("name"));
+      expect(lastUrl(onUrlUpdate).get("auto_routers_sort_order")).toBe("asc");
+      expect(lastUrl(onUrlUpdate).get("auto_routers_page")).toBeNull();
+      expect(routerNamesInOrder()[0]).toBe("router-01-oldest");
+    });
   });
 });

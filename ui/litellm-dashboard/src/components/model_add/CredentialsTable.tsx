@@ -1,11 +1,15 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { KeyRound } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
 import { CredentialItem } from "@/components/networking";
-import { DataTable } from "@/components/shared/DataTable";
+import {
+  DataTable,
+  DEFAULT_PAGE_SIZE_OPTIONS,
+  useUrlTableState,
+  type UrlTableStateOptions,
+} from "@/components/shared/DataTable";
 
 import { getCredentialsTableColumns } from "./CredentialsTableColumns";
 
@@ -17,7 +21,13 @@ interface CredentialsTableProps {
   isLoading?: boolean;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "credential_name", desc: false }];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["credential_name"],
+  defaultSort: { id: "credential_name", desc: false },
+  defaultPageSize: DEFAULT_PAGE_SIZE_OPTIONS[0],
+  filterColumns: [],
+  keyPrefix: "credentials_",
+};
 
 function EmptyState() {
   return (
@@ -38,7 +48,7 @@ const CredentialsTable: React.FC<CredentialsTableProps> = ({
   onDelete,
   isLoading = false,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
 
   const columns = useMemo(
     () => getCredentialsTableColumns({ canModifyCredentials, onEdit, onDelete }),
@@ -49,11 +59,13 @@ const CredentialsTable: React.FC<CredentialsTableProps> = ({
     <DataTable
       data={credentials}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(credential, index) => credential.credential_name || String(index)}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       isLoading={isLoading}
       loadingMessage="Loading credentials…"
       noDataMessage={<EmptyState />}
