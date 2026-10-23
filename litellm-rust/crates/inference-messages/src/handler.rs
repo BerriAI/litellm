@@ -288,7 +288,7 @@ async fn send(
 ) -> Result<reqwest::Response, Error> {
     let request = outbound_request(
         authenticated,
-        url.to_string(),
+        url,
         body,
         Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
     )?;
@@ -859,12 +859,12 @@ mod tests {
                 headers: call.wire.headers,
                 signer: call.signer,
             },
-            call.wire.url,
+            &call.wire.url,
             &call.wire.body,
             None,
         )
         .unwrap();
-        let authorization = signed.header("authorization").unwrap_or_default();
+        let authorization = signed.headers()["authorization"].to_str().unwrap();
         assert!(
             authorization.contains(&format!("/us-west-2/{service}/aws4_request")),
             "{authorization}"
