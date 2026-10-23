@@ -199,7 +199,7 @@ async def latest_release_info(
     Latest stable LiteLLM GitHub release with the PR count of its whole minor line (e.g. v1.105.0 + v1.105.1)
     split into new features, bug fixes and other updates.
     Returns null when GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
-    Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without contacting GitHub.
+    Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without making any outbound request.
     """
     if not release_check_enabled:
         return None
