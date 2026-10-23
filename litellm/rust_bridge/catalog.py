@@ -212,8 +212,8 @@ RULES: Final[Rules] = (
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY, features=RESPONSES_PYTHON_FEATURES),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
-    RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
-    RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),
+    RouteRule(Route.TOKEN_COUNTER, Rollout.RUST_OPT_IN),
+    RouteRule(Route.TOKENIZER, Rollout.RUST_OPT_IN),
     RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
 )
 
