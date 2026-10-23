@@ -95,23 +95,20 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         model the cost map does not know (see #40890). Pop them before the
         base transform so no drop warning fires, restore afterwards.
         """
-        params: Final[dict[str, object]] = (
-            anthropic_messages_optional_request_params  # mutable-ok: popped below to detach the stashed keys
-        )
+        params: Final[dict[str, object]] = anthropic_messages_optional_request_params  # mutable-ok: popped below
         stashed: Final[dict[str, object]] = {}  # mutable-ok: filled key-by-key, then restored onto the request
         for _key in ("thinking", "output_config", "temperature"):
             if _key in params:
                 stashed[_key] = params.pop(_key)
         # base returns an unparameterized dict; annotate at the boundary
-        request: Final[dict[str, object]] = (
-            super().transform_anthropic_messages_request(  # mutable-ok: base returns a dict the caller updates in place  # pyright: ignore[reportUnknownMemberType]  # base signature is unparameterized
-                model=model,
-                messages=messages,
-                anthropic_messages_optional_request_params=params,
-                litellm_params=litellm_params,
-                headers=headers,
-            )
+        base_request: Final = super().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # base signature is unparameterized
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=params,
+            litellm_params=litellm_params,
+            headers=headers,
         )
+        request: Final[dict[str, object]] = base_request  # mutable-ok: stash restored into it before returning
         if self.supports_cache_control_ttl():
             request.update(stashed)
             return request
