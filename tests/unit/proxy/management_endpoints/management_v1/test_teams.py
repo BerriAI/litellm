@@ -137,6 +137,8 @@ class _MembershipTable:
         relation: Final = data.get("litellm_budget_table")
         if isinstance(relation, dict) and relation.get("disconnect"):
             self.rows[index] = self.rows[index].model_copy(update={"budget_id": None})
+        if isinstance(relation, dict) and isinstance(connected := relation.get("connect"), dict):
+            self.rows[index] = self.rows[index].model_copy(update={"budget_id": connected["budget_id"]})
         return self.rows[index]
 
     async def upsert(self, where: Mapping[str, Mapping[str, str]], data: Mapping[str, object]) -> _MembershipRow:
@@ -179,6 +181,9 @@ class _Db:
         self.litellm_teamtable = _TeamTable(teams)
         self.litellm_budgettable = _BudgetTable(budgets)
         self.litellm_teammembership = _MembershipTable(self.litellm_budgettable, memberships)
+
+    async def query_raw(self, query: str, *args: object) -> list[object]:
+        return []
 
 
 class _FakePrisma:
@@ -407,6 +412,20 @@ async def test_an_omitted_field_is_kept_an_explicit_null_clears_it_and_clearing_
 
 
 @pytest.mark.asyncio
+async def test_clearing_the_last_limit_links_the_member_back_to_the_team_default():
+    prisma = _FakePrisma(
+        teams=[_team("m1", default_budget_id="team-default")],
+        memberships=[_membership("m1", "priv-m1")],
+        budgets=[_budget("team-default", max_budget=50.0), _budget("priv-m1", max_budget=10.0)],
+    )
+
+    emptied = await _bulk_update(prisma, [{"user_id": "m1", "max_budget_in_team": None}])
+
+    assert emptied[0].success is True
+    assert _budget_id_of(prisma, "m1") == "team-default"
+
+
+@pytest.mark.asyncio
 async def test_budget_duration_seeds_a_reset_time_derived_from_the_duration_and_clearing_it_clears_the_reset():
     prisma = _FakePrisma(
         teams=[_team("m1", "m2")],
@@ -566,8 +585,8 @@ async def test_an_explicit_cap_reports_as_the_members_own_while_clearing_one_fal
         ("m1", 50.0, "member"),
         ("m2", 25.0, "team_default"),
     ]
-    assert results[1].budget_id is None
-    assert _budget_id_of(prisma, "m2") is None
+    assert results[1].budget_id == "team-default"
+    assert _budget_id_of(prisma, "m2") == "team-default"
     assert prisma.db.litellm_budgettable.rows["team-default"].max_budget == 25.0
 
 

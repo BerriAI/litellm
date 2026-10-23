@@ -20,10 +20,11 @@ from typing import Final
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._internal_context import service_target
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.user_api_key_cache import team_member_default_budget_cache_key
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
@@ -202,10 +203,10 @@ async def update_budget(
         data=budget_obj_jsonified,
     )
     with service_target("team_member_budgets"):
-        try:
-            await user_api_key_cache.async_delete_cache(key=f"team_member_default_budget:{budget_obj.budget_id}")
-        except Exception:  # noqa: BLE001  # Cache failure must not fail a committed budget update.
-            verbose_proxy_logger.warning("Failed to evict the team member default budget cache", exc_info=True)
+        await evict_and_broadcast(
+            cache_keys=(team_member_default_budget_cache_key(budget_obj.budget_id),),
+            user_api_key_cache=user_api_key_cache,
+        )
 
     return response
 

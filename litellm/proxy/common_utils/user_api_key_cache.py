@@ -392,6 +392,10 @@ def team_membership_reservation_cache_key(user_id: str, team_id: str) -> str:
     return f"team_membership:{user_id}:{team_id}"
 
 
+def team_member_default_budget_cache_key(budget_id: str) -> str:
+    return f"team_member_default_budget:{budget_id}"
+
+
 #: Cached under ``team_membership_reservation_cache_key`` when a member has no ``LiteLLM_TeamMembership``
 #: row, so a session-token member without a per-member budget costs no DB read per request. Lives beside
 #: the key builder because it is part of the same cache protocol: every reader of the key must know that

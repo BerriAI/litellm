@@ -8,6 +8,7 @@ import { toast } from "@/lib/toast";
 import type { Member } from "@/components/networking";
 import type { EffectiveMcpServer } from "../mcp_server_management/effectiveMcpServers";
 import type { MCPServer } from "../mcp_tools/types";
+import type { Team } from "../key_team_helpers/key_list";
 import TeamInfoView, {
   grantedMcpServerIds,
   type McpGrantInput,
@@ -2150,6 +2151,54 @@ describe("TeamInfoView", () => {
       expect(screen.getByLabelText("Member Default TPM Limit")).toHaveValue(100);
       expect(screen.getByLabelText("Member Default RPM Limit")).toHaveValue(5);
       expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
+    });
+
+    it("asks a team admin which custom member budgets follow a new member default and sends the choice", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue({
+        ...createMockTeamData({
+          team_member_budget_table: { max_budget: 10, budget_duration: "30d", tpm_limit: null, rpm_limit: null },
+          caller_edit_access: { kind: "team_admin", editable_fields: ["team_member_budget"] },
+        }),
+        team_memberships: [
+          {
+            user_id: "user-high",
+            team_id: "123",
+            budget_id: "budget-user-high",
+            budget_source: "custom",
+            spend: 0,
+            total_spend: 0,
+            litellm_budget_table: {
+              budget_id: "budget-user-high",
+              soft_budget: null,
+              max_budget: 50,
+              max_parallel_requests: null,
+              tpm_limit: null,
+              rpm_limit: null,
+              model_max_budget: null,
+              budget_duration: "30d",
+              budget_reset_at: null,
+            },
+          },
+        ],
+      });
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {} as Team, team_id: "123" });
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      fireEvent.change(await screen.findByLabelText("Member Default Budget (USD)"), { target: { value: "20" } });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+      await user.click(await screen.findByRole("radio", { name: "Lower 1 member above $20.00" }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).toStrictEqual({
+        team_id: "123",
+        team_member_budget: 20,
+        team_member_budget_backfill: "lower_to_default",
+      });
     });
 
     it("opens the form when the proxy reports unrestricted access although the props only mark a team admin", async () => {

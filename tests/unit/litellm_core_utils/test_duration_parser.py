@@ -6,8 +6,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-import litellm.litellm_core_utils.duration_parser as duration_parser
+from litellm.litellm_core_utils import duration_parser
 from litellm.litellm_core_utils.duration_parser import (
+    budget_reset_period_key,
     duration_in_seconds,
     duration_in_seconds_from,
     get_budget_window_start,
@@ -407,3 +408,26 @@ def test_a_month_starting_now_matches_duration_in_seconds():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.parametrize(
+    "first,second,same_schedule",
+    [
+        ("7d", "1w", True),
+        ("24h", "1d", True),
+        ("daily", "1d", True),
+        ("60s", "1m", True),
+        ("monthly", "30d", True),
+        (" 30d ", "30d", True),
+        ("1mo", "1mo", True),
+        (None, None, True),
+        ("1mo", "30d", False),
+        ("2mo", "1mo", False),
+        ("7d", "1d", False),
+        ("30d", None, False),
+        ("garbage", "garbage", True),
+        ("garbage", "30d", False),
+    ],
+)
+def test_budget_reset_period_key_matches_only_identical_schedules(first, second, same_schedule):
+    assert (budget_reset_period_key(first) == budget_reset_period_key(second)) is same_schedule

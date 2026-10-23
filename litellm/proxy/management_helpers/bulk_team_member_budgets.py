@@ -30,6 +30,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     member_budget_patch,
     upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # the single-member write, shared so the two surfaces cannot drift
 )
+from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.management_helpers.bulk_user_deletion import (
     _duplicate_member_indexes,  # pyright: ignore[reportPrivateUsage]  # same duplicate rule as members/bulk_delete
@@ -141,6 +142,7 @@ def _result(
     user_id: str | None,
     error: str | None,
     budget_of: "MappingProxyType[str, prisma_models.LiteLLM_BudgetTable | None]",
+    team_default_budget_id: str | None,
     team_default_max_budget: float | None,
 ) -> TeamMemberBudgetUpdateResult:
     if error is not None or user_id is None:
@@ -151,7 +153,8 @@ def _result(
             error=error or "User not found in team",
         )
     budget: Final = budget_of.get(user_id)
-    own_max_budget: Final = budget.max_budget if budget is not None else None
+    on_team_default: Final = budget is not None and budget.budget_id == team_default_budget_id
+    own_max_budget: Final = budget.max_budget if budget is not None and not on_team_default else None
     inherits: Final = own_max_budget is None and team_default_max_budget is not None and team_default_max_budget > 0
     return TeamMemberBudgetUpdateResult(
         user_id=user_id,
@@ -198,7 +201,12 @@ async def bulk_update_team_member_budgets(
     if not applied:
         return tuple(
             _result(
-                member, None, "Duplicate member in request" if index in duplicates else None, MappingProxyType({}), None
+                member,
+                None,
+                "Duplicate member in request" if index in duplicates else None,
+                MappingProxyType({}),
+                None,
+                None,
             )
             for index, member in enumerate(data.members)
         )
@@ -208,6 +216,7 @@ async def bulk_update_team_member_budgets(
     team_members_filter: Final = _team_users_filter(team_id, user_ids)
 
     async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
+        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
         memberships: Final = await _membership_tx_db(tx).find_many(where=team_members_filter, include=_WITH_BUDGET)
         budget_id_of: Final = MappingProxyType({m.user_id: m.budget_id for m in memberships})
         shared: Final = await _shared_budget_ids(
@@ -254,6 +263,7 @@ async def bulk_update_team_member_budgets(
             named[index],
             "Duplicate member in request" if index in duplicates else None,
             budget_of,
+            default_budget_id,
             team_default.max_budget if team_default is not None else None,
         )
         for index, member in enumerate(data.members)

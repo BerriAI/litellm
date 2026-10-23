@@ -97,6 +97,7 @@ import type { ListPluginsResponse, SkillRegisterRequest } from "./claude_code_pl
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { StoredModelMaxBudget } from "./key_team_helpers/modelMaxBudgetPayload";
 import type { ObjectPermission } from "./object_permission_types";
+import type { MemberBudgetBackfillResult } from "./team/memberBudgetReset";
 import type { components } from "@/lib/http/schema";
 import type { DecisionTestBody } from "@/app/(dashboard)/guardrails/_components/decision_model/decisionModelQuestion";
 import { fetchClient } from "@/lib/http/api";
@@ -2828,7 +2829,11 @@ export const teamUpdateCall = async (
       toast.fromError("Failed to update team settings: " + unwrapProxyErrorMessage(errorData));
       throw new Error(errorData);
     }
-    const data = (await response.json()) as { data: Team; team_id: string };
+    const data = (await response.json()) as {
+      data: Team;
+      team_id: string;
+      team_member_budget_backfill_result?: MemberBudgetBackfillResult;
+    };
     return data;
     // Handle success - you might want to update some state or UI based on the updated team
   } catch (error) {

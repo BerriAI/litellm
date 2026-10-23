@@ -619,7 +619,7 @@ def _is_set_budget_value(value: object) -> bool:
     return True
 
 
-def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
+def has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     """A budget is meaningful if at least one limit is actually set; an empty
     list (no model restriction) and None both count as unset."""
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
@@ -642,8 +642,9 @@ async def upsert_budget_and_membership(
     ``budget_patch`` holds only the budget columns the caller explicitly sent
     (RFC 7396 semantics): a value sets the column, ``None`` clears it, and a
     column that is absent from the dict is left untouched. Once the patch is
-    applied, if the budget has no meaningful limit left the member's private
-    budget is disconnected so they fall back to the team default.
+    applied, if the budget has no meaningful limit left the member is linked
+    back to the team default budget, so their spend keeps resetting on its
+    schedule, or unlinked when the team has none.
 
     ``team_default_budget_id`` is the team's shared default member budget id
     (from team metadata.team_member_budget_id). When the membership still
@@ -687,18 +688,24 @@ async def upsert_budget_and_membership(
     )
     temp_only: Final = frozenset(write_data) <= _TEMP_BUDGET_FIELDS
 
-    async def _disconnect():
+    async def _fall_back_to_team_default():
         await tx.litellm_teammembership.update(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-            data={"litellm_budget_table": {"disconnect": True}},
+            data={
+                "litellm_budget_table": (
+                    {"disconnect": True}
+                    if team_default_budget_id is None
+                    else {"connect": {"budget_id": team_default_budget_id}}
+                )
+            },
         )
 
     if existing_budget_id is not None and not is_shared_default:
         existing_budget: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
         merged: Final = existing_budget.model_dump() if existing_budget is not None else {}
         merged.update(write_data)
-        if not _has_meaningful_budget_limit(merged):
-            await _disconnect()
+        if not has_meaningful_budget_limit(merged):
+            await _fall_back_to_team_default()
             return
         await tx.litellm_budgettable.update(
             where={"budget_id": existing_budget_id},
@@ -739,9 +746,9 @@ async def upsert_budget_and_membership(
     if create_data.get("budget_reset_at") is None:
         create_data.pop("budget_reset_at", None)
 
-    if not _has_meaningful_budget_limit(create_data):
+    if not has_meaningful_budget_limit(create_data):
         if existing_budget_id is not None and not temp_only:
-            await _disconnect()
+            await _fall_back_to_team_default()
         return
 
     new_budget: Final = await tx.litellm_budgettable.create(

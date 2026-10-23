@@ -132,9 +132,12 @@ import {
 } from "./teamMemberBudgetAlertEmails";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
-import { customBudgetMemberUserIds, shouldPromptMemberBudgetReset } from "./memberBudgetReset";
+import {
+  previewMemberBudgetBackfill,
+  shouldPromptMemberBudgetReset,
+  type TeamUpdatePayload,
+} from "./memberBudgetReset";
 import { useMemberBudgetReset } from "./useMemberBudgetReset";
-import { fetchClient } from "@/lib/http/api";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -941,31 +944,37 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   };
 
   const persistTeamUpdate = async (token: string, updateData: Record<string, unknown>) => {
-    await teamUpdateCall(token, updateData);
+    const response = await teamUpdateCall(token, updateData);
     void queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     void invalidateTeamQueries(queryClient);
     setIsEditing(false);
+    return response.team_member_budget_backfill_result;
   };
 
   const memberBudgetReset = useMemberBudgetReset({
     saveTeam: async (updateData) => {
-      if (!accessToken) return;
+      if (!accessToken) return undefined;
       setIsTeamSaving(true);
       try {
-        await persistTeamUpdate(accessToken, updateData);
+        return await persistTeamUpdate(accessToken, updateData);
       } finally {
         setIsTeamSaving(false);
       }
     },
-    resetMemberBudgets: async (bulkTeamId, userIds) => {
-      const { data } = await fetchClient.POST("/management/v1/teams/{team_id}/members/bulk_update", {
-        params: { path: { team_id: bulkTeamId } },
-        body: { members: userIds.map((user_id) => ({ user_id, max_budget_in_team: null })) },
-      });
-      return data?.data ?? [];
-    },
     refreshTeamData,
   });
+
+  const promptsMemberBudgetBackfill = (
+    updateData: TeamUpdatePayload,
+    newBudget: number | null | undefined,
+    newBudgetDuration: string | null | undefined,
+  ): boolean => {
+    if (typeof newBudget !== "number") return false;
+    const preview = previewMemberBudgetBackfill(teamData?.team_memberships ?? [], newBudget, newBudgetDuration);
+    if (!shouldPromptMemberBudgetReset(newBudget, info.team_member_budget_table?.max_budget, preview)) return false;
+    memberBudgetReset.prompt({ updateData, newBudget, preview });
+    return true;
+  };
 
   const { dismiss: dismissMemberBudgetReset } = memberBudgetReset;
   useEffect(() => {
@@ -974,9 +983,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges) => {
     if (!accessToken) return;
+    const updateData = { team_id: teamId, ...changes };
+    const newBudgetDuration =
+      "team_member_budget_duration" in changes
+        ? changes.team_member_budget_duration
+        : info.team_member_budget_table?.budget_duration;
+    if (promptsMemberBudgetBackfill(updateData, changes.team_member_budget, newBudgetDuration)) return;
     setIsTeamSaving(true);
     try {
-      await persistTeamUpdate(accessToken, { team_id: teamId, ...changes });
+      await persistTeamUpdate(accessToken, updateData);
       toast.success("Team settings updated successfully");
       await fetchTeamInfo();
     } catch (error) {
@@ -1257,24 +1272,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      const customBudgetUserIds = customBudgetMemberUserIds(teamData?.team_memberships ?? []);
-      if (
-        typeof newTeamMemberBudget === "number" &&
-        shouldPromptMemberBudgetReset(
-          newTeamMemberBudget,
-          info.team_member_budget_table?.max_budget,
-          customBudgetUserIds,
-        )
-      ) {
-        const pendingReset = {
-          teamId,
-          updateData,
-          userIds: customBudgetUserIds,
-          newBudget: newTeamMemberBudget,
-        };
-        memberBudgetReset.prompt(pendingReset);
-        return;
-      }
+      if (promptsMemberBudgetBackfill(updateData, newTeamMemberBudget, values.team_member_budget_duration)) return;
 
       await persistTeamUpdate(accessToken, updateData);
       toast.success("Team settings updated successfully");
@@ -2711,9 +2709,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       <ResetMemberBudgetsDialog
         state={memberBudgetReset.state}
-        onReset={memberBudgetReset.reset}
-        onRetry={memberBudgetReset.retry}
-        onKeep={memberBudgetReset.keepCustom}
+        onSave={memberBudgetReset.save}
         onDismiss={memberBudgetReset.dismiss}
       />
     </div>
