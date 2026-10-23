@@ -70,7 +70,7 @@ fn project_litellm_params<'py>(
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
     match error {
-        Error::Transport(TransportError::Http { status, body }) => {
+        Error::Transport(TransportError::Http { status, body, .. }) => {
             let error = RustUpstreamError::new_err((status, body));
             error
                 .value(py)
@@ -470,7 +470,11 @@ mod tests {
     #[case::missing_field(Error::MissingField("max_tokens"), true)]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(
-        Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),
+        Error::Transport(TransportError::Http {
+            status: 400,
+            body: "bad".into(),
+            headers: Default::default(),
+        }),
         false,
     )]
     fn only_request_rejections_carry_the_request_error_marker(

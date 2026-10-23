@@ -4139,6 +4139,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-inference-tokenize"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-auth",
+ "litellm-core-utils",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-inference-transcription"
 version = "0.1.0"
 dependencies = [

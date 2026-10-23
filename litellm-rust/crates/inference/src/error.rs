@@ -88,6 +88,7 @@ impl From<litellm_auth::Error> for Error {
                 Some(status) => Self::Transport(TransportError::Http {
                     status,
                     body: source.to_string(),
+                    headers: Default::default(),
                 }),
                 None => Self::Transport(TransportError::Network(source.to_string())),
             },
@@ -171,6 +172,7 @@ mod tests {
             Some(status) => super::TransportError::Http {
                 status,
                 body: "credential endpoint failed".into(),
+                headers: Default::default(),
             },
             None => super::TransportError::Network("credential endpoint failed".into()),
         };

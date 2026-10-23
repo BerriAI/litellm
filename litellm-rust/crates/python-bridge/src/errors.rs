@@ -21,7 +21,7 @@ pyo3::create_exception!(
 
 pub(crate) fn route_error_to_pyerr(error: Error) -> PyErr {
     match error {
-        Error::Transport(TransportError::Http { status, body }) => {
+        Error::Transport(TransportError::Http { status, body, .. }) => {
             RustUpstreamError::new_err((status, body))
         }
         other => by_fault(other.is_request(), other.to_string()),
@@ -66,6 +66,7 @@ mod tests {
                 TransportError::Http {
                     status: 429,
                     body: "slow down".into(),
+                    headers: Default::default(),
                 }
                 .into(),
             );

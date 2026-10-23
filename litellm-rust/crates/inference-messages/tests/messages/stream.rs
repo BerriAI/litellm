@@ -264,7 +264,8 @@ async fn an_upstream_error_fails_the_call_without_opening_the_stream(
         error,
         Error::Transport(litellm_http::transport::Error::Http {
             status: 429,
-            body: body.into()
+            body: body.into(),
+            headers: Default::default()
         })
     );
     assert!(host.seen.into_inner().unwrap().is_empty());
@@ -395,6 +396,7 @@ async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall)
         Error::Transport(litellm_http::transport::Error::Http {
             status: 429,
             body: "slow down".into(),
+            headers: Default::default(),
         })
     );
 }
