@@ -10,6 +10,7 @@ import { categoryFills, type ChartColor } from "./colors";
 export type BarChartProps<TDatum extends Record<string, unknown>> = {
   data: readonly TDatum[];
   index: string;
+  indexFormatter?: (value: string) => string;
   categories: readonly string[];
   colors?: readonly ChartColor[];
   colorByDatum?: boolean;
@@ -32,6 +33,7 @@ export type BarChartProps<TDatum extends Record<string, unknown>> = {
 export function BarChart<TDatum extends Record<string, unknown>>({
   data,
   index,
+  indexFormatter,
   categories,
   colors,
   colorByDatum = false,
@@ -87,10 +89,19 @@ export function BarChart<TDatum extends Record<string, unknown>>({
             axisLine={false}
             minTickGap={tickGap}
             interval="equidistantPreserveStart"
+            tickFormatter={indexFormatter}
           />
         )}
         {vertical ? (
-          <YAxis type="category" dataKey={index} width={yAxisWidth} tickLine={false} axisLine={false} interval={0} />
+          <YAxis
+            type="category"
+            dataKey={index}
+            width={yAxisWidth}
+            tickLine={false}
+            axisLine={false}
+            interval={0}
+            tickFormatter={indexFormatter}
+          />
         ) : (
           <YAxis width={yAxisWidth} tickLine={false} axisLine={false} tickFormatter={valueFormatter} />
         )}
