@@ -4,17 +4,20 @@ import hashlib
 import json
 import re
 import socket
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
 from base64 import urlsafe_b64encode
+from pathlib import Path
+from typing import Final
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 import requests
 
-from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+from litellm.litellm_core_utils.cli_token_utils import cli_token_lock, is_cli_token_fresh
 from litellm.proxy.client.cli.commands.pkce_login import (
     CallbackCode,
     CallbackDenied,
@@ -125,8 +128,9 @@ def _get(url):
         return error.code, error.read().decode()
 
 
-def _fresh(token_data, save, http, reload=lambda: None, **options):
-    return fresh_api_key(token_data, save, http, reload=reload, **options)
+def _fresh(token_data, save, http, reload=None, **options):
+    reader = reload if reload is not None else lambda: token_data
+    return fresh_api_key(token_data, save, http, reload=reader, **options)
 
 
 def _challenge_for(verifier: str) -> str:
@@ -600,9 +604,7 @@ def test_fresh_api_key_refreshes_near_expiry_and_saves_before_returning():
 
 
 @pytest.mark.parametrize(("seconds_left", "refreshes"), [(200, True), (600, False)])
-def test_fresh_api_key_refreshes_exactly_when_is_cli_token_fresh_stops_calling_the_key_fresh(
-    seconds_left, refreshes
-):
+def test_fresh_api_key_refreshes_exactly_when_is_cli_token_fresh_stops_calling_the_key_fresh(seconds_left, refreshes):
     """`lite up` and `lite auth print-token` ask `is_cli_token_fresh` and then `fresh_api_key`; a key
     the first calls stale that the second would not renew left `lite up` refusing a renewable login."""
     record = {**STORED, "expires_at": time.time() + seconds_left}
@@ -643,17 +645,20 @@ def test_fresh_api_key_reports_why_a_renewal_failed_unless_a_sibling_rotated_fir
     assert _fresh(STORED, lambda _: None, failing, now=lambda: 999_950.0, warn=warnings.append) == "sk-cli-old"
     assert _fresh(STORED, lambda _: None, failing, now=lambda: 1_000_001.0, warn=warnings.append) is None
     assert warnings == ["Could not renew the key: token request failed with 503: temporarily_unavailable"] * 2
-    sibling = _fresh(STORED, lambda _: None, failing, reload=lambda: rotated, now=lambda: 1_000_001.0, warn=warnings.append)
+    sibling = _fresh(
+        STORED, lambda _: None, failing, reload=lambda: rotated, now=lambda: 1_000_001.0, warn=warnings.append
+    )
     assert sibling == "sk-cli-sibling"
     assert len(warnings) == 2
 
 
-def test_fresh_api_key_uses_a_sibling_rotation_when_its_own_refresh_loses_the_race():
+def test_fresh_api_key_reloads_a_sibling_rotation_before_spending_the_old_refresh_token():
     rotated = {**STORED, "key": "sk-cli-sibling", "refresh_token": "llm_srefresh_sibling", "expires_at": 1_003_600.0}
     http = _FakeHttp({("POST", f"{BASE}/token"): _FakeResponse(400, {"error": "invalid_grant"})})
     saved = []
     assert _fresh(STORED, saved.append, http, reload=lambda: rotated, now=lambda: 999_950.0) == "sk-cli-sibling"
     assert _fresh(STORED, saved.append, http, reload=lambda: rotated, now=lambda: 1_000_001.0) == "sk-cli-sibling"
+    assert http.calls == []
     assert _fresh(STORED, saved.append, http, reload=lambda: STORED, now=lambda: 1_000_001.0) is None
     assert _fresh(STORED, saved.append, http, reload=lambda: None, now=lambda: 1_000_001.0) is None
     assert saved == []
@@ -694,6 +699,42 @@ def test_fresh_api_key_never_substitutes_a_sibling_record_for_another_proxy_iden
     http = _FakeHttp({("POST", f"{BASE}/token"): _FakeResponse(400, {"error": "invalid_grant"})})
     assert _fresh(STORED, lambda _: None, http, reload=lambda: foreign, now=lambda: 1_000_001.0) is None
     assert _fresh(STORED, lambda _: None, http, reload=lambda: foreign, now=lambda: 999_950.0) == "sk-cli-old"
+
+
+@pytest.mark.parametrize("current", [None, {**STORED, "user_id": "another-user"}])
+def test_fresh_api_key_does_not_renew_a_cleared_or_replaced_login(current):
+    http = _FakeHttp({("POST", f"{BASE}/token"): _FakeResponse(200, TOKEN_JSON)})
+    assert (
+        _fresh(STORED, lambda _: pytest.fail("Unexpected save"), http, reload=lambda: current, now=lambda: 1_000_001.0)
+        is None
+    )
+    assert http.calls == []
+
+
+@pytest.mark.parametrize(("now", "expected"), [(999_950.0, "sk-cli-old"), (1_000_001.0, None)])
+def test_fresh_api_key_reports_a_lock_failure_without_reading_or_spending_the_refresh_token(
+    capsys: pytest.CaptureFixture[str],
+    now: float,
+    expected: str | None,
+) -> None:
+    Path(cli_token_lock().lock_file).mkdir()
+    http: Final = _FakeHttp({("POST", f"{BASE}/token"): _FakeResponse(200, TOKEN_JSON)})
+    key: Final = _fresh(
+        STORED,
+        lambda _: pytest.fail("Unexpected credential save"),
+        http,
+        reload=lambda: pytest.fail("Credential read without the lock"),
+        now=lambda: now,
+        warn=lambda message: print(message, file=sys.stderr),
+    )
+    assert key == expected
+    assert http.calls == []
+    captured: Final = capsys.readouterr()
+    assert captured.out == ""
+    assert (
+        captured.err
+        == "Could not renew the key: the CLI credential store could not be locked; no refresh was attempted\n"
+    )
 
 
 def test_fresh_api_key_without_refresh_inputs_expires_like_a_classic_key():

@@ -6,6 +6,8 @@ import sys
 import tempfile
 import threading
 import time
+from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -32,12 +34,15 @@ from litellm.litellm_core_utils.cli_token_utils import (
     CredentialNotRecorded,
     CredentialNotSaved,
     clear_cli_token,
+    cli_token_lock,
     get_cli_token_file_path,
     get_litellm_gateway_api_key,
     is_cli_token_fresh,
     load_cli_token,
     save_cli_token,
 )
+
+from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 
 SERVER = "https://proxy.example.com"
 OTHER_SERVER = "https://other-proxy.example.com"
@@ -387,6 +392,58 @@ class TestLoadCliToken:
         _token_file(isolated_home).write_text("not json at all {{{")
 
         assert load_cli_token(vault=secret_vault_factory(blob=_blob())) is None
+
+
+def test_load_does_not_migrate_the_credential_when_the_lock_cannot_be_opened(
+    isolated_home: Path,
+    secret_vault_factory: type[FakeSecretVault],
+) -> None:
+    path: Final = _write_legacy_file(isolated_home, timestamp=1000.0)
+    original: Final = path.read_bytes()
+    vault: Final = secret_vault_factory()
+    Path(cli_token_lock().lock_file).mkdir()
+
+    assert load_cli_token(vault=vault) is None
+    assert path.read_bytes() == original
+    assert vault.reads == 0
+    assert vault.writes == []
+
+
+def test_save_preserves_both_stores_when_the_lock_cannot_be_opened(
+    isolated_home: Path,
+    secret_vault_factory: type[FakeSecretVault],
+) -> None:
+    path: Final = _write_legacy_file(isolated_home, timestamp=1000.0)
+    original: Final = path.read_bytes()
+    vault: Final = secret_vault_factory(blob=_blob())
+    original_secret: Final = vault.blob
+    Path(cli_token_lock().lock_file).mkdir()
+
+    outcome: Final = save_cli_token(
+        CliTokenRecord(base_url=SERVER, key="sk-replacement", timestamp=2000.0), vault=vault
+    )
+    assert isinstance(outcome, CredentialNotSaved)
+    assert path.read_bytes() == original
+    assert vault.blob == original_secret
+    assert vault.reads == 0
+    assert vault.writes == []
+
+
+def test_clear_preserves_both_stores_when_the_lock_cannot_be_opened(
+    isolated_home: Path,
+    secret_vault_factory: type[FakeSecretVault],
+) -> None:
+    path: Final = _write_legacy_file(isolated_home, timestamp=1000.0)
+    original: Final = path.read_bytes()
+    vault: Final = secret_vault_factory(blob=_blob())
+    original_secret: Final = vault.blob
+    Path(cli_token_lock().lock_file).mkdir()
+
+    outcome: Final = clear_cli_token(vault=vault)
+    assert isinstance(outcome, CredentialNotCleared)
+    assert path.read_bytes() == original
+    assert vault.blob == original_secret
+    assert vault.erases == 0
 
 
 class TestGetLitellmGatewayApiKey:
