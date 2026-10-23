@@ -90,6 +90,7 @@ function transport(responses: ChatCompletion[], statuses: number | readonly numb
 
 const options = () =>
   ({
+    access: { mode: "admin" as const },
     model: "selected-model",
     accessToken: "test-session",
     inferenceBaseUrl: "https://inference.example",
@@ -179,6 +180,9 @@ describe("fixed management operations", () => {
     ],
     ["team_spend_report", "/team/spend/report", "GET", { ...dates, team_id: "team-1" }, false],
     ["key_spend_report", "/key/spend/report", "GET", { ...dates, api_key: keyHash }, false],
+    ["get_usage_data", "/user/daily/activity/aggregated", "GET", { ...dates, user_id: null }, false],
+    ["get_team_usage_data", "/team/daily/activity/aggregated", "GET", { ...dates, team_ids: "team-1,team-2" }, false],
+    ["get_tag_usage_data", "/tag/daily/activity/aggregated", "GET", { ...dates, tags: "production,feature-a" }, false],
     [
       "request_logs",
       "/spend/logs/ui",
@@ -275,6 +279,81 @@ describe("fixed management operations", () => {
     expect(new URL(String(managementFetch.mock.calls[1][0])).searchParams.get("search")).toBe("admin@example.com");
   });
 
+  it.each([
+    ["get_usage_data", "user_id", "user-1"],
+    ["get_team_usage_data", "team_ids", "team-1,team-2"],
+    ["get_tag_usage_data", "tags", "production,feature-a"],
+  ])(
+    "should return model, provider and entity usage through %s in the shared conversation",
+    async (name, filter, value) => {
+      const metrics = { spend: 12, api_requests: 30, total_tokens: 800 };
+      managementFetch.mockImplementation(async () =>
+        json({
+          results: [
+            {
+              date: dates.start_date,
+              metrics,
+              breakdown: {
+                models: { "chat-model": { metrics } },
+                providers: { "model-provider": { metrics } },
+                entities: { production: { metrics } },
+              },
+            },
+          ],
+          metadata: { total_spend: 12, total_api_requests: 30, total_tokens: 800 },
+        }),
+      );
+      const model = transport([completion([call(name, { ...dates, [filter]: value })]), completion()]);
+      const input = options();
+      await runLiteAdmin(input, model.client);
+
+      const query = new URL(String(managementFetch.mock.calls[0][0])).searchParams;
+      expect(query.get(filter)).toBe(value);
+      expect(query.get("start_date")).toBe(dates.start_date);
+      expect(query.get("end_date")).toBe(dates.end_date);
+      expect(query.get("api_key_limit")).toBe("20");
+      expect(model.requests[1].messages.at(-1)).toMatchObject({
+        role: "tool",
+        content: JSON.stringify({
+          operation: name,
+          success: true,
+          result: {
+            totals: { total_spend: 12, total_api_requests: 30, total_tokens: 800 },
+            daily: [{ date: dates.start_date, ...metrics }],
+            breakdown_limit: 20,
+            top_models: [{ name: "chat-model", ...metrics }],
+            top_providers: [{ name: "model-provider", ...metrics }],
+            top_entities: [{ name: "production", ...metrics }],
+            top_api_keys: [],
+          },
+        }),
+      });
+      expect(input.confirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it("should abort a usage lookup without sending its result back to the model", async () => {
+    const controller = new AbortController();
+    const requested = deferred<void>();
+    const response = deferred<Response>();
+    managementFetch.mockImplementation(async () => {
+      requested.resolve();
+      return response.promise;
+    });
+    const model = transport([completion([call("get_tag_usage_data", { ...dates, tags: null })])]);
+    const input = { ...options(), signal: controller.signal };
+    const running = runLiteAdmin(input, model.client);
+    const rejected = expect(running).rejects.toBeInstanceOf(Error);
+    await requested.promise;
+    expect(managementFetch.mock.calls[0][1]?.signal).toBe(controller.signal);
+    controller.abort();
+    response.resolve(json({ results: [] }));
+    await rejected;
+    expect(model.requests).toHaveLength(1);
+    expect(input.onMessage).not.toHaveBeenCalled();
+    expect(input.confirm).not.toHaveBeenCalled();
+  });
+
   it("provides strict JSON schemas for nullable and transformed tool arguments", async () => {
     const model = transport([completion()]);
     await runLiteAdmin(options(), model.client);
@@ -307,6 +386,105 @@ describe("fixed management operations", () => {
     expect(managementFetch).not.toHaveBeenCalled();
     expect(input.confirm).not.toHaveBeenCalled();
     expect(input.onResult).not.toHaveBeenCalled();
+  });
+});
+
+describe("usage access", () => {
+  it("should query global usage across users, teams and tags without exposing management tools", async () => {
+    const input = { ...options(), access: { mode: "usage", scope: { type: "global" } } as const };
+    const model = transport([
+      completion([
+        call("get_usage_data", { ...dates, user_id: null }, "global"),
+        call("get_team_usage_data", { ...dates, team_ids: null }, "teams"),
+        call("get_tag_usage_data", { ...dates, tags: null }, "tags"),
+      ]),
+      completion(),
+    ]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+      "/root/user/daily/activity/aggregated",
+      "/root/team/daily/activity/aggregated",
+      "/root/tag/daily/activity/aggregated",
+    ]);
+    expect(new URL(String(managementFetch.mock.calls[0][0])).searchParams.has("user_id")).toBe(false);
+    expect(input.confirm).not.toHaveBeenCalled();
+    expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("Done");
+    expect(model.requests[0].tools?.map((tool) => (tool.type === "function" ? tool.function.name : null))).toEqual([
+      "get_usage_data",
+      "get_team_usage_data",
+      "get_tag_usage_data",
+    ]);
+  });
+
+  it.each([
+    ["keys_list", { ...pages, team_id: null, user_id: null }],
+    ["team_info", { team_id: "team-1" }],
+    ["budget_info", { budgets: ["budget-1"] }],
+    ["key_create", keyFields],
+  ])("should reject management operation %s for a usage-only session", async (name, args) => {
+    const input = { ...options(), access: { mode: "usage", scope: { type: "global" } } as const };
+    const model = transport([completion([call(String(name), args)]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).not.toHaveBeenCalled();
+    expect(input.confirm).not.toHaveBeenCalled();
+    expect(input.onResult).not.toHaveBeenCalled();
+  });
+
+  it("should bind a user's usage lookup to their signed-in identity", async () => {
+    const input = {
+      ...options(),
+      access: { mode: "usage", scope: { type: "user", userId: "signed-in-user" } } as const,
+    };
+    const model = transport([completion([call("get_usage_data", dates)]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).toHaveBeenCalledTimes(1);
+    const query = new URL(String(managementFetch.mock.calls[0][0])).searchParams;
+    expect(query.get("user_id")).toBe("signed-in-user");
+    expect(query.get("start_date")).toBe(dates.start_date);
+    expect(query.get("end_date")).toBe(dates.end_date);
+    expect(query.get("api_key_limit")).toBe("20");
+    expect(input.confirm).not.toHaveBeenCalled();
+    expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("Done");
+  });
+
+  it.each([
+    ["get_usage_data", { ...dates, user_id: "other-user" }],
+    ["get_team_usage_data", { ...dates, team_ids: null }],
+    ["get_tag_usage_data", { ...dates, tags: null }],
+  ])("should reject usage outside the signed-in user's scope through %s", async (name, args) => {
+    const input = {
+      ...options(),
+      access: { mode: "usage", scope: { type: "user", userId: "signed-in-user" } } as const,
+    };
+    const model = transport([completion([call(String(name), args)]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).not.toHaveBeenCalled();
+    expect(input.confirm).not.toHaveBeenCalled();
+  });
+
+  it("should refuse user usage when the session has no user identity", async () => {
+    const input = { ...options(), access: { mode: "usage", scope: { type: "user", userId: "" } } as const };
+    const model = transport([completion([call("get_usage_data", dates)]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).not.toHaveBeenCalled();
+    expect(model.requests[1].messages.at(-1)).toMatchObject({
+      role: "tool",
+      content: JSON.stringify({
+        operation: "get_usage_data",
+        success: false,
+        message: "The gateway could not complete this lookup.",
+      }),
+    });
   });
 });
 
@@ -653,15 +831,24 @@ describe("preferred LiteAdmin model", () => {
     expect(getPreferredLiteAdminModel([{ model_group }])).toBe(model_group);
   });
 
-  it("leaves the choice empty without an identifiable Sonnet 5.5 route", () => {
+  it("should choose the first available chat model when the preferred route is unavailable", () => {
+    const fallback = { model_group: "chat-alias", mode: "chat" };
+    expect(
+      getPreferredLiteAdminModel([
+        { model_group: "embedding-model", mode: "embedding" },
+        fallback,
+        { model_group: "another-chat-model", mode: "chat" },
+      ]),
+    ).toBe(fallback.model_group);
+    expect(getPreferredLiteAdminModel([{ model_group: "unspecified-mode" }])).toBe("unspecified-mode");
+  });
+
+  it("should leave the choice empty only when no chat models are available", () => {
     expect(getPreferredLiteAdminModel([])).toBeNull();
     expect(
       getPreferredLiteAdminModel([
-        { model_group: "claude-sonnet-5-50", providers: ["anthropic"] },
-        { model_group: "claude-sonnet-5-5other", providers: ["anthropic"] },
-        { model_group: "notclaude-sonnet-5-5", providers: ["anthropic"] },
-        { model_group: "chat-alias", providers: ["anthropic"] },
-        { model_group: "claude-sonnet-4-6", providers: ["anthropic"] },
+        { model_group: "embedding-model", mode: "embedding" },
+        { model_group: "image-model", mode: "image_generation" },
       ]),
     ).toBeNull();
   });
