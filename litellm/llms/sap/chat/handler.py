@@ -188,15 +188,14 @@ class _StreamParser:
 
         # FINAL RESULT IS *NOT* TERMINAL: treat it as the next chunk
         if "final_result" in event_obj:
-            fr: Final = event_obj["final_result"] or {}
-            # ensure it looks like an OpenAI chunk
-            if "object" not in fr:
-                fr["object"] = "chat.completion.chunk"
-            return OpenAIChatCompletionChunk.model_validate(
-                normalize_reasoning_content(
-                    cast(dict[str, object], fr)  # cast-ok: final_result wire JSON is always a dict
-                )
-            )
+            fr_raw: Final = event_obj["final_result"] or {}
+            if not isinstance(fr_raw, dict):
+                return None
+            fr: Final[dict[str, object]] = {  # mutable-ok: wire dict consumed by model_validate
+                **fr_raw,
+                **(({"object": "chat.completion.chunk"}) if "object" not in fr_raw else {}),
+            }
+            return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(fr))
 
         # Orchestration incremental delta
         if "orchestration_result" in event_obj:
@@ -204,11 +203,7 @@ class _StreamParser:
 
         # Already an OpenAI-like chunk
         if "choices" in event_obj and "object" in event_obj:
-            return OpenAIChatCompletionChunk.model_validate(
-                normalize_reasoning_content(
-                    cast(dict[str, object], event_obj)  # cast-ok: "choices" and "object" keys confirm dict shape
-                )
-            )
+            return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(event_obj))
 
         # Unknown / heartbeat / metrics
         return None
