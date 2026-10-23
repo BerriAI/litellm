@@ -307,7 +307,14 @@ describe("ViewUserDashboard", () => {
       expect(sortOrder).toBe("desc");
     });
 
-    it("sends the clicked column as sort_by and resets to the first page", async () => {
+    it.each([
+      ["user_alias", "asc"],
+      ["max_budget", "desc"],
+      ["updated_at", "asc"],
+      ["status", "asc"],
+      ["key_count", "desc"],
+      ["sso_user_id", "asc"],
+    ])("sorts %s through the API and resets pagination", async (field, direction) => {
       const user = userEvent.setup();
       renderDashboard();
 
@@ -315,12 +322,12 @@ describe("ViewUserDashboard", () => {
         expect(screen.getByText("test@example.com")).toBeInTheDocument();
       });
 
-      await user.click(screen.getByTestId("sort-header-user_email"));
+      await user.click(screen.getByTestId(`sort-header-${field}`));
 
       await waitFor(() => {
         const latest = userListCall.mock.calls[userListCall.mock.calls.length - 1];
-        expect(latest[8]).toBe("user_email");
-        expect(latest[9]).toBe("asc");
+        expect(latest[8]).toBe(field);
+        expect(latest[9]).toBe(direction);
         expect(latest[2]).toBe(1);
       });
     });
