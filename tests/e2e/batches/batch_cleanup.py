@@ -8,6 +8,7 @@ from typing import Final, Protocol
 from batch_client import BatchObject, FileDeleteResponse
 from capabilities import is_cloud_storage_id, is_managed_id
 from e2e_http import NetworkError, RateLimitedError, Result, Success, UnknownApiError
+from e2e_metadata import STEP_FRAMES, step
 from pydantic import BaseModel
 
 CLEANUP_DELAYS: Final = (1.0, 2.0, 4.0)
@@ -26,10 +27,6 @@ class BatchCleanupClient(Protocol):
     def retrieve_batch(self, batch_id: str, *, key: str, provider: str | None = None) -> Result[BatchObject]: ...
 
     def cancel_batch(self, batch_id: str, *, key: str, provider: str | None = None) -> Result[BatchObject]: ...
-
-
-class BatchCleanupLeftover(UserWarning):
-    pass
 
 
 def cleanup_result[R: BaseModel](
@@ -56,6 +53,7 @@ def _require_cleanup_success[R: BaseModel](result: Result[R], operation: str) ->
             raise AssertionError(f"{operation} failed: {result.kind}")
 
 
+@step("Clean up the uploaded file")
 def cleanup_file(client: BatchCleanupClient, file_id: str, *, key: str, provider: str | None = None) -> None:
     delete: Final[Callable[[], Result[FileDeleteResponse]]] = (
         (lambda: client.delete_file_as_admin(file_id, provider=provider))
@@ -68,8 +66,8 @@ def cleanup_file(client: BatchCleanupClient, file_id: str, *, key: str, provider
     if isinstance(result, UnknownApiError) and result.status_code == 400 and FILE_IN_USE_REFUSAL in result.body:
         warnings.warn(
             f"Left file {file_id} in place: LiteLLM refused to delete it while a batch still references it",
-            BatchCleanupLeftover,
-            stacklevel=2,
+            UserWarning,
+            stacklevel=2 + STEP_FRAMES,
         )
         return
     deleted: Final = _require_cleanup_success(result, f"Delete file {file_id}")
@@ -78,6 +76,7 @@ def cleanup_file(client: BatchCleanupClient, file_id: str, *, key: str, provider
     ), f"Delete file {file_id} did not confirm deletion"
 
 
+@step("Cancel the batch if it is still running")
 def cleanup_batch(
     client: BatchCleanupClient,
     batch_id: str,
@@ -140,8 +139,8 @@ def cleanup_batch(
             )
             warnings.warn(
                 f"Left batch {batch_id} cancelling after {BATCH_CANCEL_TIMEOUT_SECONDS}s for the provider to finish",
-                BatchCleanupLeftover,
-                stacklevel=2,
+                UserWarning,
+                stacklevel=2 + STEP_FRAMES,
             )
             return
         wait(BATCH_CANCEL_POLL_SECONDS)

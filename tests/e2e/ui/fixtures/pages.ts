@@ -26,6 +26,7 @@ export enum Page {
   Logs = "logs",
   McpServers = "mcp-servers",
   SearchTools = "search-tools",
+  ToolPolicies = "tool-policies",
   TagManagement = "tag-management",
   VectorStores = "vector-stores",
   NewUsage = "new_usage",

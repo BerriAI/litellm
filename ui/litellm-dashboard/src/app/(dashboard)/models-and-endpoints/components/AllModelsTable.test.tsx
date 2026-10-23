@@ -94,16 +94,32 @@ describe("AllModelsTable", () => {
       expect(screen.getByRole("columnheader", { name: new RegExp(header, "i") })).toBeInTheDocument();
     }
 
-    expect(screen.queryByRole("columnheader", { name: /^source$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: /^status$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /^source$/i })).not.toBeInTheDocument();
     expect(screen.queryByText("DB Model")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /columns/i }));
-    expect(screen.queryByRole("menuitemcheckbox", { name: /status/i })).not.toBeInTheDocument();
     await user.click(await screen.findByRole("menuitemcheckbox", { name: /^source$/i }));
 
     expect(await screen.findByRole("columnheader", { name: /^source$/i })).toBeInTheDocument();
     expect(await screen.findByText("DB Model")).toBeInTheDocument();
+  });
+
+  it("reports the routing status picked in the Filters drawer", async () => {
+    const user = userEvent.setup();
+    const onColumnFiltersChange = vi.fn();
+    render(<AllModelsTable {...baseProps} onColumnFiltersChange={onColumnFiltersChange} />);
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.click(screen.getByRole("combobox", { name: /filter by status/i }));
+    expect(await screen.findByRole("option", { name: "All", exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "All Statuses" })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("option", { name: "Paused" }));
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
+    const updater = onColumnFiltersChange.mock.calls.at(-1)?.[0];
+    const next = typeof updater === "function" ? updater([]) : updater;
+    expect(next).toEqual([{ id: "model_info_blocked", value: "paused" }]);
   });
 
   it("opens the model detail from the model ID cell", async () => {
@@ -157,6 +173,42 @@ describe("AllModelsTable", () => {
     expect(screen.getByText("Manual")).toBeInTheDocument();
   });
 
+  it("renders the credential's display name with its credential name beneath", () => {
+    render(
+      <AllModelsTable
+        {...baseProps}
+        credentialLabels={new Map([["openai-prod", "Prod OpenAI"]])}
+        data={[makeModel({ litellm_params: { model: "openai/gpt-4", litellm_credential_name: "openai-prod" } })]}
+      />,
+    );
+    expect(screen.getByText("Prod OpenAI")).toBeInTheDocument();
+    expect(screen.getByText("openai-prod")).toBeInTheDocument();
+  });
+
+  it("tells apart a credential whose label is another credential's name", () => {
+    render(
+      <AllModelsTable
+        {...baseProps}
+        credentialLabels={
+          new Map([
+            ["openai-prod", "openai-staging"],
+            ["openai-staging", "openai-staging"],
+          ])
+        }
+        data={[
+          makeModel({ litellm_params: { model: "openai/gpt-4", litellm_credential_name: "openai-prod" } }),
+          makeModel({
+            model_name: "gpt-4-staging",
+            model_info: { id: "staging-id", db_model: true } as ModelData["model_info"],
+            litellm_params: { model: "openai/gpt-4", litellm_credential_name: "openai-staging" },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getAllByText("openai-staging")).toHaveLength(2);
+    expect(screen.getByText("openai-prod")).toBeInTheDocument();
+  });
+
   it("shows 'Defined in config' for a config model and the creator for a DB model", () => {
     const { rerender } = render(<AllModelsTable {...baseProps} />);
     expect(screen.getByText("alice")).toBeInTheDocument();
@@ -174,6 +226,8 @@ describe("AllModelsTable", () => {
     const { rerender } = render(<AllModelsTable {...baseProps} />);
     expect(screen.getByText("$30")).toBeInTheDocument();
     expect(screen.getByText("$60")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: /\$30/ })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: /costs/i })).toHaveClass("text-right");
 
     rerender(<AllModelsTable {...baseProps} data={[makeModel({ input_cost: null, output_cost: null })]} />);
     expect(screen.queryByText(/^\$/)).not.toBeInTheDocument();

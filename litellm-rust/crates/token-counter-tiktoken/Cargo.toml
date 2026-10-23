@@ -11,3 +11,6 @@ once_cell = "1.21.3"
 rustc-hash = "2.1.3"
 thiserror.workspace = true
 tiktoken-rs.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true

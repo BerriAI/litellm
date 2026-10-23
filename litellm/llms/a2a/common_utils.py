@@ -22,7 +22,7 @@ class A2AError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: dict[str, Any] = {},
+        headers: dict[str, str] = {},
     ):
         super().__init__(
             status_code=status_code,

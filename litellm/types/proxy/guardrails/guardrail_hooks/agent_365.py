@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import Field
 
@@ -34,30 +34,13 @@ class Agent365GuardrailConfigModel(GuardrailConfigModel):
         ),
     )
 
-    api_base: str | None = Field(
-        default=None,
+    unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
+        default="fail_closed",
         description=(
-            "Base URL of the Microsoft Agent 365 tool-evaluation endpoint. "
-            f"Defaults to the production endpoint {AGENT_365_PROD_API_BASE}. "
-            "Falls back to the AGENT365_API_BASE environment variable."
-        ),
-    )
-
-    resource_app_id: str | None = Field(
-        default=None,
-        description=(
-            "Application id of the Agent 365 resource the OBO token is minted for. "
-            f"Defaults to the production resource {AGENT_365_PROD_RESOURCE_APP_ID}; "
-            "the Test and PreProd environments use a different id. "
-            "Falls back to the AGENT365_RESOURCE_APP_ID environment variable."
-        ),
-    )
-
-    agent_id: str | None = Field(
-        default=None,
-        description=(
-            "Agent identity reported to Agent 365 with every tool evaluation. "
-            "When unset, the caller's key alias is used."
+            "Behavior when Agent 365 or Entra is unreachable, times out, returns 5xx, skips the evaluation, or "
+            "rejects the gateway's own client credentials. 'fail_closed' (default) blocks the tool call with HTTP 503. "
+            "'fail_open' allows it, logs an error and records it as Unscanned in the logs and OpenTelemetry. "
+            "Policy blocks, 4xx rejections, throttling and a rejected caller token always block."
         ),
     )
 

@@ -1,30 +1,35 @@
-"""
-MCP Elicitation Handler
-Handles `elicitation/create` requests from upstream MCP servers by either:
-1. Relaying them to the connected downstream MCP client (if it supports elicitation)
-2. Returning a decline/error response (if no downstream client or unsupported)
-Supports both Form mode (structured data collection) and URL mode (external URL
-navigation for sensitive interactions like OAuth).
-MCP Spec Reference:
-    https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation
-"""
+"""Relay upstream elicitation through the initiating downstream MCP request."""
 
-from typing import TYPE_CHECKING, Final, Protocol, Union
+from __future__ import annotations
+
+import asyncio
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_CLIENT_TIMEOUT
 
 if TYPE_CHECKING:
     from mcp.types import (
+        INTERNAL_ERROR,
+        INVALID_REQUEST,
+        REQUEST_TIMEOUT,
+        ClientCapabilities,
+        ElicitRequestedSchema,
         ElicitRequestFormParams,
         ElicitRequestParams,
         ElicitRequestURLParams,
         ElicitResult,
         ErrorData,
+        RequestId,
     )
 
-# Guard imports that require the mcp package
 try:
     from mcp.types import (
+        INTERNAL_ERROR,
+        INVALID_REQUEST,
+        REQUEST_TIMEOUT,
+        ClientCapabilities,
+        ElicitRequestedSchema,
         ElicitRequestFormParams,
         ElicitRequestParams,
         ElicitRequestURLParams,
@@ -38,136 +43,65 @@ except ImportError:
 
 
 class _DownstreamElicitSession(Protocol):
-    """The downstream MCP client session methods this module relays elicitation requests through."""
+    async def elicit_url(
+        self, message: str, url: str, elicitation_id: str, related_request_id: RequestId | None = None
+    ) -> ElicitResult: ...
 
-    async def elicit_url(self, message: str, url: str, elicitation_id: str) -> "ElicitResult": ...
-
-    async def elicit_form(self, message: str, requested_schema: dict[str, object]) -> "ElicitResult": ...
-
-    async def elicit(self, message: str, requested_schema: dict[str, object]) -> "ElicitResult": ...
+    async def elicit_form(
+        self, message: str, requested_schema: ElicitRequestedSchema, related_request_id: RequestId | None = None
+    ) -> ElicitResult: ...
 
 
 async def handle_elicitation_request(
     context: object,
-    params: "ElicitRequestParams",
+    params: ElicitRequestParams,
     downstream_session: _DownstreamElicitSession | None = None,
-    downstream_capabilities: object = None,
-) -> Union["ElicitResult", "ErrorData"]:
-    """
-    Handle an MCP elicitation/create request from an upstream MCP server.
-    In Gateway mode (Mode A), we relay the elicitation request to the
-    connected downstream client if they declared elicitation capabilities.
-    In Tool Bridge mode (Mode B), there's no persistent downstream MCP
-    client, so we return a decline response.
-    Args:
-        context: MCP RequestContext from the upstream server connection.
-        params: The ElicitRequestParams (either form or URL mode).
-        downstream_session: The ServerSession to the downstream client,
-            if available (for relaying).
-        downstream_capabilities: The downstream client's declared
-            capabilities, used to check elicitation support.
-    Returns:
-        ElicitResult with the user's response, or ErrorData on failure.
-    """
+    downstream_capabilities: ClientCapabilities | None = None,
+    related_request_id: RequestId | None = None,
+    timeout: float = MCP_CLIENT_TIMEOUT,
+) -> ElicitResult | ErrorData:
     if not MCP_ELICITATION_AVAILABLE:
-        return ErrorData(
-            code=-1,
-            message="MCP elicitation is not available (mcp package not installed)",
-        )
+        return ErrorData(code=INTERNAL_ERROR, message="MCP elicitation is not available")
+    if downstream_session is None:
+        return ErrorData(code=INVALID_REQUEST, message="MCP elicitation requires a connected downstream MCP client")
     try:
-        mode: Final = getattr(params, "mode", "form")
-        verbose_logger.info(
-            "MCP elicitation: received request mode=%s, message=%s",
-            mode,
-            getattr(params, "message", ""),
+        return await asyncio.wait_for(
+            _relay_elicitation_to_downstream(params, downstream_session, downstream_capabilities, related_request_id),
+            timeout=timeout,
         )
-        # Check if we have a downstream session to relay to
-        if downstream_session is not None:
-            return await _relay_elicitation_to_downstream(
-                params=params,
-                downstream_session=downstream_session,
-                downstream_capabilities=downstream_capabilities,
-            )
-        # No downstream session — we're in Tool Bridge mode
-        # or the client doesn't support elicitation
-        verbose_logger.info("MCP elicitation: no downstream session available, declining")
-        return ElicitResult(
-            action="decline",
-        )
-    except Exception as e:
-        verbose_logger.exception("MCP elicitation handler failed: %s", e)
+    except asyncio.TimeoutError:
+        return ErrorData(code=REQUEST_TIMEOUT, message="MCP elicitation timed out waiting for the downstream client")
+    except Exception:
+        verbose_logger.warning("MCP elicitation: downstream relay failed")
         return ErrorData(
-            code=-1,
-            message=f"Elicitation failed: {e}",
+            code=INTERNAL_ERROR, message="MCP elicitation failed while communicating with the downstream client"
         )
 
 
 async def _relay_elicitation_to_downstream(
-    params: "ElicitRequestParams",
+    params: ElicitRequestParams,
     downstream_session: _DownstreamElicitSession,
-    downstream_capabilities: object = None,
-) -> Union["ElicitResult", "ErrorData"]:
-    """
-    Relay an elicitation request to the downstream MCP client.
-    Uses the ServerSession's elicit_form() or elicit_url() methods to
-    send the elicitation request back to the connected client.
-    Args:
-        params: The elicitation request parameters.
-        downstream_session: The ServerSession connected to the downstream client.
-        downstream_capabilities: Client capabilities to check support.
-    Returns:
-        ElicitResult from the downstream client.
-    """
-    mode: Final = getattr(params, "mode", "form")
-    # Check if the downstream client supports the requested mode
-    if downstream_capabilities is not None:
-        elicit_caps: Final[object] = getattr(downstream_capabilities, "elicitation", None)
-        if elicit_caps is None:
-            verbose_logger.info("MCP elicitation: downstream client does not support elicitation")
-            return ElicitResult(action="decline")
-        if mode == "url":
-            url_cap: Final[object] = getattr(elicit_caps, "url", None)
-            if url_cap is None:
-                verbose_logger.info("MCP elicitation: downstream client does not support URL mode")
-                return ElicitResult(action="decline")
-        if mode == "form":
-            form_cap: Final[object] = getattr(elicit_caps, "form", None)
-            if form_cap is None:
-                verbose_logger.info("MCP elicitation: downstream client does not support form mode")
-                return ElicitResult(action="decline")
-    try:
-        if mode == "url" and isinstance(params, ElicitRequestURLParams):
-            # URL mode: relay URL to client for external navigation
-            verbose_logger.info(
-                "MCP elicitation: relaying URL mode to downstream, url=%s",
-                getattr(params, "url", ""),
-            )
-            result = await downstream_session.elicit_url(
-                message=params.message,
-                url=params.url,
-                elicitation_id=params.elicitation_id,
-            )
-        elif isinstance(params, ElicitRequestFormParams):
-            # Form mode: relay structured form to client
-            verbose_logger.info("MCP elicitation: relaying form mode to downstream")
-            result = await downstream_session.elicit_form(
-                message=params.message,
-                requested_schema=params.requested_schema,
-            )
-        else:
-            # Fallback for generic ElicitRequestParams — pass an empty schema
-            # since elicit() requires requested_schema as a positional arg.
-            verbose_logger.info("MCP elicitation: relaying generic elicitation to downstream")
-            result = await downstream_session.elicit(
-                message=getattr(params, "message", ""),
-                requested_schema=getattr(params, "requested_schema", {}),  # mutable-ok: elicitation default schema
-            )
-        verbose_logger.info(
-            "MCP elicitation: downstream responded with action=%s",
-            getattr(result, "action", "unknown"),
+    downstream_capabilities: ClientCapabilities | None = None,
+    related_request_id: RequestId | None = None,
+) -> ElicitResult | ErrorData:
+    capabilities: Final = downstream_capabilities.elicitation if downstream_capabilities is not None else None
+    if capabilities is None:
+        return ErrorData(code=INVALID_REQUEST, message="Downstream client has not advertised elicitation support")
+    if isinstance(params, ElicitRequestURLParams):
+        if capabilities.url is None:
+            return ErrorData(code=INVALID_REQUEST, message="Downstream client does not support URL elicitation")
+        return await downstream_session.elicit_url(
+            message=params.message,
+            url=params.url,
+            elicitation_id=params.elicitation_id,
+            related_request_id=related_request_id,
         )
-        return result
-    except Exception as e:
-        verbose_logger.warning("MCP elicitation: failed to relay to downstream: %s", e)
-        # If relay fails, decline gracefully
-        return ElicitResult(action="decline")
+    if capabilities.form is None and capabilities.url is not None:
+        return ErrorData(code=INVALID_REQUEST, message="Downstream client does not support form elicitation")
+    if not isinstance(params, ElicitRequestFormParams):
+        return ErrorData(code=INVALID_REQUEST, message="Unsupported MCP elicitation parameters")
+    return await downstream_session.elicit_form(
+        message=params.message,
+        requested_schema=params.requested_schema,
+        related_request_id=related_request_id,
+    )
