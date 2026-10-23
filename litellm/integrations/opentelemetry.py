@@ -3161,7 +3161,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 otel_exporter,
             )
             normalized_endpoint = self._normalize_otel_endpoint(otel_endpoint, "traces")
-            tls: Final = resolve_otlp_http_tls("TRACES")
+            tls: Final = resolve_otlp_http_tls("TRACES", _split_otel_headers)
             return BatchSpanProcessor(
                 OTLPSpanExporterHTTP(
                     endpoint=normalized_endpoint,
@@ -3249,7 +3249,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self.OTEL_EXPORTER,
                 normalized_endpoint,
             )
-            tls: Final = resolve_otlp_http_tls("LOGS")
+            tls: Final = resolve_otlp_http_tls("LOGS", _split_otel_headers)
             return OTLPLogExporter(
                 endpoint=normalized_endpoint,
                 headers=_split_otel_headers,
@@ -3318,7 +3318,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 OTLPMetricExporter,
             )
 
-            tls: Final = resolve_otlp_http_tls("METRICS")
+            tls: Final = resolve_otlp_http_tls("METRICS", _split_otel_headers)
             exporter = OTLPMetricExporter(
                 endpoint=normalized_endpoint,
                 headers=_split_otel_headers,

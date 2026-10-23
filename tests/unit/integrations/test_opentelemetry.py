@@ -12,21 +12,23 @@ import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import ClassVar, Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 from opentelemetry import trace
+from opentelemetry._logs import LogRecord
 from opentelemetry._logs.severity import SeverityNumber
-from opentelemetry.sdk._logs import LogData, LogRecord
+from opentelemetry.sdk._logs import ReadableLogRecord
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
-from opentelemetry.sdk._logs.export import InMemoryLogExporter, LogExportResult, SimpleLogRecordProcessor
+from opentelemetry.sdk._logs.export import InMemoryLogExporter, LogRecordExportResult, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from parameterized import parameterized
@@ -2321,9 +2323,13 @@ def test_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPat
             severity_number=SeverityNumber.INFO,
             body="tls-export-test",
         )
-        log_data: Final = LogData(log_record=record, instrumentation_scope=InstrumentationScope("tls-export-test"))
+        log_data: Final = ReadableLogRecord(
+            log_record=record,
+            resource=Resource.create({}),
+            instrumentation_scope=InstrumentationScope("tls-export-test"),
+        )
         result: Final = exporter.export([log_data])
-        assert result is LogExportResult.SUCCESS, f"log export failed: {result}"
+        assert result is LogRecordExportResult.SUCCESS, f"log export failed: {result}"
         assert tls_sink.received.get(timeout=5) == "/v1/logs"
     finally:
         exporter.shutdown()
@@ -6639,7 +6645,7 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
             time.sleep(self.POLL_INTERVAL)
         return None
 
-    def _emitted_log_records(self, semconv_opt_in: str) -> tuple[LogData, ...]:
+    def _emitted_log_records(self, semconv_opt_in: str) -> tuple[ReadableLogRecord, ...]:
         log_exporter = InMemoryLogExporter()
         logger_provider = OTLoggerProvider()
         logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
@@ -6713,7 +6719,19 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
     must be bounded and must shut down whatever it drops (LIT-5437: threads accumulated
     until pods were OOMKilled)."""
 
-    BSP_THREAD_NAME = "OtelBatchSpanProcessor"
+    BSP_THREAD_NAME: ClassVar[str]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        before: Final = frozenset(threading.enumerate())
+        processor: Final = BatchSpanProcessor(InMemorySpanExporter())
+        try:
+            workers: Final = tuple(thread for thread in threading.enumerate() if thread not in before)
+            assert len(workers) == 1
+            assert workers[0].is_alive()
+            cls.BSP_THREAD_NAME = workers[0].name
+        finally:
+            processor.shutdown()
 
     def _logger(self, cap=3, exporter="console"):
         logger = OpenTelemetry(
@@ -6751,8 +6769,6 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
             logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
 
         self.assertEqual(len(logger._tracer_provider_cache), 3)
-        # Guards the thread-name constant: a rename upstream would make this read 0 and the
-        # bound assertion below would pass while measuring nothing.
         self.assertGreaterEqual(len(self._live_exporter_threads()), 1)
         self.assertLessEqual(self._wait_for_exporter_threads(before + 3) - before, 3)
 
@@ -6923,8 +6939,8 @@ class TestOpenTelemetryDatabaseSemconvAttributes(unittest.TestCase):
     database's own metrics.
     """
 
-    DSN = "postgresql://llmproxy:dbpassword9090@litellm-prod.abc123.us-east-1.rds.amazonaws.com:6432/litellm?schema=reporting"
-    REPLICA_DSN = "postgresql://reader:r3ad0nly@litellm-prod-ro.abc123.us-east-1.rds.amazonaws.com/litellm"
+    DSN = "postgresql://TEST_ONLY_USER:TEST_ONLY_PASSWORD@primary-db.example.invalid:6432/TEST_ONLY_DATABASE?schema=reporting"
+    REPLICA_DSN = "postgresql://TEST_ONLY_REPLICA_USER:TEST_ONLY_REPLICA_PASSWORD@replica-db.example.invalid/TEST_ONLY_DATABASE"
 
     def _service_span(self, service, call_type, dsn, error=None, replica_dsn=None):
         exporter = InMemorySpanExporter()
@@ -6965,10 +6981,10 @@ class TestOpenTelemetryDatabaseSemconvAttributes(unittest.TestCase):
         self.assertEqual(span.attributes["db.operation.name"], "get_data")
         self.assertEqual(
             span.attributes["server.address"],
-            "litellm-prod.abc123.us-east-1.rds.amazonaws.com",
+            "primary-db.example.invalid",
         )
         self.assertEqual(span.attributes["server.port"], 6432)
-        self.assertEqual(span.attributes["db.namespace"], "litellm|reporting")
+        self.assertEqual(span.attributes["db.namespace"], "TEST_ONLY_DATABASE|reporting")
 
     def test_datastore_span_is_a_client_span_carrying_the_legacy_db_system(self):
         """Datadog types a span as a database call from CLIENT kind plus
@@ -6994,16 +7010,16 @@ class TestOpenTelemetryDatabaseSemconvAttributes(unittest.TestCase):
         self.assertEqual(span.kind, trace.SpanKind.CLIENT)
         self.assertEqual(
             span.attributes["server.address"],
-            "litellm-prod.abc123.us-east-1.rds.amazonaws.com",
+            "primary-db.example.invalid",
         )
         self.assertEqual(span.attributes["error"], "connection refused")
 
     def test_no_credential_from_the_dsn_lands_on_the_span(self):
         span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
         exported = " ".join(str(value) for value in span.attributes.values())
-        self.assertIn("litellm-prod.abc123.us-east-1.rds.amazonaws.com", exported)
-        self.assertNotIn("dbpassword9090", exported)
-        self.assertNotIn("llmproxy", exported)
+        self.assertIn("primary-db.example.invalid", exported)
+        self.assertNotIn("TEST_ONLY_PASSWORD", exported)
+        self.assertNotIn("TEST_ONLY_USER", exported)
 
     def test_redis_span_does_not_borrow_the_postgres_endpoint(self):
         span = self._service_span(ServiceTypes.REDIS, "async_set_cache", self.DSN)
