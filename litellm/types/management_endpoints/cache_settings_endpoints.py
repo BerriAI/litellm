@@ -4,6 +4,7 @@ Types and field definitions for cache settings management endpoints
 
 from typing import Final
 
+from litellm.types.caching import CacheScope
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -102,6 +103,15 @@ CACHE_SETTINGS_FIELDS: Final[list[CacheSettingsField]] = [
         field_default=False,
         ui_field_name="SSL",
         redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="cache_scope",
+        field_type="String",
+        field_value=None,
+        field_description="Who can share exact cached responses. Team falls back to key for requests without a team.",
+        field_default=CacheScope.GLOBAL.value,
+        options=[scope.value for scope in CacheScope],
+        ui_field_name="Cache isolation",
     ),
     CacheSettingsField(
         field_name="namespace",

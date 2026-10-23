@@ -6,7 +6,8 @@ export type CacheSavePayloadValue = string | number | boolean | unknown[];
 export type CacheSavePayload = Record<string, CacheSavePayloadValue>;
 
 export const isFieldVisible = (field: CacheField, redisType: RedisType): boolean =>
-  field.redisType === null || field.redisType === redisType;
+  field.redisType === null ||
+  (typeof field.redisType === "string" ? field.redisType === redisType : field.redisType.includes(redisType));
 
 export const fieldsForSection = (section: CacheSection, redisType: RedisType): CacheField[] =>
   CACHE_FIELDS.filter((field) => field.section === section && isFieldVisible(field, redisType));

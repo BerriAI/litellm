@@ -54,6 +54,7 @@ import httpx
 from typing_extensions import Never, ReadOnly, TypedDict
 
 from litellm import _custom_logger_compatible_callbacks_literal
+from litellm.caching.cache_scope import CacheScopePolicy
 from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     FILE_USAGE_MAX_TRACKED_COUNTERS,
@@ -90,6 +91,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
+from litellm.types.caching import DEFAULT_CACHING_SUPPORTED_CALL_TYPES
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
@@ -1582,6 +1584,9 @@ def _proxy_hook_factory(hook_name: str) -> Callable[..., CustomLogger]:
     return get_proxy_hook(hook_name)
 
 
+_PRE_CALL_REQUEST: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+
+
 class ProxyLogging:
     """
     Logging/Custom Handlers for proxy.
@@ -2792,6 +2797,31 @@ class ProxyLogging:
         pass
 
     async def pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict[str, object] | None,  # mutable-ok: legacy hooks mutate the caller's request dictionary
+        call_type: CallTypesLiteral,
+        guardrails_only: bool = False,
+        skip_guardrails: bool = False,
+        endpoint_type: EndpointType = EndpointType.GENERIC,
+    ) -> dict[str, object] | None:  # mutable-ok: proxy dispatch continues updating the returned request
+        request: Final = _PRE_CALL_REQUEST.validate_python(
+            await self._run_pre_call_hooks(  # pyright: ignore[reportUnknownMemberType]  # legacy hook payloads are validated at this boundary
+                user_api_key_dict,
+                data,
+                call_type,
+                guardrails_only,
+                skip_guardrails,
+                endpoint_type,
+            )
+        )
+        if request is None:
+            return request
+        if guardrails_only or litellm.cache is None or call_type not in DEFAULT_CACHING_SUPPORTED_CALL_TYPES:
+            return dict(request)
+        return dict(CacheScopePolicy(litellm.cache).apply(request, user_api_key_dict))
+
+    async def _run_pre_call_hooks(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: dict | None,
