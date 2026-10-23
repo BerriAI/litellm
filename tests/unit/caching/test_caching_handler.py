@@ -290,67 +290,6 @@ async def test_existing_provider_response_cache_still_hits(copilot_response_cach
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("is_async", [False, True])
-@pytest.mark.parametrize(
-    ("provider", "include_direct_fields"),
-    [("hosted_vllm", False), ("hosted_vllm", True), ("openai", True)],
-)
-async def test_chat_cache_preserves_vllm_choice_fields_without_changing_other_providers(
-    copilot_response_cache: Cache,
-    respx_mock: respx.MockRouter,
-    is_async: bool,
-    provider: str,
-    include_direct_fields: bool,
-) -> None:
-    model: Final = f"{provider}/cache-regression"
-    messages: Final = [{"role": "user", "content": "cached choice fields"}]
-    choice_fields: Final[tuple[dict[str, object], ...]] = (
-        {"stop_reason": "<stop>", "token_ids": [1, 2]},
-        {"stop_reason": 0, "token_ids": []},
-        {"stop_reason": None, "token_ids": None},
-        {},
-    )
-    cached_response: Final = ModelResponse(
-        id="cached-vllm-choice-fields",
-        created=1_700_000_000,
-        model="cache-regression",
-        choices=[
-            {
-                "index": index,
-                "message": {"role": "assistant", "content": f"cached answer {index}"},
-                "finish_reason": "stop",
-                "provider_specific_fields": {**fields, "unrelated_metadata": {"value": index}},
-                **(fields if include_direct_fields else {}),
-            }
-            for index, fields in enumerate(choice_fields)
-        ],
-        usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
-    )
-    copilot_response_cache.add_cache(cached_response, model=model, messages=messages, caching=True)
-
-    response: Final = (
-        await litellm.acompletion(model=model, messages=messages, api_key="test-key", caching=True)
-        if is_async
-        else litellm.completion(model=model, messages=messages, api_key="test-key", caching=True)
-    )
-
-    assert isinstance(response, ModelResponse)
-    assert response.id == cached_response.id
-    assert response.hidden_params.get("cache_hit") is True
-    assert not respx_mock.calls
-    serialized_choices: Final = TypeAdapter(list[dict[str, object]]).validate_python(response.model_dump()["choices"])
-    assert len(serialized_choices) == len(choice_fields)
-    for index, (choice, fields) in enumerate(zip(serialized_choices, choice_fields, strict=True)):
-        direct_fields: Final = {key: choice[key] for key in ("stop_reason", "token_ids") if key in choice}
-        expected_direct_fields: Final = fields if provider == "hosted_vllm" else {}
-        expected_metadata: Final = (
-            {**fields, "unrelated_metadata": {"value": index}} if provider == "hosted_vllm" else fields
-        )
-        assert direct_fields == expected_direct_fields
-        assert choice["provider_specific_fields"] == expected_metadata
-
-
-@pytest.mark.asyncio
 async def test_cache_hit_reports_zero_response_cost(copilot_response_cache: Cache) -> None:
     messages: Final = [{"role": "user", "content": "cache cost repro"}]
     first: Final = await litellm.acompletion(

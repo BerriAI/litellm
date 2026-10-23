@@ -43,18 +43,6 @@ class _VLLMChoiceFields(BaseModel):
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
-    @staticmethod
-    def preserve_choice_fields(response: ModelResponse) -> ModelResponse:
-        for choice in response.choices:
-            if "provider_specific_fields" not in choice:
-                continue
-            fields = _VLLMChoiceFields.model_validate(choice.provider_specific_fields or {})
-            if "stop_reason" in fields.model_fields_set and "stop_reason" not in choice:
-                choice["stop_reason"] = fields.stop_reason
-            if "token_ids" in fields.model_fields_set and "token_ids" not in choice:
-                choice["token_ids"] = list(fields.token_ids) if fields.token_ids is not None else None
-        return response
-
     def transform_response(
         self,
         model: str,
@@ -82,7 +70,15 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
-        return self.preserve_choice_fields(response)
+        for choice in response.choices:
+            if "provider_specific_fields" not in choice:
+                continue
+            fields = _VLLMChoiceFields.model_validate(choice.provider_specific_fields or {})
+            if "stop_reason" in fields.model_fields_set and "stop_reason" not in choice:
+                choice["stop_reason"] = fields.stop_reason
+            if "token_ids" in fields.model_fields_set and "token_ids" not in choice:
+                choice["token_ids"] = list(fields.token_ids) if fields.token_ids is not None else None
+        return response
 
     def _convert_custom_tools_to_function_tools(self, tools: list[dict[str, object]]) -> list[dict[str, object]]:
         """

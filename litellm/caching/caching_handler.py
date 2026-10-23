@@ -47,7 +47,6 @@ from litellm.types.utils import (
     Choices,
     Embedding,
     EmbeddingResponse,
-    LlmProviders,
     ModelResponse,
     TextChoices,
     TextCompletionResponse,
@@ -384,7 +383,7 @@ class LLMCachingHandler:
                         kwargs=kwargs,
                         logging_obj=logging_obj,
                         model=provider_model,
-                        custom_llm_provider=custom_llm_provider,
+                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         args=args,
                     )
                     if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
@@ -481,28 +480,33 @@ class LLMCachingHandler:
                     pass
                 else:
                     call_type = original_function.__name__
-                    provider_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                        model=model or "",
-                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
-                        api_base=kwargs.get("api_base", None),
-                        api_key=kwargs.get("api_key", None),
-                    )
                     cached_result = self._convert_cached_result_to_model_response(
                         cached_result=cached_result,
                         call_type=call_type,
                         kwargs=kwargs,
                         logging_obj=logging_obj,
                         model=model,
-                        custom_llm_provider=custom_llm_provider,
+                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         args=args,
                     )
 
                     # LOG SUCCESS
                     cache_hit: Final = True
                     end_time: Final = datetime.datetime.now()
+                    (
+                        model,
+                        custom_llm_provider,
+                        dynamic_api_key,
+                        api_base,
+                    ) = litellm.get_llm_provider(
+                        model=model or "",
+                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
+                        api_base=kwargs.get("api_base", None),
+                        api_key=kwargs.get("api_key", None),
+                    )
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
-                        model=f"{custom_llm_provider}/{provider_model}",
+                        model=f"{custom_llm_provider}/{model}",
                         kwargs=kwargs,
                         cached_result=cached_result,
                         is_async=False,
@@ -986,13 +990,9 @@ class LLMCachingHandler:
                     model=model,
                 )
             else:
-                cached_result = (
-                    litellm.HostedVLLMChatConfig.preserve_choice_fields(ModelResponse.model_validate(cached_result))
-                    if custom_llm_provider == LlmProviders.HOSTED_VLLM
-                    else convert_to_model_response_object(
-                        response_object=cached_result,
-                        model_response_object=ModelResponse(),
-                    )
+                cached_result = convert_to_model_response_object(
+                    response_object=cached_result,
+                    model_response_object=ModelResponse(),
                 )
         if (
             call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value
