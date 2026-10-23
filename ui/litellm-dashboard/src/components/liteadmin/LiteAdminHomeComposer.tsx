@@ -42,7 +42,7 @@ export function LiteAdminHomeComposer({
           }
         }}
         placeholder="What would you like to do?"
-        aria-label="Message LiteAdmin"
+        aria-label="Message Aria Agent"
         disabled={disabled}
         rows={2}
         className="min-h-24 max-h-48 w-full rounded-t-xl px-5 pt-5 pb-2 text-sm placeholder:text-muted-foreground [field-sizing:content]"

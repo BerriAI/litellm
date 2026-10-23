@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { MessageSquare, Sparkles, X } from "lucide-react";
+import { X } from "lucide-react";
+import { AriaAvatar } from "@/components/liteadmin/AriaAvatar";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -238,23 +239,26 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
   };
 
   return (
-    <div
+    <aside
       data-testid="usage-ai-chat-panel"
+      aria-label="Aria Agent"
+      aria-hidden={!open}
+      inert={!open}
       className={`fixed top-0 right-0 h-full bg-card border-l border-border shadow-2xl z-overlay flex flex-col transition-transform duration-300 ease-in-out ${
         open ? "translate-x-0" : "translate-x-full"
       }`}
-      style={{ width: 420 }}
+      style={{ width: "min(420px, 100vw)" }}
     >
       {/* Header */}
       <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-5 pt-4 pb-3">
         <div className="min-w-0">
           <h3 className="flex items-center gap-2 text-sm leading-5 font-medium text-foreground">
-            <Sparkles aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
-            Ask AI
+            <AriaAvatar size={32} />
+            Aria Agent
           </h3>
           <p className="mt-0.5 text-xs text-muted-foreground">Ask about your spend, models, keys, and trends</p>
         </div>
-        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={handleClose}>
+        <Button variant="ghost" size="icon-sm" aria-label="Close Aria Agent" onClick={handleClose}>
           <X />
         </Button>
       </div>
@@ -289,10 +293,22 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
       {/* Chat messages */}
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 bg-muted/40">
         {messages.length === 0 && !streamingContent && !isLoading && (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-            <MessageSquare aria-hidden="true" className="mb-2 size-6" strokeWidth={1.5} />
-            <p className="text-sm font-medium text-foreground">Ask a question about your usage</p>
-            <p className="text-xs mt-1">e.g. &quot;Which model costs me the most?&quot;</p>
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-muted-foreground">
+            <AriaAvatar size={88} />
+            <div className="space-y-1.5">
+              <h4 className="text-lg font-semibold text-foreground">Hi, I’m Aria.</h4>
+              <p className="max-w-64 text-sm">
+                Let’s make sense of your usage. Ask me about spend, models, and trends.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2 text-xs"
+              onClick={() => setInputText("Which model costs me the most?")}
+            >
+              Which model costs me the most?
+            </Button>
           </div>
         )}
 
@@ -357,7 +373,8 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about your usage..."
+            placeholder="Ask Aria about your usage…"
+            aria-label="Message Aria Agent"
             rows={1}
             className="flex-1 min-h-9 max-h-24"
             disabled={isLoading}
@@ -378,7 +395,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
           <span className="text-xs text-muted-foreground">Enter to send</span>
         </div>
       </div>
-    </div>
+    </aside>
   );
 };
 

@@ -1,7 +1,8 @@
-import { screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import UsageAIChatPanel from "./UsageAIChatPanel";
+import { usageAiChatStream } from "@/components/networking";
 
 beforeAll(() => {
   if (typeof window !== "undefined" && !window.ResizeObserver) {
@@ -30,7 +31,8 @@ describe("UsageAIChatPanel", () => {
   it("should render the panel when open", () => {
     renderWithProviders(<UsageAIChatPanel {...defaultProps} />);
 
-    expect(screen.getByText("Ask AI")).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Aria Agent" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Aria Agent" })).toBeInTheDocument();
     expect(screen.getByText("Ask about your spend, models, keys, and trends")).toBeInTheDocument();
   });
 
@@ -46,7 +48,7 @@ describe("UsageAIChatPanel", () => {
   it("should render empty state message when no conversation", () => {
     renderWithProviders(<UsageAIChatPanel {...defaultProps} />);
 
-    expect(screen.getByText("Ask a question about your usage")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Hi, I’m Aria." })).toBeInTheDocument();
   });
 
   it("should render the send button", () => {
@@ -58,7 +60,10 @@ describe("UsageAIChatPanel", () => {
   it("should render input placeholder", () => {
     renderWithProviders(<UsageAIChatPanel {...defaultProps} />);
 
-    expect(screen.getByPlaceholderText("Ask about your usage...")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Message Aria Agent" })).toHaveAttribute(
+      "placeholder",
+      "Ask Aria about your usage…",
+    );
   });
 
   it("should render clear chat button", () => {
@@ -72,6 +77,7 @@ describe("UsageAIChatPanel", () => {
 
     expect(screen.getByTestId("usage-ai-chat-panel")).toBeInTheDocument();
     expect(screen.getByTestId("usage-ai-chat-panel")).toHaveClass("translate-x-full");
+    expect(screen.queryByRole("complementary", { name: "Aria Agent" })).not.toBeInTheDocument();
   });
 
   it("should not have translate-x-full class when open", () => {
@@ -79,5 +85,29 @@ describe("UsageAIChatPanel", () => {
 
     expect(screen.getByTestId("usage-ai-chat-panel")).not.toHaveClass("translate-x-full");
     expect(screen.getByTestId("usage-ai-chat-panel")).toHaveClass("translate-x-0");
+  });
+
+  it("should let users send a suggested question through the usage endpoint", async () => {
+    renderWithProviders(<UsageAIChatPanel {...defaultProps} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Which model costs me the most?" }));
+    });
+    expect(screen.getByRole("textbox", { name: "Message Aria Agent" })).toHaveValue("Which model costs me the most?");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+    expect(usageAiChatStream).toHaveBeenCalledWith(
+      "test-token",
+      [{ role: "user", content: "Which model costs me the most?" }],
+      "",
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(AbortSignal),
+    );
   });
 });

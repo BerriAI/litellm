@@ -250,12 +250,12 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
           ))}
           {premiumUser === true && canUseLiteAdmin && (
             <div className="flex h-[38px] items-center justify-between gap-3 px-3">
-              <span className="text-[13px] text-foreground">Hide LiteAdmin</span>
+              <span className="text-[13px] text-foreground">Hide Aria Agent</span>
               <Switch
                 size="sm"
                 checked={disableLiteAdmin}
                 onCheckedChange={setDisableLiteAdmin}
-                aria-label="Toggle hide LiteAdmin"
+                aria-label="Toggle hide Aria Agent"
               />
             </div>
           )}

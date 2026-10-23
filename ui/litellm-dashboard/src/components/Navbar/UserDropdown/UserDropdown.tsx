@@ -206,12 +206,12 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
       </div>
       {premiumUser === true && canUseLiteAdmin && (
         <div className="flex w-full items-center justify-between gap-2">
-          <span className="text-muted-foreground">Hide LiteAdmin</span>
+          <span className="text-muted-foreground">Hide Aria Agent</span>
           <Switch
             size="sm"
             checked={disableLiteAdmin}
             onCheckedChange={setDisableLiteAdmin}
-            aria-label="Toggle hide LiteAdmin"
+            aria-label="Toggle hide Aria Agent"
           />
         </div>
       )}

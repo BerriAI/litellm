@@ -240,7 +240,20 @@ vi.mock("@/components/EntityUsageExport", () => ({
 }));
 
 vi.mock("./UsageAIChatPanel", () => ({
-  default: () => <div data-testid="usage-ai-chat-panel">Usage AI Chat Panel</div>,
+  default: ({ open }: { open: boolean }) => (
+    <div data-testid="usage-ai-chat-panel" hidden={!open}>
+      Aria usage chat
+    </div>
+  ),
+}));
+
+vi.mock("@/components/liteadmin/LiteAdmin", () => ({
+  useAriaUsageVisibility: () => true,
+  AriaUsageTrigger: ({ onFallback }: { onFallback: () => void }) => (
+    <button aria-label="Open Aria Agent" onClick={onFallback}>
+      Aria
+    </button>
+  ),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
@@ -1388,25 +1401,30 @@ describe("UsagePage", () => {
     });
   });
 
-  describe("Ask AI button", () => {
-    it("should render Ask AI button in global view", async () => {
+  describe("Aria button", () => {
+    it("should render Aria in global view", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByText("Ask AI")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open Aria Agent" })).toBeInTheDocument();
+      expect(screen.queryByText("Ask AI")).not.toBeInTheDocument();
     });
 
-    it("should render AI chat panel component", async () => {
+    it("should open usage chat when Aria falls back to usage-only access", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByTestId("usage-ai-chat-panel")).toBeInTheDocument();
+      expect(screen.getByTestId("usage-ai-chat-panel")).not.toBeVisible();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Open Aria Agent" }));
+      });
+      expect(screen.getByTestId("usage-ai-chat-panel")).toBeVisible();
     });
   });
 

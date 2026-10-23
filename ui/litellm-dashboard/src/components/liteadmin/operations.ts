@@ -329,6 +329,24 @@ export function createLiteAdminOperations(context: OperationContext) {
       dated({ api_key: hash }),
       (a) => apiClient.get<unknown>("/key/spend/report", { ...auth, query: a }),
     ),
+    operation("read", "usage")(
+      "get_usage_data",
+      "View dated global or user usage totals, daily trends, and top models, providers and keys",
+      dated({ user_id: optionalText }),
+      (a) => apiClient.get<unknown>("/user/daily/activity/aggregated", { ...auth, query: { ...a, api_key_limit: 20 } }),
+    ),
+    operation("read", "usage")(
+      "get_team_usage_data",
+      "View dated usage by team, including model and provider breakdowns. Omit team_ids for all teams",
+      dated({ team_ids: optionalText }),
+      (a) => apiClient.get<unknown>("/team/daily/activity/aggregated", { ...auth, query: { ...a, api_key_limit: 20 } }),
+    ),
+    operation("read", "usage")(
+      "get_tag_usage_data",
+      "View dated usage by tag, including model and provider breakdowns. Omit tags for all tags",
+      dated({ tags: optionalText }),
+      (a) => apiClient.get<unknown>("/tag/daily/activity/aggregated", { ...auth, query: { ...a, api_key_limit: 20 } }),
+    ),
     operation("read", "log")(
       "request_logs",
       "List request cost, timing and status, excluding prompts and responses",

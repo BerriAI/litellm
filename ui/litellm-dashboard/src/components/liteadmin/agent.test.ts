@@ -179,6 +179,9 @@ describe("fixed management operations", () => {
     ],
     ["team_spend_report", "/team/spend/report", "GET", { ...dates, team_id: "team-1" }, false],
     ["key_spend_report", "/key/spend/report", "GET", { ...dates, api_key: keyHash }, false],
+    ["get_usage_data", "/user/daily/activity/aggregated", "GET", { ...dates, user_id: null }, false],
+    ["get_team_usage_data", "/team/daily/activity/aggregated", "GET", { ...dates, team_ids: "team-1,team-2" }, false],
+    ["get_tag_usage_data", "/tag/daily/activity/aggregated", "GET", { ...dates, tags: "production,feature-a" }, false],
     [
       "request_logs",
       "/spend/logs/ui",
@@ -273,6 +276,81 @@ describe("fixed management operations", () => {
     await runLiteAdmin(options(), model.client);
     expect(new URL(String(managementFetch.mock.calls[0][0])).searchParams.get("key_limit")).toBe("20");
     expect(new URL(String(managementFetch.mock.calls[1][0])).searchParams.get("search")).toBe("admin@example.com");
+  });
+
+  it.each([
+    ["get_usage_data", "user_id", "user-1"],
+    ["get_team_usage_data", "team_ids", "team-1,team-2"],
+    ["get_tag_usage_data", "tags", "production,feature-a"],
+  ])(
+    "should return model, provider and entity usage through %s in the shared conversation",
+    async (name, filter, value) => {
+      const metrics = { spend: 12, api_requests: 30, total_tokens: 800 };
+      managementFetch.mockImplementation(async () =>
+        json({
+          results: [
+            {
+              date: dates.start_date,
+              metrics,
+              breakdown: {
+                models: { "chat-model": { metrics } },
+                providers: { "model-provider": { metrics } },
+                entities: { production: { metrics } },
+              },
+            },
+          ],
+          metadata: { total_spend: 12, total_api_requests: 30, total_tokens: 800 },
+        }),
+      );
+      const model = transport([completion([call(name, { ...dates, [filter]: value })]), completion()]);
+      const input = options();
+      await runLiteAdmin(input, model.client);
+
+      const query = new URL(String(managementFetch.mock.calls[0][0])).searchParams;
+      expect(query.get(filter)).toBe(value);
+      expect(query.get("start_date")).toBe(dates.start_date);
+      expect(query.get("end_date")).toBe(dates.end_date);
+      expect(query.get("api_key_limit")).toBe("20");
+      expect(model.requests[1].messages.at(-1)).toMatchObject({
+        role: "tool",
+        content: JSON.stringify({
+          operation: name,
+          success: true,
+          result: {
+            totals: { total_spend: 12, total_api_requests: 30, total_tokens: 800 },
+            daily: [{ date: dates.start_date, ...metrics }],
+            breakdown_limit: 20,
+            top_models: [{ name: "chat-model", ...metrics }],
+            top_providers: [{ name: "model-provider", ...metrics }],
+            top_entities: [{ name: "production", ...metrics }],
+            top_api_keys: [],
+          },
+        }),
+      });
+      expect(input.confirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it("should abort a usage lookup without sending its result back to the model", async () => {
+    const controller = new AbortController();
+    const requested = deferred<void>();
+    const response = deferred<Response>();
+    managementFetch.mockImplementation(async () => {
+      requested.resolve();
+      return response.promise;
+    });
+    const model = transport([completion([call("get_tag_usage_data", { ...dates, tags: null })])]);
+    const input = { ...options(), signal: controller.signal };
+    const running = runLiteAdmin(input, model.client);
+    const rejected = expect(running).rejects.toBeInstanceOf(Error);
+    await requested.promise;
+    expect(managementFetch.mock.calls[0][1]?.signal).toBe(controller.signal);
+    controller.abort();
+    response.resolve(json({ results: [] }));
+    await rejected;
+    expect(model.requests).toHaveLength(1);
+    expect(input.onMessage).not.toHaveBeenCalled();
+    expect(input.confirm).not.toHaveBeenCalled();
   });
 
   it("provides strict JSON schemas for nullable and transformed tool arguments", async () => {

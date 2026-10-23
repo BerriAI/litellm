@@ -14,7 +14,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { History, Plus, Sparkles, X } from "lucide-react";
+import { History, Plus, X } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useDisableLiteAdmin } from "@/app/(dashboard)/hooks/useDisableLiteAdmin";
 import { useProxySettingsQuery } from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
@@ -32,6 +32,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cva.config";
 import { isProxyAdminRole } from "@/utils/roles";
 import { getPreferredLiteAdminModel, MAX_INPUT_LENGTH, resolveInferenceTarget } from "./agent";
+import { AriaAvatar } from "./AriaAvatar";
 import { LiteAdminConversation } from "./LiteAdminConversation";
 import { LiteAdminHomeComposer } from "./LiteAdminHomeComposer";
 import { useLiteAdmin, type ConversationEntry, type LiteAdminSession } from "./useLiteAdmin";
@@ -48,21 +49,34 @@ type LiteAdminState = {
 };
 
 const LiteAdminContext = createContext<LiteAdminState | null>(null);
+const AriaUsageVisibilityContext = createContext(true);
+
+export function useAriaUsageVisibility() {
+  return useContext(AriaUsageVisibilityContext);
+}
 
 function useLiteAdminSession() {
   const auth = useAuthorized();
   const [disabled] = useDisableLiteAdmin(auth.userId);
   const sessionReady = !auth.isLoading && auth.isAuthorized && auth.premiumUser === true;
   const writableAdmin = !auth.isViewOnly && isProxyAdminRole(auth.userRole);
-  const allowed = sessionReady && writableAdmin && !disabled;
-  if (!allowed || !auth.token || !auth.accessToken) return null;
+  const eligible = sessionReady && writableAdmin;
+  const usageVisible = !(eligible && disabled);
+  const allowed = eligible && !disabled;
+  if (!allowed || !auth.token || !auth.accessToken) return { configured: null, usageVisible };
   const session = { token: auth.token, accessToken: auth.accessToken, managementBaseUrl: getProxyBaseUrl() };
-  return { session, key: JSON.stringify([auth.userId, session.token, session.accessToken, session.managementBaseUrl]) };
+  return {
+    configured: {
+      session,
+      key: JSON.stringify([auth.userId, session.token, session.accessToken, session.managementBaseUrl]),
+    },
+    usageVisible,
+  };
 }
 
 /** Wraps the dashboard content column and docks the LiteAdmin panel beside it, so opening it narrows the page instead of covering it. */
 export function LiteAdminFrame({ children }: { children: ReactNode }) {
-  const configured = useLiteAdminSession();
+  const { configured, usageVisible } = useLiteAdminSession();
   const sessionKey = configured?.key ?? null;
   const [open, setOpen] = useState(false);
   const [homeContainer, setHomeContainer] = useState<HTMLDivElement | null>(null);
@@ -88,12 +102,14 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [sessionKey]);
   return (
-    <LiteAdminContext.Provider value={configured ? { open, toggle, show, homeContainer, setHomeContainer } : null}>
-      {children}
-      {configured && (
-        <DockedPanel key={configured.key} session={configured.session} open={open} close={() => setOpen(false)} />
-      )}
-    </LiteAdminContext.Provider>
+    <AriaUsageVisibilityContext.Provider value={usageVisible}>
+      <LiteAdminContext.Provider value={configured ? { open, toggle, show, homeContainer, setHomeContainer } : null}>
+        {children}
+        {configured && (
+          <DockedPanel key={configured.key} session={configured.session} open={open} close={() => setOpen(false)} />
+        )}
+      </LiteAdminContext.Provider>
+    </AriaUsageVisibilityContext.Provider>
   );
 }
 
@@ -102,14 +118,14 @@ export function LiteAdminHome() {
   if (!state) return null;
   const { open, show, setHomeContainer } = state;
   return (
-    <section aria-label="Ask LiteAdmin" hidden={open} className="space-y-3">
+    <section aria-label="Ask Aria Agent" hidden={open} className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <Sparkles className="size-4 text-info" />
-            LiteAdmin
+            <AriaAvatar size={32} />
+            Aria Agent
           </h2>
-          <p className="border-l pl-3 text-sm text-muted-foreground">Control your entire gateway.</p>
+          <p className="border-l pl-3 text-sm text-muted-foreground">Your gateway, a little easier.</p>
         </div>
         <Button variant="ghost" size="sm" onClick={show} className="text-muted-foreground">
           <History className="size-3.5" />
@@ -127,15 +143,40 @@ export default function LiteAdminTrigger() {
   return (
     <Button
       variant="ghost"
-      aria-label="LiteAdmin"
+      aria-label="Aria Agent"
       aria-keyshortcuts="Meta+J Control+J"
       aria-expanded={state.open}
       onClick={state.toggle}
-      className="rounded-full bg-info/10 text-info hover:bg-info/15 hover:text-info/80 aria-expanded:bg-info/15 aria-expanded:text-info"
+      className="gap-2 rounded-full border border-blue-200/70 bg-blue-50/80 pl-1.5 pr-3 text-blue-700 hover:bg-blue-100 hover:text-blue-800 aria-expanded:bg-blue-100 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300 dark:hover:bg-blue-400/20"
     >
-      <Sparkles className="size-4" />
-      <span className="hidden lg:inline">LiteAdmin</span>
+      <AriaAvatar />
+      <span className="hidden lg:inline">Aria Agent</span>
       <kbd className="hidden rounded-full border border-info/30 px-1.5 font-sans text-xs lg:inline">⌘J</kbd>
+    </Button>
+  );
+}
+
+export function AriaUsageTrigger({
+  onFallback,
+  fallbackOpen = false,
+}: {
+  onFallback: () => void;
+  fallbackOpen?: boolean;
+}) {
+  const state = useContext(LiteAdminContext);
+  const visible = useAriaUsageVisibility();
+  if (!visible) return null;
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      aria-label="Open Aria Agent"
+      aria-expanded={state?.open ?? fallbackOpen}
+      onClick={() => (state ? state.show() : onFallback())}
+      className="gap-1.5 border-blue-200 bg-blue-50/70 pl-1.5 text-blue-700 hover:bg-blue-100 hover:text-blue-800 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300 dark:hover:bg-blue-400/20"
+    >
+      <AriaAvatar size={24} />
+      Aria
     </Button>
   );
 }
@@ -203,7 +244,7 @@ function Destination({
               <CardContent className="space-y-3">
                 <p className="break-all font-mono text-xs">{target.baseUrl}</p>
                 <p className="text-muted-foreground">
-                  This gateway uses a different address. LiteAdmin will send your existing session credential to the
+                  This gateway uses a different address. Aria Agent will send your existing session credential to the
                   address shown above.
                 </p>
               </CardContent>
@@ -245,7 +286,7 @@ function Panel({
   return (
     <aside
       ref={ref}
-      aria-label="LiteAdmin"
+      aria-label="Aria Agent"
       tabIndex={-1}
       hidden={!open}
       className={cn(
@@ -319,7 +360,7 @@ function LiteAdminChats({ session, open, close }: { session: LiteAdminSession; o
           </Button>
         </PanelHeader>
         <TabsList
-          aria-label="LiteAdmin chats"
+          aria-label="Aria Agent chats"
           className="h-auto w-full shrink-0 justify-start overflow-x-auto rounded-none border-b bg-transparent p-2"
         >
           {tabs.chats.map((tab) => (
@@ -481,7 +522,7 @@ function LiteAdminComposer({
         />
       ) : (
         <>
-          <ChatComposer {...props} placeholder="Ask LiteAdmin…" />
+          <ChatComposer {...props} placeholder="Ask Aria…" />
           <p className="text-xs text-muted-foreground">Use a model you trust with your gateway data.</p>
         </>
       )}
@@ -505,7 +546,7 @@ function ModelPicker({
   if (models.isPending) return <Skeleton className="h-8 w-full" aria-label="Loading models" />;
   return (
     <SearchSelect
-      aria-label="LiteAdmin model"
+      aria-label="Aria Agent model"
       options={(models.data ?? []).map((item) => ({ value: item.model_group, label: item.model_group }))}
       value={value}
       onValueChange={onChange}
@@ -532,7 +573,7 @@ function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
       )}
       {models.isSuccess && models.data.length === 0 && (
         <Alert role="status">
-          <AlertDescription>Add a chat model to your gateway to use LiteAdmin.</AlertDescription>
+          <AlertDescription>Add a chat model to your gateway to use Aria Agent.</AlertDescription>
         </Alert>
       )}
     </>
@@ -543,15 +584,15 @@ function PanelHeader({ close, children }: { close: () => void; children?: ReactN
   return (
     <div className="flex items-start justify-between gap-3 border-b p-4">
       <div className="flex flex-col gap-1 text-sm">
-        <h2 className="flex items-center gap-1.5 font-medium">
-          <Sparkles className="size-4 text-info" />
-          LiteAdmin
+        <h2 className="flex items-center gap-2 font-semibold">
+          <AriaAvatar size={32} />
+          Aria Agent
         </h2>
         <p className="text-muted-foreground">Ask about your gateway. Review changes in chat.</p>
       </div>
       <div className="flex shrink-0">
         {children}
-        <Button variant="ghost" size="icon-sm" aria-label="Close LiteAdmin" onClick={close}>
+        <Button variant="ghost" size="icon-sm" aria-label="Close Aria Agent" onClick={close}>
           <X className="size-4" />
         </Button>
       </div>
