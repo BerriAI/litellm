@@ -269,6 +269,7 @@ _CLAUDE_MODEL_ROUTES: Final = frozenset(
     f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
 )
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
+_USAGE_AI_CHAT_ROUTE: Final = "/usage/ai/chat"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
@@ -300,6 +301,10 @@ async def _normalize_claude_model(
     rewrite_request_model(request_data, request, source)
 
 
+def _routes_through_router(route: str) -> bool:
+    return RouteChecks.is_llm_api_route(route=route) or route == _USAGE_AI_CHAT_ROUTE
+
+
 async def _resolve_router_settings_model_group_alias(
     request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
     valid_token: UserAPIKeyAuth,
@@ -311,7 +316,7 @@ async def _resolve_router_settings_model_group_alias(
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
 
-    if request is None or llm_router is None or not RouteChecks.is_llm_api_route(route=route):
+    if request is None or llm_router is None or not _routes_through_router(route):
         return
     if request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is True:
         return

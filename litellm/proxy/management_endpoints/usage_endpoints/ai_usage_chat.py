@@ -6,9 +6,12 @@ usage/spend data by querying the aggregated daily activity endpoints.
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import date
-from typing import Final, Literal, NamedTuple, Protocol, cast, overload
+from itertools import chain
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Protocol, cast, overload
 
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -18,13 +21,20 @@ from litellm.proxy._types import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+from litellm.types.router_weights import RouterWeights, validate_router_weights
 from litellm.types.utils import ChatCompletionMessageToolCall
+from litellm.utils import CustomStreamWrapper, ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.router import Router
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 USAGE_AI_TEMPERATURE: Final = 0.2
+USAGE_AI_REQUIRED_PARAMS: Final = ("tools",)
 
 TABLE_DAILY_USER_SPEND: Final = "litellm_dailyuserspend"
 TABLE_DAILY_TEAM_SPEND: Final = "litellm_dailyteamspend"
@@ -457,6 +467,235 @@ def _sse(event: SSEEvent) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
+def _resolve_model(model: str | None) -> str:
+    return (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+
+
+def _is_router_model(router: "Router", model: str, caller_is_proxy_admin: bool) -> bool:
+    if router.is_recognized_model(model) or (caller_is_proxy_admin and model in router.team_public_model_names):
+        return True
+    if router.router_general_settings.pass_through_all_models:
+        return False
+    return router.default_deployment is not None or router.pattern_router.route(model) is not None  # pyright: ignore[reportUnknownMemberType]  # PatternMatchDeployments.route returns untyped dicts
+
+
+class _TaggedMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    tags: tuple[object, ...] | None = None
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _ignore_non_list_tags(cls, tags: object) -> object:
+        return tags if isinstance(tags, (list, tuple)) else None
+
+
+class _CallerTagSources(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    metadata: _TaggedMetadata | None = None
+    team_metadata: _TaggedMetadata | None = None
+    project_metadata: _TaggedMetadata | None = None
+
+
+def _caller_routing_tags(user_api_key_dict: "UserAPIKeyAuth") -> tuple[str, ...]:
+    sources: Final = _CallerTagSources.model_validate(user_api_key_dict, from_attributes=True)
+    tags: Final = chain.from_iterable(
+        source.tags or () for source in (sources.metadata, sources.team_metadata, sources.project_metadata) if source
+    )
+    return tuple(dict.fromkeys(tag for tag in tags if isinstance(tag, str)))
+
+
+def _caller_metadata(user_api_key_dict: "UserAPIKeyAuth") -> Mapping[str, object]:
+    from litellm.proxy.litellm_pre_call_utils import sanitized_user_api_key_auth
+
+    caller_tags: Final = _caller_routing_tags(user_api_key_dict)
+    return MappingProxyType(
+        {
+            "user_api_key_auth": sanitized_user_api_key_auth(user_api_key_dict),
+            **({"tags": list(caller_tags), "inherited_tags": list(caller_tags)} if caller_tags else {}),
+        }
+    )
+
+
+def _router_weights(router_settings: Mapping[str, object]) -> RouterWeights | None:
+    try:
+        return validate_router_weights(router_settings.get("weights"))
+    except ValidationError:
+        verbose_proxy_logger.warning("Ignoring invalid saved router weights; update team/key router_settings")
+        return None
+
+
+def _per_request_router_kwargs(router_settings: Mapping[str, object] | None) -> Mapping[str, object]:
+    from litellm.proxy.route_llm_request import (
+        _PER_REQUEST_ROUTER_SETTINGS,  # pyright: ignore[reportPrivateUsage]  # the key and team settings /chat/completions forwards per request
+    )
+
+    if router_settings is None:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            **{
+                key: router_settings[key]
+                for key in _PER_REQUEST_ROUTER_SETTINGS
+                if router_settings.get(key) is not None
+            },
+            "_router_weights": _router_weights(router_settings),
+        }
+    )
+
+
+async def usage_ai_chat_router_settings(user_api_key_dict: "UserAPIKeyAuth") -> Mapping[str, object] | None:
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
+
+    if llm_router is None:
+        return None
+    return await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=user_api_key_dict, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+
+
+def _requested_model(model: str | None, router_settings: Mapping[str, object] | None) -> str:
+    from litellm.router_utils.common_utils import resolve_model_group_alias
+
+    picked_or_default: Final = _resolve_model(model)
+    if router_settings is None:
+        return picked_or_default
+    return resolve_model_group_alias(router_settings.get("model_group_alias"), picked_or_default) or picked_or_default
+
+
+async def resolve_usage_ai_chat_model(
+    user_api_key_dict: "UserAPIKeyAuth", model: str | None, router_settings: Mapping[str, object] | None
+) -> str:
+    from litellm.proxy.auth.auth_checks import key_model_aliases_for_auth_check
+    from litellm.proxy.common_request_processing import (
+        _resolve_per_request_model_group_alias,  # pyright: ignore[reportPrivateUsage]  # the key and team alias rule /chat/completions applies
+    )
+    from litellm.proxy.litellm_pre_call_utils import resolve_team_model_alias
+    from litellm.proxy.proxy_server import llm_router
+
+    team_aliased_model: Final = resolve_team_model_alias(_requested_model(model, router_settings), user_api_key_dict)
+    key_aliases: Final = key_model_aliases_for_auth_check(user_api_key_dict) or {}
+    key_aliased_model: Final = key_aliases.get(team_aliased_model, team_aliased_model)
+    global_aliased_model: Final = litellm.model_alias_map.get(key_aliased_model, key_aliased_model)
+    authorized_model: Final = key_aliases.get(global_aliased_model, global_aliased_model)
+    if llm_router is None or router_settings is None:
+        return authorized_model
+    group_alias_target: Final = await _resolve_per_request_model_group_alias(
+        requested_model=authorized_model,
+        router_settings=router_settings,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+    )
+    return group_alias_target or authorized_model
+
+
+async def _acompletion(
+    model: str,
+    messages: list[Mapping[str, object]],  # mutable-ok: callers pass the request message list unchanged
+    tools: list[_ToolDef] | None = None,  # mutable-ok: forwarded verbatim to acompletion
+    stream: bool = False,
+    user_api_key_dict: "UserAPIKeyAuth | None" = None,
+    router_settings: Mapping[str, object] | None = None,
+) -> ModelResponse | CustomStreamWrapper:
+    from litellm.proxy.proxy_server import llm_router
+    from litellm.router_utils.common_utils import is_proxy_admin_request
+    from litellm.types.llms.openai import AllMessageValues
+
+    completion_messages: Final = cast(  # cast-ok: acompletion accepts the same Mapping messages it already receives
+        list[AllMessageValues], messages
+    )
+    caller_metadata: Final[Mapping[str, object]] = (
+        _caller_metadata(user_api_key_dict) if user_api_key_dict is not None else MappingProxyType({})
+    )
+    if llm_router is not None and _is_router_model(
+        llm_router, model, is_proxy_admin_request(MappingProxyType({"metadata": caller_metadata}))
+    ):
+        router_kwargs: Final = _per_request_router_kwargs(router_settings)
+        if stream:
+            return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
+                model=model,
+                messages=completion_messages,
+                tools=tools,
+                stream=True,
+                temperature=USAGE_AI_TEMPERATURE,
+                drop_params=True,
+                allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
+                metadata=dict(caller_metadata),
+                **router_kwargs,
+            )
+        return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
+            model=model,
+            messages=completion_messages,
+            tools=tools,
+            stream=False,
+            temperature=USAGE_AI_TEMPERATURE,
+            drop_params=True,
+            allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
+            metadata=dict(caller_metadata),
+            **router_kwargs,
+        )
+    return await litellm.acompletion(
+        model=model,
+        messages=completion_messages,
+        tools=tools,
+        stream=stream,
+        temperature=USAGE_AI_TEMPERATURE,
+        drop_params=True,
+        allowed_openai_params=list(USAGE_AI_REQUIRED_PARAMS),
+        metadata=dict(caller_metadata),
+    )
+
+
+async def check_usage_ai_chat_model_access(
+    user_api_key_dict: "UserAPIKeyAuth", model: str | None, router_settings: Mapping[str, object] | None
+) -> None:
+    from litellm.proxy._types import LitellmUserRoles, ProxyException
+    from litellm.proxy.auth.auth_checks import (
+        _personal_key_owner,  # pyright: ignore[reportPrivateUsage]  # the same owner lookup the resolved-model check uses
+        can_key_call_resolved_model,
+        can_user_call_model,
+        key_model_aliases_for_auth_check,
+    )
+    from litellm.proxy.proxy_server import (
+        llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy_server.llm_model_list is an untyped module global
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    resolved_model: Final = _requested_model(model, router_settings)
+    try:
+        await can_key_call_resolved_model(
+            model=resolved_model,
+            llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # proxy_server.llm_model_list is an untyped module global
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+        if user_api_key_dict.team_id is None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            await can_user_call_model(
+                model=resolved_model,
+                llm_router=llm_router,
+                user_object=await _personal_key_owner(
+                    valid_token=user_api_key_dict,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                ),
+                key_model_aliases=key_model_aliases_for_auth_check(user_api_key_dict),
+            )
+    except ProxyException as denial:
+        if (model or "").strip():
+            raise
+        raise ProxyException(
+            message=f"No model was picked, so Ask AI used its default. {denial.message} Pick a model you can call.",
+            type=denial.type,
+            param="model",
+            code=denial.code,
+        ) from denial
+
+
 def _resolve_fetch_kwargs(
     fn_name: str,
     fn_args: Mapping[str, str],
@@ -562,15 +801,21 @@ async def _process_tool_call(
     chat_messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
 
 
-async def _stream_final_response(model: str, chat_messages: list[Mapping[str, object]]) -> AsyncIterator[str]:
+async def _stream_final_response(
+    model: str,
+    chat_messages: list[Mapping[str, object]],
+    user_api_key_dict: "UserAPIKeyAuth | None",
+    router_settings: Mapping[str, object] | None,
+) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    response: Final = await litellm.acompletion(
+    response: Final = await _acompletion(
         model=model,
         messages=chat_messages,
         stream=True,
-        temperature=USAGE_AI_TEMPERATURE,
+        user_api_key_dict=user_api_key_dict,
+        router_settings=router_settings,
     )
     async for chunk in response:
         delta = chunk.choices[0].delta.content
@@ -583,9 +828,11 @@ async def stream_usage_ai_chat(
     model: str | None = None,
     user_id: str | None = None,
     is_admin: bool = False,
+    user_api_key_dict: "UserAPIKeyAuth | None" = None,
+    router_settings: Mapping[str, object] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream SSE events: status → tool_call → chunk → done."""
-    resolved_model: Final = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+    resolved_model: Final = _resolve_model(model)
     truncated: Final = messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
     chat_messages: Final[list[Mapping[str, object]]] = [
         {"role": "system", "content": _build_system_prompt(is_admin)},
@@ -595,11 +842,12 @@ async def stream_usage_ai_chat(
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
         tools: Final = get_tools_for_role(is_admin)
-        response: Final = await litellm.acompletion(
+        response: Final = await _acompletion(
             model=resolved_model,
             messages=chat_messages,
             tools=tools,
-            temperature=USAGE_AI_TEMPERATURE,
+            user_api_key_dict=user_api_key_dict,
+            router_settings=router_settings,
         )
         choice: Final = response.choices[0]
 
@@ -613,7 +861,7 @@ async def stream_usage_ai_chat(
         for tc in choice.message.tool_calls:
             async for event in _process_tool_call(tc, chat_messages, user_id, is_admin):
                 yield event
-        async for event in _stream_final_response(resolved_model, chat_messages):
+        async for event in _stream_final_response(resolved_model, chat_messages, user_api_key_dict, router_settings):
             yield event
         yield _sse({"type": "done"})
 

@@ -11719,7 +11719,14 @@ def _alias_token(monkeypatch, level: str, alias: dict, models: list) -> UserAPIK
 @pytest.mark.parametrize("level", ["key", "team"])
 @pytest.mark.parametrize(
     "route",
-    ["/v1/chat/completions", "/v1/messages", "/v1/embeddings", "/openai/v1/responses", "/cursor/chat/completions"],
+    [
+        "/v1/chat/completions",
+        "/v1/messages",
+        "/v1/embeddings",
+        "/openai/v1/responses",
+        "/cursor/chat/completions",
+        "/usage/ai/chat",
+    ],
 )
 async def test_router_settings_model_group_alias_authorizes_target_for_key(monkeypatch, level, route):
     """LIT-3054: a key allowed only the alias target must be able to call the alias, and a key not
