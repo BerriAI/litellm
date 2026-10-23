@@ -5104,9 +5104,31 @@ def _tool_call_response(arguments: str) -> ModelResponse:
     )
 
 
+_UNQUOTED_PERSON_NAME: Final = re.compile(r'(?<!")\b[A-Z][a-z]+ [A-Z][a-z]+\b(?!")')
+
+
+async def _analyze_names_outside_json_quotes(request: web.Request) -> web.Response:
+    payload = await request.json()
+    return web.json_response(
+        [
+            {"entity_type": "PERSON", "start": match.start(), "end": match.end(), "score": 0.85}
+            for match in _UNQUOTED_PERSON_NAME.finditer(payload["text"])
+        ]
+    )
+
+
+def _json_blind_presidio_app() -> web.Application:
+    app = web.Application()
+    app.router.add_post("/analyze", _analyze_names_outside_json_quotes)
+    app.router.add_post("/anonymize", _fake_anonymize)
+    return app
+
+
 @asynccontextmanager
-async def _reversible_presidio_guardrail() -> AsyncIterator[OPTIONAL_PresidioPIIMasking]:
-    async with TestServer(_fake_presidio_app()) as server:
+async def _reversible_presidio_guardrail(
+    presidio_app: web.Application | None = None,
+) -> AsyncIterator[OPTIONAL_PresidioPIIMasking]:
+    async with TestServer(presidio_app or _fake_presidio_app()) as server:
         guardrail: Final = OPTIONAL_PresidioPIIMasking(
             presidio_analyzer_api_base=str(server.make_url("/")),
             presidio_anonymizer_api_base=str(server.make_url("/")),
@@ -5141,6 +5163,48 @@ async def test_restore_writes_the_original_values_into_non_streaming_tool_call_a
     )
 
     assert response.choices[0].message.tool_calls[0].function.arguments == '{"guest": "Jane Doe"}'
+
+
+async def test_restore_escapes_original_values_so_tool_call_arguments_stay_valid_json() -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        event_hook="pre_call", default_on=True, output_parse_pii=True, mock_testing=True
+    )
+    original: Final = 'Apt "B"\nFloor 2'
+    response: Final = _tool_call_response('{"address": "<LOCATION_1>"}')
+    data: Final = {"metadata": {"pii_tokens": {"<LOCATION_1>": original}}, "guardrail_to_apply": guardrail}
+
+    await UnifiedLLMGuardrails().async_post_call_success_hook(
+        data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+    )
+
+    assert json.loads(response.choices[0].message.tool_calls[0].function.arguments) == {"address": original}
+
+
+async def test_names_inside_json_tool_call_arguments_are_masked_even_when_the_analyzer_needs_bare_text() -> None:
+    async with _reversible_presidio_guardrail(_json_blind_presidio_app()) as guardrail:
+        data: Final = await _masked_chat_request(
+            guardrail,
+            [{"role": "assistant", "content": None, "tool_calls": [_function_tool_call("call_1", '{"guest": "Jane Doe"}')]}],
+        )
+
+    masked: Final = json.loads(data["messages"][0]["tool_calls"][0]["function"]["arguments"])
+    pii_tokens: Final = data.get("metadata", {}).get("pii_tokens", {})
+    assert pii_tokens.get(masked["guest"]) == "Jane Doe", f"masked arguments {masked} against token map {pii_tokens}"
+
+
+async def test_tool_call_arguments_without_pii_reach_the_model_byte_for_byte() -> None:
+    arguments: Final = '{"city":"Boston","days":[1,2]}'
+    async with _reversible_presidio_guardrail() as guardrail:
+        data: Final = await _masked_chat_request(
+            guardrail,
+            [
+                {"role": "user", "content": "Plan a trip for Jane Doe."},
+                {"role": "assistant", "content": None, "tool_calls": [_function_tool_call("call_1", arguments)]},
+            ],
+        )
+
+    assert data["messages"][0]["content"] != "Plan a trip for Jane Doe.", data["messages"][0]
+    assert data["messages"][1]["tool_calls"][0]["function"]["arguments"] == arguments
 
 
 async def test_apply_guardrail_restores_the_arguments_of_tool_call_objects() -> None:

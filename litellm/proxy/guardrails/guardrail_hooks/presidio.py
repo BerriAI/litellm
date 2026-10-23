@@ -12,16 +12,25 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import accumulate, chain, count, pairwise
+from itertools import accumulate, chain, count, pairwise, repeat
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, cast
 
 import aiohttp
-from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -280,6 +289,37 @@ def _set_tool_call_arguments(tool_call: _ToolCall, arguments: str) -> None:
             function.arguments = arguments
         case _:
             pass
+
+
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+async def _rewritten_json_strings(value: JsonValue, rewrite: Callable[[str], Awaitable[str]]) -> JsonValue:
+    match value:
+        case str():
+            return await rewrite(value)
+        case list():
+            return [await _rewritten_json_strings(item, rewrite) for item in value]
+        case dict():
+            return {key: await _rewritten_json_strings(item, rewrite) for key, item in value.items()}
+        case _:
+            return value
+
+
+async def _rewritten_arguments(arguments: str, rewrite: Callable[[str], Awaitable[str]]) -> str:
+    """
+    Rewrite each string of a tool call's JSON arguments on its own. An entity recognizer
+    finds a bare value that it misses inside JSON quoting, and a restored value with a
+    quote or a newline has to be escaped for the arguments to stay valid JSON.
+    """
+    try:
+        parsed: Final = _JSON_VALUE.validate_json(arguments)
+    except ValidationError:
+        return await rewrite(arguments)
+    if not isinstance(parsed, (dict, list)):
+        return await rewrite(arguments)
+    rewritten: Final = await _rewritten_json_strings(parsed, rewrite)
+    return arguments if rewritten == parsed else json.dumps(rewritten, ensure_ascii=False)
 
 
 def _conversation_segments(
@@ -1870,25 +1910,37 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Final = metadata.get("pii_tokens", {})
 
-        reserved: Final = accumulate(map(_literal_tokens, (source for _, source in segments)), frozenset[str].union)
-        rewritten: Final = (
-            [self._unmask_pii_text(source, pii_tokens) for _, source in segments]
-            if input_type == "response"
-            and (
-                self._callback_role == "restore"
-                or (self._callback_role is None and not self.apply_to_output and pii_tokens)
-            )
-            else [
-                await self.check_pii(
-                    text=source,
+        async def restore(text: str) -> str:
+            return self._unmask_pii_text(text, pii_tokens)
+
+        def mask_reserving(reserved_tokens: frozenset[str]) -> Callable[[str], Awaitable[str]]:
+            async def mask(text: str) -> str:
+                return await self.check_pii(
+                    text=text,
                     output_parse_pii=self.output_parse_pii,
                     presidio_config=None,
                     request_data=request_data or {},
                     reserved_tokens=reserved_tokens,
                 )
-                for (_, source), reserved_tokens in zip(segments, reserved)
-            ]
+
+            return mask
+
+        rewrites: Final = (
+            repeat(restore)
+            if input_type == "response"
+            and (
+                self._callback_role == "restore"
+                or (self._callback_role is None and not self.apply_to_output and pii_tokens)
+            )
+            else map(
+                mask_reserving,
+                accumulate(map(_literal_tokens, (source for _, source in segments)), frozenset[str].union),
+            )
         )
+        rewritten: Final = [
+            await (_rewritten_arguments(source, rewrite) if isinstance(slot, _ToolCallSlot) else rewrite(source))
+            for (slot, source), rewrite in zip(segments, rewrites)
+        ]
         by_slot: Final = dict(zip((slot for slot, _ in segments), rewritten))
         inputs["texts"] = [by_slot[_TextSlot(index)] for index in range(len(texts))]
         for index, tool_call in enumerate(tool_calls):
