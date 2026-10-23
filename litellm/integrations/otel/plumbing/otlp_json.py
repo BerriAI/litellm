@@ -6,6 +6,7 @@ retry loop and swaps the payload for OTLP/JSON (enums as integers, ids as hex).
 
 import base64
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, TypeAlias
@@ -13,9 +14,13 @@ from typing import Final, TypeAlias
 import requests
 from google.protobuf.json_format import MessageToDict
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+from opentelemetry.exporter.otlp.proto.http._common import RequestPayloadTooLargeError
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export import SpanExportResult
+from opentelemetry.semconv.attributes.http_attributes import HTTP_RESPONSE_STATUS_CODE
 
+_logger: Final = logging.getLogger(__name__)
 JSON_CONTENT_TYPE: Final = "application/json"
 _HEX_ID_KEYS: Final = frozenset({"traceId", "spanId", "parentSpanId"})
 
@@ -66,12 +71,49 @@ class OTLPJsonSpanExporter(OTLPSpanExporter):
     def __init__(
         self,
         endpoint: str | None,
-        headers: dict[str, str],  # mutable-ok: SDK __init__ takes Dict
+        headers: Mapping[str, str],
         certificate_file: str | None = None,
         session: "requests.Session | None" = None,
+        *,
+        max_request_size: int | None = None,
     ) -> None:
-        super().__init__(endpoint=endpoint, headers=headers, certificate_file=certificate_file, session=session)
-        self._session.headers["Content-Type"] = JSON_CONTENT_TYPE
+        super().__init__(
+            endpoint=endpoint,
+            headers={**{key.lower(): value for key, value in headers.items()}, "content-type": JSON_CONTENT_TYPE},
+            certificate_file=certificate_file,
+            session=session,
+            max_request_size=max_request_size,
+        )
 
-    def _serialize_spans(self, spans: Sequence[ReadableSpan]) -> bytes:
-        return encode_spans_json(spans)
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        if self._shutdown:
+            _logger.warning("Exporter already shutdown, ignoring batch")
+            return SpanExportResult.FAILURE
+
+        with self._metrics.export_operation(len(spans)) as result:
+            try:
+                serialized_data: Final = encode_spans_json(spans)
+            except Exception as error:  # noqa: BLE001  # SDK export contract reports encoding failures as results
+                _logger.error("Failed to encode span batch: %s", error)
+                result.error = error
+                return SpanExportResult.FAILURE
+
+            if 0 < self._max_request_size < len(serialized_data):
+                result.error = RequestPayloadTooLargeError(
+                    f"Serialized span request size {len(serialized_data)} bytes "
+                    f"exceeds max_request_size {self._max_request_size} bytes."
+                )
+                _logger.warning("Dropping span batch: %s", result.error)
+                return SpanExportResult.FAILURE
+
+            export_result: Final = self._client.export(serialized_data)
+            if not export_result.success:
+                result.error = export_result.error
+                result.error_attrs = (
+                    {HTTP_RESPONSE_STATUS_CODE: export_result.status_code}
+                    if export_result.status_code is not None
+                    else None
+                )
+                return SpanExportResult.FAILURE
+
+        return SpanExportResult.SUCCESS
