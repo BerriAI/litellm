@@ -198,4 +198,3 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         if extra_body:
             result["extra_body"] = extra_body
         return result
-
