@@ -393,11 +393,10 @@ async def _log_virtual_mcp_tool_failure(
             request_logging_obj.post_call_failure_hook
         )
         await failure_hook(
-            request_data={
-                "name": name,
-                "arguments": arguments,
-                "litellm_logging_obj": failure_logging_obj,
-            },
+            request_data=_failure_hook_request_data(
+                failure_logging_obj,
+                {"name": name, "arguments": arguments, "litellm_logging_obj": failure_logging_obj},
+            ),
             original_exception=exc,
             user_api_key_dict=user_api_key_auth,
             route="/mcp/call_tool",
@@ -2742,6 +2741,30 @@ def suppress_completed_success_logging(logging_obj: LiteLLMLoggingObj) -> None:
     logging_obj.mark_logging_complete(event_type="async_success")
 
 
+def _failure_hook_request_data(
+    logging_obj: LiteLLMLoggingObj | None, request_data: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: post_call_failure_hook callbacks write into request_data
+    """``request_data`` for ``post_call_failure_hook`` callbacks, minus credential fields.
+
+    ``arguments`` is taken from the logger's recorded request body, which ``pre_call_tool_check``
+    replaces once a ``pre_mcp_call`` guardrail has blocked or rewritten the tool inputs, so the
+    raw values the caller sent do not reach the callbacks.
+    """
+    sanitized: Final = {key: value for key, value in request_data.items() if key not in _MCP_CREDENTIAL_REQUEST_FIELDS}
+    litellm_params: Final[object] = (
+        logging_obj.model_call_details.get("litellm_params") if logging_obj is not None else None
+    )
+    proxy_server_request: Final = _mapping_field(litellm_params, "proxy_server_request")
+    logged_arguments: Final = _mapping_field(_mapping_field(proxy_server_request, "body"), "arguments")
+    if "arguments" not in sanitized or logged_arguments is None:
+        return sanitized
+    return {**sanitized, "arguments": logged_arguments}
+
+
+def _mapping_field(value: object, key: str) -> object:
+    return TypeAdapter(Mapping[str, object]).validate_python(value).get(key) if isinstance(value, Mapping) else None
+
+
 async def _fire_mcp_tool_call_logging(
     logging_obj: LiteLLMLoggingObj,
     result: CallToolResult,
@@ -2797,11 +2820,8 @@ async def _fire_mcp_tool_call_logging(
         return result
 
     if proxy_logging_obj:
-        sanitized_request_data: Final = {
-            key: value for key, value in (request_data or {}).items() if key not in _MCP_CREDENTIAL_REQUEST_FIELDS
-        }
         await proxy_logging_obj.post_call_failure_hook(
-            request_data=sanitized_request_data,
+            request_data=_failure_hook_request_data(logging_obj, request_data or {}),
             original_exception=tool_error,
             user_api_key_dict=user_api_key_auth,
             route="/mcp/call_tool",
@@ -2835,11 +2855,8 @@ async def fire_mcp_tool_call_failure_logging(
 
     if isinstance(exception, MCPUpstreamAuthError) or not proxy_logging_obj or user_api_key_auth is None:
         return
-    sanitized_request_data: Final = {
-        key: value for key, value in request_data.items() if key not in _MCP_CREDENTIAL_REQUEST_FIELDS
-    }
     await proxy_logging_obj.post_call_failure_hook(
-        request_data=sanitized_request_data,
+        request_data=_failure_hook_request_data(logging_obj, request_data),
         original_exception=exception,
         user_api_key_dict=user_api_key_auth,
         route="/mcp/call_tool",

@@ -91,6 +91,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 import litellm.llms as litellm_llms
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.slack_alerting import AlertType
@@ -21606,3 +21607,89 @@ class TestMCPUpstreamRateLimitRetry:
 
         assert exc_info.value.fault == ServerListFault(tag="upstream_error", status_code=429)
         assert list_tools_page.await_count == 2
+
+
+RAW_TOOL_ARGUMENTS: Final = {"text": "deploy with glpat-Xq7rT2mPz9Lk4vB8nWc3"}
+MASKED_TOOL_ARGUMENTS: Final = {"text": "deploy with [MASKED]"}
+BLOCKED_TOOL_ARGUMENTS: Final = {"[redacted]": "blocked by guardrail"}
+
+
+class _CredentialGuardrail(CustomGuardrail):
+    def __init__(self, outcome: Literal["block", "mask", "pass"]) -> None:
+        super().__init__(guardrail_name="credential-guardrail", event_hook="pre_mcp_call", default_on=True)
+        self.outcome = outcome
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        if self.outcome == "block":
+            raise HTTPException(status_code=400, detail="credential detected")
+        if self.outcome == "mask":
+            return {**data, "modified_arguments": dict(MASKED_TOOL_ARGUMENTS)}
+        return data
+
+
+def _tool_call_logger(body_arguments: dict[str, object]) -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="MCP: echo",
+        messages=[],
+        stream=False,
+        call_type="call_mcp_tool",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.model_call_details["mcp_tool_call_metadata"] = {"name": "echo", "arguments": dict(RAW_TOOL_ARGUMENTS)}
+    logging_obj.model_call_details["litellm_params"] = {
+        "proxy_server_request": {"body": {"name": "echo", "arguments": body_arguments}}
+    }
+    return logging_obj
+
+
+async def _run_guardrailed_tool_check(
+    monkeypatch: pytest.MonkeyPatch, outcome: Literal["block", "mask", "pass"], logging_obj: LiteLLMLoggingObj
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_CredentialGuardrail(outcome)])
+    call: Final = MCPServerManager().pre_call_tool_check(
+        name="echo",
+        arguments=dict(RAW_TOOL_ARGUMENTS),
+        server_name="echo",
+        user_api_key_auth=UserAPIKeyAuth(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        server=MCPServer(server_id="echo", name="echo", server_name="echo", transport=MCPTransport.http),
+        litellm_logging_obj=logging_obj,
+    )
+    if outcome != "block":
+        await call
+        return
+    with pytest.raises(HTTPException):
+        await call
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "logged"),
+    [("block", BLOCKED_TOOL_ARGUMENTS), ("mask", MASKED_TOOL_ARGUMENTS), ("pass", RAW_TOOL_ARGUMENTS)],
+)
+async def test_pre_call_tool_check_logs_only_the_arguments_the_guardrail_let_through(monkeypatch, outcome, logged):
+    logging_obj: Final = _tool_call_logger(dict(RAW_TOOL_ARGUMENTS))
+
+    await _run_guardrailed_tool_check(monkeypatch, outcome, logging_obj)
+
+    details: Final = logging_obj.model_call_details
+    assert details["mcp_tool_call_metadata"]["arguments"] == logged
+    assert details["litellm_params"]["proxy_server_request"]["body"] == {"name": "echo", "arguments": logged}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "logged_body_arguments"),
+    [("block", BLOCKED_TOOL_ARGUMENTS), ("mask", {"[redacted]": "modified by guardrail"})],
+)
+async def test_pre_call_tool_check_replaces_a_wrapping_request_body_with_a_placeholder(
+    monkeypatch, outcome, logged_body_arguments
+):
+    logging_obj: Final = _tool_call_logger({"tool_id": "echo", "arguments": dict(RAW_TOOL_ARGUMENTS)})
+
+    await _run_guardrailed_tool_check(monkeypatch, outcome, logging_obj)
+
+    body: Final = logging_obj.model_call_details["litellm_params"]["proxy_server_request"]["body"]
+    assert body["arguments"] == logged_body_arguments

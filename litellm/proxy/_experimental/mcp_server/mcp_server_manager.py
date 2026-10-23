@@ -7,6 +7,7 @@ This is a Proxy
 """
 
 import asyncio
+import copy
 import datetime
 import hashlib
 import json
@@ -1871,6 +1872,56 @@ def _record_mcp_guardrail_evaluations(
         # would let an unexpected type escape that ``finally`` and replace the guardrail's
         # block with a bookkeeping error.
         verbose_logger.warning("Failed to record MCP guardrail evaluation for logging: %s", e)
+
+
+MCP_GUARDRAIL_BLOCKED_ARGUMENTS_PLACEHOLDER: Final[Mapping[str, str]] = MappingProxyType(
+    {"[redacted]": "blocked by guardrail"}
+)
+MCP_GUARDRAIL_MODIFIED_ARGUMENTS_PLACEHOLDER: Final[Mapping[str, str]] = MappingProxyType(
+    {"[redacted]": "modified by guardrail"}
+)
+
+
+def _replace_logged_mcp_tool_arguments(
+    litellm_logging_obj: "LiteLLMLoggingObj | None",
+    original_arguments: Mapping[str, object],
+    logged_arguments: Mapping[str, object],
+    mismatch_placeholder: Mapping[str, object],
+) -> None:
+    """Point every spend-log copy of a tool call's inputs at ``logged_arguments``.
+
+    ``mcp_tool_call_metadata`` and ``litellm_params["proxy_server_request"]`` are both filled
+    with the raw arguments before the ``pre_mcp_call`` guardrails run. A request body whose
+    ``arguments`` are not the tool's own (the ``/mcp/proxy`` virtual tool wraps them) gets
+    ``mismatch_placeholder`` instead of being rewritten in place.
+    """
+    if litellm_logging_obj is None:
+        return
+    try:
+        model_call_details: Final = litellm_logging_obj.model_call_details
+        metadata: Final = model_call_details.get("mcp_tool_call_metadata")
+        if isinstance(metadata, dict) and "arguments" in metadata:
+            metadata["arguments"] = dict(logged_arguments)
+        litellm_params: Final = model_call_details.get("litellm_params")
+        proxy_server_request: Final = (
+            cast(dict[str, object], litellm_params).get("proxy_server_request")  # cast-ok: litellm_params is str-keyed
+            if isinstance(litellm_params, dict)
+            else None
+        )
+        if not isinstance(proxy_server_request, dict):
+            return
+        request_record: Final = cast(dict[str, object], proxy_server_request)  # cast-ok: rewritten in place, shared
+        body: Final = request_record.get("body")
+        if isinstance(body, Mapping) and "arguments" in body:
+            body_fields: Final = TypeAdapter(Mapping[str, object]).validate_python(body)
+            request_record["body"] = {
+                **body_fields,
+                "arguments": dict(
+                    logged_arguments if body_fields["arguments"] == original_arguments else mismatch_placeholder
+                ),
+            }
+    except Exception as e:  # noqa: BLE001  # runs on the block path; must not replace the guardrail's error
+        verbose_logger.error("Failed to scrub guardrailed MCP tool arguments from logging: %s", e)
 
 
 def _mcp_discovery_cache_ttl() -> float:
@@ -6208,13 +6259,23 @@ class MCPServerManager:
         synthetic_llm_data: Final = proxy_logging_obj.convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
         synthetic_llm_data["litellm_logging_obj"] = litellm_logging_obj
 
+        # Snapshot before the hooks run: a guardrail may rewrite ``arguments`` in place.
+        original_arguments: Final = copy.deepcopy(arguments)
         try:
-            # Use standard pre_call_hook
-            modified_data: Final = await proxy_logging_obj.pre_call_hook(
-                user_api_key_dict=checked_auth,
-                data=synthetic_llm_data,
-                call_type=CallTypes.call_mcp_tool.value,
-            )
+            try:
+                modified_data: Final = await proxy_logging_obj.pre_call_hook(
+                    user_api_key_dict=checked_auth,
+                    data=synthetic_llm_data,
+                    call_type=CallTypes.call_mcp_tool.value,
+                )
+            except BaseException:
+                _replace_logged_mcp_tool_arguments(
+                    litellm_logging_obj,
+                    original_arguments,
+                    MCP_GUARDRAIL_BLOCKED_ARGUMENTS_PLACEHOLDER,
+                    MCP_GUARDRAIL_BLOCKED_ARGUMENTS_PLACEHOLDER,
+                )
+                raise
             await proxy_logging_obj.enforce_mcp_server_rate_limits(checked_auth, server)
             if modified_data:
                 # Convert response back to MCP format and apply modifications
@@ -6225,6 +6286,14 @@ class MCPServerManager:
                     hook_result["arguments"] = modified_kwargs["arguments"]
                 if modified_kwargs.get("extra_headers"):
                     hook_result["extra_headers"] = modified_kwargs["extra_headers"]
+            logged_arguments: Final[object] = hook_result.get("arguments", arguments)
+            if logged_arguments != original_arguments and isinstance(logged_arguments, Mapping):
+                _replace_logged_mcp_tool_arguments(
+                    litellm_logging_obj,
+                    original_arguments,
+                    TypeAdapter(Mapping[str, object]).validate_python(logged_arguments),
+                    MCP_GUARDRAIL_MODIFIED_ARGUMENTS_PLACEHOLDER,
+                )
 
         except (
             BlockedPiiEntityError,
