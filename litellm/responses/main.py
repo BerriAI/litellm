@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     with_compaction_items_as_summaries,
@@ -1467,7 +1468,12 @@ def responses(
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
-        default_affinity_header: Final = get_provider_affinity_header(litellm_params.api_base)
+        affinity_api_base: Final = (
+            get_openai_credentials(api_base=litellm_params.api_base).api_base
+            if custom_llm_provider == "openai"
+            else litellm_params.api_base
+        )
+        default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
         try:
             effective_extra_headers: Final = (
                 add_provider_affinity_header(

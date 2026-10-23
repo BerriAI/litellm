@@ -131,6 +131,7 @@ from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantl
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -5992,7 +5993,11 @@ def completion(
         )
         litellm_params: Final = with_control_options(requested_litellm_params, control_options)
         affinity_api_base: Final = (
-            str(client.base_url) if isinstance(client, openai.OpenAI | openai.AsyncOpenAI) else api_base
+            str(client.base_url)
+            if isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            else get_openai_credentials(api_base=api_base).api_base
+            if custom_llm_provider == "openai"
+            else api_base
         )
         default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
         if litellm_params.get("provider_affinity_header") is not None or default_affinity_header is not None:
