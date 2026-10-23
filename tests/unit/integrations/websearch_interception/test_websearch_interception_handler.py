@@ -1268,3 +1268,48 @@ def test_is_web_search_tool_detection():
     else:
         print("\n❌ Some detection tests failed")
         return False
+
+
+@pytest.mark.asyncio
+async def test_execute_search_consumes_configured_exa_stream(monkeypatch: pytest.MonkeyPatch):
+    import json
+    from types import SimpleNamespace
+
+    import respx
+
+    import litellm
+    from litellm.proxy import proxy_server
+
+    source: Final = {"title": "Source", "url": "https://example.com", "highlights": ["evidence"]}
+    output: Final = {"content": "answer", "grounding": []}
+    events: Final = (
+        {"type": "results", "results": [source]},
+        {"type": "done", "output": output, "searchTime": 1},
+    )
+    router: Final = SimpleNamespace(
+        search_tools=[
+            {
+                "search_tool_name": "exa-stream",
+                "litellm_params": {
+                    "search_provider": "exa_ai",
+                    "api_key": "test",
+                    "stream": True,
+                    "outputSchema": {"type": "text"},
+                    "contents": {"highlights": True},
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="exa-stream")
+    with respx.mock as upstream:
+        upstream.post("https://api.exa.ai/search").respond(
+            headers={"content-type": "text/event-stream"},
+            content="".join("data: " + json.dumps(event) + "\n\n" for event in events),
+        )
+        text, response = await logger._execute_search("question")
+    assert "evidence" in text
+    assert response is not None
+    assert response.results[0].url == source["url"]
+    assert response.model_dump()["output"] == output

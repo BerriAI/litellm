@@ -457,6 +457,11 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     logging_obj: Final = request_data.get("litellm_logging_obj")
     if not isinstance(logging_obj, LiteLLMLoggingObj):
         return False
+    from litellm.llms.base_llm.search.streaming_iterator import SearchStreamWrapper
+
+    if isinstance(response, SearchStreamWrapper):
+        await response.aclose()
+        return bool(logging_obj.model_call_details.get("has_dispatched_final_stream_success"))
     if logging_obj.model_call_details.get("has_dispatched_final_stream_success"):
         # A natural end-of-stream success event already fired and released the
         # slot; do not bill again, and let the caller skip the slot release.
@@ -2972,9 +2977,12 @@ class ProxyBaseLLMRequestProcessing:
                     status="success",
                 )
             )
-            if self._is_streaming_request(
-                data=self.data, is_streaming_request=is_streaming_request
-            ) or self._is_streaming_response(response):  # use generate_responses to stream responses
+            if (
+                route_type != "asearch"
+                and self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request)
+            ) or self._is_streaming_response(
+                cast(object, response)  # cast-ok: the router result is checked by type inside this helper
+            ):
                 selected_data_generator: AsyncGenerator[str, None] | None = None
                 # Call response headers hook for streaming success
                 stream_callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(

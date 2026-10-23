@@ -3,9 +3,12 @@ import json
 from collections.abc import Callable
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -23,6 +26,30 @@ from litellm.proxy.proxy_server import app
 from litellm.types.search import SearchToolInfoResponse
 
 client = TestClient(app)
+
+
+@pytest.mark.parametrize("has_results", [False, True])
+@pytest.mark.asyncio
+async def test_exa_connection_reports_returned_result_count(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, has_results: bool
+) -> None:
+    import litellm
+    from litellm.proxy.search_endpoints.search_tool_management import (
+        TestSearchToolConnectionRequest,
+        test_search_tool_connection,
+    )
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    results: Final = [{"title": "Source", "url": "https://example.com"}] if has_results else []
+    route: Final = respx_mock.post("https://api.exa.ai/search").mock(
+        return_value=httpx.Response(200, json={"results": results})
+    )
+    response: Final = await test_search_tool_connection(
+        TestSearchToolConnectionRequest(litellm_params={"search_provider": "exa_ai", "api_key": "test"})
+    )
+    assert response["status"] == "success"
+    assert response["results_count"] == len(results)
+    assert json.loads(route.calls.last.request.content)["numResults"] == 1
 
 
 @pytest.mark.asyncio
