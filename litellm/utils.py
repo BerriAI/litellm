@@ -349,9 +349,7 @@ if TYPE_CHECKING:
 
     # Type stubs for lazy-loaded functions to help mypy understand their types
     # These imports allow mypy to understand the types when these are accessed via __getattr__
-    from litellm.litellm_core_utils.exception_mapping_utils import exception_type as _exception_type
-
-    exception_type: Final = _exception_type
+    exception_type: Callable[..., Exception]
 
     from litellm.litellm_core_utils.get_litellm_params import (
         get_base_model_from_litellm_call_metadata,
