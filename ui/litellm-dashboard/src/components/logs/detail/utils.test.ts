@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { sortSessionLogs } from "./utils";
+import { formatGatewayEndpoint, sortSessionLogs } from "./utils";
+
+describe("formatGatewayEndpoint", () => {
+  it.each(["/rerank", "/v1/rerank", "/v2/rerank"])("should preserve the recorded route %s", (path) => {
+    expect(formatGatewayEndpoint({ spend_logs_metadata: { gateway_endpoint: { method: "POST", path } } })).toBe(
+      `POST ${path}`,
+    );
+  });
+
+  it.each([
+    undefined,
+    null,
+    {},
+    { spend_logs_metadata: null },
+    { spend_logs_metadata: { gateway_endpoint: "POST /rerank" } },
+    { spend_logs_metadata: { gateway_endpoint: { method: ["POST"], path: "/rerank" } } },
+    { spend_logs_metadata: { gateway_endpoint: { method: "", path: "/rerank" } } },
+    { spend_logs_metadata: { gateway_endpoint: { method: "POST", path: "https://api.example.com/rerank" } } },
+    { spend_logs_metadata: { gateway_endpoint: { method: "POST", path: "/rerank?api_key=hidden" } } },
+  ])("should return no endpoint for missing or malformed metadata %j", (metadata) => {
+    expect(formatGatewayEndpoint(metadata)).toBeNull();
+  });
+});
 
 const log = (id: string, startTime: string, endTime: string, request_duration_ms?: number) => ({
   request_id: id,

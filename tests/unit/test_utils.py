@@ -1151,6 +1151,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_tool_search": {"type": "boolean"},
                 "supports_video_input": {"type": "boolean"},
                 "supports_box_questions": {"type": "boolean"},
+                "rerank_strategy": {"type": "string", "enum": ["pointwise", "multiple_choice"]},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
                 "token_count_framing": {"type": "integer"},

@@ -16,6 +16,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
@@ -39,12 +40,22 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
-from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model
+from litellm.proxy.spend_tracking.input_tokens import (
+    count_input_tokens,
+    count_input_tokens_for_model,
+    count_text_tokens,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.rerank_api.litellm_decisions_transformation.transformation import (
+    DecisionRerankRequest,
+    LiteLLMDecisionsRerankConfig,
+)
+from litellm.rerank_api.rerank_utils import get_decision_rerank_strategy
 from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
+from litellm.types.utils import LlmProviders
 
 
 @dataclass
@@ -73,7 +84,7 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
 }
 
 _CACHED_VALUE: Final = TypeAdapter(object)
-_WINDOW_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _CounterReservationUnavailable(Exception):
@@ -884,7 +895,7 @@ def _coerce_window(window: object) -> Mapping[str, object]:
         return window
     if isinstance(window, str):
         try:
-            return _WINDOW_OBJECT.validate_python(json.loads(window))
+            return _OBJECT_MAPPING.validate_python(json.loads(window))
         except Exception:
             return {}
     model_dump: Final = getattr(window, "model_dump", None)
@@ -1341,13 +1352,19 @@ def _estimate_request_input_cost_for_model(
     llm_router: Router | None,
     input_tokens: int | None = None,
 ) -> float | None:
+    typed_body: Final = _OBJECT_MAPPING.validate_python(request_body)
+    plans: Final = _decision_rerank_plans(typed_body, route, model, llm_router)
+    counted: Final = (
+        _decision_rerank_input_tokens(typed_body, model, plans) if input_tokens is None and plans else input_tokens
+    )
     estimates: Final = [
         _input_cost_for_cost_info(
             request_body=request_body,
             route=route,
             model=model,
             model_info=model_info,
-            input_tokens=input_tokens,
+            input_tokens=counted,
+            is_decision_rerank=bool(plans),
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
@@ -1361,6 +1378,7 @@ def _input_cost_for_cost_info(
     model: str,
     model_info: Mapping[str, object],
     input_tokens: int | None = None,
+    is_decision_rerank: bool = False,
 ) -> float | None:
     estimated_input_tokens: Final = _estimate_input_tokens(
         request_body=request_body,
@@ -1372,6 +1390,8 @@ def _input_cost_for_cost_info(
     if estimated_input_tokens is None:
         return None
     tiered_pricing: Final = model_info.get("tiered_pricing")
+    if is_decision_rerank and tiered_pricing:
+        return estimated_input_tokens * _max_tier_rate(tiered_pricing, "input_cost_per_token")
     if isinstance(tiered_pricing, list) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
@@ -1389,13 +1409,20 @@ def _estimate_request_max_cost_for_model(
     llm_router: Router | None,
     input_tokens: int | None = None,
 ) -> float | None:
+    typed_body: Final = _OBJECT_MAPPING.validate_python(request_body)
+    plans: Final = _decision_rerank_plans(typed_body, route, model, llm_router)
+    counted: Final = (
+        _decision_rerank_input_tokens(typed_body, model, plans) if input_tokens is None and plans else input_tokens
+    )
+    request_count: Final = max((request.request_count for _, request in plans), default=0)
     estimates: Final = [
         _max_cost_for_cost_info(
             request_body=request_body,
             route=route,
             model=model,
             model_info=model_info,
-            input_tokens=input_tokens,
+            input_tokens=counted,
+            decision_request_count=request_count,
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
@@ -1409,6 +1436,7 @@ def _max_cost_for_cost_info(
     model: str,
     model_info: Mapping[str, object],
     input_tokens: int | None = None,
+    decision_request_count: int = 0,
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
         request_body=request_body,
@@ -1428,12 +1456,18 @@ def _max_cost_for_cost_info(
         request_body=request_body,
         route=route,
         model_info=model_info,
+        decision_request_count=decision_request_count,
     )
     if estimated_input_tokens is None or output_tokens is None:
         return None
 
     output_multiplier: Final = _get_output_multiplier(request_body=request_body)
     tiered_pricing: Final = model_info.get("tiered_pricing")
+    if decision_request_count and tiered_pricing:
+        return estimated_input_tokens * _max_tier_rate(tiered_pricing, "input_cost_per_token") + output_tokens * max(
+            _max_tier_rate(tiered_pricing, "output_cost_per_token"),
+            _max_tier_rate(tiered_pricing, "output_cost_per_reasoning_token"),
+        )
     if isinstance(tiered_pricing, list) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
@@ -1464,6 +1498,14 @@ def _max_cost_for_cost_info(
         return None
 
     return cost
+
+
+_TIER_COSTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _max_tier_rate(tiered_pricing: object, cost_key: str) -> float:
+    tiers: Final = _TIER_COSTS.validate_python(tiered_pricing)
+    return max(tier_rate(dict(tier), cost_key) for tier in tiers)
 
 
 def _estimate_image_generation_cost(
@@ -1597,7 +1639,84 @@ async def count_request_input_tokens(
     models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     if not models:
         return MappingProxyType({})
-    return await count_input_tokens(request_body=request_body, raw_body=raw_body, models=models)
+    typed_body: Final = _OBJECT_MAPPING.validate_python(request_body)
+    plans: Final = {model: _decision_rerank_plans(typed_body, route, model, llm_router) for model in models}
+    regular_models: Final = tuple(model for model in models if not plans[model])
+    regular_counts: Final = await count_input_tokens(
+        request_body=request_body, raw_body=raw_body, models=regular_models
+    )
+    decision_counts: Final = {
+        model: await asyncio.to_thread(_decision_rerank_input_tokens, typed_body, model, plan)
+        for model, plan in plans.items()
+        if plan
+    }
+    return MappingProxyType({**regular_counts, **decision_counts})
+
+
+def _decision_rerank_plan(
+    request_body: Mapping[str, object], model: str, custom_llm_provider: str | None
+) -> tuple[str, DecisionRerankRequest] | None:
+    try:
+        resolved_model, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        strategy: Final = get_decision_rerank_strategy(resolved_model, LlmProviders(provider))
+        if strategy is None:
+            return None
+        pricing_params: Final = {key: value for key, value in request_body.items() if key != "timeout"}
+        request: Final = LiteLLMDecisionsRerankConfig.validate_request(
+            pricing_params, resolved_model, provider, strategy
+        )
+    except (litellm.BadRequestError, litellm.UnsupportedParamsError, ValueError):
+        return None
+    return f"{provider}/{resolved_model}", request
+
+
+def _decision_rerank_plans(
+    request_body: Mapping[str, object], route: str, model: str, llm_router: Router | None
+) -> tuple[tuple[str, DecisionRerankRequest], ...]:
+    if "rerank" not in route:
+        return ()
+    deployments: Final = () if llm_router is None else (llm_router.get_model_list(model_name=model) or ())
+    if not deployments:
+        provider: Final = request_body.get("custom_llm_provider")
+        direct_plan: Final = _decision_rerank_plan(request_body, model, provider if isinstance(provider, str) else None)
+        return () if direct_plan is None else (direct_plan,)
+    return tuple(
+        plan
+        for deployment in deployments
+        if (plan := _decision_rerank_deployment_plan(request_body, deployment)) is not None
+    )
+
+
+def _decision_rerank_deployment_plan(
+    request_body: Mapping[str, object], deployment: DeploymentTypedDict
+) -> tuple[str, DecisionRerankRequest] | None:
+    params: Final = as_str_mapping(deployment["litellm_params"]) if "litellm_params" in deployment else None
+    if params is None:
+        return None
+    model: Final = params.get("model")
+    provider: Final = params.get("custom_llm_provider")
+    if not isinstance(model, str):
+        return None
+    return _decision_rerank_plan({**params, **request_body}, model, provider if isinstance(provider, str) else None)
+
+
+def _decision_rerank_input_tokens(
+    request_body: Mapping[str, object], requested_model: str, plans: Sequence[tuple[str, DecisionRerankRequest]]
+) -> int:
+    native_count: Final = count_input_tokens_for_model(dict(request_body), requested_model) or 0
+    decision_counts: Final = (
+        sum(
+            count_text_tokens(
+                model=model,
+                text=LiteLLMDecisionsRerankConfig.transform_rerank_request(request, index).model_dump_json(
+                    exclude_none=True
+                ),
+            )
+            for index in range(request.request_count)
+        )
+        for model, request in plans
+    )
+    return max(native_count, *decision_counts)
 
 
 def _estimate_input_tokens(
@@ -1629,7 +1748,11 @@ def _estimate_output_tokens(
     request_body: dict,
     route: str,
     model_info: Mapping[str, object],
+    decision_request_count: int = 0,
 ) -> int | None:
+    if decision_request_count:
+        ceiling: Final = _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+        return decision_request_count * ceiling
     if _is_input_only_route(route=route):
         return 0
 

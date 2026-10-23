@@ -2,19 +2,32 @@
 Tests for rerank_endpoints/endpoints.py response headers.
 """
 
+import asyncio
 import json
 import logging
-from collections.abc import Iterator
-from unittest.mock import AsyncMock, MagicMock, patch
+from collections.abc import Iterator, Mapping
+from datetime import datetime, timezone
+from queue import SimpleQueue
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request, Response
 
+import litellm
 import litellm.proxy.common_request_processing as common_request_processing_mod
 import litellm.proxy.proxy_server as proxy_server_mod
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.rerank_endpoints.endpoints import rerank
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.utils import RerankResponse
 
 HIDDEN_PARAMS = {
@@ -31,8 +44,21 @@ HIDDEN_PARAMS = {
 }
 
 
-def _build_request(headers: tuple[tuple[bytes, bytes], ...] = ()) -> Request:
-    body = json.dumps({"model": "rerank-model", "query": "q", "documents": ["a", "b"]}).encode()
+def _build_request(
+    headers: tuple[tuple[bytes, bytes], ...] = (),
+    documents: tuple[str, ...] = ("a", "b"),
+    path: str = "/rerank",
+    root_path: str = "",
+    metadata: Mapping[str, object] | None = None,
+) -> Request:
+    body = json.dumps(
+        {
+            "model": "rerank-model",
+            "query": "q",
+            "documents": documents,
+            **({"metadata": metadata} if metadata is not None else {}),
+        }
+    ).encode()
 
     async def receive():
         return {"type": "http.request", "body": body, "more_body": False}
@@ -41,7 +67,8 @@ def _build_request(headers: tuple[tuple[bytes, bytes], ...] = ()) -> Request:
         scope={
             "type": "http",
             "method": "POST",
-            "path": "/rerank",
+            "path": path,
+            "root_path": root_path,
             "headers": [(b"content-type", b"application/json"), *headers],
             "query_string": b"",
         },
@@ -209,3 +236,205 @@ async def test_a_rejection_raised_before_routing_keeps_its_own_status(monkeypatc
     error = await _rerank_failure(rejection, raised_before_routing=True, monkeypatch=monkeypatch)
 
     assert (error.type, error.param, error.code) == ("bad_request_error", "session_id", "400")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "root_path", "expected_path"),
+    [
+        ("/rerank", "", "/rerank"),
+        ("/v1/rerank", "", "/v1/rerank"),
+        ("/v2/rerank", "", "/v2/rerank"),
+        ("/gateway/v2/rerank", "/gateway", "/v2/rerank"),
+    ],
+)
+@pytest.mark.parametrize("partial_failure", [False, True])
+async def test_decision_rerank_writes_one_log_with_gateway_endpoint_and_aggregate_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    path: str,
+    root_path: str,
+    expected_path: str,
+    partial_failure: bool,
+) -> None:
+    model: Final = "typesafe/jevrank-spend-unit-test"
+    rate: Final = 0.004
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "typesafe",
+            "mode": "evaluation",
+            "rerank_strategy": "pointwise",
+            "input_cost_per_token": rate,
+            "output_cost_per_token": 0,
+        },
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cache", None)
+    llm_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "rerank-model",
+                "litellm_params": {"model": model, "api_key": "test-key"},
+            }
+        ],
+        num_retries=0,
+    )
+    writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    db_logger: Final = ProxyDBLogger(spend_writer=lambda: writer)
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    proxy_logging.db_spend_update_writer = writer
+    monkeypatch.setattr(litellm, "callbacks", [db_logger])
+    monkeypatch.setattr(proxy_server_mod, "llm_router", llm_router)
+    monkeypatch.setattr(proxy_server_mod, "proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr(proxy_server_mod, "general_settings", {})
+    monkeypatch.setattr(proxy_server_mod, "prisma_client", None)
+
+    def score(request: httpx.Request) -> httpx.Response:
+        passage: Final = json.loads(json.loads(request.content)["state"])["passage"]
+        if passage == "failed":
+            return httpx.Response(503, json={"error": "unavailable"})
+        return httpx.Response(
+            200,
+            json={
+                "model": "jevrank-spend-unit-test",
+                "answers": {"relevance": {"type": "noul", "noul": 0.8}},
+                "usage": {
+                    "input_tokens": 100 if passage == "first" else 80,
+                    "output_tokens": 0,
+                },
+            },
+        )
+
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").mock(
+        side_effect=score
+    )
+    request: Final = _build_request(
+        headers=((b"x-litellm-call-id", b"rerank-spend"),),
+        documents=("first", "failed" if partial_failure else "middle", "last"),
+        path=path,
+        root_path=root_path,
+        metadata={
+            "tags": ["search"],
+            "spend_logs_metadata": {
+                "customer": "retained",
+                "gateway_endpoint": {"method": "DELETE", "path": "/client-forged"},
+            },
+        },
+    )
+    call: Final = rerank(
+        request=request,
+        fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route=expected_path),
+    )
+    if partial_failure:
+        with pytest.raises(ProxyException) as failure:
+            await call
+        assert failure.value.code == "503"
+    else:
+        await call
+    await asyncio.sleep(0)
+    GLOBAL_LOGGING_WORKER.start()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert upstream.call_count == (2 if partial_failure else 3)
+    writer.update_database.assert_awaited_once()
+    write: Final = writer.update_database.call_args.kwargs
+    recorded_at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    row: Final = get_logging_payload(
+        kwargs={**write["kwargs"], "response_cost": write["response_cost"]},
+        response_obj=write["completion_response"],
+        start_time=recorded_at,
+        end_time=recorded_at,
+    )
+    tokens: Final = 100 if partial_failure else 260
+    assert row["request_id"] == "rerank-spend"
+    assert row["call_type"] == "arerank"
+    assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == (tokens, 0, tokens)
+    assert row["spend"] == pytest.approx(tokens * rate)
+    assert json.loads(row["metadata"])["spend_logs_metadata"] == {
+        "customer": "retained",
+        "gateway_endpoint": {"method": "POST", "path": expected_path},
+    }
+    assert json.loads(row["request_tags"]) == ["search"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("decision_model", [True, False])
+async def test_rerank_keeps_the_selected_deployment_success_callback(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, decision_model: bool
+) -> None:
+    provider: Final = "typesafe" if decision_model else "cohere"
+    model: Final = f"{provider}/rerank-callback-unit-test"
+    events: Final[SimpleQueue[object]] = SimpleQueue()
+
+    async def record_success(
+        kwargs: Mapping[str, object],
+        response: object,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
+        events.put(response)
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": provider,
+            "mode": "evaluation" if decision_model else "rerank",
+            **({"rerank_strategy": "pointwise"} if decision_model else {}),
+            "input_cost_per_token": 0.004,
+            "output_cost_per_token": 0,
+        },
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cache", None)
+    llm_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "rerank-model",
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "test-key",
+                    "success_callback": [record_success],
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(proxy_server_mod, "llm_router", llm_router)
+    monkeypatch.setattr(
+        proxy_server_mod,
+        "proxy_logging_obj",
+        ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+    )
+    monkeypatch.setattr(proxy_server_mod, "general_settings", {})
+    monkeypatch.setattr(proxy_server_mod, "prisma_client", None)
+    if decision_model:
+        respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(
+            json={
+                "model": "rerank-callback-unit-test",
+                "answers": {"relevance": {"type": "noul", "noul": 0.8}},
+                "usage": {"input_tokens": 10, "output_tokens": 0},
+            }
+        )
+    else:
+        respx_mock.post("https://api.cohere.com/v2/rerank").respond(
+            json={
+                "id": "native-rerank",
+                "results": [{"index": 0, "relevance_score": 0.8}],
+            }
+        )
+    response: Final = await rerank(
+        request=_build_request(),
+        fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route="/rerank"),
+    )
+    await asyncio.sleep(0)
+    GLOBAL_LOGGING_WORKER.start()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert events.qsize() == 1
+    assert events.get_nowait() is response

@@ -1,11 +1,15 @@
 import asyncio
 import contextvars
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from functools import partial
 from typing import Final, Literal
 
+import httpx
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -13,11 +17,16 @@ from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
-from litellm.rerank_api.rerank_utils import get_optional_rerank_params
+from litellm.rerank_api.rerank_utils import (
+    get_decision_rerank_strategy,
+    get_optional_rerank_params,
+)
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import *
 from litellm.utils import ProviderConfigManager, client, exception_type
+
+_DECISION_KWARGS: Final = TypeAdapter(Mapping[str, object])
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -25,6 +34,13 @@ together_rerank: Final = TogetherAIRerank()
 bedrock_rerank: Final = BedrockRerankHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
+
+
+def _decision_rerank_timeout(timeout: object) -> float:
+    limit: Final = CompletionTimeout.as_limit(litellm.request_timeout if timeout is None else timeout)
+    if isinstance(limit, httpx.Timeout):
+        return float(litellm.request_timeout) if limit.read is None else limit.read
+    return limit
 
 
 @client
@@ -153,6 +169,38 @@ def rerank(
             api_base=optional_params.api_base,
             api_key=optional_params.api_key,
         )
+
+        decision_strategy: Final = get_decision_rerank_strategy(model, litellm.LlmProviders(_custom_llm_provider))
+        if decision_strategy is not None:
+            decision_kwargs: Final = _DECISION_KWARGS.validate_python(kwargs)
+            from litellm.rerank_api.litellm_decisions_transformation.handler import (
+                rerank_with_decisions,
+            )
+
+            return rerank_with_decisions(
+                model=model,
+                provider=_custom_llm_provider,
+                api_key=dynamic_api_key or optional_params.api_key,
+                api_base=dynamic_api_base or optional_params.api_base,
+                logging_obj=litellm_logging_obj,
+                is_async=_is_async,
+                strategy=decision_strategy,
+                params=_DECISION_KWARGS.validate_python(
+                    {
+                        **decision_kwargs,
+                        "query": query,
+                        "documents": documents,
+                        "top_n": top_n,
+                        "return_documents": return_documents,
+                        "rank_fields": rank_fields,
+                        "max_chunks_per_doc": max_chunks_per_doc,
+                        "max_tokens_per_doc": max_tokens_per_doc,
+                        "timeout": _decision_rerank_timeout(optional_params.timeout),
+                        "extra_headers": decision_kwargs.get("extra_headers") or headers,
+                    }
+                ),
+                kwargs=decision_kwargs,
+            )
 
         rerank_provider_config: Final[BaseRerankConfig] = ProviderConfigManager.get_provider_rerank_config(
             model=model,
