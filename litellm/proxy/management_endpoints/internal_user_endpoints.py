@@ -2376,6 +2376,7 @@ async def get_users(
         else ()
     )
     page_users: Final = await UserRepository(prisma_client).table.find_many(
+        # bounded-ok: sorted_ids comes from LIMIT page_size, capped at 100 by the route
         where={"AND": (where, {"user_id": {"in": sorted_ids}})} if computed_sort else where,
         skip=0 if computed_sort else skip,
         take=page_size,
