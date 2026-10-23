@@ -46,9 +46,17 @@ class _RunwayMLTask(TypedDict, total=False):
 _JSON_VALUE: Final = TypeAdapter(object)
 
 
-def _parse_runway_task(response: httpx.Response) -> _RunwayMLTask:
-    task: Final = decoded_json_object(_JSON_VALUE.validate_python(response.json()))
+def _decoded_json(response: httpx.Response) -> object:
+    return _JSON_VALUE.validate_python(response.json())
+
+
+def _runway_task(decoded: object) -> _RunwayMLTask:
+    task: Final = decoded_json_object(decoded)
     return cast(_RunwayMLTask, task)  # cast-ok: the payload passes through unvalidated, as before it was typed
+
+
+def _parse_runway_task(response: httpx.Response) -> _RunwayMLTask:
+    return _runway_task(_decoded_json(response))
 
 
 class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
@@ -338,13 +346,14 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         }
         """
         try:
-            response_data: _RunwayMLTask = _parse_runway_task(raw_response)
+            decoded: Final = _decoded_json(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
+        response_data: _RunwayMLTask = _runway_task(decoded)
 
         verbose_logger.debug("RunwayML starting polling...")
 
@@ -398,13 +407,14 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         We need to poll the task until it completes (status SUCCEEDED) using async polling.
         """
         try:
-            response_data: _RunwayMLTask = _parse_runway_task(raw_response)
+            decoded: Final = _decoded_json(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
+        response_data: _RunwayMLTask = _runway_task(decoded)
 
         verbose_logger.debug("RunwayML starting polling (async)...")
 

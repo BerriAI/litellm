@@ -39,3 +39,25 @@ def test_output_dict_with_non_string_values_still_yields_the_image(respx_mock):
     )
 
     assert [image.url for image in image_response.data] == ["https://cdn.example/image.png"]
+
+
+def test_non_object_task_body_raises_the_base_error_class():
+    created = httpx.Response(
+        200,
+        json=["unexpected"],
+        request=httpx.Request(
+            "POST", "https://api.dev.runwayml.com/v1/text_to_image", headers={"Authorization": "Bearer k"}
+        ),
+    )
+
+    with pytest.raises(AttributeError):
+        RunwayMLImageGenerationConfig().transform_image_generation_response(
+            model="gen4_image",
+            raw_response=created,
+            model_response=ImageResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
