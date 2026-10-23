@@ -418,8 +418,11 @@
   }
 }
 @media (max-width: 600px) {
+  .moyai-models-page {
+    padding-top: 16px;
+  }
   .moyai-chat-home {
-    padding: 92px 20px 36px;
+    padding: 28px 20px 36px;
   }
   .moyai-chat-home-header {
     margin-bottom: 24px;
@@ -691,7 +694,8 @@
 }
 @media (max-width: 600px) {
   .moyai-chat-conversation-header {
-    padding-left: 60px;
+    min-height: 52px;
+    padding: 12px 20px;
   }
   .moyai-chat-transcript-layout {
     --chat-gutter: 16px;

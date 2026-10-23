@@ -6,6 +6,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ChatShellProvider } from "@/contexts/ChatShellContext";
+import { PluginModeProvider } from "@/contexts/PluginModeContext";
 import ChatShell from "@/components/chat/ChatShell";
 import { uiHref } from "@/utils/uiHref";
 import "@/components/chat/moyai/moyai-chat.css";
@@ -49,7 +50,9 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
             userRole={userRole ?? ""}
             premiumUser={premiumUser ?? false}
           >
-            <ChatShell>{children}</ChatShell>
+            <PluginModeProvider accessToken={accessToken}>
+              <ChatShell>{children}</ChatShell>
+            </PluginModeProvider>
           </ChatShellProvider>
         </div>
       </div>

@@ -632,48 +632,51 @@
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  min-height: 28px;
+  min-height: 40px;
   gap: 4px;
-  container: chat-sidebar-brand / inline-size;
 }
 
-.moyai-chat-brand-row .moyai-chat-brand {
+.chat-theme .moyai-chat-workspace-switcher {
   min-width: 0;
-  height: 28px;
+  height: 36px;
   flex: 1;
   justify-content: flex-start;
   gap: 8px;
-  padding: 0 6px 0 10px;
+  padding: 0 6px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--sidebar-foreground);
+  box-shadow: none;
   font-size: 15px;
   line-height: 1.25;
   font-weight: 550;
   letter-spacing: -0.02em;
 }
 
-.moyai-chat-brand > span {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+.chat-theme .moyai-chat-workspace-switcher:hover,
+.chat-theme .moyai-chat-workspace-switcher[data-popup-open] {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
 }
 
-.moyai-chat-brand small {
-  color: var(--muted-foreground);
-  font-size: 10px;
-  font-weight: 400;
-  line-height: 1.25;
-  letter-spacing: 0;
+.moyai-chat-workspace-switcher [data-slot="workspace-icon"] {
+  width: 28px;
+  height: 28px;
 }
 
-.moyai-chat-brand-row > [data-slot="button"]:not(.moyai-chat-brand) {
+.moyai-chat-workspace-switcher [data-slot="workspace-label"] {
+  flex: 1;
+  text-align: left;
+}
+
+.moyai-chat-mobile-header .moyai-chat-workspace-switcher {
+  flex: none;
+}
+
+.moyai-chat-brand-row > [data-slot="button"]:not(.moyai-chat-workspace-switcher) {
   width: 28px;
   height: 28px;
   color: var(--foreground);
-}
-
-@container chat-sidebar-brand (max-width: 204px) {
-  .moyai-chat-brand small {
-    display: none;
-  }
 }
 
 .chat-theme .moyai-chat-rail-button {
@@ -763,13 +766,22 @@
 }
 
 .moyai-chat-collapsed .moyai-chat-sidebar > :not(.moyai-chat-brand-row),
-.moyai-chat-collapsed .moyai-chat-brand,
+.moyai-chat-collapsed [data-slot="workspace-label"],
+.moyai-chat-collapsed [data-slot="workspace-chevron"],
 .moyai-chat-collapsed .moyai-chat-search {
   display: none;
 }
 
 .moyai-chat-collapsed .moyai-chat-brand-row {
+  flex-direction: column;
   justify-content: center;
+  gap: 8px;
+}
+
+.moyai-chat-collapsed .moyai-chat-workspace-switcher {
+  flex: none;
+  width: 36px;
+  padding: 4px;
 }
 
 @media (min-width: 601px) and (max-width: 1250px) {
@@ -780,18 +792,22 @@
 }
 
 @media (max-width: 600px) {
+  .moyai-chat-shell {
+    flex-direction: column;
+  }
+
   .chat-theme.moyai-chat-sidebar {
     width: calc(100vw - 56px);
   }
 
   .chat-theme .moyai-chat-rail-button,
-  .moyai-chat-brand-row .moyai-chat-brand,
-  .moyai-chat-brand-row > [data-slot="button"]:not(.moyai-chat-brand),
+  .chat-theme .moyai-chat-workspace-switcher,
+  .moyai-chat-brand-row > [data-slot="button"]:not(.moyai-chat-workspace-switcher),
   .moyai-chat-account [data-slot="button"] {
     min-height: 44px;
   }
 
-  .moyai-chat-brand-row > [data-slot="button"]:not(.moyai-chat-brand),
+  .moyai-chat-brand-row > [data-slot="button"]:not(.moyai-chat-workspace-switcher),
   .moyai-chat-account [data-slot="button"] {
     width: 44px;
   }

@@ -17,7 +17,6 @@ import {
   Settings2,
   ChevronDown,
   Info,
-  ArrowUpRight,
   Settings,
   LogOut,
 } from "lucide-react";
@@ -35,9 +34,7 @@ import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { uiHref } from "@/utils/uiHref";
 import { useChatShell } from "@/contexts/ChatShellContext";
-import { resolveLogoSrc } from "@/lib/assetPaths";
-import monogram from "../../../public/assets/logos/litellm_monogram.svg";
-import darkMonogram from "../../../public/assets/logos/litellm_monogram_dark.svg";
+import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
 import ConversationList from "./ConversationList";
 
 export function getChatRoutes() {
@@ -116,21 +113,7 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const sidebar = (
     <>
       <div className="moyai-chat-brand-row">
-        <Button
-          variant="ghost"
-          onClick={() => navigate(routes.chats)}
-          className="moyai-chat-brand"
-          aria-label="LiteLLM Chat home"
-        >
-          {/* Local brand assets share Moyai's compact 20px mark geometry. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={resolveLogoSrc(monogram.src)} alt="" className="size-5 dark:hidden" />
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={resolveLogoSrc(darkMonogram.src)} alt="" className="hidden size-5 dark:block" />
-          <span>
-            Chat <small>by LiteLLM</small>
-          </span>
-        </Button>
+        <ViewSwitcher className="moyai-chat-workspace-switcher" contentClassName="chat-theme min-w-60" />
         <Button
           variant="ghost"
           size="icon-sm"
@@ -204,11 +187,6 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               </DropdownMenuItem>
             ))}
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => navigate(uiHref(""))}>
-              <ArrowUpRight className="size-4" />
-              AI Gateway
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
             <p className="px-2 py-1 text-xs text-muted-foreground">
               Chat is a pre-v0 preview and may change unexpectedly. Do not use in production.
             </p>
@@ -263,18 +241,21 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </aside>
       ) : (
         <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-          <SheetTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-lg"
-                className="moyai-chat-mobile-trigger absolute left-3 top-3 z-chrome"
-                aria-label="Open chat navigation"
-              />
-            }
-          >
-            <PanelLeftOpen className="size-5" />
-          </SheetTrigger>
+          <div className="moyai-chat-mobile-header z-chrome flex h-16 shrink-0 items-center gap-2 px-3">
+            <SheetTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-lg"
+                  className="moyai-chat-mobile-trigger"
+                  aria-label="Open chat navigation"
+                />
+              }
+            >
+              <PanelLeftOpen className="size-5" />
+            </SheetTrigger>
+            <ViewSwitcher className="moyai-chat-workspace-switcher" contentClassName="chat-theme min-w-60" />
+          </div>
           <SheetContent
             side="left"
             showCloseButton={false}
@@ -288,7 +269,7 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           </SheetContent>
         </Sheet>
       )}
-      <main className="chat-glass-pane relative flex min-w-0 flex-1 flex-col overflow-hidden">{children}</main>
+      <main className="chat-glass-pane relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</main>
     </div>
   );
 };

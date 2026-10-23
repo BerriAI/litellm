@@ -26,6 +26,9 @@ vi.mock("next/navigation", () => ({
 // Deterministic hrefs so navigation/active-state assertions don't depend on server_root_path.
 vi.mock("@/utils/uiHref", () => ({ uiHref: (seg: string) => `/ui/${seg}`.replace(/\/$/, "") || "/ui" }));
 vi.mock("@/contexts/ChatShellContext", () => ({ useChatShell: mockUseChatShell }));
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: () => ({ data: { values: { enable_chat_ui: true } } }),
+}));
 vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({ useLogout: () => vi.fn() }));
 vi.mock("usehooks-ts", () => ({ useMediaQuery: mockUseMediaQuery }));
 vi.mock("./ConversationList", () => ({ default: () => <div data-testid="conversation-list" /> }));
@@ -48,6 +51,7 @@ describe("ChatShell", () => {
     expect(screen.getByRole("button", { name: "Workspace" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Switch workspace, current: Chat" })).toBeInTheDocument();
     expect(screen.getByTestId("conversation-list")).toBeInTheDocument();
   });
 
@@ -92,7 +96,6 @@ describe("ChatShell", () => {
       ["API Keys", "/ui/chat/api-keys"],
       ["Usage", "/ui/chat/usage"],
       ["Logs", "/ui/chat/logs"],
-      ["AI Gateway", "/ui"],
     ]) {
       await user.click(screen.getByRole("button", { name: "Workspace" }));
       await user.click(await screen.findByRole("menuitem", { name: label, exact: true }));
@@ -123,6 +126,9 @@ describe("ChatShell", () => {
     );
     await user.click(screen.getByRole("button", { name: "Close sidebar" }));
     expect(screen.getByRole("button", { name: "Open sidebar" })).toHaveAttribute("aria-expanded", "false");
+    await user.click(screen.getByRole("button", { name: "Switch workspace, current: Chat" }));
+    expect(await screen.findByRole("menuitem", { name: "AI Gateway", exact: true })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Open sidebar" }));
     expect(screen.getByRole("button", { name: "Close sidebar" })).toHaveAttribute("aria-expanded", "true");
   });
@@ -137,6 +143,7 @@ describe("ChatShell", () => {
     );
 
     expect(screen.queryByRole("navigation", { name: "Chat workspace" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Switch workspace, current: Chat" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
     expect(await screen.findByRole("dialog", { name: "LiteLLM Chat" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Models" }));
