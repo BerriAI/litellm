@@ -53,6 +53,9 @@ if mode == "orphan":
         start_new_session=True,
     )
     Path(child_pid_file).write_text(str(child.pid))
+elif mode == "orphan-exit":
+    middle_command = "import subprocess,sys,time; child=subprocess.Popen((sys.executable,'-P','-c','import time; time.sleep(0.35)'), start_new_session=True); open(sys.argv[1],'w').write(str(child.pid)); time.sleep(0.2)"
+    subprocess.Popen((sys.executable, "-P", "-c", middle_command, child_pid_file))
 
 def stop(_signum, _frame):
     with Path(events).open("a") as output:
@@ -241,6 +244,35 @@ def test_supervisor_kills_unresponsive_rust_group_and_reaps_orphan(tmp_path: Pat
         assert process.wait(timeout=10) == 0
         assert events.read_text().splitlines() == ["rust", "python"]
         assert not Path(f"/proc/{child_pid}").exists()
+    finally:
+        _terminate_if_running(process)
+
+
+def test_supervisor_reaps_adopted_child_while_gateway_is_ready(tmp_path: Path) -> None:
+    public_port: Final = allocate_port()
+    child_pid_file: Final = tmp_path / "orphan.pid"
+    process: Final = _start_supervisor(
+        tmp_path,
+        allocate_port(),
+        public_port,
+        tmp_path / "signals",
+        rust_mode="orphan-exit",
+    )
+    try:
+        _wait_for_gateway(process, public_port)
+        deadline: Final = time.monotonic() + 5
+        while not child_pid_file.is_file() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert child_pid_file.is_file()
+        child_pid: Final = int(child_pid_file.read_text())
+        child_deadline: Final = time.monotonic() + 5
+        while Path(f"/proc/{child_pid}").exists() and time.monotonic() < child_deadline:
+            time.sleep(0.05)
+        assert not Path(f"/proc/{child_pid}").exists()
+        assert process.poll() is None
+        _wait_for_gateway(process, public_port)
+        os.kill(process.pid, signal.SIGTERM)  # test-quality-ok: Signal shutdown after observing the adopted child reap
+        assert process.wait(timeout=10) == 0
     finally:
         _terminate_if_running(process)
 

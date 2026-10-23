@@ -14,8 +14,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from types import MappingProxyType
-from types import FrameType
+from types import FrameType, MappingProxyType
 from typing import Final, Protocol, cast
 from urllib.parse import urlsplit
 
@@ -525,12 +524,15 @@ def _wait_for_python(
     deadline: float,
     requested: Event,
 ) -> bool | SupervisorFailure:
+    protected_children: Final = frozenset((process.pid,))
     while not requested.is_set() and time.monotonic() < deadline:
+        _reap_adopted_children(protected_children)
         if (status := process.poll()) is not None:
             return SupervisorFailure(f"Python gateway exited during startup with status {status}")
         if _tcp_ready("127.0.0.1", port):
             return True
         time.sleep(0.05)
+    _reap_adopted_children(protected_children)
     return False
 
 
@@ -542,7 +544,9 @@ def _wait_for_rust(
     deadline: float,
     requested: Event,
 ) -> bool | SupervisorFailure:
+    protected_children: Final = frozenset((python.pid, rust.pid))
     while not requested.is_set() and time.monotonic() < deadline:
+        _reap_adopted_children(protected_children)
         if (python_status := python.poll()) is not None:
             return SupervisorFailure(f"Python gateway exited during startup with status {python_status}")
         if (rust_status := rust.poll()) is not None:
@@ -550,15 +554,19 @@ def _wait_for_rust(
         if _http_ready(host, port):
             return True
         time.sleep(0.05)
+    _reap_adopted_children(protected_children)
     return False
 
 
 def _monitor_children(python: ChildProcess, rust: ChildProcess, requested: Event) -> SupervisorFailure | None:
+    protected_children: Final = frozenset((python.pid, rust.pid))
     while not requested.wait(0.1):
+        _reap_adopted_children(protected_children)
         if (python_status := python.poll()) is not None:
             return SupervisorFailure(f"Python gateway exited unexpectedly with status {python_status}")
         if (rust_status := rust.poll()) is not None:
             return SupervisorFailure(f"Rust gateway exited unexpectedly with status {rust_status}")
+    _reap_adopted_children(protected_children)
     return None
 
 

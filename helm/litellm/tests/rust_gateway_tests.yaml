@@ -2,6 +2,7 @@ suite: test opt-in Rust gateway deployment
 templates:
   - gateway/deployment.yaml
   - gateway/service.yaml
+  - gateway/configmap.yaml
 values:
   - ./values/required.yaml
 tests:
@@ -114,6 +115,12 @@ tests:
           path: spec.template.spec.containers[0].envFrom[0].configMapRef.name
           value: gateway-runtime
         template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_GATEWAY_METRICS_PORT
+            value: "4001"
+        template: gateway/deployment.yaml
 
   - it: preserves an explicit zero termination grace for enabled-mode rejection
     set:
@@ -131,10 +138,4 @@ tests:
           content:
             name: LITELLM_RUST_GATEWAY_TERMINATION_GRACE_SECONDS
             value: "0"
-        template: gateway/deployment.yaml
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: LITELLM_GATEWAY_METRICS_PORT
-            value: "4001"
         template: gateway/deployment.yaml
