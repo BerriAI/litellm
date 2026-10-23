@@ -1,5 +1,9 @@
 use thiserror::Error as ThisError;
 
+#[derive(Clone, Copy, Debug, ThisError, PartialEq, Eq)]
+#[error("request-controlled inputs cannot be combined with host credentials")]
+pub struct UntrustedCredentialContext;
+
 #[derive(Clone, Debug, ThisError, PartialEq, Eq)]
 pub enum Error {
     #[error("invalid authentication configuration: {0}")]
