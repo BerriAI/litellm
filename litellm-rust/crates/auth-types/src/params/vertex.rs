@@ -1,8 +1,33 @@
+use litellm_layered::{Layered, read};
 use serde::{Deserialize, Deserializer, Serialize, de::Unexpected};
 use serde_json::Value;
 use veil::Redact;
 
-use super::ParamSpec;
+#[derive(Layered)]
+pub struct VertexKeys {
+    #[layer(
+        litellm_param = ["vertex_credentials", "vertex_ai_credentials"],
+        deserialize_with = optional_credential_text,
+        env = "VERTEXAI_CREDENTIALS",
+        read = read::text,
+        secret
+    )]
+    pub credentials: String,
+    #[layer(
+        litellm_param = ["vertex_project", "vertex_ai_project"],
+        litellm_setting = "vertex_project",
+        env = "VERTEXAI_PROJECT",
+        read = read::text
+    )]
+    pub project: String,
+    #[layer(
+        litellm_param = ["vertex_location", "vertex_ai_location"],
+        litellm_setting = "vertex_location",
+        env = ["VERTEXAI_LOCATION", "VERTEX_LOCATION"],
+        read = read::text
+    )]
+    pub location: String,
+}
 
 /// The Vertex AI fields of Python's `GenericLiteLLMParams`, both the current names and the
 /// `vertex_ai_*` spellings `VertexBase.safe_get_vertex_ai_*` still read.
@@ -25,65 +50,20 @@ pub struct VertexParams {
 }
 
 impl VertexParams {
-    pub const CREDENTIALS: ParamSpec = ParamSpec {
-        setting: "credentials",
-        wire: &["vertex_credentials", "vertex_ai_credentials"],
-        module_global: None,
-        env: &["VERTEXAI_CREDENTIALS"],
-    };
-    pub const PROJECT: ParamSpec = ParamSpec {
-        setting: "project",
-        wire: &["vertex_project", "vertex_ai_project"],
-        module_global: Some("vertex_project"),
-        env: &["VERTEXAI_PROJECT"],
-    };
-    pub const LOCATION: ParamSpec = ParamSpec {
-        setting: "location",
-        wire: &["vertex_location", "vertex_ai_location"],
-        module_global: Some("vertex_location"),
-        env: &["VERTEXAI_LOCATION", "VERTEX_LOCATION"],
-    };
-
-    /// Every Vertex AI param Python reads, with both spellings, the module global
-    /// `VertexBase.get_vertex_ai_*` consults, and the environment names it falls back to.
-    pub const SPECS: [ParamSpec; 3] = [Self::CREDENTIALS, Self::PROJECT, Self::LOCATION];
-
-    /// The wire names a host projects out of a caller's kwargs, derived from [`Self::SPECS`].
-    pub fn fields() -> impl Iterator<Item = &'static str> {
-        Self::SPECS
-            .iter()
-            .flat_map(|spec| spec.wire.iter().copied())
-    }
-
-    /// The value under a wire name, read through serde so the names can never drift from
-    /// the struct.
-    pub fn get(&self, wire: &str) -> Option<String> {
-        serde_json::to_value(self)
-            .ok()?
-            .get(wire)?
-            .as_str()
-            .map(str::to_string)
-    }
-
-    /// The spec's value from these params, then the environment.
-    pub fn resolve(
-        &self,
-        spec: &ParamSpec,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Option<String> {
-        spec.resolve(&|name| self.get(name), env_lookup)
+    pub fn keys(&self) -> VertexKeysPartial {
+        VertexKeysPartial::from_litellm_params(&super::as_litellm_params(self))
     }
 
     pub fn credentials(&self) -> Option<String> {
-        self.resolve(&Self::CREDENTIALS, &|_| None)
+        self.keys().credentials
     }
 
     pub fn project(&self) -> Option<String> {
-        self.resolve(&Self::PROJECT, &|_| None)
+        self.keys().project
     }
 
     pub fn location(&self) -> Option<String> {
-        self.resolve(&Self::LOCATION, &|_| None)
+        self.keys().location
     }
 }
 

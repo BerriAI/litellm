@@ -13,14 +13,13 @@ use aws_sigv4::http_request::{
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
 
-use litellm_auth_types::AwsParams;
+use litellm_auth_types::{AwsKeysPartial, AwsParams};
+use litellm_layered::merge;
 
 use super::Error;
 use super::constants::{
-    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_ROLE_ARN,
-    AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
-    AWS_SIGNED_HEADER_NAMES, AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE,
-    DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX, SIGV4_COMPUTED_HEADER_NAMES,
+    AWS_ROLE_ARN, AWS_SIGNED_HEADER_NAMES, AWS_WEB_IDENTITY_TOKEN_FILE, DEFAULT_BEDROCK_REGION,
+    DEFAULT_SESSION_NAME_PREFIX, SIGV4_COMPUTED_HEADER_NAMES,
 };
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
@@ -74,21 +73,39 @@ pub struct AwsAuthConfig {
 
 impl AwsAuthConfig {
     fn with_environment(self, env_lookup: &(dyn Fn(&str) -> Option<String> + Sync)) -> Self {
+        Self::from(merge([self.keys(), env_keys(env_lookup)]))
+    }
+
+    fn keys(self) -> AwsKeysPartial {
+        AwsKeysPartial {
+            access_key_id: self.access_key_id,
+            secret_access_key: self.secret_access_key,
+            session_token: self.session_token,
+            region: self.region_name,
+            session_name: self.session_name,
+            profile_name: self.profile_name,
+            role_name: self.role_name,
+            web_identity_token: self.web_identity_token,
+            sts_endpoint: self.sts_endpoint,
+            external_id: self.external_id,
+            bedrock_runtime_endpoint: None,
+        }
+    }
+}
+
+impl From<AwsKeysPartial> for AwsAuthConfig {
+    fn from(keys: AwsKeysPartial) -> Self {
         Self {
-            access_key_id: self.access_key_id.or_else(|| env_lookup(AWS_ACCESS_KEY_ID)),
-            secret_access_key: self
-                .secret_access_key
-                .or_else(|| env_lookup(AWS_SECRET_ACCESS_KEY)),
-            session_token: self.session_token.or_else(|| env_lookup(AWS_SESSION_TOKEN)),
-            region_name: self.region_name.or_else(|| env_lookup(AWS_REGION_NAME)),
-            session_name: self.session_name.or_else(|| env_lookup(AWS_SESSION_NAME)),
-            profile_name: self.profile_name.or_else(|| env_lookup(AWS_PROFILE_NAME)),
-            role_name: self.role_name.or_else(|| env_lookup(AWS_ROLE_NAME)),
-            web_identity_token: self
-                .web_identity_token
-                .or_else(|| env_lookup(AWS_WEB_IDENTITY_TOKEN)),
-            sts_endpoint: self.sts_endpoint.or_else(|| env_lookup(AWS_STS_ENDPOINT)),
-            external_id: self.external_id.or_else(|| env_lookup(AWS_EXTERNAL_ID)),
+            access_key_id: keys.access_key_id,
+            secret_access_key: keys.secret_access_key,
+            session_token: keys.session_token,
+            region_name: keys.region,
+            session_name: keys.session_name,
+            profile_name: keys.profile_name,
+            role_name: keys.role_name,
+            web_identity_token: keys.web_identity_token,
+            sts_endpoint: keys.sts_endpoint,
+            external_id: keys.external_id,
         }
     }
 }
@@ -552,9 +569,10 @@ pub fn resolve_aws_region(
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
     params
-        .resolve(&AwsParams::REGION, &|_| None)
+        .keys()
+        .region
         .or_else(|| model_region.map(str::to_string))
-        .or_else(|| AwsParams::REGION.resolve(&|_| None, env_lookup))
+        .or_else(|| env_keys(env_lookup).region)
 }
 
 pub fn resolve_bedrock_region(
@@ -570,18 +588,11 @@ pub fn aws_auth_config(
     params: &AwsParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> AwsAuthConfig {
-    AwsAuthConfig {
-        access_key_id: params.resolve(&AwsParams::ACCESS_KEY_ID, env_lookup),
-        secret_access_key: params.resolve(&AwsParams::SECRET_ACCESS_KEY, env_lookup),
-        session_token: params.resolve(&AwsParams::SESSION_TOKEN, env_lookup),
-        region_name: params.resolve(&AwsParams::REGION, env_lookup),
-        session_name: params.resolve(&AwsParams::SESSION_NAME, env_lookup),
-        profile_name: params.resolve(&AwsParams::PROFILE_NAME, env_lookup),
-        role_name: params.resolve(&AwsParams::ROLE_NAME, env_lookup),
-        web_identity_token: params.resolve(&AwsParams::WEB_IDENTITY_TOKEN, env_lookup),
-        sts_endpoint: params.resolve(&AwsParams::STS_ENDPOINT, env_lookup),
-        external_id: params.resolve(&AwsParams::EXTERNAL_ID, env_lookup),
-    }
+    AwsAuthConfig::from(merge([params.keys(), env_keys(env_lookup)]))
+}
+
+fn env_keys(env_lookup: &dyn Fn(&str) -> Option<String>) -> AwsKeysPartial {
+    AwsKeysPartial::from_env(&env_lookup).unwrap_or_default()
 }
 
 /// Where the credentials that sign a request come from, decided when the request is
@@ -642,7 +653,10 @@ pub fn host_supplied_credentials(params: &AwsParams) -> Option<Credentials> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::{AWS_REGION, BEDROCK_SERVICE};
+    use crate::constants::{
+        AWS_PROFILE_NAME, AWS_REGION, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY, BEDROCK_SERVICE,
+    };
+    use litellm_auth_types::AwsKeys;
 
     fn no_env(_: &str) -> Option<String> {
         None
@@ -664,7 +678,7 @@ mod tests {
             seen.lock()
                 .unwrap()
                 .iter()
-                .all(|name| AwsParams::secret_names().contains(&name.as_str()))
+                .all(|name| AwsKeys::ENV_NAMES.contains(&name.as_str()))
         );
     }
 

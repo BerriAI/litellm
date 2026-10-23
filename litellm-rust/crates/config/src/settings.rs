@@ -216,6 +216,8 @@ pub struct LiteLlmSettings {
     pub aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_transport: Option<bool>,
+    pub vertex_project: Option<String>,
+    pub vertex_location: Option<String>,
     pub drop_params: Option<Spelled<bool>>,
     pub request_timeout: Option<Spelled<f64>>,
     pub num_retries: Option<u64>,
