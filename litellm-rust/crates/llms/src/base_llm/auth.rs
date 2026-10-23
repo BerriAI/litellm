@@ -5,7 +5,9 @@
 //! that split: `validate_environment` shapes the forwarded headers and names the credential
 //! as an [`AuthScheme`], and [`resolve_auth`] turns the scheme into headers and a signer.
 
-use litellm_auth::{AuthServices, CredentialPlacement, SecretValue, TokenProviderHandle};
+use litellm_auth::{
+    AuthServices, CredentialPlacement, SecretValue, TokenProviderHandle, watsonx::WatsonxIamConfig,
+};
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer};
 use litellm_auth_gcp::VertexConfig;
 use litellm_http::request::with_header;
@@ -24,10 +26,17 @@ pub enum AuthScheme {
     },
     /// A bearer acquired when the request is sent, from a token source such as a cloud SDK
     /// or a caller-supplied callable.
-    Token { provider: TokenProviderHandle },
+    Token {
+        provider: TokenProviderHandle,
+    },
     /// A Google access token for the Vertex AI project the config names, acquired when the
     /// request is sent through the shared GCP token cache.
-    GcpAccessToken { config: Box<VertexConfig> },
+    GcpAccessToken {
+        config: Box<VertexConfig>,
+    },
+    WatsonxIam {
+        config: Box<WatsonxIamConfig>,
+    },
     /// AWS SigV4 over the bytes that go on the wire, so the handler signs after the body is
     /// serialized.
     AwsSigV4 {
@@ -53,6 +62,7 @@ pub struct Authenticated {
 
 pub async fn resolve_auth(
     services: &AuthServices,
+    http: &litellm_http::Client,
     validated: ValidatedEnvironment,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Authenticated, litellm_auth::Error> {
@@ -81,6 +91,13 @@ pub async fn resolve_auth(
             let token = services.gcp.access_token(&config, env_lookup).await?;
             Ok(Authenticated {
                 headers: with_credential(headers, CredentialPlacement::Bearer, &token),
+                signer: None,
+            })
+        }
+        AuthScheme::WatsonxIam { config } => {
+            let token = services.watsonx.access_token(&config, http).await?;
+            Ok(Authenticated {
+                headers: with_credential(headers, CredentialPlacement::Bearer, token.expose()),
                 signer: None,
             })
         }
@@ -131,6 +148,7 @@ mod tests {
     async fn resolve(headers: Headers, auth: AuthScheme) -> Authenticated {
         resolve_auth(
             &AuthServices::default(),
+            &litellm_http::Client::plain_for_test(),
             ValidatedEnvironment { headers, auth },
             &no_env,
         )

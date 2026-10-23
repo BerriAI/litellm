@@ -11,7 +11,7 @@ test-support = ["litellm-http/test-support"]
 [dependencies]
 litellm-llms-types.workspace = true
 litellm-core-utils.workspace = true
-litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
+litellm-auth = { workspace = true, features = ["aws", "azure", "gcp", "watsonx"] }
 litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-gcp.workspace = true
