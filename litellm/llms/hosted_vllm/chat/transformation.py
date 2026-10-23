@@ -3,8 +3,11 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
 import json
-from collections.abc import Coroutine
-from typing import Final, Literal, cast, overload
+from collections.abc import Coroutine, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Literal, cast, overload
+
+import httpx
+from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
@@ -22,12 +25,65 @@ from litellm.types.llms.openai import (
     ChatCompletionVideoObject,
     ChatCompletionVideoUrlObject,
 )
+from litellm.types.utils import ModelResponse
 
 from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.tokenizer import Encoding
+
+
+class _VLLMChoiceFields(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    stop_reason: StrictStr | StrictInt | None = None
+    token_ids: tuple[StrictInt, ...] | None = None
+
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
+    @staticmethod
+    def preserve_choice_fields(response: ModelResponse) -> ModelResponse:
+        for choice in response.choices:
+            if "provider_specific_fields" not in choice:
+                continue
+            fields = _VLLMChoiceFields.model_validate(choice.provider_specific_fields or {})
+            if "stop_reason" in fields.model_fields_set and "stop_reason" not in choice:
+                choice["stop_reason"] = fields.stop_reason
+            if "token_ids" in fields.model_fields_set and "token_ids" not in choice:
+                choice["token_ids"] = list(fields.token_ids) if fields.token_ids is not None else None
+        return response
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: "Logging",
+        request_data: Mapping[str, object],
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        encoding: "Encoding | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ModelResponse:
+        response: Final = super().transform_response(  # pyright: ignore[reportUnknownMemberType]  # inherited OpenAI hook has untyped mapping parameters
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=dict(request_data),
+            messages=list(messages),
+            optional_params=dict(optional_params),
+            litellm_params=dict(litellm_params),
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+        return self.preserve_choice_fields(response)
+
     def _convert_custom_tools_to_function_tools(self, tools: list[dict[str, object]]) -> list[dict[str, object]]:
         """
         vLLM chat completions currently accepts only OpenAI function tools.

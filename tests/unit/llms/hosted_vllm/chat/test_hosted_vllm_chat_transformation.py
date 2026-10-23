@@ -1,14 +1,151 @@
 import json
-from unittest.mock import MagicMock, patch
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
+from typing import Final
 
+import httpx
 import pytest
-
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.types.utils import ModelResponse
+
+
+def _chat_response(config: OpenAIGPTConfig, choice_fields: Sequence[Mapping[str, JsonValue]]) -> ModelResponse:
+    return config.transform_response(
+        model="test-vllm-model",
+        raw_response=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1735689600,
+                "model": "test-vllm-model",
+                "choices": [
+                    {
+                        "index": index,
+                        "message": {"role": "assistant", "content": f"Answer {index}"},
+                        "finish_reason": "stop",
+                        **fields,
+                    }
+                    for index, fields in enumerate(choice_fields)
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+            },
+        ),
+        model_response=ModelResponse(),
+        logging_obj=Logging(
+            model="test-vllm-model",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id="vllm-choice-fields-test",
+            function_id="vllm-choice-fields-test",
+        ),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+def _serialized_choices(response: ModelResponse) -> tuple[Mapping[str, JsonValue], ...]:
+    serialized: Final = TypeAdapter(dict[str, JsonValue]).validate_json(response.model_dump_json())
+    return TypeAdapter(tuple[Mapping[str, JsonValue], ...]).validate_python(serialized["choices"])
+
+
+@pytest.mark.parametrize(
+    "fields",
+    (
+        {"stop_reason": "</s>", "token_ids": [42, 100]},
+        {"stop_reason": 0, "token_ids": []},
+        {"stop_reason": None, "token_ids": None},
+        {"stop_reason": "end"},
+        {"token_ids": [0]},
+        {},
+    ),
+)
+def test_hosted_vllm_chat_preserves_choice_fields(fields: Mapping[str, JsonValue]) -> None:
+    response: Final = _chat_response(HostedVLLMChatConfig(), ({**fields, "vendor_marker": "keep"},))
+    choice: Final = _serialized_choices(response)[0]
+
+    assert choice == {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+            "content": "Answer 0",
+            "role": "assistant",
+            "tool_calls": None,
+            "function_call": None,
+            "provider_specific_fields": None,
+        },
+        "provider_specific_fields": {**fields, "vendor_marker": "keep"},
+        **fields,
+    }
+
+
+def test_hosted_vllm_chat_keeps_fields_with_their_choice() -> None:
+    response: Final = _chat_response(
+        HostedVLLMChatConfig(),
+        (
+            {"stop_reason": "first", "token_ids": [1, 2]},
+            {"stop_reason": 0, "token_ids": []},
+        ),
+    )
+    choices: Final = _serialized_choices(response)
+
+    assert len(choices) == 2
+    assert choices[0]["stop_reason"] == "first"
+    assert choices[0]["token_ids"] == [1, 2]
+    assert choices[0]["provider_specific_fields"] == {"stop_reason": "first", "token_ids": [1, 2]}
+    assert choices[1]["stop_reason"] == 0
+    assert choices[1]["token_ids"] == []
+    assert choices[1]["provider_specific_fields"] == {"stop_reason": 0, "token_ids": []}
+
+
+def test_openai_chat_keeps_vllm_fields_nested() -> None:
+    response: Final = _chat_response(OpenAIGPTConfig(), ({"stop_reason": "end", "token_ids": [7]},))
+    choice: Final = _serialized_choices(response)[0]
+
+    assert "stop_reason" not in choice
+    assert "token_ids" not in choice
+    assert choice["provider_specific_fields"] == {"stop_reason": "end", "token_ids": [7]}
+
+
+def test_hosted_vllm_stream_keeps_openai_chunk_serialization() -> None:
+    chunk: Final = json.dumps(
+        {
+            "id": "chatcmpl-stream-test",
+            "created": 1735689600,
+            "model": "test-vllm-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "Answer"},
+                    "finish_reason": "stop",
+                    "stop_reason": 0,
+                    "token_ids": [7],
+                }
+            ],
+        }
+    )
+    hosted_stream: Final = HostedVLLMChatConfig().get_model_response_iterator(
+        iter((f"data: {chunk}",)), sync_stream=True
+    )
+    openai_stream: Final = OpenAIGPTConfig().get_model_response_iterator(iter((f"data: {chunk}",)), sync_stream=True)
+
+    assert isinstance(hosted_stream, BaseModelResponseIterator)
+    assert isinstance(openai_stream, BaseModelResponseIterator)
+    assert next(hosted_stream).model_dump() == next(openai_stream).model_dump()
 
 
 def test_hosted_vllm_chat_transformation_file_url():
