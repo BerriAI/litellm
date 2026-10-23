@@ -135,7 +135,7 @@ semantic-router = [
     "semantic-router>=0.1.15,<1.0; python_version < '3.14'",
     "aurelio-sdk>=0.0.19,<1.0; python_version < '3.14'",
 ]
-mlflow = ["mlflow>=3.11.1,<4.0"]
+mlflow = ["mlflow>=3.17.2,<4.0"]
 grpc = [
     # First release whose bundled roots.pem drops the compromised eMudhra roots, ahead of the 30-day cutoff
     "grpcio==1.84.1",
@@ -184,7 +184,7 @@ proxy-runtime = [
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
     "azure-storage-file-datalake>=12.20.0,<13.0",
-    "pypdf>=6.21.1,<7.0",
+    "pypdf>=6.21.2,<7.0",
     "llm-sandbox>=0.3.39,<1.0",
     "detect-secrets>=1.5.0,<2.0",
 ]
@@ -354,7 +354,7 @@ constraint-dependencies = [
     "packaging>=24.0",
     "soupsieve>=2.8.4",
     "httplib2>=0.32.0",
-    "setuptools>=83.0.0",
+    "setuptools>=84.1.0",
 ]
 override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
@@ -375,6 +375,12 @@ boto3 = "2026-10-21T19:31:00Z"
 botocore = "2026-10-21T19:31:00Z"
 # TODO: remove after 2026-10-25, once brotli 1.2.1 (CVE-2026-111497) clears the 3-day window
 brotli = "2026-10-22T14:01:00Z"
+# TODO: ryan, remove after 2026-10-24, once mlflow 3.17.2 (GHSA-wqmh-qccw-pqwf) clears the 3-day window
+mlflow = "2026-10-21T03:00:00Z"
+mlflow-skinny = "2026-10-21T03:00:00Z"
+mlflow-tracing = "2026-10-21T03:00:00Z"
+# TODO: ryan, remove after 2026-10-25, once pypdf 6.21.2 (GHSA-6c7f-9265-g8fw) clears the 3-day window
+pypdf = "2026-10-21T17:00:00Z"
 
 [tool.uv.sources]
 litellm-proxy-extras = { workspace = true }
