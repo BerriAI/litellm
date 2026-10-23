@@ -7064,10 +7064,13 @@ class StandardLoggingPayloadSetup:
         headers: Final = proxy_server_request.get("headers", {})
         if not isinstance(headers, dict):
             return None
+        request_headers: Final = cast(  # cast-ok: request headers are untyped framework data
+            dict[str, str | None], headers
+        )
         # Header names are case-insensitive: a client that sends "User-Agent"
         # or "USER-AGENT" must still be tagged (#40979).
         user_agent: Final = next(
-            (v for k, v in headers.items() if str(k).lower() == "user-agent"),
+            (v for k, v in request_headers.items() if k.lower() == "user-agent"),
             None,
         )
         if user_agent is not None:
