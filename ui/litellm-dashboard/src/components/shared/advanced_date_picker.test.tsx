@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
@@ -311,5 +311,49 @@ describe("AdvancedDatePicker", () => {
       const applyButton = screen.getByText("Apply").closest("button");
       expect(applyButton).toBeDisabled();
     });
+  });
+
+  it("should label compact custom date inputs, validate their order and apply the corrected range", async () => {
+    const user = userEvent.setup();
+    render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} compact />);
+
+    await user.click(screen.getByRole("button", { expanded: false }));
+    const start = screen.getByLabelText("Start date");
+    const end = screen.getByLabelText("End date");
+    expect(start).toHaveValue("2025-01-01");
+    expect(end).toHaveValue("2025-01-31");
+
+    act(() => fireEvent.change(start, { target: { value: "2025-02-01" } }));
+    expect(screen.getByText("End date cannot be before start date")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+    expect(mockOnValueChange).not.toHaveBeenCalled();
+
+    act(() => fireEvent.change(end, { target: { value: "2025-02-05" } }));
+    expect(screen.queryByText("End date cannot be before start date")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled();
+    expect(mockOnValueChange).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    const expectedRange = {
+      from: new Date(2025, 1, 1),
+      to: new Date(2025, 1, 5, 23, 59, 59, 999),
+    };
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expectedRange, null);
+    await waitFor(() => expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expectedRange, null));
+    expect(screen.queryByLabelText("Start date")).not.toBeInTheDocument();
+  });
+
+  it("should keep compact preset selection pending until Apply is clicked", async () => {
+    const user = userEvent.setup();
+    render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} compact />);
+
+    await user.click(screen.getByRole("button", { expanded: false }));
+    await user.click(screen.getByRole("button", { name: /Last 7 days/ }));
+    expect(screen.getByRole("button", { name: /Last 7 days/ })).toHaveAttribute("aria-pressed", "true");
+    expect(mockOnValueChange).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "7d");
+    await waitFor(() => expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "7d"));
   });
 });

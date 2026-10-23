@@ -5865,9 +5865,9 @@ export interface paths {
         };
         /**
          * Latest Release Info
-         * @description Latest stable LiteLLM GitHub release with the PR count of its whole minor line (e.g. v1.105.0 + v1.105.1)
-         *     split into new features, bug fixes and other updates.
-         *     Returns null when GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
+         * @description Newest stable release on the LiteLLM changelog, linked to its changelog page, with the PR count of its whole
+         *     minor line (e.g. v1.105.0 + v1.105.1) from GitHub split into new features, bug fixes and other updates.
+         *     Returns null when the changelog or GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
          */
         get: operations["latest_release_info_get_latest_release_info_get"];
         put?: never;
@@ -10484,6 +10484,9 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - return_wildcard_routes: When true, also list wildcard routes such as `openai/*`.
+         *                     Defaults to `general_settings.return_wildcard_routes`, and an explicit
+         *                     value on the request wins over it
          *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
          *                     provider's model catalog. When present, the response is Codex's own
          *                     catalog shape (`{"models": [...]}`) built from the same listing, with
@@ -16022,7 +16025,7 @@ export interface paths {
         put?: never;
         /**
          * Ask named questions about a state (System One format)
-         * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+         * @description Judge a `state` against one or more named `questions` and get one calibrated answer per question name.
          *
          *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
          *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
@@ -21413,6 +21416,9 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - return_wildcard_routes: When true, also list wildcard routes such as `openai/*`.
+         *                     Defaults to `general_settings.return_wildcard_routes`, and an explicit
+         *                     value on the request wins over it
          *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
          *                     provider's model catalog. When present, the response is Codex's own
          *                     catalog shape (`{"models": [...]}`) built from the same listing, with
@@ -22340,7 +22346,7 @@ export interface paths {
         put?: never;
         /**
          * Ask named questions about a state (System One format)
-         * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+         * @description Judge a `state` against one or more named `questions` and get one calibrated answer per question name.
          *
          *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
          *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
@@ -30291,6 +30297,11 @@ export interface components {
              * @default 3600
              */
             responses_websocket_session_limit_seconds: number;
+            /**
+             * Return Wildcard Routes
+             * @description When true, `/v1/models` lists wildcard routes like `openai/*` unless the request passes `return_wildcard_routes=false`.
+             */
+            return_wildcard_routes?: boolean | null;
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
             /**
