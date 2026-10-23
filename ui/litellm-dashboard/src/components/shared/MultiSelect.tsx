@@ -33,6 +33,7 @@ interface MultiSelectProps {
   loading?: boolean;
   allowCustomValues?: boolean;
   className?: string;
+  contentClassName?: string;
 }
 
 const splitOnCommas = (raw: string): string[] =>
@@ -62,6 +63,7 @@ export function MultiSelect({
   loading = false,
   allowCustomValues = false,
   className,
+  contentClassName,
 }: MultiSelectProps) {
   const anchor = useComboboxAnchor();
   const [query, setQuery] = useState("");
@@ -128,7 +130,7 @@ export function MultiSelect({
           )}
         </ComboboxValue>
       </ComboboxChips>
-      <ComboboxContent anchor={anchor}>
+      <ComboboxContent anchor={anchor} className={contentClassName}>
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>
           {(option: MultiSelectOption) => (

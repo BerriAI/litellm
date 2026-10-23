@@ -116,11 +116,13 @@ describe("DashboardHeader breadcrumb", () => {
     );
   });
 
-  it("keeps the gateway selector and tools available from the compact header menu", async () => {
+  it("should keep the gateway selector and tools available from the compact header menu", async () => {
     renderDashboardHeader();
-    fireEvent.click(screen.getByRole("button", { name: "More options" }));
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "More options" }));
+    });
     const tools = await screen.findByRole("dialog", { name: "Gateway tools" });
-    expect(within(tools).getByRole("button", { name: "AI Gateway" })).toBeInTheDocument();
+    expect(within(tools).getByRole("button", { name: "Switch workspace, current: AI Gateway" })).toBeInTheDocument();
     expect(within(tools).getByRole("link", { name: "Docs" })).toBeInTheDocument();
     expect(within(tools).getByRole("button", { name: "Aria Agent" })).toBeInTheDocument();
   });
