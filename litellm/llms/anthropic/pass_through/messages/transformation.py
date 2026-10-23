@@ -715,14 +715,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> AnthropicMessagesResponse:
-        """
-        No transformation is needed for Anthropic messages, since we want the response in the Anthropic /v1/messages API spec
-        """
         try:
             raw_response_json: Final = raw_response.json()
         except Exception:
             raise AnthropicError(message=raw_response.text, status_code=raw_response.status_code)
-        return AnthropicMessagesResponse(**raw_response_json)
+        response: Final = AnthropicMessagesResponse(**raw_response_json)
+        return {"stop_sequence": None, **response}
 
     def get_async_streaming_response_iterator(
         self,
