@@ -63,7 +63,7 @@ class FoundryLocalAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig
         litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         if not isinstance(audio_file, Path):
-            raise ValueError("Foundry Local audio must be prepared using audio_file_context")
+            raise TypeError("Foundry Local audio must be prepared using audio_file_context")
         if optional_params.get("stream"):
             raise ValueError("Streaming Foundry Local transcription is not supported by this integration")
         return AudioTranscriptionRequestData(

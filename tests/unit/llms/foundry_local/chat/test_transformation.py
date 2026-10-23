@@ -320,6 +320,12 @@ def test_should_reject_bare_audio_paths_and_unsupported_transcription_options(tm
         config.get_complete_url(None, None, "whisper-tiny", {}, {})
 
 
+def test_should_require_prepared_audio_for_transcription() -> None:
+    config: Final = FoundryLocalAudioTranscriptionConfig()
+    with pytest.raises(TypeError, match="must be prepared using audio_file_context"):
+        config.transform_audio_transcription_request("whisper-tiny", b"audio-content", {}, {})
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 async def test_should_complete_chat_asynchronously_over_foundry_http_service(stream: bool) -> None:
