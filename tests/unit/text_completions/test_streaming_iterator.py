@@ -1,10 +1,11 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Final
 
 import pytest
 
+from litellm.exceptions import APIConnectionError
 from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
-from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+from litellm.types.utils import Choices, Delta, ModelResponseStream, StreamingChoices, Usage
 
 
 def test_reasoning_content_preserved_in_text_completion_wrapper():
@@ -82,3 +83,62 @@ async def test_text_completion_stream_usage_is_opt_in(
             **expected_usage,
         }
     ]
+
+
+def test_text_completion_conversion_rejects_non_streaming_choices() -> None:
+    chunk: Final = Choices()
+    wrapper: Final = TextCompletionStreamWrapper(completion_stream=None, model="test-model")
+
+    with pytest.raises(Exception, match="Error occurred converting to text completion object") as error:
+        wrapper.convert_to_text_completion_object(chunk)
+
+    assert str(chunk) in str(error.value)
+
+
+@pytest.mark.parametrize("chunk", (None, "None"))
+def test_sync_text_completion_stream_rejects_invalid_chunks(chunk: str | None) -> None:
+    wrapper: Final = TextCompletionStreamWrapper(
+        completion_stream=iter((chunk,)), model="test-model", custom_llm_provider="openai"
+    )
+
+    with pytest.raises(APIConnectionError, match="OpenAIException") as error:
+        next(wrapper)
+
+    assert (error.value.model, error.value.llm_provider) == ("test-model", "openai")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunk", (None, "None"))
+async def test_async_text_completion_stream_rejects_invalid_chunks(chunk: str | None) -> None:
+    async def chunks() -> AsyncIterator[str | None]:
+        yield chunk
+
+    wrapper: Final = TextCompletionStreamWrapper(completion_stream=chunks(), model="test-model")
+
+    with pytest.raises(Exception) as error:
+        await anext(wrapper)
+
+    assert not isinstance(error.value, StopAsyncIteration)
+
+
+def test_sync_text_completion_stream_maps_upstream_failure_after_content() -> None:
+    chunk: Final = ModelResponseStream(
+        id="test-id",
+        created=1234567890,
+        model="test-model",
+        choices=[StreamingChoices(index=0, delta=Delta(content="Hello"))],
+    )
+
+    def chunks() -> Iterator[ModelResponseStream]:
+        yield chunk
+        raise RuntimeError("upstream disconnected")
+
+    wrapper: Final = TextCompletionStreamWrapper(
+        completion_stream=chunks(), model="test-model", custom_llm_provider="openai"
+    )
+    assert next(wrapper).choices[0].text == "Hello"
+
+    with pytest.raises(APIConnectionError, match="upstream disconnected") as error:
+        next(wrapper)
+
+    assert (error.value.model, error.value.llm_provider) == ("test-model", "openai")
