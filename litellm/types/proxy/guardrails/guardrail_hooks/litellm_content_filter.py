@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Literal, TypedDict
+from typing import Literal, TypedDict
 
 from pydantic import Field
 
@@ -77,7 +77,7 @@ class CompetitorIntentDetection(TypedDict):
     action_hint: str
     entities: dict[str, list[str]]
     signals: list[str]
-    evidence: list[dict[str, Any]]
+    evidence: list[dict[str, object]]
 
 
 ContentFilterDetection = PatternDetection | BlockedWordDetection | CategoryKeywordDetection | CompetitorIntentDetection
@@ -157,7 +157,7 @@ class LitellmContentFilterGuardrailConfigModel(GuardrailConfigModel):
     )
 
     # Competitor intent blocker (generic; industry presets add domain_words, etc.)
-    competitor_intent_config: dict[str, Any] | None = Field(
+    competitor_intent_config: dict[str, object] | None = Field(
         default=None,
         description="Optional config for intent-based competitor comparison detection. "
         "Keys: brand_self (list), competitors (list), competitor_aliases (dict), "

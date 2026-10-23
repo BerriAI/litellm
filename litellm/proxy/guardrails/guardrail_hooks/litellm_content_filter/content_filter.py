@@ -6,6 +6,7 @@ to detect and block/mask sensitive content.
 """
 
 import asyncio
+import contextvars
 import itertools
 import json
 import os
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, cast
 
 import yaml
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
@@ -42,12 +44,14 @@ from litellm.types.utils import (
     GenericGuardrailAPIInputs,
     GuardrailStatus,
     GuardrailTracingDetail,
+    Message,
     ModelResponse,
     ModelResponseStream,
 )
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 
 from litellm.types.guardrails import (
     BlockedWord,
@@ -73,6 +77,7 @@ from .competitor_intent import (
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
+_DECODED_ARGUMENTS: Final = TypeAdapter(object)
 GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
 
@@ -97,6 +102,13 @@ WORD_NUMBER_SEQUENCE_PATTERN: Final = re.compile(
     re.IGNORECASE,
 )
 WORD_NUMBER_TOKEN_FINDER: Final = re.compile(rf"(?:{WORD_NUMBER_TOKEN_REGEX})", re.IGNORECASE)
+
+_logging_only_scan_guardrail: Final[contextvars.ContextVar["ContentFilterGuardrail | None"]] = contextvars.ContextVar(
+    "litellm_content_filter_logging_only_scan", default=None
+)
+_logging_only_scan_would_reject: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
+    "litellm_content_filter_logging_only_scan_would_reject", default=False
+)
 
 
 class ConditionalCategoryConfig(TypedDict):
@@ -1206,6 +1218,18 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (keyword, action, description)
         return None
 
+    def _is_logging_only_scan(self) -> bool:
+        return _logging_only_scan_guardrail.get() is self
+
+    def _enforces_block(self, action: ContentFilterAction) -> bool:
+        return action == ContentFilterAction.BLOCK and not self._is_logging_only_scan()
+
+    @staticmethod
+    def _asks_to_block(detection: ContentFilterDetection) -> bool:
+        if detection["type"] == "competitor_intent":
+            return detection["action_hint"] in ("refuse", "reframe")
+        return detection["action"] == ContentFilterAction.BLOCK.value
+
     def _handle_conditional_match(
         self,
         matched_phrase: str,
@@ -1225,7 +1249,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             }
             detections.append(category_detection)
 
-        if action == ContentFilterAction.BLOCK:
+        if self._enforces_block(action):
             error_msg: Final = (
                 f"Content blocked: {category_name} conditional match '{matched_phrase}' detected (severity: {severity})"
             )
@@ -1266,7 +1290,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             }
             detections.append(category_detection)
 
-        if action == ContentFilterAction.BLOCK:
+        if self._enforces_block(action):
             error_msg = f"Content blocked: {category_name} category keyword '{keyword}' detected (severity: {severity})"
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
@@ -1309,7 +1333,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             }
             detections.append(pattern_detection)
 
-        if action == ContentFilterAction.BLOCK:
+        if self._enforces_block(action):
             error_msg: Final = f"Content blocked: {pattern_name} pattern detected"
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
@@ -1343,7 +1367,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             }
             detections.append(blocked_word_detection)
 
-        if action == ContentFilterAction.BLOCK:
+        if self._enforces_block(action):
             error_msg = f"Content blocked: keyword '{keyword}' detected"
             if description:
                 error_msg += f" ({description})"
@@ -1516,7 +1540,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     @staticmethod
     def _describe_image_response_content(response: ModelResponse) -> str | None:
         choice = response.choices[0]
-        message = getattr(choice, "message", None)
+        message: Final[Message | None] = getattr(choice, "message", None)
         if message and getattr(message, "content", None):
             return message.content
         return None
@@ -1616,7 +1640,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         - Number of entities masked
         - Whether the guardrail blocked the request (max risk)
         """
-        if status == "guardrail_intervened":
+        if status in ("guardrail_intervened", "guardrail_flagged"):
             return 10.0
 
         total_masked: Final = sum(masked_entity_count.values()) if masked_entity_count else 0
@@ -1662,6 +1686,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         }
         detections.append(detection)
 
+        if self._is_logging_only_scan():
+            return
         if action_hint_val == "refuse":
             msg = "Content blocked: competitor comparison or ranking intent detected."
             if self._competitor_intent_checker and getattr(
@@ -1760,18 +1786,18 @@ class ContentFilterGuardrail(CustomGuardrail):
             return raw_name
         return None
 
+    def _reject(self, error: str) -> None:
+        """Raise the 400 an enforcing mode returns, or note it on the leg a logging_only scan is observing."""
+        if self._is_logging_only_scan():
+            _logging_only_scan_would_reject.set(True)
+            return
+        raise HTTPException(status_code=400, detail={"error": error})
+
     def _assert_argument_label_clean(
         self, text: str, detections: list[ContentFilterDetection], context_label: str
     ) -> None:
         if self._filter_single_text(text, detections=detections) != text:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": (
-                        f"Content blocked: {context_label} argument matched a masking rule on a non-rewritable field"
-                    )
-                },
-            )
+            self._reject(f"Content blocked: {context_label} argument matched a masking rule on a non-rewritable field")
 
     def _filter_argument_value(
         self,
@@ -1781,10 +1807,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         depth: int = 0,
     ) -> object:
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"Content blocked: {context_label} arguments exceed the maximum nesting depth"},
-            )
+            self._reject(f"Content blocked: {context_label} arguments exceed the maximum nesting depth")
+            return value
         if isinstance(value, str):
             return self._filter_single_text(value, detections=detections)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -1850,7 +1874,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         detections: list[ContentFilterDetection],  # mutable-ok: _filter_single_text appends into a caller-owned list
     ) -> str:
         try:
-            parsed: Final[object] = json.loads(arguments)
+            parsed: Final = _DECODED_ARGUMENTS.validate_python(json.loads(arguments))
         except (json.JSONDecodeError, TypeError, ValueError):
             return self._filter_single_text(arguments, detections=detections)
         if not isinstance(parsed, (dict, list)):
@@ -1870,6 +1894,21 @@ class ContentFilterGuardrail(CustomGuardrail):
             filtered_arguments = self._filter_tool_call_arguments(arguments, detections)
             if filtered_arguments != arguments:
                 self._set_tool_call_arguments(tool_call, filtered_arguments)
+
+    async def _scan_logged_call(
+        self,
+        kwargs: dict[str, object],  # mutable-ok: CustomLogger.async_logging_hook contract
+        response: object | None,
+        translation: "BaseTranslation",
+        output_translation: "BaseTranslation",
+        scratch_metadata: dict[str, object],  # mutable-ok: apply_guardrail records its verdict into request metadata
+    ) -> None:
+        """Scan the logged call with every BLOCK match recorded instead of raised."""
+        token: Final = _logging_only_scan_guardrail.set(self)
+        try:
+            await super()._scan_logged_call(kwargs, response, translation, output_translation, scratch_metadata)
+        finally:
+            _logging_only_scan_guardrail.reset(token)
 
     async def apply_guardrail(
         self,
@@ -1901,6 +1940,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         masked_entity_count: Final[dict[str, int]] = {}
         status: GuardrailStatus = "success"
         exception_str: str = ""
+        would_reject_token: Final = _logging_only_scan_would_reject.set(False)
 
         try:
             texts: Final = inputs.get("texts", [])
@@ -1944,11 +1984,13 @@ class ContentFilterGuardrail(CustomGuardrail):
             exception_str = str(e)
             raise e
         finally:
+            would_reject: Final = _logging_only_scan_would_reject.get() or any(map(self._asks_to_block, detections))
+            _logging_only_scan_would_reject.reset(would_reject_token)
             # Log guardrail information
             self._log_guardrail_information(
                 request_data=request_data,
                 detections=detections,
-                status=status,
+                status="guardrail_flagged" if status == "success" and would_reject else status,
                 start_time=start_time,
                 masked_entity_count=masked_entity_count,
                 exception_str=exception_str,

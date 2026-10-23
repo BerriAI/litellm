@@ -2,9 +2,10 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, cast  # noqa: TID251 - PrismaWrapper dynamically delegates database methods
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.proxy.utils import PrismaClient
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.roi_calculator import ROIReport, ROISyncStatus
 from litellm.types.roi_observed import ObservedData
 
@@ -12,13 +13,13 @@ _SYNC_KEY: Final = "roi_calculator_sync"
 _REPORT_KEY: Final = "roi_calculator_report"
 
 
-class _SyncState(BaseModel):
+class _SyncState(LiteLLMBaseModel):
     owner: str
     status: ROISyncStatus
     cancel: bool = False
 
 
-class _StateRow(BaseModel):
+class _StateRow(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     param_value: _SyncState
     expired: bool = False

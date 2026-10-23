@@ -14,6 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy.roi_calculator.analytics import normalize_email
 from litellm.proxy.roi_calculator.github import GitHubPullListItem, SourceError
 from litellm.proxy.roi_calculator.source import repository_tag
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.roi_calculator import ROIPullCommit, ROIPullEvidence, ROIPullFile, ROISettings
 from litellm.types.roi_observed import ObservedIssue
@@ -21,13 +22,13 @@ from litellm.types.roi_observed import ObservedIssue
 _T: Final = TypeVar("_T", bound=BaseModel)
 
 
-class _User(BaseModel):
+class _User(LiteLLMBaseModel):
     username: str
     public_email: str | None = None
     bot: bool = False
 
 
-class _Project(BaseModel):
+class _Project(LiteLLMBaseModel):
     id: int
     path_with_namespace: str
     visibility: str = "private"
@@ -36,7 +37,7 @@ class _Project(BaseModel):
     issues_access_level: str = "enabled"
 
 
-class _MergeRequest(BaseModel):
+class _MergeRequest(LiteLLMBaseModel):
     iid: int
     title: str
     description: str | None = None
@@ -70,7 +71,7 @@ class _MergeRequest(BaseModel):
         )
 
 
-class _Diff(BaseModel):
+class _Diff(LiteLLMBaseModel):
     new_path: str
     old_path: str
     diff: str = ""
@@ -95,12 +96,12 @@ class _Diff(BaseModel):
         )
 
 
-class _Commit(BaseModel):
+class _Commit(LiteLLMBaseModel):
     id: str
     message: str
 
 
-class _Issue(BaseModel):
+class _Issue(LiteLLMBaseModel):
     iid: int
     created_at: datetime
     labels: tuple[str, ...] = ()

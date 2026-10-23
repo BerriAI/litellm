@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.health_check_latest import latest_by_model_name
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
 from litellm.proxy.list_api.in_memory import Cells, InMemoryListExecutor
 from litellm.proxy.list_api.list_framework import (
@@ -59,12 +60,12 @@ class PrismaHealthSnapshotLookup:
         checks: Final = await self.prisma_client.get_latest_health_checks_for_models(model_groups)
         return MappingProxyType(
             {
-                check.model_name: HealthSnapshot(
+                model_group: HealthSnapshot(
                     status=check.status,
                     response_time_ms=check.response_time_ms,
                     checked_at=check.checked_at.isoformat() if check.checked_at else None,
                 )
-                for check in checks
+                for model_group, check in latest_by_model_name(checks).items()
             }
         )
 
@@ -186,7 +187,7 @@ MODEL_HUB_LIST_SPEC: Final[ListSpec[ModelGroupInfoProxy, ModelGroupInfoProxy]] =
 
 def _published_rows() -> Sequence[ModelGroupInfoProxy]:
     from litellm.proxy.proxy_server import (
-        _get_model_group_info,  # pyright: ignore[reportPrivateUsage]  # /public/model_hub imports it the same way
+        get_model_group_info,  # pyright: ignore[reportPrivateUsage]  # /public/model_hub imports it the same way
         llm_router,
     )
 
@@ -202,7 +203,7 @@ def _published_rows() -> Sequence[ModelGroupInfoProxy]:
     if litellm.public_model_groups is None:
         return ()
     return tuple(
-        _get_model_group_info(
+        get_model_group_info(
             llm_router=llm_router,
             all_models_str=litellm.public_model_groups,
             model_group=None,

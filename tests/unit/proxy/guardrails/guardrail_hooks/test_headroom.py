@@ -23,7 +23,7 @@ Tests cover:
 
 import json
 import time
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -41,7 +41,7 @@ from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
-from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY, HEADROOM_STREAM_OPTIONS_KEY
 from litellm.types.utils import (
     CallTypes,
     GenericGuardrailAPIInputs,
@@ -2009,6 +2009,45 @@ async def test_apply_guardrail_sends_textless_parts_rows_unflattened(
 
 
 @pytest.mark.asyncio
+async def test_sdk_echoed_null_tool_calls_never_reach_compression_service(guardrail: HeadroomGuardrail):
+    """LIT-6921: OpenAI SDK assistant messages echoed back as history carry
+    ``"tool_calls": null``, which headroom-ai 0.27-0.30 answer with a 503. The
+    chat handler sends no row carrying that null and forwards the echoed rows
+    unchanged."""
+    from openai.types.chat import ChatCompletionMessage
+
+    from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+
+    def _sdk_assistant(**fields: object) -> dict:
+        return ChatCompletionMessage.model_validate({"role": "assistant", **fields}).model_dump()
+
+    tool_call = {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+    history = [
+        {"role": "user", "content": "E" * 5000},
+        _sdk_assistant(content=None, tool_calls=[tool_call]),
+        {"role": "tool", "tool_call_id": "call_1", "content": "R" * 5000},
+        _sdk_assistant(content="summary"),
+        {"role": "user", "content": "F" * 5000},
+        _sdk_assistant(content="noted"),
+        {"role": "user", "content": "and now?"},
+    ]
+    assert history[3]["tool_calls"] is None
+    sent: dict = {}
+
+    def _echo(**kwargs):
+        sent["messages"] = kwargs["json"]["messages"]
+        return _make_compress_response(json.loads(json.dumps(sent["messages"])))
+
+    data = {"model": "claude-sonnet-5", "messages": json.loads(json.dumps(history))}
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo):
+        result = await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert [row["role"] for row in sent["messages"]] == ["user", "tool", "user"]
+    assert all(row.get("tool_calls", []) is not None for row in sent["messages"])
+    assert [result["messages"][index] for index in (1, 3, 5)] == [history[index] for index in (1, 3, 5)]
+
+
+@pytest.mark.asyncio
 async def test_fail_open_returns_original_parts_shapes():
     guardrail = _make_guardrail(unreachable_fallback="fail_open")
     inputs = GenericGuardrailAPIInputs(
@@ -2169,6 +2208,28 @@ async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_comple
     assert result["stream"] is False
     assert result[HEADROOM_CONVERTED_STREAM_KEY] is True
     assert kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", (CallTypes.acompletion, CallTypes.aresponses))
+async def test_pre_call_deployment_hook_moves_stream_options_off_the_forced_non_stream_call(
+    guardrail: HeadroomGuardrail, call_type: CallTypes
+):
+    stream_options: Final = {"include_usage": True}
+    kwargs: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "stream": True,
+        "stream_options": stream_options,
+        "tools": [_retrieve_tool_definition()],
+    }
+
+    result: Final = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=call_type)
+
+    assert result is not None
+    assert result["stream"] is False
+    assert "stream_options" not in result
+    assert result[HEADROOM_STREAM_OPTIONS_KEY] == stream_options
+    assert kwargs["stream_options"] == stream_options
 
 
 @pytest.mark.asyncio

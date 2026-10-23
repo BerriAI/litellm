@@ -17,11 +17,19 @@ if TYPE_CHECKING:
     ToolConfigDict = _genai_types.ToolConfigDict
 
     class GenerateContentRequestDict(GenerateContentRequestParametersDict):
-        generationConfig: Any | None
+        generationConfig: object | None
         tools: ToolConfigDict | None
 
     class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject):
         _hidden_params: dict = {}
+
+        @property
+        def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+            return self._hidden_params
+
+        @hidden_params.setter
+        def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+            self._hidden_params = hidden_params
 
 else:
     # Fallback types when google.genai is not available
@@ -50,6 +58,14 @@ else:
             super().__init__(**kwargs)
 
     class GenerateContentResponse(BaseLiteLLMOpenAIResponseObject):
+        @property
+        def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+            return self._hidden_params
+
+        @hidden_params.setter
+        def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+            self._hidden_params = hidden_params
+
         def __init__(self, **kwargs) -> None:
             super().__init__(**kwargs)
             self._hidden_params = kwargs.get("_hidden_params", {})

@@ -11,7 +11,7 @@ const ThemeToggle: React.FC = () => {
   const { t } = useTranslation();
   const { setTheme, resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
-  const label = isDark ? t("Switch to light mode") : t("Switch to dark mode (beta)");
+  const label = isDark ? t("Switch to light mode") : t("Switch to dark mode");
 
   return (
     <Button

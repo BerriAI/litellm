@@ -1,6 +1,6 @@
 import pytest
 
-from litellm.proxy.utils import _is_valid_team_configs
+from litellm.proxy.utils import is_valid_team_configs
 
 
 def normalize(value):
@@ -11,7 +11,7 @@ def test_is_valid_team_configs_happy_path_allowed_model_mutates_config():
     team_config = {"models": ["gpt-4o", "gpt-4o-mini"], "max_budget": 100.0}
     request_data = {"model": "gpt-4o"}
     snapshot = {
-        "result": _is_valid_team_configs(
+        "result": is_valid_team_configs(
             team_id="team-1",
             team_config=team_config,
             request_data=request_data,
@@ -30,7 +30,7 @@ def test_is_valid_team_configs_no_models_key_is_noop():
     team_config = {"max_budget": 100.0, "tpm_limit": 1000}
     request_data = {"model": "anything"}
     snapshot = {
-        "result": _is_valid_team_configs(
+        "result": is_valid_team_configs(
             team_id="team-1",
             team_config=team_config,
             request_data=request_data,
@@ -48,7 +48,7 @@ def test_is_valid_team_configs_no_models_key_is_noop():
 def test_is_valid_team_configs_short_circuits_when_team_id_none():
     team_config = {"models": ["only-this"]}
     snapshot = {
-        "result": _is_valid_team_configs(
+        "result": is_valid_team_configs(
             team_id=None,
             team_config=team_config,
             request_data={"model": "anything-else"},
@@ -67,7 +67,7 @@ def test_is_valid_team_configs_raises_on_model_not_in_team_models():
     team_config = {"models": ["gpt-4o"]}
     request_data = {"model": "claude-haiku"}
     with pytest.raises(Exception, match='claude-haiku\\.  Valid models for team are') as exc_info:
-        _is_valid_team_configs(
+        is_valid_team_configs(
             team_id="team-1",
             team_config=team_config,
             request_data=request_data,

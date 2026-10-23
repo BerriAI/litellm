@@ -28,6 +28,7 @@ interface NavbarProps {
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
+  deploymentHealth?: React.ReactNode;
 }
 
 const NAV_LOGO_CLASS_NAME = "h-auto max-h-full w-auto max-w-full object-contain";
@@ -37,6 +38,7 @@ const Navbar: React.FC<NavbarProps> = ({
   isPublicPage = false,
   sidebarCollapsed = false,
   onToggleSidebar,
+  deploymentHealth,
 }) => {
   const baseUrl = getProxyBaseUrl();
   const { t } = useTranslation();
@@ -153,7 +155,8 @@ const Navbar: React.FC<NavbarProps> = ({
                   <LanguageSwitcher />
                   <ThemeToggle />
                   <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
-                  <NotificationsBell />
+                  {deploymentHealth}
+                  <NotificationsBell accessToken={accessToken} />
                   <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
                   <UserDropdown onLogout={handleLogout} />
                 </div>
