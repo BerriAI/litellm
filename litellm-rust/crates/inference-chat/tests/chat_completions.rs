@@ -5,7 +5,6 @@ use litellm_host::{
 };
 use std::time::Duration;
 
-use litellm_http::transport::Error as TransportError;
 use litellm_inference_chat::{Error, types::ChatCompletionsRequest};
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use rstest::{fixture, rstest};
@@ -201,13 +200,7 @@ async fn an_upstream_error_status_keeps_its_code_and_body(
     .await
     .expect_err("upstream rejects");
 
-    assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status,
-            body: "slow down".into()
-        })
-    );
+    assert_eq!(error.upstream_response(), Some((status, "slow down")));
 }
 
 #[rstest]
@@ -223,7 +216,7 @@ async fn a_connection_that_is_never_established_returns_a_connect_error(
     .expect_err("nothing is listening");
 
     assert!(
-        matches!(error, Error::Transport(TransportError::Connect(_))),
+        matches!(&error, Error::Http(http) if !http.dispatched()),
         "{error:?}"
     );
 }
@@ -244,7 +237,7 @@ async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletion
     .expect_err("the call times out");
 
     assert!(
-        matches!(error, Error::Transport(TransportError::Network(_))),
+        matches!(&error, Error::Http(http) if http.dispatched()),
         "{error:?}"
     );
 }

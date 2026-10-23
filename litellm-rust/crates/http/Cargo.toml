@@ -21,6 +21,7 @@ strum.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+url.workspace = true
 veil.workspace = true
 webpki-roots.workspace = true
 

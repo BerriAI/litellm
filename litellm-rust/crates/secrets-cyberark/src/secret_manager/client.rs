@@ -64,19 +64,12 @@ impl CyberArkSecretManager {
             }),
             ..config.clone()
         };
-        let client =
-            pool.client(&config, ClientVariant::Provider)
-                .map_err(|error| match error {
-                    litellm_http::Error::Read {
-                        tls_source: TlsSource::ClientIdentity,
-                        ..
-                    }
-                    | litellm_http::Error::InvalidPem {
-                        tls_source: TlsSource::ClientIdentity,
-                        ..
-                    } => Error::ClientCertificate,
-                    other => Error::Client(Box::new(other)),
-                })?;
+        let client = pool
+            .client(&config, ClientVariant::Provider)
+            .map_err(|error| match error.tls_source() {
+                Some(TlsSource::ClientIdentity) => Error::ClientCertificate,
+                _ => Error::Client(error),
+            })?;
         let endpoint = reqwest::Url::parse(
             &environment
                 .get(CYBERARK_API_BASE)

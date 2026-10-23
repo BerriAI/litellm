@@ -1,4 +1,4 @@
-use std::{fmt, path::Path, str::FromStr, sync::Arc};
+use std::{path::Path, str::FromStr, sync::Arc};
 
 use rustls::{
     CipherSuite, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
@@ -9,7 +9,7 @@ use rustls::{
 
 use crate::{
     config::{ClientIdentity, HttpClientConfig, Verify},
-    error::{Error, TlsSource},
+    error::{Error, PemFault, Repr, TlsSource},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -187,7 +187,7 @@ impl TryFrom<&HttpClientConfig> for ClientConfig {
         });
         let builder = ClientConfig::builder_with_provider(Arc::clone(&provider))
             .with_safe_default_protocol_versions()
-            .map_err(|error| Error::Client(error.to_string()))?;
+            .map_err(Repr::TlsConfig)?;
         let verified = match &config.verify {
             Verify::Disabled => builder
                 .dangerous()
@@ -224,7 +224,7 @@ impl TryFrom<&HttpClientConfig> for ClientConfig {
 fn bundle_roots(path: &Path, source: TlsSource) -> Result<RootCertStore, Error> {
     let certificates = certificates(path, source)?;
     if certificates.is_empty() {
-        return Err(invalid_pem(path, source, "no certificates found"));
+        return Err(invalid_pem(path, source, PemFault::NoCertificates));
     }
     let mut store = RootCertStore::empty();
     for certificate in certificates {
@@ -242,7 +242,7 @@ fn client_identity(
     let source = TlsSource::ClientIdentity;
     let chain = certificates(certificate, source)?;
     if chain.is_empty() {
-        return Err(invalid_pem(certificate, source, "no certificates found"));
+        return Err(invalid_pem(certificate, source, PemFault::NoCertificates));
     }
     let private_key = PrivateKeyDer::from_pem_slice(&read(key, source)?)
         .map_err(|error| invalid_pem(key, source, error))?;
@@ -256,19 +256,23 @@ fn certificates(path: &Path, source: TlsSource) -> Result<Vec<CertificateDer<'st
 }
 
 fn read(path: &Path, source: TlsSource) -> Result<Vec<u8>, Error> {
-    std::fs::read(path).map_err(|error| Error::Read {
-        path: path.to_path_buf(),
-        message: error.to_string(),
-        tls_source: source,
+    std::fs::read(path).map_err(|cause| {
+        Repr::Read {
+            path: path.to_path_buf(),
+            tls_source: source,
+            cause,
+        }
+        .into()
     })
 }
 
-fn invalid_pem(path: &Path, source: TlsSource, message: impl fmt::Display) -> Error {
-    Error::InvalidPem {
+fn invalid_pem(path: &Path, source: TlsSource, cause: impl Into<PemFault>) -> Error {
+    Repr::InvalidPem {
         path: path.to_path_buf(),
-        message: message.to_string(),
         tls_source: source,
+        cause: cause.into(),
     }
+    .into()
 }
 
 #[derive(Debug)]
@@ -448,11 +452,10 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         assert!(matches!(
             result,
-            Err(Error::InvalidPem {
-                path: reported,
-                tls_source: TlsSource::ClientIdentity,
-                ..
-            }) if reported == path
+            Err(error) if matches!(
+                error.repr(),
+                Repr::InvalidPem { path: reported, tls_source: TlsSource::ClientIdentity, .. } if *reported == path
+                )
         ));
     }
 

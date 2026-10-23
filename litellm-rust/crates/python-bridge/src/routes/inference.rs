@@ -6,7 +6,6 @@ use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host::{call::HostedMachine, protocol::Protocol};
 use litellm_host_python::{PythonBinding, PythonHostCalls, from_py};
-use litellm_http::transport::Error as TransportError;
 use litellm_inference::Error;
 use litellm_secrets::source::SecretSource;
 use pyo3::{
@@ -125,15 +124,15 @@ impl InferenceHost {
         {
             return Ok(original);
         }
-        let native = match error {
-            Error::Transport(TransportError::Http { status, body }) => {
-                let error = RustUpstreamError::new_err((status, body));
+        let native = match error.upstream_response() {
+            Some((status, body)) => {
+                let error = RustUpstreamError::new_err((status, body.to_owned()));
                 error
                     .value(py)
                     .setattr("headers", Vec::<(String, String)>::new())?;
                 error
             }
-            other => route_error_to_pyerr(other),
+            None => route_error_to_pyerr(error),
         };
         let mapped = py
             .import(self.module)?

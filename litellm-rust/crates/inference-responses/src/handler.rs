@@ -89,10 +89,10 @@ pub(super) async fn execute(
             let status = response.status().as_u16();
             if !response.status().is_success() {
                 let body = response.text().await.map_err(network)?;
-                return Err(litellm_http::transport::Error::Http {
+                return Err(litellm_http::Error::upstream(
                     status,
-                    body: litellm_http::request::truncate_error_body(&body),
-                }
+                    litellm_http::request::truncate_error_body(&body),
+                )
                 .into());
             }
             if stream {
@@ -135,5 +135,5 @@ pub(super) async fn execute(
 }
 
 fn network(error: reqwest::Error) -> Error {
-    litellm_http::transport::Error::Network(error.to_string()).into()
+    litellm_http::Error::from(error).into()
 }

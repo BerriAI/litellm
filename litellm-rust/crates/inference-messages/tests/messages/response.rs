@@ -2,7 +2,6 @@ use litellm_host::{
     interceptors::{ExecutionFacts, ResultSource},
     lifecycle::ExecutionEvent,
 };
-use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{MessagesCallResponse, messages_body};
 use litellm_inference_testing::{
     RecordingSecrets, http_config, no_secrets, provider_http, resources,
@@ -166,11 +165,11 @@ async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
     .await
     .expect_err("upstream error propagates");
 
-    let Error::Transport(TransportError::Http { status, body }) = error else {
+    let Some((status, body)) = error.upstream_response() else {
         panic!("{error:?}");
     };
     assert_eq!(status, 400);
-    assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), envelope);
+    assert_eq!(serde_json::from_str::<Value>(body).unwrap(), envelope);
 }
 
 #[rstest]
@@ -188,11 +187,8 @@ async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall
     .expect_err("upstream error propagates");
 
     assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status: 500,
-            body: format!("{}... (truncated)", &long[..256])
-        })
+        error.upstream_response(),
+        Some((500, format!("{}... (truncated)", &long[..256]).as_str()))
     );
 }
 
@@ -216,11 +212,8 @@ async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case]
     .expect_err("upstream error propagates");
 
     assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status,
-            body: "upstream said no".into()
-        })
+        error.upstream_response(),
+        Some((status, "upstream said no"))
     );
 }
 
@@ -259,7 +252,7 @@ async fn a_provider_slower_than_the_timeout_fails_the_call(call: MessagesCall) {
     .await
     .expect_err("the call times out");
 
-    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    assert!(matches!(error, Error::Http(_)), "{error:?}");
 }
 
 #[rstest]

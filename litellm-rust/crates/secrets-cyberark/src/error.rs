@@ -19,7 +19,7 @@ pub enum Error {
     #[error("CyberArk client certificate could not be loaded")]
     ClientCertificate,
     #[error("CyberArk Conjur HTTP client could not be built")]
-    Client(#[redact] Box<litellm_http::Error>),
+    Client(#[redact] litellm_http::Error),
     #[error("invalid refresh interval")]
     RefreshInterval,
     #[error("invalid CyberArk Conjur endpoint")]

@@ -34,5 +34,6 @@ litellm-cache-memory.workspace = true
 futures-util.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 rstest.workspace = true
+tokio-tungstenite.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
 wiremock.workspace = true

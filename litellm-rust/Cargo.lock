@@ -3811,6 +3811,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "wiremock",
 ]
@@ -3958,6 +3959,7 @@ dependencies = [
  "tokio-rustls 0.26.4",
  "tokio-tungstenite",
  "tracing",
+ "url",
  "veil",
  "webpki-roots",
 ]
@@ -4009,7 +4011,6 @@ dependencies = [
  "litellm-llms-types",
  "litellm-secrets",
  "litellm-tracing",
- "reqwest",
  "rstest",
  "serde_json",
  "tokio",
@@ -4252,6 +4253,7 @@ dependencies = [
  "serde_with",
  "sqlx",
  "strum",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",

@@ -222,11 +222,8 @@ async fn an_upstream_error_keeps_its_status_and_body(
     .expect_err("upstream error propagates");
 
     assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            status,
-            body: "upstream said no".into()
-        })
+        error.upstream_response(),
+        Some((status, "upstream said no"))
     );
 }
 

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use http::{
     HeaderMap, HeaderValue, StatusCode,
     header::{
@@ -14,12 +16,29 @@ use tokio_tungstenite::{
     },
 };
 
-use crate::{client::Client, transport::Error};
+use crate::{
+    client::Client,
+    error::{Error, Repr},
+};
 
 pub type UpstreamWebSocket = WebSocketStream<reqwest::Upgraded>;
 
 #[tracing::instrument(name = "litellm.websocket.handshake", level = "debug", skip_all)]
 pub async fn connect(
+    client: &Client,
+    url: &str,
+    headers: HeaderMap,
+    timeout: Option<Duration>,
+) -> Result<UpstreamWebSocket, Error> {
+    match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, handshake(client, url, headers))
+            .await
+            .map_err(|_| Repr::HandshakeTimeout)?,
+        None => handshake(client, url, headers).await,
+    }
+}
+
+async fn handshake(
     client: &Client,
     url: &str,
     headers: HeaderMap,
@@ -30,14 +49,13 @@ pub async fn connect(
         .get(http_url(url)?)
         .headers(handshake_headers(headers, &key)?)
         .send()
-        .await
-        .map_err(Error::from_reqwest_before_dispatch)?;
+        .await?;
     let status = response.status();
     if status != StatusCode::SWITCHING_PROTOCOLS {
-        return Err(Error::Http {
-            status: status.as_u16(),
-            body: response.text().await.unwrap_or_default(),
-        });
+        return Err(Error::upstream(
+            status.as_u16(),
+            response.text().await.unwrap_or_default(),
+        ));
     }
     let expected = derive_accept_key(key.as_bytes());
     if response
@@ -46,9 +64,7 @@ pub async fn connect(
         .map(HeaderValue::as_bytes)
         != Some(expected.as_bytes())
     {
-        return Err(Error::Network(
-            "WebSocket handshake returned a wrong Sec-WebSocket-Accept".into(),
-        ));
+        return Err(Repr::HandshakeAccept.into());
     }
     validate_response_headers(response.headers(), offered_protocols.as_ref())?;
     let upgraded = response.upgrade().await?;
@@ -63,9 +79,7 @@ fn validate_response_headers(
         .get(UPGRADE)
         .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"websocket"))
     {
-        return Err(Error::Network(
-            "WebSocket handshake returned an invalid Upgrade header".into(),
-        ));
+        return Err(Repr::HandshakeUpgrade.into());
     }
     if !headers.get_all(CONNECTION).iter().any(|value| {
         value.to_str().is_ok_and(|value| {
@@ -74,9 +88,7 @@ fn validate_response_headers(
                 .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
         })
     }) {
-        return Err(Error::Network(
-            "WebSocket handshake returned an invalid Connection header".into(),
-        ));
+        return Err(Repr::HandshakeConnection.into());
     }
     let protocol_matches = match (offered_protocols, headers.get(SEC_WEBSOCKET_PROTOCOL)) {
         (None, None) => true,
@@ -92,31 +104,25 @@ fn validate_response_headers(
         _ => false,
     };
     if !protocol_matches {
-        return Err(Error::Network(
-            "WebSocket handshake returned an invalid subprotocol".into(),
-        ));
+        return Err(Repr::HandshakeSubprotocol.into());
     }
     Ok(())
 }
 
 fn http_url(url: &str) -> Result<Url, Error> {
-    let mut url = Url::parse(url).map_err(not_dispatched)?;
+    let mut url = Url::parse(url).map_err(Repr::WebSocketUrl)?;
     let scheme = match url.scheme() {
         "ws" | "http" => "http",
         "wss" | "https" => "https",
-        other => {
-            return Err(not_dispatched(format!(
-                "unsupported WebSocket URL scheme {other:?}"
-            )));
-        }
+        other => return Err(Repr::WebSocketScheme(other.to_owned()).into()),
     };
     url.set_scheme(scheme)
-        .map_err(|()| not_dispatched("WebSocket URL cannot be sent over HTTP"))?;
+        .map_err(|()| Repr::WebSocketScheme(url.scheme().to_owned()))?;
     Ok(url)
 }
 
 fn handshake_headers(headers: HeaderMap, key: &str) -> Result<HeaderMap, Error> {
-    let key = HeaderValue::from_str(key).map_err(not_dispatched)?;
+    let key = HeaderValue::from_str(key).map_err(|error| Repr::Request(error.into()))?;
     Ok([
         (CONNECTION, HeaderValue::from_static("Upgrade")),
         (UPGRADE, HeaderValue::from_static("websocket")),
@@ -128,8 +134,4 @@ fn handshake_headers(headers: HeaderMap, key: &str) -> Result<HeaderMap, Error> 
         headers.insert(name, value);
         headers
     }))
-}
-
-fn not_dispatched(error: impl std::fmt::Display) -> Error {
-    Error::Connect(error.to_string())
 }

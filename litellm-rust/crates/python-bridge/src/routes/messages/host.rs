@@ -3,7 +3,6 @@ use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
-use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
@@ -69,14 +68,14 @@ fn project_litellm_params<'py>(
 }
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
+    if let Some((status, body)) = error.upstream_response() {
+        let error = RustUpstreamError::new_err((status, body.to_owned()));
+        error
+            .value(py)
+            .setattr("headers", Vec::<(String, String)>::new())?;
+        return Ok(error);
+    }
     match error {
-        Error::Transport(TransportError::Http { status, body }) => {
-            let error = RustUpstreamError::new_err((status, body));
-            error
-                .value(py)
-                .setattr("headers", Vec::<(String, String)>::new())?;
-            Ok(error)
-        }
         Error::InvalidRequest(message) => {
             let error = PyValueError::new_err(message.to_string());
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
@@ -470,7 +469,7 @@ mod tests {
     #[case::missing_field(Error::MissingField("max_tokens"), true)]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(
-        Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),
+        litellm_http::Error::upstream(400, "bad".into()).into(),
         false,
     )]
     fn only_request_rejections_carry_the_request_error_marker(

@@ -38,14 +38,6 @@ pub enum Error {
     ReductoSource,
     #[error("inline OCR document exceeds the size limit")]
     InlineDocumentTooLarge,
-    #[error("OCR document URL is blocked by network policy")]
-    BlockedDocumentUrl,
-    #[error("OCR document downloads are disabled")]
-    DownloadDisabled,
-    #[error("OCR document download exceeds the size limit")]
-    DownloadTooLarge,
-    #[error("OCR document download exceeded the redirect limit")]
-    TooManyRedirects,
     #[error("invalid OCR pages: {0}")]
     Pages(String),
     #[error("invalid OCR features")]
@@ -58,10 +50,6 @@ pub enum Error {
     ResponseField { path: String },
     #[error("OCR response is missing non-empty content")]
     EmptyContent,
-    #[error("OCR document redirect is missing a location")]
-    MissingRedirectLocation,
-    #[error("OCR document redirect location is invalid")]
-    InvalidRedirect,
     #[error("OCR operation ended with status {0}")]
     OperationStatus(String),
     #[error("OCR response numeric value is out of range: {0}")]
@@ -103,8 +91,6 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
-    Transport(#[from] litellm_http::transport::Error),
-    #[error(transparent)]
     Params(#[from] litellm_core_utils::params::Error),
     #[error(transparent)]
     Headers(#[from] litellm_http::request::HeaderError),
@@ -133,57 +119,52 @@ impl From<litellm_core_utils::call_arguments::ArgumentError> for Error {
 impl Error {
     pub fn http_status_code(&self) -> Option<u16> {
         match self {
-            Self::Provider { status, .. }
-            | Self::Transport(litellm_http::transport::Error::Http { status, .. }) => Some(*status),
+            Self::Provider { status, .. } => Some(*status),
+            Self::Http(error) if error.status().is_some() => error.status(),
             error if error.is_request() => Some(400),
             _ => None,
         }
     }
 
     pub fn is_request(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::EmptyFile
-                | Self::InvalidMimeType(_)
-                | Self::CohereImageOnly
-                | Self::RequestFormat
-                | Self::RequestField { .. }
-                | Self::MissingField(_)
-                | Self::MissingDocumentUrl
-                | Self::InvalidDataUri
-                | Self::ReductoSource
-                | Self::InlineDocumentTooLarge
-                | Self::BlockedDocumentUrl
-                | Self::DownloadDisabled
-                | Self::DownloadTooLarge
-                | Self::TooManyRedirects
-                | Self::Pages(_)
-                | Self::Features
-                | Self::DotModel
-                | Self::InvalidRequest(_)
-                | Self::InvalidProvider(_)
-                | Self::InvalidModel { .. }
-                | Self::Params(_)
-                | Self::Headers(_)
-                | Self::Http(_)
-                | Self::Auth(litellm_auth::Error::MissingParam { .. })
-        )
+            | Self::InvalidMimeType(_)
+            | Self::CohereImageOnly
+            | Self::RequestFormat
+            | Self::RequestField { .. }
+            | Self::MissingField(_)
+            | Self::MissingDocumentUrl
+            | Self::InvalidDataUri
+            | Self::ReductoSource
+            | Self::InlineDocumentTooLarge
+            | Self::Pages(_)
+            | Self::Features
+            | Self::DotModel
+            | Self::InvalidRequest(_)
+            | Self::InvalidProvider(_)
+            | Self::InvalidModel { .. }
+            | Self::Params(_)
+            | Self::Headers(_)
+            | Self::Auth(litellm_auth::Error::MissingParam { .. }) => true,
+            Self::Http(error) => error.is_request(),
+            _ => false,
+        }
     }
 
     pub fn is_response(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::TooLarge { .. }
-                | Self::ResponseField { .. }
-                | Self::EmptyContent
-                | Self::MissingRedirectLocation
-                | Self::InvalidRedirect
-                | Self::OperationStatus(_)
-                | Self::NumericRange(_)
-                | Self::PollLocation
-                | Self::PollOrigin
-                | Self::PollTimeout
-                | Self::InvalidResponse(_)
-        )
+            | Self::ResponseField { .. }
+            | Self::EmptyContent
+            | Self::OperationStatus(_)
+            | Self::NumericRange(_)
+            | Self::PollLocation
+            | Self::PollOrigin
+            | Self::PollTimeout
+            | Self::InvalidResponse(_) => true,
+            Self::Http(error) => error.is_response(),
+            _ => false,
+        }
     }
 }

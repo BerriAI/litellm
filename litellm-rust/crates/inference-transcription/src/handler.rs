@@ -57,18 +57,13 @@ pub(super) async fn execute(
     )?;
     let response = litellm_inference::outbound::send(outbound, http)
         .await
-        .map_err(|error| {
-            Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-        })?;
+        .map_err(litellm_http::Error::from)?;
     let status = response.status();
-    let text = response.text().await.map_err(|error| {
-        Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-    })?;
+    let text = response.text().await.map_err(litellm_http::Error::from)?;
     if !status.is_success() {
-        return Err(Error::Transport(litellm_http::transport::Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        }));
+        return Err(
+            litellm_http::Error::upstream(status.as_u16(), truncate_error_body(&text)).into(),
+        );
     }
     let response_json = serde_json::from_str(&text).map_err(|error| {
         Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(

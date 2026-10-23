@@ -10,7 +10,7 @@ use litellm_core_utils::{
 use litellm_host::interceptors::{
     Cost, ExecutionFacts, Interceptors, ProviderIdentity, RequestContext, ResultSource, WireRequest,
 };
-use litellm_http::{request::with_default_headers, transport::Error as TransportError};
+use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{
     auth::{Authenticated, ValidatedEnvironment, resolve_auth},
     messages::{
@@ -276,7 +276,7 @@ fn serialize_failure(err: serde_json::Error) -> Error {
 }
 
 fn network(error: reqwest::Error) -> Error {
-    Error::Transport(TransportError::Network(error.to_string()))
+    litellm_http::Error::from(error).into()
 }
 
 async fn send(
@@ -302,10 +302,7 @@ async fn provider_error(response: reqwest::Response) -> Error {
     match response.text().await {
         Ok(text) => {
             log_error_body(status, &text);
-            Error::Transport(TransportError::Http {
-                status,
-                body: truncate_error_body(&text),
-            })
+            litellm_http::Error::upstream(status, truncate_error_body(&text)).into()
         }
         Err(error) => network(error),
     }

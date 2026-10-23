@@ -18,7 +18,6 @@ litellm-secrets.workspace = true
 
 serde_json = { workspace = true, features = ["preserve_order"] }
 futures-util.workspace = true
-reqwest.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

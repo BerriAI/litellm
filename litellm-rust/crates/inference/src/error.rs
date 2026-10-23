@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use litellm_http::transport::Error as TransportError;
 use litellm_llms::Error as LlmError;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -30,11 +29,9 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
-    Transport(#[from] TransportError),
-    #[error(transparent)]
     Headers(#[from] litellm_http::request::HeaderError),
     #[error(transparent)]
-    Http(#[from] litellm_http::Error),
+    Http(litellm_http::Error),
     #[error(transparent)]
     Secret(#[from] SecretError),
     #[error("post-call hook failed: {0}")]
@@ -67,12 +64,29 @@ impl Error {
             | Self::Unsupported(_)
             | Self::Headers(_) => true,
             Self::Auth(error) => !matches!(error, litellm_auth::Error::MissingApiKey { .. }),
-            Self::InvalidResponse(_)
-            | Self::Transport(_)
-            | Self::Http(_)
-            | Self::Secret(_)
-            | Self::PostCallHook(_) => false,
+            Self::Http(error) => error.is_request(),
+            Self::InvalidResponse(_) | Self::Secret(_) | Self::PostCallHook(_) => false,
         }
+    }
+}
+
+impl Error {
+    pub fn upstream_response(&self) -> Option<(u16, &str)> {
+        match self {
+            Self::Http(error) => error.upstream_response(),
+            _ => None,
+        }
+    }
+}
+
+impl From<litellm_http::Error> for Error {
+    fn from(error: litellm_http::Error) -> Self {
+        // Python drops the caller's copy and prefers a forwarded Authorization
+        // over the signature, so leave the request to it.
+        if error.is_computed_header() {
+            return Self::Unsupported("request forwards a header AWS SigV4 computes");
+        }
+        Self::Http(error)
     }
 }
 
@@ -132,6 +146,13 @@ mod tests {
         assert!(Error::InvalidRequest("top_k".into()).is_request());
         assert!(!Error::InvalidResponse("bad json".into()).is_request());
     }
+    #[test]
+    fn a_header_the_signer_computes_is_left_to_the_host_on_every_route() {
+        let error = Error::from(litellm_http::Error::computed_header("authorization"));
+        assert!(matches!(error, Error::Unsupported(_)), "{error:?}");
+        assert!(error.is_request());
+    }
+
     #[rstest]
     #[case::request(true)]
     #[case::response(false)]

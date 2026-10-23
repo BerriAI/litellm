@@ -216,7 +216,10 @@ async fn configured_client_preserves_document_url_policy(#[case] allowed: bool) 
     .await;
 
     if !allowed {
-        assert!(matches!(result, Err(Error::BlockedDocumentUrl)));
+        assert!(
+            matches!(&result, Err(Error::Http(error)) if error.is_request()),
+            "{result:?}"
+        );
         assert!(received(&documents).await.is_empty());
         assert!(received(&upstream).await.is_empty());
         return;

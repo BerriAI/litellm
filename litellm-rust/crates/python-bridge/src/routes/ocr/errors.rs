@@ -15,7 +15,10 @@ pub(super) fn to_pyerr(error: Error) -> PyErr {
                 body,
                 headers,
             } => upstream_error(py, status, body, headers)?,
-            Error::Transport(litellm_http::transport::Error::Http { status, body }) => {
+            Error::Http(http) if let Some(status) = http.status() => {
+                let body = http
+                    .upstream_response()
+                    .map_or_else(|| http.to_string(), |(_, body)| body.to_owned());
                 upstream_error(py, status, body, Vec::new())?
             }
             Error::RequestFormat => {

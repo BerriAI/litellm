@@ -9,7 +9,6 @@ use litellm_http::{
     media::{MediaFetcher, UrlPolicy},
     outbound::{RequestSigner, json, signed},
     request::header_pairs,
-    transport,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -134,13 +133,14 @@ pub async fn ocr<C: BaseOcrConfig>(
         .provider_http()
         .execute(http)
         .await
-        .map_err(transport_error)?;
+        .map_err(litellm_http::Error::from)?;
     if !response.status().is_success() {
         let headers = header_pairs(response.headers());
         return match read_response_bytes(response, request.connection.max_response_bytes).await {
-            Err(Error::Transport(transport::Error::Http { status, body })) => {
-                Err(config.get_error_class(body, status, headers))
-            }
+            Err(Error::Http(error)) => Err(match error.upstream_response() {
+                Some((status, body)) => config.get_error_class(body.to_owned(), status, headers),
+                None => Error::Http(error),
+            }),
             Err(error) => Err(error),
             Ok(_) => unreachable!("non-success response produces an HTTP error"),
         };
@@ -180,7 +180,7 @@ pub async fn read_response_bytes(
         return Err(Error::TooLarge { limit });
     }
     let mut bytes = BytesMut::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
+    while let Some(chunk) = response.chunk().await.map_err(litellm_http::Error::from)? {
         let remaining = limit.saturating_sub(bytes.len());
         if status.is_success() && chunk.len() > remaining {
             return Err(Error::TooLarge { limit });
@@ -191,23 +191,13 @@ pub async fn read_response_bytes(
         }
     }
     if !status.is_success() {
-        return Err(transport::Error::Http {
-            status: status.as_u16(),
-            body: String::from_utf8_lossy(&bytes).into_owned(),
-        }
+        return Err(litellm_http::Error::upstream(
+            status.as_u16(),
+            String::from_utf8_lossy(&bytes).into_owned(),
+        )
         .into());
     }
     Ok(bytes.freeze())
-}
-
-pub fn transport_error(error: reqwest::Error) -> Error {
-    if error.is_timeout() {
-        return Error::Transport(transport::Error::Http {
-            status: 408,
-            body: "OCR request timed out".into(),
-        });
-    }
-    transport::Error::from(error).into()
 }
 
 pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
@@ -309,8 +299,6 @@ mod tests {
         net::TcpListener,
     };
 
-    use super::*;
-
     #[rstest::rstest]
     #[tokio::test]
     async fn request_timeout_has_an_http_408_status() {
@@ -326,10 +314,10 @@ mod tests {
             .send()
             .await
             .unwrap_err();
-        assert!(matches!(
-            transport_error(error),
-            Error::Transport(transport::Error::Http { status: 408, .. })
-        ));
+        assert_eq!(
+            Error::from(litellm_http::Error::from(error)).http_status_code(),
+            Some(408)
+        );
         server.abort();
     }
 
@@ -400,10 +388,9 @@ mod tests {
         .await
         .unwrap_err();
 
-        let Error::Transport(litellm_http::transport::Error::Http { status, body }) = error else {
+        let Error::Http(error) = error else {
             panic!("unexpected error: {error}");
         };
-        assert_eq!(status, 429);
-        assert_eq!(body, prefix);
+        assert_eq!(error.upstream_response(), Some((429, prefix.as_str())));
     }
 }

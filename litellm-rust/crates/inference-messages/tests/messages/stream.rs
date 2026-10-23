@@ -260,13 +260,7 @@ async fn an_upstream_error_fails_the_call_without_opening_the_stream(
         .await
         .expect_err("upstream error propagates");
 
-    assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            status: 429,
-            body: body.into()
-        })
-    );
+    assert_eq!(error.upstream_response(), Some((429, body)));
     assert!(host.seen.into_inner().unwrap().is_empty());
 }
 
@@ -332,7 +326,7 @@ async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
         .expect("the stalled stream gives up within the timeout")
         .expect_err("a stalled body fails the call");
 
-    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    assert!(matches!(error, Error::Http(_)), "{error:?}");
     let seen = host.seen.into_inner().unwrap();
     assert!(
         matches!(seen.as_slice(), [Seen::Open(_), Seen::Deliver(chunk)] if chunk.as_ref() == b"event: message_start\ndata: {}\n\n"),
@@ -390,13 +384,7 @@ async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall)
         .err()
         .expect("upstream failure is returned by messages()");
 
-    assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            status: 429,
-            body: "slow down".into(),
-        })
-    );
+    assert_eq!(error.upstream_response(), Some((429, "slow down")));
 }
 
 #[rstest]
@@ -470,7 +458,7 @@ async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesC
         .expect("the stalled body times out")
         .unwrap()
         .unwrap_err();
-    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    assert!(matches!(error, Error::Http(_)), "{error:?}");
     assert!(chunks.next().await.is_none());
     tokio::time::timeout(Duration::from_secs(5), connection)
         .await

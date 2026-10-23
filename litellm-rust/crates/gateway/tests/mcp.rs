@@ -313,9 +313,10 @@ fn applies_configured_http_environment_before_building_clients() {
     .unwrap();
     let error = litellm_gateway::build_inference(&config).err().unwrap();
     assert!(matches!(
-        error,
-        litellm_gateway::Error::Http(litellm_http::Error::Read { path, .. })
-            if path == missing
+        &error,
+        litellm_gateway::Error::Http(http)
+            if http.tls_source() == Some(litellm_http::TlsSource::CaBundle)
+                && http.to_string().contains(&missing.display().to_string())
     ));
 }
 

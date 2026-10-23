@@ -3,7 +3,6 @@ use axum::{
     Json,
     response::{IntoResponse, Response},
 };
-use litellm_http::transport::Error as TransportError;
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use serde_json::{Map, Value, json};
@@ -64,8 +63,8 @@ impl Error {
                 .and_then(|status| StatusCode::from_u16(status).ok())
                 .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             Self::InvalidBody(_) | Self::UnknownModel(_) => StatusCode::BAD_REQUEST,
-            Self::Route(InferenceError::Transport(TransportError::Http { status, .. })) => {
-                StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
+            Self::Route(error) if let Some((status, _)) = error.upstream_response() => {
+                StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY)
             }
             Self::Route(InferenceError::Auth(litellm_auth::Error::MissingApiKey { .. })) => {
                 StatusCode::UNAUTHORIZED
@@ -97,8 +96,8 @@ impl Error {
     /// body already in that shape passes through, any other has its message extracted.
     pub fn body(&self, request_id: Option<&str>) -> Value {
         let raw = match self {
-            Self::Route(InferenceError::Transport(TransportError::Http { body, .. })) => {
-                body.clone()
+            Self::Route(error) if let Some((_, body)) = error.upstream_response() => {
+                body.to_owned()
             }
             other => other.to_string(),
         };
@@ -177,10 +176,7 @@ mod tests {
     use super::*;
 
     fn upstream(status: u16, body: &str) -> Error {
-        Error::Route(InferenceError::Transport(TransportError::Http {
-            status,
-            body: body.into(),
-        }))
+        Error::Route(litellm_http::Error::upstream(status, body.into()).into())
     }
 
     #[rstest]
@@ -236,7 +232,10 @@ mod tests {
         StatusCode::UNAUTHORIZED,
     )]
     #[case::lost_connection(
-        Error::Route(InferenceError::Transport(TransportError::Network("reset".into()))),
+        Error::Route(
+            litellm_http::Error::from(tokio_tungstenite::tungstenite::Error::ConnectionClosed)
+                .into()
+        ),
         StatusCode::INTERNAL_SERVER_ERROR,
     )]
     fn status_follows_who_is_at_fault(#[case] error: Error, #[case] status: StatusCode) {

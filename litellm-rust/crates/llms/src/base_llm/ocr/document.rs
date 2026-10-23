@@ -1,9 +1,6 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError, mime::Mime};
-use litellm_http::{
-    media::{DownloadPolicy, Error as MediaError, MediaFetcher},
-    transport::Error as TransportError,
-};
+use litellm_http::media::{DownloadPolicy, MediaFetcher};
 use reqwest::Url;
 
 use crate::base_llm::ocr::{
@@ -73,8 +70,7 @@ pub async fn inline_remote_document(
                 max_redirects: OCR_MAX_FETCH_REDIRECTS,
             },
         )
-        .await
-        .map_err(map_media_error)?;
+        .await?;
     let result = document.with_source(format!(
         "data:{};base64,{}",
         downloaded.content_type,
@@ -82,28 +78,6 @@ pub async fn inline_remote_document(
     ));
     validate_inline_document(&result)?;
     Ok(result)
-}
-
-fn map_media_error(error: MediaError) -> Error {
-    match error {
-        MediaError::BlockedUrl => Error::BlockedDocumentUrl,
-        MediaError::DownloadDisabled => Error::DownloadDisabled,
-        MediaError::DownloadTooLarge => Error::DownloadTooLarge,
-        MediaError::TooManyRedirects => Error::TooManyRedirects,
-        MediaError::MissingRedirectLocation => Error::MissingRedirectLocation,
-        MediaError::InvalidRedirect => Error::InvalidRedirect,
-        MediaError::Http(status) => TransportError::Http {
-            status,
-            body: "OCR document download failed".into(),
-        }
-        .into(),
-        MediaError::Timeout => TransportError::Http {
-            status: 408,
-            body: "OCR document download timed out".into(),
-        }
-        .into(),
-        MediaError::Transport(error) => error.into(),
-    }
 }
 
 #[cfg(test)]

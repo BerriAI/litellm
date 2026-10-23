@@ -505,7 +505,7 @@ async fn poll_operation(
             tokio::time::timeout_at(deadline, litellm_http::request::http_request(builder))
                 .await
                 .map_err(|_| Error::PollTimeout)?
-                .map_err(litellm_http::transport::Error::from)?;
+                .map_err(litellm_http::Error::from)?;
         let retry = response
             .headers()
             .get(reqwest::header::RETRY_AFTER)

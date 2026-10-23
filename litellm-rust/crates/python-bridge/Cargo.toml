@@ -70,6 +70,7 @@ criterion.workspace = true
 futures-util.workspace = true
 rstest.workspace = true
 sqlx = { workspace = true, features = ["migrate"] }
+tempfile.workspace = true
 tokio-tungstenite.workspace = true
 wiremock.workspace = true
 aws-sdk-secretsmanager = "1.117.0"
