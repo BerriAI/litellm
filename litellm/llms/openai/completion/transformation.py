@@ -3,7 +3,7 @@ Support for gpt model family
 """
 
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, cast
 
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
@@ -161,10 +161,10 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         prompt: Final = transform_prompt(messages)
-        body_only: Final = {k: v for k, v in optional_params.items() if k in _BODY_ONLY_PARAMS}
-        params: Final = {k: v for k, v in optional_params.items() if k not in _BODY_ONLY_PARAMS}
+        params: Final = cast(dict[str, object], optional_params).copy()
+        body_only: Final = {key: params.pop(key) for key in _BODY_ONLY_PARAMS & params.keys()}
         if body_only:
-            params["extra_body"] = {**(params.get("extra_body") or {}), **body_only}
+            params["extra_body"] = {**cast(Mapping[str, object], params.get("extra_body") or {}), **body_only}
         return {
             "model": model,
             "prompt": prompt,
