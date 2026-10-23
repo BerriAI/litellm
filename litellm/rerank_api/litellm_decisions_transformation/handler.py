@@ -149,6 +149,10 @@ def _finish(
     return response
 
 
+def _call_count(request: DecisionRerankRequest) -> int:
+    return 1 if request.strategy == "multiple_choice" else len(request.documents)
+
+
 def _rerank(
     prepare: Callable[[int], _DocumentCall],
     request: DecisionRerankRequest,
@@ -157,7 +161,7 @@ def _rerank(
     provider: str,
     deadline: float,
 ) -> DecisionRerankResponse:
-    count: Final = request.call_count
+    count: Final = _call_count(request)
     workers: Final = min(count, _MAX_CONCURRENCY)
     completed: Final[SimpleQueue[DecisionRerankResult]] = SimpleQueue()
 
@@ -193,7 +197,7 @@ async def _arerank(
     provider: str,
     deadline: float,
 ) -> DecisionRerankResponse:
-    count: Final = request.call_count
+    count: Final = _call_count(request)
     workers: Final = min(count, _MAX_CONCURRENCY)
     outcomes: Final[list[DecisionRerankResult]] = []  # mutable-ok: retain completed results for partial billing
     cancellation_requested: Final = asyncio.Event()

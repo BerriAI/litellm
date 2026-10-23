@@ -66,10 +66,6 @@ class DecisionRerankRequest(BaseModel):
         document: Final = self.documents[index]
         return document if isinstance(document, str) else document.text
 
-    @property
-    def call_count(self) -> int:
-        return 1 if self.strategy == "multiple_choice" else len(self.documents)
-
 
 @dataclass(frozen=True, slots=True)
 class DecisionRerankResult:
