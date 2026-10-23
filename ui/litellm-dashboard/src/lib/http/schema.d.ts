@@ -18301,27 +18301,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/usage/ai/chat": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Usage Ai Chat
-         * @description AI chat about usage data. Streams SSE events with the AI response.
-         *     The AI agent has access to tools that query aggregated daily activity data.
-         */
-        post: operations["usage_ai_chat_usage_ai_chat_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/user/available_roles": {
         parameters: {
             query?: never;
@@ -29087,16 +29066,6 @@ export interface components {
             detail?: string;
             /** Url */
             url: string;
-        };
-        /** ChatMessage */
-        ChatMessage: {
-            /** Content */
-            content: string;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "user" | "assistant";
         };
         /** ChoiceAnswer */
         ChoiceAnswer: {
@@ -49011,19 +48980,6 @@ export interface components {
             user_id?: string | null;
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
-        };
-        /** UsageAIChatRequest */
-        UsageAIChatRequest: {
-            /**
-             * Messages
-             * @description Chat messages (user/assistant history)
-             */
-            messages: components["schemas"]["ChatMessage"][];
-            /**
-             * Model
-             * @description Model to use for AI chat
-             */
-            model?: string | null;
         };
         /** UsageChartPoint */
         UsageChartPoint: {
@@ -75625,39 +75581,6 @@ export interface operations {
         requestBody: {
             content: {
                 "multipart/form-data": components["schemas"]["Body_upload_logo_upload_logo_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    usage_ai_chat_usage_ai_chat_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UsageAIChatRequest"];
             };
         };
         responses: {

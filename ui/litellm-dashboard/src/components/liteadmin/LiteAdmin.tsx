@@ -30,7 +30,7 @@ import { FieldError } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cva.config";
-import { isProxyAdminRole } from "@/utils/roles";
+import { hasProxyWideSpendView, isProxyAdminRole } from "@/utils/roles";
 import { getPreferredLiteAdminModel, MAX_INPUT_LENGTH, resolveInferenceTarget } from "./agent";
 import { AriaAvatar } from "./AriaAvatar";
 import { LiteAdminConversation } from "./LiteAdminConversation";
@@ -44,42 +44,41 @@ type LiteAdminState = {
   open: boolean;
   toggle: () => void;
   show: () => void;
+  access: LiteAdminSession["access"];
   homeContainer: HTMLDivElement | null;
   setHomeContainer: (container: HTMLDivElement | null) => void;
+  usageContainer: HTMLDivElement | null;
+  setUsageContainer: (container: HTMLDivElement | null) => void;
 };
 
 const LiteAdminContext = createContext<LiteAdminState | null>(null);
-const AriaUsageVisibilityContext = createContext(true);
-
-export function useAriaUsageVisibility() {
-  return useContext(AriaUsageVisibilityContext);
-}
-
 function useLiteAdminSession() {
   const auth = useAuthorized();
   const [disabled] = useDisableLiteAdmin(auth.userId);
-  const sessionReady = !auth.isLoading && auth.isAuthorized && auth.premiumUser === true;
-  const writableAdmin = !auth.isViewOnly && isProxyAdminRole(auth.userRole);
-  const eligible = sessionReady && writableAdmin;
-  const usageVisible = !(eligible && disabled);
-  const allowed = eligible && !disabled;
-  if (!allowed || !auth.token || !auth.accessToken) return { configured: null, usageVisible };
-  const session = { token: auth.token, accessToken: auth.accessToken, managementBaseUrl: getProxyBaseUrl() };
+  const sessionReady = !auth.isLoading && auth.isAuthorized;
+  const admin = auth.premiumUser === true && !auth.isViewOnly && isProxyAdminRole(auth.userRole);
+  if (!sessionReady || (admin && disabled)) return null;
+  if (!auth.token || !auth.accessToken || !auth.userId) return null;
+  const access: LiteAdminSession["access"] = admin
+    ? { mode: "admin" }
+    : {
+        mode: "usage",
+        scope: hasProxyWideSpendView(auth.userRole) ? { type: "global" } : { type: "user", userId: auth.userId },
+      };
+  const session = { token: auth.token, accessToken: auth.accessToken, managementBaseUrl: getProxyBaseUrl(), access };
   return {
-    configured: {
-      session,
-      key: JSON.stringify([auth.userId, session.token, session.accessToken, session.managementBaseUrl]),
-    },
-    usageVisible,
+    session,
+    key: JSON.stringify([auth.userId, session.token, session.accessToken, session.managementBaseUrl, access]),
   };
 }
 
 /** Wraps the dashboard content column and docks the LiteAdmin panel beside it, so opening it narrows the page instead of covering it. */
 export function LiteAdminFrame({ children }: { children: ReactNode }) {
-  const { configured, usageVisible } = useLiteAdminSession();
+  const configured = useLiteAdminSession();
   const sessionKey = configured?.key ?? null;
   const [open, setOpen] = useState(false);
   const [homeContainer, setHomeContainer] = useState<HTMLDivElement | null>(null);
+  const [usageContainer, setUsageContainer] = useState<HTMLDivElement | null>(null);
   const [openedSession, setOpenedSession] = useState(sessionKey);
   if (openedSession !== sessionKey) {
     setOpenedSession(sessionKey);
@@ -89,8 +88,10 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
   const show = () => {
     if (!open) setOpen(true);
   };
+  const available = configured?.session.access.mode === "admin" || Boolean(usageContainer);
+  const showPanel = available || open;
   useEffect(() => {
-    if (sessionKey === null) return;
+    if (sessionKey === null || !available) return;
     const onKeyDown = (event: KeyboardEvent) => {
       const modifier = event.metaKey || event.ctrlKey;
       const extraModifier = event.shiftKey || event.altKey;
@@ -100,22 +101,35 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [sessionKey]);
+  }, [sessionKey, available]);
   return (
-    <AriaUsageVisibilityContext.Provider value={usageVisible}>
-      <LiteAdminContext.Provider value={configured ? { open, toggle, show, homeContainer, setHomeContainer } : null}>
-        {children}
-        {configured && (
-          <DockedPanel key={configured.key} session={configured.session} open={open} close={() => setOpen(false)} />
-        )}
-      </LiteAdminContext.Provider>
-    </AriaUsageVisibilityContext.Provider>
+    <LiteAdminContext.Provider
+      value={
+        configured
+          ? {
+              open,
+              toggle,
+              show,
+              access: configured.session.access,
+              homeContainer,
+              setHomeContainer,
+              usageContainer,
+              setUsageContainer,
+            }
+          : null
+      }
+    >
+      {children}
+      {configured && showPanel && (
+        <DockedPanel key={configured.key} session={configured.session} open={open} close={() => setOpen(false)} />
+      )}
+    </LiteAdminContext.Provider>
   );
 }
 
 export function LiteAdminHome() {
   const state = useContext(LiteAdminContext);
-  if (!state) return null;
+  if (!state || state.access.mode !== "admin") return null;
   const { open, show, setHomeContainer } = state;
   return (
     <section aria-label="Ask Aria Agent" hidden={open} className="space-y-3">
@@ -139,7 +153,7 @@ export function LiteAdminHome() {
 
 export default function LiteAdminTrigger() {
   const state = useContext(LiteAdminContext);
-  if (!state) return null;
+  if (!state || state.access.mode !== "admin") return null;
   return (
     <Button
       variant="ghost"
@@ -150,34 +164,44 @@ export default function LiteAdminTrigger() {
       className="gap-2 rounded-full border border-blue-200/70 bg-blue-50/80 pl-1.5 pr-3 text-blue-700 hover:bg-blue-100 hover:text-blue-800 aria-expanded:bg-blue-100 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300 dark:hover:bg-blue-400/20"
     >
       <AriaAvatar />
-      <span className="hidden lg:inline">Aria Agent</span>
+      <span className="md:hidden lg:inline">
+        Aria (agent) <span aria-hidden="true">✨</span>
+      </span>
       <kbd className="hidden rounded-full border border-info/30 px-1.5 font-sans text-xs lg:inline">⌘J</kbd>
     </Button>
   );
 }
 
-export function AriaUsageTrigger({
-  onFallback,
-  fallbackOpen = false,
-}: {
-  onFallback: () => void;
-  fallbackOpen?: boolean;
-}) {
+export function AriaUsageTrigger() {
   const state = useContext(LiteAdminContext);
-  const visible = useAriaUsageVisibility();
-  if (!visible) return null;
+  if (!state) return null;
   return (
     <Button
       variant="outline"
       size="sm"
       aria-label="Open Aria Agent"
-      aria-expanded={state?.open ?? fallbackOpen}
-      onClick={() => (state ? state.show() : onFallback())}
+      aria-expanded={state.open}
+      onClick={state.show}
       className="gap-1.5 border-blue-200 bg-blue-50/70 pl-1.5 text-blue-700 hover:bg-blue-100 hover:text-blue-800 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300 dark:hover:bg-blue-400/20"
     >
       <AriaAvatar size={24} />
-      Aria
+      Aria (agent) <span aria-hidden="true">✨</span>
     </Button>
+  );
+}
+
+export function AriaUsageComposer() {
+  const state = useContext(LiteAdminContext);
+  if (!state) return null;
+  const { open, setUsageContainer } = state;
+  return (
+    <section aria-label="Ask Aria about usage" hidden={open} className="mb-4">
+      <h2 className="mb-2 flex items-center gap-2 text-sm font-medium">
+        <AriaAvatar size={24} /> Aria (agent) <span aria-hidden="true">✨</span>
+        <span className="font-normal text-muted-foreground">Your AI usage assistant</span>
+      </h2>
+      <div ref={setUsageContainer} />
+    </section>
   );
 }
 
@@ -274,7 +298,7 @@ function Panel({
   children: ReactNode;
 }) {
   const state = useContext(LiteAdminContext);
-  const homeContainer = !open ? state?.homeContainer : null;
+  const homeContainer = !open ? state?.usageContainer ?? state?.homeContainer : null;
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     const panel = ref.current;
@@ -442,7 +466,7 @@ function LiteAdminChat({
   const modelQuery = {
     queryKey: ["liteadmin-models", session.accessToken, session.managementBaseUrl],
     queryFn: () => fetchAvailableModels(session.accessToken),
-    enabled: active && (open || Boolean(state?.homeContainer)),
+    enabled: active && (open || Boolean(state?.homeContainer || state?.usageContainer)),
     select: (available: ModelGroup[]) =>
       available.filter((item) => isModeCompatibleWithEndpoint(item.mode, EndpointType.CHAT)),
   };
@@ -460,7 +484,7 @@ function LiteAdminChat({
     setInput("");
   };
   if (!active) return null;
-  const homeContainer = !open ? state?.homeContainer : null;
+  const homeContainer = !open ? state?.usageContainer ?? state?.homeContainer : null;
   const composerProps = {
     value: input,
     onChange: setInput,
@@ -477,6 +501,7 @@ function LiteAdminChat({
       model={selectedModel}
       onModelChange={setModel}
       home={Boolean(homeContainer)}
+      usage={Boolean(state?.usageContainer)}
       tooLong={tooLong}
     />
   );
@@ -485,6 +510,7 @@ function LiteAdminChat({
       <LiteAdminConversation
         entries={chat.entries}
         thinking={chat.phase === "thinking"}
+        readOnly={session.access.mode === "usage"}
         open={open}
         reviewRef={reviewRef}
         onAnswer={chat.answer}
@@ -499,13 +525,15 @@ function LiteAdminComposer({
   model,
   onModelChange,
   home,
+  usage,
   tooLong,
   ...props
-}: Omit<ComponentProps<typeof LiteAdminHomeComposer>, "modelPicker"> & {
+}: Omit<ComponentProps<typeof LiteAdminHomeComposer>, "modelPicker" | "usage"> & {
   models: UseQueryResult<ModelGroup[]>;
   model: string | null;
   onModelChange: (value: string | null) => void;
   home: boolean;
+  usage: boolean;
   tooLong: boolean;
 }) {
   return (
@@ -516,6 +544,7 @@ function LiteAdminComposer({
       {home ? (
         <LiteAdminHomeComposer
           {...props}
+          usage={usage}
           modelPicker={
             <ModelPicker models={models} value={model} onChange={onModelChange} disabled={props.isLoading} compact />
           }
@@ -581,6 +610,7 @@ function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
 }
 
 function PanelHeader({ close, children }: { close: () => void; children?: ReactNode }) {
+  const state = useContext(LiteAdminContext);
   return (
     <div className="flex items-start justify-between gap-3 border-b p-4">
       <div className="flex flex-col gap-1 text-sm">
@@ -588,7 +618,11 @@ function PanelHeader({ close, children }: { close: () => void; children?: ReactN
           <AriaAvatar size={32} />
           Aria Agent
         </h2>
-        <p className="text-muted-foreground">Ask about your gateway. Review changes in chat.</p>
+        <p className="text-muted-foreground">
+          {state?.access.mode === "usage"
+            ? "Your AI assistant for usage and spend."
+            : "Ask about your gateway. Review changes in chat."}
+        </p>
       </div>
       <div className="flex shrink-0">
         {children}

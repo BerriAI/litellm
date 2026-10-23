@@ -72,8 +72,7 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
 import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
-import UsageAIChatPanel from "./UsageAIChatPanel";
-import { AriaUsageTrigger, useAriaUsageVisibility } from "@/components/liteadmin/LiteAdmin";
+import { AriaUsageComposer, AriaUsageTrigger } from "@/components/liteadmin/LiteAdmin";
 import { allowedUsageOptions, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 import UserRecordLink from "./UserRecordLink";
 import {
@@ -113,7 +112,6 @@ interface UsagePageProps {
 
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoading = false }) => {
   const { accessToken, userRole, userId: userID, premiumUser, isLoading: authorizationLoading } = useAuthorized();
-  const ariaVisible = useAriaUsageVisibility();
   const [gatewayActivityData, setGatewayActivityData] = useState<FetchedGatewayActivity | null>(null);
 
   // Create initial dates outside of state to prevent recreation
@@ -156,8 +154,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const [modelQuery, setModelQuery] = useState("");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
-  const [isAiChatOpen, setIsAiChatOpen] = useState(false);
-  if (!ariaVisible && isAiChatOpen) setIsAiChatOpen(false);
   const selectedUsageView = usageViewFromParams(urlParams);
   const selectedTab = usageTabFromParams(urlParams, isAdmin);
   const usageView = allowedViews.includes(selectedUsageView) ? selectedUsageView : DEFAULT_USAGE_VIEW;
@@ -493,6 +489,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
           </div>
         </div>
       </header>
+      <AriaUsageComposer />
       {aggregatedFailed && (
         <ErrorState title="Failed to load spend data" message={aggregatedError} onRetry={reloadAggregated} />
       )}
@@ -533,7 +530,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                     )}
                   </TabsList>
                   <div className="flex items-center gap-2">
-                    <AriaUsageTrigger fallbackOpen={isAiChatOpen} onFallback={() => setIsAiChatOpen(true)} />
+                    <AriaUsageTrigger />
                     <Button variant="outline" size="sm" onClick={() => setIsGlobalExportModalOpen(true)}>
                       <Download />
                       Export Data
@@ -850,11 +847,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
         selectedFilters={[]}
         customTitle="Export Usage Data"
       />
-
-      {/* AI Chat Panel */}
-      {ariaVisible && (
-        <UsageAIChatPanel open={isAiChatOpen} onClose={() => setIsAiChatOpen(false)} accessToken={accessToken} />
-      )}
     </div>
   );
 };

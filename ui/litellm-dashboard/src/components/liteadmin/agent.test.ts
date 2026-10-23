@@ -90,6 +90,7 @@ function transport(responses: ChatCompletion[], statuses: number | readonly numb
 
 const options = () =>
   ({
+    access: { mode: "admin" as const },
     model: "selected-model",
     accessToken: "test-session",
     inferenceBaseUrl: "https://inference.example",
@@ -385,6 +386,105 @@ describe("fixed management operations", () => {
     expect(managementFetch).not.toHaveBeenCalled();
     expect(input.confirm).not.toHaveBeenCalled();
     expect(input.onResult).not.toHaveBeenCalled();
+  });
+});
+
+describe("usage access", () => {
+  it("should query global usage across users, teams and tags without exposing management tools", async () => {
+    const input = { ...options(), access: { mode: "usage", scope: { type: "global" } } as const };
+    const model = transport([
+      completion([
+        call("get_usage_data", { ...dates, user_id: null }, "global"),
+        call("get_team_usage_data", { ...dates, team_ids: null }, "teams"),
+        call("get_tag_usage_data", { ...dates, tags: null }, "tags"),
+      ]),
+      completion(),
+    ]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+      "/root/user/daily/activity/aggregated",
+      "/root/team/daily/activity/aggregated",
+      "/root/tag/daily/activity/aggregated",
+    ]);
+    expect(new URL(String(managementFetch.mock.calls[0][0])).searchParams.has("user_id")).toBe(false);
+    expect(input.confirm).not.toHaveBeenCalled();
+    expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("Done");
+    expect(model.requests[0].tools?.map((tool) => (tool.type === "function" ? tool.function.name : null))).toEqual([
+      "get_usage_data",
+      "get_team_usage_data",
+      "get_tag_usage_data",
+    ]);
+  });
+
+  it.each([
+    ["keys_list", { ...pages, team_id: null, user_id: null }],
+    ["team_info", { team_id: "team-1" }],
+    ["budget_info", { budgets: ["budget-1"] }],
+    ["key_create", keyFields],
+  ])("should reject management operation %s for a usage-only session", async (name, args) => {
+    const input = { ...options(), access: { mode: "usage", scope: { type: "global" } } as const };
+    const model = transport([completion([call(String(name), args)]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).not.toHaveBeenCalled();
+    expect(input.confirm).not.toHaveBeenCalled();
+    expect(input.onResult).not.toHaveBeenCalled();
+  });
+
+  it("should bind a user's usage lookup to their signed-in identity", async () => {
+    const input = {
+      ...options(),
+      access: { mode: "usage", scope: { type: "user", userId: "signed-in-user" } } as const,
+    };
+    const model = transport([completion([call("get_usage_data", dates)]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).toHaveBeenCalledTimes(1);
+    const query = new URL(String(managementFetch.mock.calls[0][0])).searchParams;
+    expect(query.get("user_id")).toBe("signed-in-user");
+    expect(query.get("start_date")).toBe(dates.start_date);
+    expect(query.get("end_date")).toBe(dates.end_date);
+    expect(query.get("api_key_limit")).toBe("20");
+    expect(input.confirm).not.toHaveBeenCalled();
+    expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("Done");
+  });
+
+  it.each([
+    ["get_usage_data", { ...dates, user_id: "other-user" }],
+    ["get_team_usage_data", { ...dates, team_ids: null }],
+    ["get_tag_usage_data", { ...dates, tags: null }],
+  ])("should reject usage outside the signed-in user's scope through %s", async (name, args) => {
+    const input = {
+      ...options(),
+      access: { mode: "usage", scope: { type: "user", userId: "signed-in-user" } } as const,
+    };
+    const model = transport([completion([call(String(name), args)]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).not.toHaveBeenCalled();
+    expect(input.confirm).not.toHaveBeenCalled();
+  });
+
+  it("should refuse user usage when the session has no user identity", async () => {
+    const input = { ...options(), access: { mode: "usage", scope: { type: "user", userId: "" } } as const };
+    const model = transport([completion([call("get_usage_data", dates)]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).not.toHaveBeenCalled();
+    expect(model.requests[1].messages.at(-1)).toMatchObject({
+      role: "tool",
+      content: JSON.stringify({
+        operation: "get_usage_data",
+        success: false,
+        message: "The gateway could not complete this lookup.",
+      }),
+    });
   });
 });
 
@@ -731,15 +831,24 @@ describe("preferred LiteAdmin model", () => {
     expect(getPreferredLiteAdminModel([{ model_group }])).toBe(model_group);
   });
 
-  it("leaves the choice empty without an identifiable Sonnet 5.5 route", () => {
+  it("should choose the first available chat model when the preferred route is unavailable", () => {
+    const fallback = { model_group: "chat-alias", mode: "chat" };
+    expect(
+      getPreferredLiteAdminModel([
+        { model_group: "embedding-model", mode: "embedding" },
+        fallback,
+        { model_group: "another-chat-model", mode: "chat" },
+      ]),
+    ).toBe(fallback.model_group);
+    expect(getPreferredLiteAdminModel([{ model_group: "unspecified-mode" }])).toBe("unspecified-mode");
+  });
+
+  it("should leave the choice empty only when no chat models are available", () => {
     expect(getPreferredLiteAdminModel([])).toBeNull();
     expect(
       getPreferredLiteAdminModel([
-        { model_group: "claude-sonnet-5-50", providers: ["anthropic"] },
-        { model_group: "claude-sonnet-5-5other", providers: ["anthropic"] },
-        { model_group: "notclaude-sonnet-5-5", providers: ["anthropic"] },
-        { model_group: "chat-alias", providers: ["anthropic"] },
-        { model_group: "claude-sonnet-4-6", providers: ["anthropic"] },
+        { model_group: "embedding-model", mode: "embedding" },
+        { model_group: "image-model", mode: "image_generation" },
       ]),
     ).toBeNull();
   });

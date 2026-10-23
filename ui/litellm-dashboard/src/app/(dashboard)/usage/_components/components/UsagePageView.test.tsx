@@ -239,21 +239,9 @@ vi.mock("@/components/EntityUsageExport", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 
-vi.mock("./UsageAIChatPanel", () => ({
-  default: ({ open }: { open: boolean }) => (
-    <div data-testid="usage-ai-chat-panel" hidden={!open}>
-      Aria usage chat
-    </div>
-  ),
-}));
-
 vi.mock("@/components/liteadmin/LiteAdmin", () => ({
-  useAriaUsageVisibility: () => true,
-  AriaUsageTrigger: ({ onFallback }: { onFallback: () => void }) => (
-    <button aria-label="Open Aria Agent" onClick={onFallback}>
-      Aria
-    </button>
-  ),
+  AriaUsageTrigger: () => <button aria-label="Open Aria Agent">Aria</button>,
+  AriaUsageComposer: () => <section aria-label="Ask Aria Agent">Shared Aria composer</section>,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
@@ -1401,8 +1389,8 @@ describe("UsagePage", () => {
     });
   });
 
-  describe("Aria button", () => {
-    it("should render Aria in global view", async () => {
+  describe("Aria Agent", () => {
+    it("should render the shared Aria prompt and entry point in global view", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
@@ -1410,21 +1398,24 @@ describe("UsagePage", () => {
       });
 
       expect(screen.getByRole("button", { name: "Open Aria Agent" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Ask Aria Agent" })).toBeVisible();
       expect(screen.queryByText("Ask AI")).not.toBeInTheDocument();
     });
 
-    it("should open usage chat when Aria falls back to usage-only access", async () => {
+    it("should keep the shared Aria prompt available in entity usage views", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByTestId("usage-ai-chat-panel")).not.toBeVisible();
-      await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Open Aria Agent" }));
+      act(() => {
+        fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "team" } });
       });
-      expect(screen.getByTestId("usage-ai-chat-panel")).toBeVisible();
+
+      expect(await screen.findByText("Entity Usage")).toBeInTheDocument();
+      expect(screen.getAllByRole("region", { name: "Ask Aria Agent" })).toHaveLength(1);
+      expect(screen.getByRole("region", { name: "Ask Aria Agent" })).toBeVisible();
     });
   });
 

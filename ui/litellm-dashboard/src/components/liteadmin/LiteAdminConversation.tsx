@@ -24,12 +24,20 @@ const ACTION_STATUS: Record<ActionEntry["status"], string> = {
 interface ConversationProps {
   entries: ConversationEntry[];
   thinking: boolean;
+  readOnly?: boolean;
   open: boolean;
   reviewRef: RefObject<HTMLDivElement | null>;
   onAnswer: (id: string, approved: boolean) => void;
 }
 
-export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAnswer }: ConversationProps) {
+export function LiteAdminConversation({
+  entries,
+  thinking,
+  open,
+  readOnly = false,
+  reviewRef,
+  onAnswer,
+}: ConversationProps) {
   return (
     <MessageScroller.Provider autoScroll>
       <MessageScroller.Root className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -77,11 +85,13 @@ export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAn
             <div className="space-y-2">
               <p className="text-lg font-semibold tracking-tight">Hi, I’m Aria.</p>
               <p className="max-w-72 text-sm leading-relaxed text-muted-foreground">
-                Understand your spend, explore usage, and manage your gateway. Just ask.
+                {readOnly
+                  ? "Understand your spend and explore usage. Just ask."
+                  : "Understand your spend, explore usage, and manage your gateway. Just ask."}
               </p>
             </div>
             <p className="max-w-64 text-xs leading-relaxed text-muted-foreground">
-              You review every change before it runs.
+              {readOnly ? "Answers use usage data your account can access." : "You review every change before it runs."}
             </p>
           </div>
         )}
