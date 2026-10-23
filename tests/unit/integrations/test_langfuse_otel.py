@@ -597,32 +597,28 @@ class TestLangfuseOtelKeyDynamicConfig:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter,
         )
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-        with self._clean_env():
+        with (
+            self._clean_env(),
+            patch(
+                "opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter", wraps=OTLPSpanExporter
+            ) as exporter_factory,
+        ):
             logger = LangfuseOtelLogger()
             assert logger.OTEL_EXPORTER == "console"
 
-            tracer = logger.get_tracer_to_use_for_request(
-                {"standard_callback_dynamic_params": self._dynamic_params()}
-            )
+            tracer = logger.get_tracer_to_use_for_request({"standard_callback_dynamic_params": self._dynamic_params()})
 
         assert tracer is not logger.tracer
         assert len(logger._tracer_provider_cache) == 1
 
-        provider = next(iter(logger._tracer_provider_cache.values())).provider
-        span_processors = provider._active_span_processor._span_processors
-        assert len(span_processors) == 1
-        assert isinstance(span_processors[0], BatchSpanProcessor)
-
-        exporter = span_processors[0].span_exporter
-        assert isinstance(exporter, OTLPSpanExporter)
-        assert exporter._endpoint == "https://langfuse.example.com/api/public/otel/v1/traces"
+        exporter_factory.assert_called_once()
+        assert exporter_factory.call_args.kwargs["endpoint"] == "https://langfuse.example.com/api/public/otel/v1/traces"
 
         import base64
 
         expected_auth = base64.b64encode(b"key_public:key_secret").decode()
-        assert exporter._headers == {
+        assert exporter_factory.call_args.kwargs["headers"] == {
             "Authorization": f"Basic {expected_auth}",
             "x-langfuse-ingestion-version": "4",
         }
@@ -665,20 +661,21 @@ class TestLangfuseOtelKeyDynamicConfig:
 
         with self._clean_env():
             logger = LangfuseOtelLogger()
-            with patch.object(otel_module.verbose_logger, "debug", side_effect=_spy):
-                logger.get_tracer_to_use_for_request(
-                    {"standard_callback_dynamic_params": self._dynamic_params()}
-                )
+            with (
+                patch.object(otel_module.verbose_logger, "debug", side_effect=_spy),
+                patch(
+                    "opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter", wraps=OTLPSpanExporter
+                ) as exporter_factory,
+            ):
+                logger.get_tracer_to_use_for_request({"standard_callback_dynamic_params": self._dynamic_params()})
 
         logged = "\n".join(recorded_arguments)
         assert "initializing span processor" in logged
         assert secret not in logged
         assert f"Basic {secret}" not in logged
 
-        provider = next(iter(logger._tracer_provider_cache.values())).provider
-        exporter = provider._active_span_processor._span_processors[0].span_exporter
-        assert isinstance(exporter, OTLPSpanExporter)
-        assert exporter._headers == {
+        exporter_factory.assert_called_once()
+        assert exporter_factory.call_args.kwargs["headers"] == {
             "Authorization": f"Basic {secret}",
             "x-langfuse-ingestion-version": "4",
         }
