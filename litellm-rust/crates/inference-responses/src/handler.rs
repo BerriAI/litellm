@@ -135,5 +135,5 @@ pub(super) async fn execute(
 }
 
 fn network(error: reqwest::Error) -> Error {
-    litellm_http::transport::Error::Network(error.to_string()).into()
+    litellm_http::transport::Error::from(error).into()
 }

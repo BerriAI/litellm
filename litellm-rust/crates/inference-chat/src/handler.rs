@@ -103,21 +103,13 @@ pub(super) async fn execute(
 
             let response = litellm_inference::outbound::send(outbound, http)
                 .await
-                .map_err(|err| {
-                    // Failing to establish the connection means the request never went out,
-                    // so the host can still serve it. Everything else here, a timeout
-                    // above all, may have reached the provider and been answered.
-                    if err.is_connect() || err.is_builder() {
-                        Error::Transport(litellm_http::transport::Error::Connect(err.to_string()))
-                    } else {
-                        Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
-                    }
-                })?;
+                .map_err(litellm_http::transport::Error::from_reqwest_before_dispatch)?;
 
             let status = response.status();
-            let text = response.text().await.map_err(|err| {
-                Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
-            })?;
+            let text = response
+                .text()
+                .await
+                .map_err(litellm_http::transport::Error::from)?;
 
             if !status.is_success() {
                 return Err(Error::Transport(litellm_http::transport::Error::Http {

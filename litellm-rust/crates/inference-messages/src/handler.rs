@@ -276,7 +276,7 @@ fn serialize_failure(err: serde_json::Error) -> Error {
 }
 
 fn network(error: reqwest::Error) -> Error {
-    Error::Transport(TransportError::Network(error.to_string()))
+    Error::Transport(error.into())
 }
 
 async fn send(

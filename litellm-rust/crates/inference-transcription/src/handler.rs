@@ -57,13 +57,12 @@ pub(super) async fn execute(
     )?;
     let response = litellm_inference::outbound::send(outbound, http)
         .await
-        .map_err(|error| {
-            Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-        })?;
+        .map_err(litellm_http::transport::Error::from)?;
     let status = response.status();
-    let text = response.text().await.map_err(|error| {
-        Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-    })?;
+    let text = response
+        .text()
+        .await
+        .map_err(litellm_http::transport::Error::from)?;
     if !status.is_success() {
         return Err(Error::Transport(litellm_http::transport::Error::Http {
             status: status.as_u16(),

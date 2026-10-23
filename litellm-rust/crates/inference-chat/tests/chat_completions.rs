@@ -230,6 +230,23 @@ async fn a_connection_that_is_never_established_returns_a_connect_error(
 
 #[rstest]
 #[tokio::test]
+async fn a_transport_error_does_not_echo_the_provider_url(
+    request: ChatCompletionsRequest<'static>,
+) {
+    let base = format!("{UNREACHABLE_BASE}/tenant-token-1234");
+
+    let error = complete(ChatCompletionsRequest {
+        api_base: Some(&base),
+        ..request
+    })
+    .await
+    .expect_err("nothing is listening");
+
+    assert!(!error.to_string().contains("tenant-token-1234"), "{error}");
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletionsRequest<'static>) {
     let upstream =
         upstream([anthropic_response(ANTHROPIC_MESSAGE).set_delay(Duration::from_secs(5))]).await;
