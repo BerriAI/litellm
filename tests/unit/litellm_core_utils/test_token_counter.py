@@ -1175,6 +1175,8 @@ def test_disable_hf_tokenizer_download_keeps_deepseek_v4_on_cl100k(monkeypatch: 
 
 @pytest.mark.parametrize("model", ["llama-2-7b", "meta-llama/llama-3-8b-instruct"])
 def test_offline_mode_counts_downloaded_tokenizer_models_with_tiktoken(monkeypatch: pytest.MonkeyPatch, model: str):
+    _load_huggingface_tokenizer.cache_clear()
+    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
     monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
 
     with patch("litellm.utils.tokenizer_dispatch.from_pretrained") as from_pretrained:

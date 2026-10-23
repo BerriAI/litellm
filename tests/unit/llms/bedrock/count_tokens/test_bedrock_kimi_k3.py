@@ -531,8 +531,14 @@ async def test_tokenizer_load_still_running_after_the_wait_is_logged(
     [("true", None, False), ("false", True, False), ("false", None, True)],
 )
 def test_offline_mode_and_disabled_downloads_never_ask_hugging_face_for_the_tokenizer(
-    monkeypatch: pytest.MonkeyPatch, offline_mode: str, disable_download: bool | None, asks_hub: bool
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, offline_mode: str, disable_download: bool | None, asks_hub: bool
 ):
+    import huggingface_hub.constants
+    import huggingface_hub.utils._detect_agent
+
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path / "hub"))
+    monkeypatch.setattr(huggingface_hub.constants, "AGENT_HARNESSES_PATH", str(tmp_path / "agent_harnesses.json"))
+    monkeypatch.setattr(huggingface_hub.utils._detect_agent, "_registry", None)
     monkeypatch.setenv("LITELLM_OFFLINE_MODE", offline_mode)
     monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", disable_download)
     with respx.mock(assert_all_called=False) as router:
