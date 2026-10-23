@@ -1,10 +1,9 @@
-import json
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, assert_never
+from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, field_validator
 
@@ -20,7 +19,6 @@ from litellm.proxy.management_endpoints.common_utils import (
     has_meaningful_budget_limit,
     upsert_budget_and_membership,
 )
-from litellm.proxy.utils import jsonify_object
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -59,19 +57,24 @@ _SHARED_BUDGET_IDS_SQL: Final = """
 SELECT budget_id FROM "LiteLLM_TeamMembership" WHERE budget_id = ANY($1::text[])
 GROUP BY budget_id HAVING COUNT(*) > 1
 """
-_CANDIDATES_BY_SCHEDULE_SQL: Final = """
-SELECT b.budget_duration AS duration, COUNT(*)::int AS members
-FROM "LiteLLM_TeamMembership" m JOIN "LiteLLM_BudgetTable" b ON b.budget_id = m.budget_id
-WHERE m.team_id = $1 AND m.budget_id <> $2 AND {direction}
-GROUP BY b.budget_duration
-"""
-_CANDIDATES_SQL: Final = """
-SELECT m.user_id, b.budget_id, b.soft_budget, b.max_parallel_requests, b.tpm_limit, b.rpm_limit,
-    b.model_max_budget, b.budget_duration, b.allowed_models, b.temp_budget_increase, b.temp_budget_expiry
-FROM "LiteLLM_TeamMembership" m JOIN "LiteLLM_BudgetTable" b ON b.budget_id = m.budget_id
-WHERE m.team_id = $1 AND m.budget_id <> $2 AND {direction}
-    AND (b.budget_duration = ANY($4::text[]) OR ($5::boolean AND b.budget_duration IS NULL))
-"""
+_ON_CHOSEN_SIDE_OF_DEFAULT: Final = """m.team_id = $1 AND m.budget_id <> $2 AND CASE $3::text
+    WHEN 'raise_to_default' THEN b.max_budget < $4::double precision
+    WHEN 'lower_to_default' THEN b.max_budget > $4::double precision
+    WHEN 'all_to_default' THEN b.max_budget <> $4::double precision
+    ELSE FALSE END"""
+_CANDIDATES_BY_SCHEDULE_SQL: Final = (
+    'SELECT b.budget_duration AS duration, COUNT(*)::int AS members FROM "LiteLLM_TeamMembership" m '
+    'JOIN "LiteLLM_BudgetTable" b ON b.budget_id = m.budget_id WHERE '
+    + _ON_CHOSEN_SIDE_OF_DEFAULT
+    + " GROUP BY b.budget_duration"
+)
+_CANDIDATES_SQL: Final = (
+    "SELECT m.user_id, b.budget_id, b.soft_budget, b.max_parallel_requests, b.tpm_limit, b.rpm_limit, "
+    "b.model_max_budget, b.budget_duration, b.allowed_models, b.temp_budget_increase, b.temp_budget_expiry "
+    'FROM "LiteLLM_TeamMembership" m JOIN "LiteLLM_BudgetTable" b ON b.budget_id = m.budget_id WHERE '
+    + _ON_CHOSEN_SIDE_OF_DEFAULT
+    + " AND (b.budget_duration = ANY($5::text[]) OR ($6::boolean AND b.budget_duration IS NULL))"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,12 +124,12 @@ class _BudgetLimits(BaseModel):
     @field_validator("model_max_budget", mode="before")
     @classmethod
     def _decode_json_column(cls, value: object) -> object:
-        return json.loads(value) if isinstance(value, str) else value
+        return _JSON_VALUE.validate_json(value) if isinstance(value, str) else value
 
     def has_own_limits_beyond(self, default: "_BudgetLimits") -> bool:
-        return has_meaningful_budget_limit(
-            {field: value for field, value in self.model_dump().items() if value != getattr(default, field)}
-        )
+        own: Final = _JSON_OBJECT.validate_python(self.model_dump(mode="json"))
+        inherited: Final = _JSON_OBJECT.validate_python(default.model_dump(mode="json"))
+        return has_meaningful_budget_limit({field: value for field, value in own.items() if value != inherited[field]})
 
 
 class _MemberBudgetRef(BaseModel):
@@ -148,6 +151,8 @@ class _BudgetIdRow(BaseModel):
     budget_id: str
 
 
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _SCHEDULE_COUNTS: Final = TypeAdapter(tuple[_ScheduleCount, ...])
 _MEMBER_BUDGET_REFS: Final = TypeAdapter(tuple[_MemberBudgetRef, ...])
 _MEMBER_BUDGET_LIMITS: Final = TypeAdapter(tuple[_BudgetLimits, ...])
@@ -160,12 +165,14 @@ def plan_team_member_default_budget_write(
     team_alias: str | None,
     team_budget_duration: str | None,
 ) -> TeamMemberDefaultBudgetWrite | None:
-    requested: Final = data.model_dump(include=frozenset(_DEFAULT_BUDGET_COLUMNS) & data.model_fields_set)
+    requested: Final = _JSON_OBJECT.validate_python(
+        data.model_dump(mode="json", include=data.model_fields_set & _DEFAULT_BUDGET_COLUMNS.keys())
+    )
     sent: Final = MappingProxyType({_DEFAULT_BUDGET_COLUMNS[field]: value for field, value in requested.items()})
     links_members: Final = any(value is not None for value in sent.values())
     if not sent or (existing_budget_id is None and not links_members):
         return None
-    create_duration: Final = sent["budget_duration"] if "budget_duration" in sent else team_budget_duration
+    create_duration: Final = sent.get("budget_duration", team_budget_duration)
     created: Final = {**sent, "budget_duration": create_duration}
     return TeamMemberDefaultBudgetWrite(
         budget_id=existing_budget_id or _new_default_budget_id(team_alias),
@@ -190,10 +197,10 @@ async def write_team_member_default_budget(
     await _budget_tx_db(tx).upsert(
         where={"budget_id": write.budget_id},
         data={
-            "create": jsonify_object(
+            "create": _prisma_columns(
                 {**write.create, **stamps, "budget_id": write.budget_id, "created_by": changed_by}
             ),
-            "update": jsonify_object({**write.update, **stamps}),
+            "update": _prisma_columns({**write.update, **stamps}),
         },
     )
     if not write.links_members:
@@ -213,17 +220,14 @@ async def move_member_budgets_to_default(
     """Members compare on their permanent ``max_budget``, and only those resetting on the default's schedule move.
     A member whose other limits all match the default is linked to the default row, while one holding a limit of its
     own keeps its row with ``max_budget`` cleared."""
-    direction: Final = _direction_sql(backfill)
-    if direction is None:
+    if backfill == "none":
         return MovedMemberBudgets(user_ids=(), skipped_other_reset_period=0)
     default: Final = await _budget_tx_db(tx).find_unique(where={"budget_id": default_budget_id})
     if default is None or default.max_budget is None:
         return MovedMemberBudgets(user_ids=(), skipped_other_reset_period=0)
     schedule: Final = budget_reset_period_key(default.budget_duration)
     counts: Final = _SCHEDULE_COUNTS.validate_python(
-        await tx.query_raw(
-            _CANDIDATES_BY_SCHEDULE_SQL.format(direction=direction), team_id, default_budget_id, default.max_budget
-        )
+        await tx.query_raw(_CANDIDATES_BY_SCHEDULE_SQL, team_id, default_budget_id, backfill, default.max_budget)
     )
     matching: Final = tuple(count for count in counts if budget_reset_period_key(count.duration) == schedule)
     moving: Final = sum(count.members for count in matching)
@@ -233,9 +237,10 @@ async def move_member_budgets_to_default(
     if moving == 0:
         return MovedMemberBudgets(user_ids=(), skipped_other_reset_period=skipped)
     rows: Final = await tx.query_raw(
-        _CANDIDATES_SQL.format(direction=direction),
+        _CANDIDATES_SQL,
         team_id,
         default_budget_id,
+        backfill,
         default.max_budget,
         [count.duration for count in matching if count.duration is not None],
         any(count.duration is None for count in matching),
@@ -289,22 +294,14 @@ async def _move_to_default(
             )
 
 
+def _prisma_columns(columns: Mapping[str, object]) -> Mapping[str, object]:
+    from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
+
+    return {column: Json(value) if isinstance(value, dict) else value for column, value in columns.items()}
+
+
 def _budget_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_BudgetTable]":
     return tx.litellm_budgettable  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
-
-
-def _direction_sql(backfill: TeamMemberBudgetBackfill) -> str | None:
-    match backfill:
-        case "none":
-            return None
-        case "raise_to_default":
-            return "b.max_budget < $3::double precision"
-        case "lower_to_default":
-            return "b.max_budget > $3::double precision"
-        case "all_to_default":
-            return "b.max_budget <> $3::double precision"
-        case _:
-            assert_never(backfill)
 
 
 def _with_reset_at(columns: Mapping[str, object]) -> Mapping[str, object]:

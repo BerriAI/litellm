@@ -17314,6 +17314,7 @@ export interface paths {
          *     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
+         *     - team_member_budget_backfill: Optional[str] - Moves members with their own budget onto the team_member_budget sent in the same request: "raise_to_default" (those below it), "lower_to_default" (those above it), "all_to_default" (both) or "none". Members on a different reset schedule are skipped, and the response's team_member_budget_backfill_result counts who moved.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
          *     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.

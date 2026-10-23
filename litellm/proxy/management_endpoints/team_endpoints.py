@@ -650,7 +650,7 @@ class TeamMemberBudgetHandler:
 
     @staticmethod
     @with_service_target("team_member_budgets")
-    async def _evict_default_budget_cache(
+    async def evict_default_budget_cache(
         budget_id: str,
         user_api_key_cache: UserApiKeyCache | None,
     ) -> None:
@@ -712,7 +712,7 @@ class TeamMemberBudgetHandler:
             budget_obj=budget_request,
             user_api_key_dict=user_api_key_dict,
         )
-        await TeamMemberBudgetHandler._evict_default_budget_cache(
+        await TeamMemberBudgetHandler.evict_default_budget_cache(
             budget_id=team_member_budget_table.budget_id,
             user_api_key_cache=user_api_key_cache,
         )
@@ -2627,10 +2627,10 @@ async def update_team(
 
         verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
         if default_budget_write is not None:
-            await TeamMemberBudgetHandler._evict_default_budget_cache(
+            await TeamMemberBudgetHandler.evict_default_budget_cache(
                 budget_id=default_budget_write.budget_id, user_api_key_cache=user_api_key_cache
             )
-        await _evict_team_member_cache_keys(
+        await evict_team_member_cache_keys(
             team_id=team_row.team_id,
             member_user_ids=team_write.changed_member_user_ids(),
             cache_keys=tuple(team_membership_cache_keys(team_row.team_id, team_write.changed_member_user_ids())),
@@ -2650,14 +2650,14 @@ async def update_team(
         if is_audit_logging_enabled():
             await _create_team_update_audit_log(
                 existing_team_row=existing_team_row,
-                updated_kv=updated_kv | team_write.backfill_audit(),
+                updated_kv={**updated_kv, **team_write.backfill_audit()},
                 team_id=data.team_id,
                 litellm_changed_by=litellm_changed_by,
                 user_api_key_dict=user_api_key_dict,
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
             )
 
-        return {"team_id": team_row.team_id, "data": team_row} | team_write.backfill_response()
+        return {"team_id": team_row.team_id, "data": team_row, **team_write.backfill_response()}
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
@@ -4839,7 +4839,7 @@ async def _invalidate_deleted_team_member_cache(
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
     for team_id, member_user_ids in member_ids_per_team:
-        await _evict_team_member_cache_keys(
+        await evict_team_member_cache_keys(
             team_id=team_id,
             member_user_ids=member_user_ids,
             cache_keys=tuple(member_cache_keys(team_id, member_user_ids)),
@@ -4847,7 +4847,7 @@ async def _invalidate_deleted_team_member_cache(
         )
 
 
-async def _evict_team_member_cache_keys(
+async def evict_team_member_cache_keys(
     team_id: str,
     member_user_ids: Sequence[str],
     cache_keys: Sequence[str],

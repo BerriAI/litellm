@@ -43,7 +43,8 @@ def test_a_first_default_gets_a_new_row_that_inherits_the_team_reset_period():
     assert write.budget_id.startswith("team-My-Team-budget-")
     assert write.create["max_budget"] == 25.0
     assert write.create["budget_duration"] == "30d"
-    assert write.create["budget_reset_at"] > before
+    reset_at = write.create["budget_reset_at"]
+    assert isinstance(reset_at, datetime) and reset_at > before
     assert write.links_members is True
 
 
@@ -63,7 +64,8 @@ def test_changing_the_reset_period_restarts_the_window():
 
     assert write is not None
     assert write.update["budget_duration"] == "7d"
-    assert write.update["budget_reset_at"] > before
+    reset_at = write.update["budget_reset_at"]
+    assert isinstance(reset_at, datetime) and reset_at > before
 
 
 @pytest.mark.parametrize("team_member_budget", [None, 0.0])
