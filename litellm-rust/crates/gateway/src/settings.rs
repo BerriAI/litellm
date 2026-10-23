@@ -35,6 +35,9 @@ impl Settings {
             .litellm_python_upstream
             .as_deref()
             .ok_or_else(invalid)?;
+        if upstream.contains('#') {
+            return Err(invalid());
+        }
         let uri: axum::http::Uri = upstream.parse().map_err(|_| invalid())?;
         let authority = uri.authority().ok_or_else(invalid)?;
         let port = authority.as_str().strip_prefix(authority.host());
@@ -169,6 +172,7 @@ mod tests {
     #[case::https("https://localhost:4002")]
     #[case::path("http://localhost:4002/python")]
     #[case::query("http://localhost:4002?token=secret")]
+    #[case::fragment("http://localhost/#token=secret")]
     #[case::userinfo("http://user:secret@localhost:4002")]
     #[case::malformed("http://[::1")]
     #[case::named_port("http://localhost:http")]

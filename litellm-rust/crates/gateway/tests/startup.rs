@@ -117,17 +117,20 @@ impl GatewayProcess {
     }
 
     async fn wait_for_exit(mut self) -> String {
-        timeout(STARTUP_TIMEOUT, async {
+        let status = timeout(STARTUP_TIMEOUT, async {
             loop {
-                if self.child.try_wait().unwrap().is_some() {
-                    break;
+                if let Some(status) = self.child.try_wait().unwrap() {
+                    break status;
                 }
                 sleep(Duration::from_millis(20)).await;
             }
         })
         .await
         .expect("invalid startup should exit within the timeout");
-        self.child.wait().unwrap();
+        assert!(
+            !status.success(),
+            "invalid startup should exit unsuccessfully"
+        );
         self.read_logs()
     }
 
@@ -695,6 +698,11 @@ async fn unreachable_upstream_returns_bad_gateway() {
 #[case::query(
     Some("true"),
     Some("http://127.0.0.1?token=upstream-secret"),
+    "upstream-secret"
+)]
+#[case::fragment(
+    Some("true"),
+    Some("http://127.0.0.1/#upstream-secret"),
     "upstream-secret"
 )]
 #[case::userinfo(
