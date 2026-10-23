@@ -56,6 +56,7 @@ describe("ViewSwitcher", () => {
     setServerRootPath("/");
     vi.clearAllMocks();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("should render the workspace selector and keep disabled Chat unavailable", async () => {
@@ -129,6 +130,20 @@ describe("ViewSwitcher", () => {
     expect(assignSpy).toHaveBeenCalledWith("/gateway/ui/");
     expect(localStorage.getItem("litellm_plugin_mode")).toBe("metrics");
   });
+
+  it.each(["/chat", "/ui/chat", "/ui/chat/models"])(
+    "should keep Chat identity and gateway navigation at the development route %s",
+    async (pathname) => {
+      vi.stubEnv("NODE_ENV", "development");
+      state.pathname = pathname;
+      const user = userEvent.setup();
+      renderSwitcher();
+
+      await user.click(screen.getByRole("button", { name: "Switch workspace, current: Chat" }));
+      await user.click(await screen.findByRole("menuitem", { name: "AI Gateway" }));
+      expect(assignSpy).toHaveBeenCalledWith("/");
+    },
+  );
 
   it.each(["/ui/moyai", "/ui/moyai/sessions/one"])(
     "should show Moyai's icon at %s and let users switch to Chat",
