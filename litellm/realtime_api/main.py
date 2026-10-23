@@ -31,7 +31,7 @@ from litellm.types.realtime import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, resolve_api_key_secret_reference
 
 from ..litellm_core_utils.core_helpers import normalize_drop_params
 from ..litellm_core_utils.credential_accessor import CredentialAccessor
@@ -562,7 +562,12 @@ async def _arealtime(
             configured_realtime_protocol, query_params=query_params, websocket=websocket
         )
         resolved_azure_ad_token: Final = (
-            None if api_key else get_azure_ad_token(GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token))
+            None
+            if api_key
+            else await asyncio.to_thread(
+                get_azure_ad_token,
+                GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token),
+            )
         )
         await azure_realtime.async_realtime(
             model=model,
@@ -743,15 +748,21 @@ def _azure_realtime_health_protocol(
     return "GA", query_params
 
 
-def _realtime_health_check_auth_headers(
+async def _realtime_health_check_auth_headers(
     custom_llm_provider: str, api_key: str | None, model_params: Mapping[str, object]
 ) -> Mapping[str, str]:
     if custom_llm_provider == "azure":
+        azure_ad_token: Final = (
+            None
+            if api_key
+            else await asyncio.to_thread(
+                get_azure_ad_token,
+                GenericLiteLLMParams.model_validate(dict(model_params)),
+            )
+        )
         return azure_realtime.get_auth_headers(
             api_key=api_key,
-            azure_ad_token=(
-                None if api_key else get_azure_ad_token(GenericLiteLLMParams.model_validate(dict(model_params)))
-            ),
+            azure_ad_token=azure_ad_token,
         )
     if api_key is None:
         return _EMPTY_AUTH_HEADERS
@@ -788,11 +799,16 @@ async def realtime_health_check(
     import websockets
 
     resolved_params: Final = _model_params_with_stored_credentials(model_params or _EMPTY_MODEL_PARAMS)
-    resolved_api_key: Final = cast(  # cast-ok: provider parameters expose optional string credentials
-        str | None, api_key or resolved_params.get("api_key")
-    )
     resolved_api_base: Final = cast(  # cast-ok: provider parameters expose optional string endpoints
         str | None, api_base or resolved_params.get("api_base")
+    )
+    resolved_api_key: Final = resolve_api_key_secret_reference(
+        cast(  # cast-ok: provider parameters expose optional string credentials
+            str | None, api_key or resolved_params.get("api_key")
+        ),
+        model=model,
+        llm_provider=custom_llm_provider,
+        upstream=MappingProxyType({**resolved_params, "api_base": resolved_api_base}),
     )
     resolved_api_version: Final = cast(  # cast-ok: provider parameters expose optional string versions
         str | None, api_version or resolved_params.get("api_version")
@@ -807,7 +823,7 @@ async def realtime_health_check(
         if custom_llm_provider == LlmProviders.OPENAI.value
         else resolved_api_key
     )
-    auth_headers: Final = _realtime_health_check_auth_headers(
+    auth_headers: Final = await _realtime_health_check_auth_headers(
         custom_llm_provider=custom_llm_provider,
         api_key=health_check_api_key,
         model_params=resolved_params,

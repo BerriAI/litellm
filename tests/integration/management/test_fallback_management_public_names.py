@@ -29,7 +29,7 @@ from tests.integration._support.process import (
 )
 from tests.integration._support.redis_process import owned_redis
 
-pytestmark: Final = pytest.mark.timeout(300)
+pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 PROVIDER_KEY: Final = "integration-provider-key"
 EVICTION_WARNING: Final = "config cache eviction of router_settings failed"
@@ -53,7 +53,7 @@ def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> None:
 @pytest.fixture
 def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as client:
-        client.get("/__observations").raise_for_status()
+        client.delete("/__observations").raise_for_status()
         yield client
 
 
@@ -206,7 +206,7 @@ def test_rule_by_team_public_name_fires_on_chat_completions(gateway: Gateway, up
         created: Final = _create_fallback(gateway, scenario, primary, [fallback])
         assert created.status_code == 200, created.text
         upstream.post(f"/__scripts/{primary_provider}", json={"statuses": [500]}).raise_for_status()
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         answered: Final = eventually(
             lambda: gateway.request(
                 "POST",

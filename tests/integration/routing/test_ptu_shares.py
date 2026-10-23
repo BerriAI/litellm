@@ -45,7 +45,7 @@ from redis import Redis
 if TYPE_CHECKING:
     from litellm.llms.azure.ptu_capacity import PTUCapacity
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 _SHARED: Final = "ptu-shared"
 _MIXED: Final = "ptu-mixed"

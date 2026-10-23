@@ -2,6 +2,7 @@ import copy
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from enum import Enum
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -15,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
     VertexAITokenCounter,
+    _fix_enum_types,
     build_vertex_schema,
     convert_anyof_null_to_nullable,
     convert_vertex_datetime_to_openai_datetime,
@@ -28,6 +30,7 @@ from litellm.llms.vertex_ai.common_utils import (
     vertex_request_labels_from_litellm_params,
 )
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
 
 
@@ -49,6 +52,37 @@ async def test_vertex_gemini_rejects_non_text_system_blocks_before_request(
     assert result.error is True
     assert result.status_code == 400
     assert "text blocks" in (result.error_message or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    (
+        "zai-org/glm-5.2-maas",
+        "deepseek-ai/deepseek-v3.2-maas",
+        "qwen/qwen3-coder-480b-a35b-instruct-maas",
+        "mistral-medium-3",
+        "codestral-2501",
+        "openai/gpt-oss-120b-maas",
+        "google/gemma-4-26b-a4b-it-maas",
+    ),
+)
+async def test_vertex_partner_model_without_an_inference_matching_count_answers_400_naming_the_model(
+    model: str,
+) -> None:
+    result: Final = await VertexAITokenCounter().count_tokens(
+        model_to_use=model,
+        messages=[{"role": "user", "content": "Count this"}],
+        contents=None,
+        deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "global"}},
+        request_model=f"vertex_ai/{model}",
+        messages_format="anthropic",
+    )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.error_message == f"LiteLLM does not support counting tokens for Vertex AI model {model}."
 
 
 class _VertexCountTokensPeer:
@@ -88,6 +122,7 @@ def _vertex_count_tokens_peer(status_code: int) -> Iterator[_VertexCountTokensPe
 
 
 _VERTEX_DEPLOYMENT: Final = {"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-central1"}}
+_JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
 
 
 @pytest.mark.asyncio
@@ -133,6 +168,77 @@ async def test_vertex_gemini_count_rejects_an_image_url_it_refuses_to_fetch_with
     assert result.status_code == 400
     assert "http://127.0.0.1:9/image.png" in (result.error_message or "")
     assert peer.requests == ()
+
+
+def _weather_tool_result_messages(text: JsonValue) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [{"type": "text", "text": text}, {"type": "text", "text": "partly cloudy"}],
+                }
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5))
+async def test_vertex_gemini_count_rejects_a_non_string_tool_result_text_without_request(text: JsonValue) -> None:
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=_weather_tool_result_messages(text),
+            contents=None,
+            deployment=_VERTEX_DEPLOYMENT,
+            request_model="vertex_ai/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.error_message == "tool_result toolu_01 content.0.text: Input should be a valid string"
+    assert peer.requests == ()
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_count_leaves_out_a_numeric_tool_result_text_when_the_deployment_drops_params() -> None:
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=_weather_tool_result_messages(5),
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                    "drop_params": True,
+                }
+            },
+            request_model="vertex_ai/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.error is False
+    assert result.total_tokens == 37
+    assert _JSON_BODY.validate_json(peer.requests[0].content)["contents"] == [
+        {"role": "user", "parts": [{"text": "What is the weather in Paris?"}]},
+        {"role": "model", "parts": [{"function_call": {"name": "get_weather", "args": {"city": "Paris"}}}]},
+        {
+            "role": "user",
+            "parts": [{"function_response": {"name": "get_weather", "response": {"content": "partly cloudy"}}}],
+        },
+    ]
 
 
 _TOOL_OUTPUT: Final = "line of a long file that the agent read earlier. " * 180
@@ -387,7 +493,6 @@ def test_anyof_conversion_forwards_a_non_object_branch_for_the_provider_to_judge
     assert schema == {"type": "object", "properties": {"example": {"anyOf": expected}}}
 
 
-
 @pytest.mark.parametrize(
     ("field", "expected"),
     [
@@ -432,6 +537,7 @@ def test_vertex_schema_folds_every_null_branch_into_nullable(field: JsonValue, e
     schema: Final = build_vertex_schema({"type": "object", "properties": {"value": field}})
 
     assert schema["properties"]["value"] == expected
+
 
 def test_anyof_with_excessive_nesting():
     """Test conversion with excessive nesting > max levels +1 deep."""
@@ -1303,12 +1409,11 @@ def test_construct_target_url_versionless_project_route_gets_api_version(
 
 def test_fix_enum_types():
     """
-    Test _fix_enum_types function removes enum fields when type is not string.
+    Test _fix_enum_types keeps string enums, converts integer enums to the form
+    Gemini accepts, and removes enums on other non-string types.
 
-    This test verifies the fix for the issue where Gemini rejects cached content
-    with function parameter enums on non-string types, causing API failures.
-
-    Relevant issue: Gemini only allows enums for string-typed fields
+    Gemini rejects non-string enum values, causing API failures. Integer enums are
+    sent as type INTEGER with string values.
     """
     from litellm.llms.vertex_ai.common_utils import _fix_enum_types
 
@@ -1322,7 +1427,7 @@ def test_fix_enum_types():
                 "description": "How to truncate content",
             },
             "maxLength": {
-                "enum": [100, 200, 500],  # This should be removed
+                "enum": [100, 200, 500],
                 "type": "integer",
                 "description": "Maximum length",
             },
@@ -1339,7 +1444,7 @@ def test_fix_enum_types():
                         "type": "string",
                     },
                     "innerNonStringEnum": {
-                        "enum": [1, 2, 3],  # This should be removed
+                        "enum": [1, 2, 3],
                         "type": "integer",
                     },
                 },
@@ -1350,13 +1455,13 @@ def test_fix_enum_types():
                         "type": "string",
                         "enum": ["option1", "option2"],
                     },  # This should be kept
-                    {"type": "integer", "enum": [1, 2, 3]},  # This should be removed
+                    {"type": "integer", "enum": [1, 2, 3]},
                 ]
             },
         },
     }
 
-    # Expected output: Non-string enums removed, string enums kept
+    # Expected output: string enums kept, integer enums converted, others removed
     expected_output = {
         "type": "object",
         "properties": {
@@ -1365,7 +1470,8 @@ def test_fix_enum_types():
                 "type": "string",
                 "description": "How to truncate content",
             },
-            "maxLength": {  # enum removed
+            "maxLength": {
+                "enum": ["100", "200", "500"],
                 "type": "integer",
                 "description": "Maximum length",
             },
@@ -1380,7 +1486,10 @@ def test_fix_enum_types():
                         "enum": ["a", "b", "c"],  # Kept - string type
                         "type": "string",
                     },
-                    "innerNonStringEnum": {"type": "integer"},  # enum removed
+                    "innerNonStringEnum": {
+                        "enum": ["1", "2", "3"],
+                        "type": "integer",
+                    },
                 },
             },
             "anyOfField": {
@@ -1389,14 +1498,14 @@ def test_fix_enum_types():
                         "type": "string",
                         "enum": ["option1", "option2"],
                     },  # Kept - has string type
-                    {"type": "integer"},  # enum removed
+                    {"type": "integer", "enum": ["1", "2", "3"]},
                 ]
             },
         },
     }
 
     # Apply the transformation
-    _fix_enum_types(input_schema)
+    _fix_enum_types(input_schema, send_integer_enums=True)
 
     # Verify the transformation
     assert input_schema == expected_output
@@ -1418,19 +1527,134 @@ def test_fix_enum_types():
         "c",
     ]
 
-    # 2. Non-string enums are removed
-    assert "enum" not in input_schema["properties"]["maxLength"]
+    # 2. Integer enums are converted, other non-string enums are removed
+    assert input_schema["properties"]["maxLength"]["enum"] == ["100", "200", "500"]
     assert "enum" not in input_schema["properties"]["enabled"]
-    assert "enum" not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
+    assert input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]["enum"] == ["1", "2", "3"]
 
-    # 3. anyOf with string type keeps enum, non-string removes it
+    # 3. anyOf keeps the string enum and converts the integer one
     assert "enum" in input_schema["properties"]["anyOfField"]["anyOf"][0]
-    assert "enum" not in input_schema["properties"]["anyOfField"]["anyOf"][1]
+    assert input_schema["properties"]["anyOfField"]["anyOf"][1]["enum"] == ["1", "2", "3"]
 
     # 4. Other properties preserved
     assert input_schema["properties"]["maxLength"]["type"] == "integer"
     assert input_schema["properties"]["enabled"]["type"] == "boolean"
 
+
+
+def test_build_vertex_schema_sends_integer_enum_as_string_values():
+    """An integer enum tool parameter reaches Gemini as INTEGER with string values and no enum format."""
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "level": {"type": "integer", "enum": [1, 2, 5]},
+            "flag": {"type": "boolean", "enum": [True]},
+        },
+        "required": ["level"],
+    }
+
+    result = _build_vertex_schema(parameters, send_integer_enums=True)
+
+    assert "format" not in result["properties"]["level"]
+    assert result["properties"]["level"]["enum"] == ["1", "2", "5"]
+    assert result["properties"]["level"]["type"].lower() == "integer"
+    assert "enum" not in result["properties"]["flag"]
+
+
+@pytest.mark.parametrize(
+    ("enum_values", "send_integer_enums", "expected_level"),
+    [
+        (
+            [1, 2, 5],
+            True,
+            {"anyOf": [{"type": "integer", "enum": ["1", "2", "5"], "nullable": True}]},
+        ),
+        (
+            [1, 2, 5, None],
+            True,
+            {"anyOf": [{"type": "integer", "enum": ["1", "2", "5"], "nullable": True}]},
+        ),
+        ([1, 2, 5], False, {"anyOf": [{"type": "integer", "nullable": True}]}),
+        ([1, "a"], True, {"anyOf": [{"type": "integer", "nullable": True}]}),
+    ],
+    ids=["sent", "null-in-enum", "not-sent", "mixed-values"],
+)
+def test_build_vertex_schema_keeps_integer_enum_on_nullable_type_list(
+    enum_values: list[object], send_integer_enums: bool, expected_level: JsonValue
+) -> None:
+    schema: Final = build_vertex_schema(
+        {"type": "object", "properties": {"level": {"type": ["integer", "null"], "enum": enum_values}}},
+        send_integer_enums=send_integer_enums,
+    )
+
+    assert schema["properties"]["level"] == expected_level
+
+
+def test_map_function_keeps_integer_enum_when_tools_are_reused():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "set_priority",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}},
+                    "required": ["level"],
+                },
+            },
+        }
+    ]
+    config = VertexGeminiConfig()
+
+    sent = [
+        config._map_function(tools, {}, send_integer_enums=True)[0]["function_declarations"][0]["parameters"][
+            "properties"
+        ]["level"]
+        for _ in range(2)
+    ]
+
+    assert sent[0]["enum"] == ["1", "2", "5"]
+    assert sent[1]["enum"] == ["1", "2", "5"]
+    assert sent[0] == sent[1]
+
+
+class _Priority(int, Enum):
+    LOW = 1
+    HIGH = 3
+
+
+@pytest.mark.parametrize(
+    ("enum_values", "send_integer_enums", "expected_enum"),
+    [
+        ([1, 2, 5], False, None),
+        (["-3", "007", 4], True, ["-3", "7", "4"]),
+        ([1, 2**53], True, None),
+        ([1, -(2**53)], True, None),
+        (["1", str(2**53)], True, None),
+        ([-(2**53 - 1), 2**53 - 1], True, [str(-(2**53 - 1)), str(2**53 - 1)]),
+        ([str(-(2**53 - 1)), str(2**53 - 1)], True, [str(-(2**53 - 1)), str(2**53 - 1)]),
+        (["1", "9" * 5000], True, None),
+        (["1", "--2"], True, None),
+        (["1", "\u00b2"], True, None),
+        ([True, 1], True, None),
+        ([1.5, 2], True, None),
+        ([], True, None),
+        ([_Priority.LOW, _Priority.HIGH], True, ["1", "3"]),
+    ],
+)
+def test_fix_enum_types_sends_only_integer_enums_gemini_accepts(
+    enum_values: list[object], send_integer_enums: bool, expected_enum: list[str] | None
+) -> None:
+    schema: Final = {"type": "integer", "enum": enum_values}
+
+    _fix_enum_types(schema, send_integer_enums=send_integer_enums)
+
+    assert schema.get("enum") == expected_enum
+    assert "format" not in schema
 
 def test_get_token_url():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -1597,6 +1821,148 @@ async def test_vertex_ai_token_counter_forwards_system_and_tools_to_partner_requ
     assert with_optional_fields.total_tokens == 37
     assert without_optional_fields is not None
     assert without_optional_fields.total_tokens == 37
+
+
+_PARTNER_CHAT_TOOL_TURNS: Final[list[dict[str, object]]] = [
+    {"role": "user", "content": "Weather in SF?"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+]
+_PARTNER_RESPONSES_TOOL: Final[dict[str, object]] = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+
+async def _partner_counted_bodies(
+    model: str, chat_params: dict[str, JsonValue] | None = None
+) -> tuple[dict[str, object], ...]:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 37}
+
+    class FakeHttpClient:
+        posted_bodies: tuple[dict[str, object], ...] = ()
+
+        async def post(
+            self, url: str, headers: dict[str, str], json: dict[str, object], timeout: float
+        ) -> FakeResponse:
+            self.posted_bodies = (*self.posted_bodies, json)
+            return FakeResponse()
+
+    fake_http_client: Final = FakeHttpClient()
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=fake_http_client),
+        patch.object(
+            handler.VertexAIPartnerModelsTokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use=model,
+            messages=copy.deepcopy(_PARTNER_CHAT_TOOL_TURNS),
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            tools=[_PARTNER_RESPONSES_TOOL],
+            chat_params=chat_params or {},
+        )
+
+    assert result is not None
+    assert result.total_tokens == 37
+    return fake_http_client.posted_bodies
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_sends_chat_tool_use_in_the_shape_chat_inference_sends() -> None:
+    assert await _partner_counted_bodies("claude-opus-5-5") == (
+        {
+            "model": "claude-opus-5-5",
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Weather in SF?"}]},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {}}],
+                },
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "sunny"}]},
+            ],
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "input_schema": {"type": "object", "properties": {}},
+                    "type": "custom",
+                    "description": "",
+                }
+            ],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_sends_the_structured_output_vertex_inference_sends() -> None:
+    model: Final = "claude-haiku-4-5"
+    chat_params: Final[dict[str, JsonValue]] = {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]},
+            },
+        }
+    }
+    config: Final = VertexAIAnthropicConfig()
+    inference: Final = config.transform_request(
+        model=model,
+        messages=copy.deepcopy(_PARTNER_CHAT_TOOL_TURNS),
+        optional_params=config.map_openai_params(
+            {
+                **chat_params,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "",
+                            "parameters": _PARTNER_RESPONSES_TOOL["parameters"],
+                        },
+                    }
+                ],
+            },
+            {},
+            model,
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    (body,) = await _partner_counted_bodies(model, chat_params)
+
+    assert (body["tools"], body.get("tool_choice"), body.get("output_config")) == (
+        inference["tools"],
+        inference.get("tool_choice"),
+        inference.get("output_config"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_vertex_llama_count_sends_chat_tool_use_as_sent() -> None:
+    assert await _partner_counted_bodies("meta/llama-4-maverick-17b-128e-instruct-maas") == (
+        {
+            "model": "meta/llama-4-maverick-17b-128e-instruct-maas",
+            "messages": _PARTNER_CHAT_TOOL_TURNS,
+            "tools": [_PARTNER_RESPONSES_TOOL],
+        },
+    )
 
 
 @pytest.mark.asyncio

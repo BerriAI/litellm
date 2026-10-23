@@ -92,7 +92,10 @@ def test_search_tool_allowlist_refuses_other_tools_before_any_upstream_call(
             assert (refused.status_code, refused.json()) == (403, refusal), refused.text
         assert wire.drain() == ()
         served: Final = gateway.request("POST", f"/v1/search/{allowed}", _SEARCH_BODY, key=key)
-        assert (served.status_code, served.json()) == (200, {"object": "search", "results": []}), served.text
+        assert (served.status_code, served.json()) == (
+            200,
+            {"object": "search", "results": [], "provider_metadata": {}},
+        ), served.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/allowed/search")]
 
 
