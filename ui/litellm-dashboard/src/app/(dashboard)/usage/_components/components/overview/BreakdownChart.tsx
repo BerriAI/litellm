@@ -6,6 +6,7 @@ import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import type { DailyData } from "@/components/UsagePage/types";
 import { cn } from "@/lib/cva.config";
 import {
+  colorForModel,
   formatMetricValue,
   leaderboard,
   OTHER_COLOR,
@@ -36,8 +37,16 @@ export interface BreakdownState {
   dimension: BreakdownDimension;
 }
 
-export const useBreakdown = (results: readonly DailyData[], { metric, dimension }: BreakdownState, top = 6) => {
-  const series = useMemo(() => seriesBy(results, dimension, metric, top), [results, dimension, metric, top]);
+export const useBreakdown = (
+  results: readonly DailyData[],
+  { metric, dimension }: BreakdownState,
+  top = 6,
+  colorByKey?: ReadonlyMap<string, string>,
+) => {
+  const series = useMemo(
+    () => seriesBy(results, dimension, metric, { top, colorByKey }),
+    [results, dimension, metric, top, colorByKey],
+  );
   const ranking = useMemo(() => leaderboard(results, dimension, metric), [results, dimension, metric]);
   return { series, ranking };
 };
@@ -114,6 +123,7 @@ export function Leaderboard({
   limit = 10,
   columns = 1,
   dense = false,
+  colorByKey,
 }: {
   ranking: readonly LeaderRow[];
   series: Series;
@@ -122,8 +132,10 @@ export function Leaderboard({
   limit?: number;
   columns?: 1 | 2;
   dense?: boolean;
+  colorByKey?: ReadonlyMap<string, string>;
 }) {
   const colorOf = (name: string) => {
+    if (colorByKey) return colorForModel(name, colorByKey);
     const index = series.labels.indexOf(name);
     return index === -1 ? OTHER_COLOR : series.colors[index];
   };

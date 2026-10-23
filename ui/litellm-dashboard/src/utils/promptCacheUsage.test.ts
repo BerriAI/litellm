@@ -36,4 +36,24 @@ describe("extractPromptCacheTokens", () => {
     ).toStrictEqual({});
     expect(extractPromptCacheTokens({ cache_read_input_tokens: Number.NaN })).toStrictEqual({});
   });
+
+  it("should preserve explicitly recorded zero counts when totals require them", () => {
+    const usage = {
+      cache_read_input_tokens: 0,
+      prompt_tokens_details: { cached_tokens: 100, cache_creation_tokens: 0 },
+    };
+    expect(extractPromptCacheTokens(usage, true)).toStrictEqual({ cacheReadTokens: 0, cacheCreationTokens: 0 });
+    expect(extractPromptCacheTokens(usage)).toStrictEqual({ cacheReadTokens: 100 });
+  });
+
+  it("should preserve Responses API cache counts with zero-inclusive extraction", () => {
+    const usage = { input_tokens_details: { cached_tokens: 0, cache_write_tokens: 120 } };
+    expect(extractPromptCacheTokens(usage, true)).toStrictEqual({ cacheReadTokens: 0, cacheCreationTokens: 120 });
+  });
+
+  it("should keep missing and invalid counts unavailable when including zero", () => {
+    expect(extractPromptCacheTokens(undefined, true)).toStrictEqual({});
+    const invalid = { cache_read_input_tokens: -1, cache_creation_input_tokens: Number.NaN };
+    expect(extractPromptCacheTokens(invalid, true)).toStrictEqual({});
+  });
 });

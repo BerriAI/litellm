@@ -10,7 +10,7 @@ Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 import json
 import os
 import re
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -250,26 +250,16 @@ class TestResponseCompliance:
             print(f"✓ Output field '{field}' exists in spec")
 
     def test_status_enum_values(self, spec_dict):
-        """Verify status enum values match spec."""
-        # `status` is an output-only field; validate against the response schema.
-        schema = spec_dict["components"]["schemas"]["Interaction"]
-        status_prop = schema["properties"]["status"]
-        # Google Interactions API uses lowercase status values (updated Feb 2026).
-        # Keep this an exact match: this test intentionally breaks CI when
-        # Google changes the live spec — that breakage is how we get notified
-        # to review the change.
-        expected_statuses = [
-            "in_progress",
-            "requires_action",
-            "completed",
-            "failed",
-            "cancelled",
-            "incomplete",
-            "budget_exceeded",
-            "queued",
-        ]
-        assert status_prop["enum"] == expected_statuses
-        print(f"✓ Status enum values: {expected_statuses}")
+        from pydantic import TypeAdapter
+
+        from litellm.types.interactions import Interaction, InteractionStatus
+
+        schema: Final = spec_dict["components"]["schemas"]["Interaction"]
+        statuses: Final = TypeAdapter(tuple[str, ...]).validate_python(schema["properties"]["status"]["enum"])
+        assert statuses
+        for status in statuses:
+            assert Interaction.model_validate({"id": "interaction-status", "status": status}).status.value == status
+            assert InteractionStatus(status).value == status
 
     def test_usage_schema(self, spec_dict):
         """Verify Usage schema fields."""
