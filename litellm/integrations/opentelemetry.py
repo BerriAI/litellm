@@ -3161,14 +3161,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 otel_exporter,
             )
             normalized_endpoint = self._normalize_otel_endpoint(otel_endpoint, "traces")
-            from litellm.integrations.otel.plumbing.otlp_transport import build_otlp_http_transport
-
-            tls: Final = resolve_otlp_http_tls("TRACES", _split_otel_headers)
+            tls: Final = resolve_otlp_http_tls("TRACES")
             return BatchSpanProcessor(
                 OTLPSpanExporterHTTP(
                     endpoint=normalized_endpoint,
                     headers=_split_otel_headers,
-                    _transport=build_otlp_http_transport("TRACES", tls),
+                    certificate_file=tls.certificate_file,
+                    session=tls.session,
                 ),
             )
         elif otel_exporter == "otlp_grpc" or otel_exporter == "grpc":
@@ -3250,13 +3249,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self.OTEL_EXPORTER,
                 normalized_endpoint,
             )
-            from litellm.integrations.otel.plumbing.otlp_transport import build_otlp_http_transport
-
-            tls: Final = resolve_otlp_http_tls("LOGS", _split_otel_headers)
+            tls: Final = resolve_otlp_http_tls("LOGS")
             return OTLPLogExporter(
                 endpoint=normalized_endpoint,
                 headers=_split_otel_headers,
-                _transport=build_otlp_http_transport("LOGS", tls),
+                certificate_file=tls.certificate_file,
+                session=tls.session,
             )
         elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
             try:
@@ -3320,13 +3318,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 OTLPMetricExporter,
             )
 
-            from litellm.integrations.otel.plumbing.otlp_transport import build_otlp_http_transport
-
-            tls: Final = resolve_otlp_http_tls("METRICS", _split_otel_headers)
+            tls: Final = resolve_otlp_http_tls("METRICS")
             exporter = OTLPMetricExporter(
                 endpoint=normalized_endpoint,
                 headers=_split_otel_headers,
-                _transport=build_otlp_http_transport("METRICS", tls),
+                certificate_file=tls.certificate_file,
+                session=tls.session,
             )
             return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
 

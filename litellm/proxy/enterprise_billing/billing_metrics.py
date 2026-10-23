@@ -25,8 +25,6 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.otel.plumbing.otlp_tls import OtlpHttpTls
-from litellm.integrations.otel.plumbing.otlp_transport import build_otlp_http_transport
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableCategory,
 )
@@ -106,12 +104,10 @@ def build_mtls_meter_provider(config: BillingMetricsConfig) -> MeterProvider:
     """
     exporter: Final = OTLPMetricExporter(
         endpoint=_metrics_endpoint(config.endpoint),
-        _transport=build_otlp_http_transport(
-            "METRICS",
-            OtlpHttpTls(certificate_file=config.ca_cert_path, session=None),
-            client_certificate_file=config.client_cert_path,
-            client_key_file=config.client_key_path,
-        ),
+        # None -> exporter falls back to the system trust store.
+        certificate_file=config.ca_cert_path,
+        client_certificate_file=config.client_cert_path,
+        client_key_file=config.client_key_path,
     )
     reader: Final = PeriodicExportingMetricReader(exporter, export_interval_millis=config.export_interval_ms)
     return MeterProvider(metric_readers=[reader], resource=Resource.create(_resource_attributes(config)))
