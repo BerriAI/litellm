@@ -3,18 +3,19 @@ import re
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from fnmatch import fnmatchcase
 from typing import Final
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import TypeAdapter
 from starlette.datastructures import Headers
-from starlette.requests import Request
 from starlette.routing import Mount
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
-from litellm.proxy._types import SpecialHeaders
+from litellm.proxy._types import AdminMCPPermissions, SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.middleware.admission_control_middleware import ADMISSION_LEASE_SCOPE_KEY
 
 _REQUEST_HEADERS: Final = frozenset(
@@ -58,6 +59,62 @@ _RESERVED_KEY_HEADERS: Final = (
 _SETTINGS: Final = TypeAdapter(Mapping[str, object])
 _IDENTITY_MAPPINGS: Final = TypeAdapter(tuple[dict[str, object], ...] | dict[str, object] | None)
 _OAUTH_MAPPINGS: Final = TypeAdapter(dict[str, str])
+_ROUTE_GRANTS: Final = TypeAdapter(tuple[str, ...])
+
+
+def _admin_route_allowed(auth: UserAPIKeyAuth, request: Request, method: str, path: str) -> bool:
+    target: Final = Request({**request.scope, "method": method, "path": path, "raw_path": path.encode()})
+    try:
+        RouteChecks.should_call_route(route=path, valid_token=auth, request=target)
+    except HTTPException:
+        return False
+    return True
+
+
+def _admin_route_intersects(template: str, grant: str) -> bool:
+    template_parts: Final = template.strip("/").split("/")
+    grant_parts: Final = grant.strip("/").split("/")
+    for segment, allowed in zip(template_parts, grant_parts):
+        if allowed == "*":
+            return True
+        if segment.startswith("{") and segment.endswith("}"):
+            continue
+        if not fnmatchcase(segment, allowed):
+            return False
+    return len(grant_parts) <= len(template_parts)
+
+
+def _admin_tool_visible(auth: UserAPIKeyAuth, request: Request, method: str, path: str) -> bool:
+    if _admin_route_allowed(auth, request, method, path):
+        return True
+    grants: Final = _ROUTE_GRANTS.validate_python(getattr(auth, "allowed_routes", None) or ())
+    return "{" in path and any(_admin_route_intersects(path, grant) for grant in grants if grant.startswith("/"))
+
+
+def get_admin_mcp_permissions(
+    auth: UserAPIKeyAuth, request: Request, tool: str | None = None, path: str | None = None
+) -> AdminMCPPermissions:
+    from litellm_admin_mcp.catalog import (  # pyright: ignore[reportMissingTypeStubs]  # connector has no py.typed marker
+        BY_NAME,
+        OPERATIONS,
+    )
+
+    allowed: Final = tuple(
+        operation.name
+        for operation in OPERATIONS
+        if _admin_tool_visible(auth, request, operation.method, operation.path)
+    )
+    if tool is None:
+        return AdminMCPPermissions(tools=allowed)
+    operation: Final = BY_NAME.get(tool)
+    if operation is None or tool not in allowed:
+        return AdminMCPPermissions(tools=allowed, action_allowed=False)
+    if path is None:
+        return AdminMCPPermissions(tools=allowed, action_allowed=True)
+    action_allowed: Final = RouteChecks.check_route_access(path, (operation.path,)) and _admin_route_allowed(
+        auth, request, operation.method, path
+    )
+    return AdminMCPPermissions(tools=allowed, action_allowed=action_allowed)
 
 
 def _configured_key_header() -> bytes | None:

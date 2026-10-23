@@ -12,8 +12,8 @@ from starlette.testclient import TestClient
 
 from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LiteLLM_UserTable, ProxyException, SpecialHeaders
-from litellm.proxy.admin_mcp import admin_mcp_lifespan
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, ProxyException, SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy.admin_mcp import admin_mcp_lifespan, get_admin_mcp_permissions
 from litellm.proxy.auth.user_api_key_auth import get_api_key, get_api_key_from_custom_header
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints import internal_user_endpoints
@@ -66,12 +66,22 @@ def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
         if credential not in {"admin-a", "admin-b", "admin-b-limited", "member", "viewer"}:
             raise HTTPException(status_code=401)
         user_id: Final = "admin-b" if credential == "admin-b-limited" else credential
+        role: Final = {"member": LitellmUserRoles.INTERNAL_USER, "viewer": LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY}.get(
+            user_id, LitellmUserRoles.PROXY_ADMIN
+        )
+        auth: Final = UserAPIKeyAuth(
+            user_id=user_id, user_role=role,
+            allowed_routes=["/user/info"] if credential == "admin-b-limited" else None,
+        )
         return {
             "user_id": user_id,
             "user_info": {
                 "user_id": user_id,
-                "user_role": {"member": "internal_user", "viewer": "proxy_admin_viewer"}.get(user_id, "proxy_admin"),
+                "user_role": role.value,
             },
+            "admin_mcp_permissions": get_admin_mcp_permissions(
+                auth, request, request.query_params.get("mcp_tool"), request.query_params.get("mcp_path")
+            ).model_dump(mode="json"),
         }
 
     @app.get("/key/list", operation_id="list_keys_key_list_get")
@@ -565,3 +575,36 @@ async def test_oauth2_proxy_auth_preserves_native_identity_and_peer_trust(
     assert response.status_code == status, response.text
     if status == 200:
         assert "list_keys" in {tool["name"] for tool in response.json()["result"]["tools"]}
+
+
+@pytest.mark.parametrize(
+    "routes,session,can_write",
+    [(None, False, True), ([], False, True), (["management_routes"], False, True),
+     (["info_routes"], False, False), (["llm_api_routes"], False, False), (None, True, True), (["info_routes"], True, False)],
+)
+def test_admin_mcp_uses_credential_routes_without_removing_full_access(
+    routes: list[str] | None, session: bool, can_write: bool
+) -> None:
+    auth: Final = UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=routes, is_session_token=session,
+    )
+    request: Final = Request({"type": "http", "method": "GET", "path": "/user/info", "headers": []})
+    permissions: Final = get_admin_mcp_permissions(auth, request, "create_key", "/key/generate")
+    assert permissions.action_allowed is can_write
+    assert ("create_key" in permissions.tools) is can_write
+
+
+@pytest.mark.parametrize("grant", ["/team/team-a/callback", "/team/team-a/*"])
+def test_admin_mcp_checks_the_concrete_resource_even_when_the_tool_is_visible(grant: str) -> None:
+    auth: Final = UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=["/user/info", grant],
+        metadata={"is_session_token": True, "user_role": "proxy_admin"},
+    )
+    request: Final = Request({"type": "http", "method": "GET", "path": "/user/info", "headers": []})
+    own: Final = get_admin_mcp_permissions(auth, request, "get_team_callbacks", "/team/team-a/callback")
+    other: Final = get_admin_mcp_permissions(auth, request, "get_team_callbacks", "/team/team-b/callback")
+    wrong_route: Final = get_admin_mcp_permissions(auth, request, "get_team_callbacks", "/key/generate")
+    assert "get_team_callbacks" in own.tools
+    assert own.action_allowed is True
+    assert other.action_allowed is False
+    assert wrong_route.action_allowed is False

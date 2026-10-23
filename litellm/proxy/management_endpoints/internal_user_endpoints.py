@@ -930,6 +930,11 @@ async def user_info(
     request: Request,
     user_id: str | None = fastapi.Query(default=None, description="User ID in the request parameters"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    admin_mcp: bool = fastapi.Query(
+        default=False, description="Include the caller's current admin MCP route permissions"
+    ),
+    mcp_tool: str | None = fastapi.Query(default=None, description="Admin MCP tool to authorize for this caller"),
+    mcp_path: str | None = fastapi.Query(default=None, description="Concrete management route used by the MCP tool"),
 ):
     """
     [10/07/2024]
@@ -950,12 +955,23 @@ async def user_info(
         user_id = _normalize_user_info_user_id(request=request, user_id=user_id)
         _enforce_user_info_access(user_id=user_id, user_api_key_dict=user_api_key_dict)
 
+        from litellm.proxy.admin_mcp import get_admin_mcp_permissions
+
+        mcp_permissions: Final = (
+            get_admin_mcp_permissions(user_api_key_dict, request, mcp_tool, mcp_path) if admin_mcp is True else None
+        )
+
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         if user_id is None and user_api_key_has_admin_view(user_api_key_dict):
-            return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
+            admin_response: Final = await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
+            return (
+                admin_response.model_copy(update={"admin_mcp_permissions": mcp_permissions})
+                if mcp_permissions is not None
+                else admin_response
+            )
         elif user_id is None:
             user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
@@ -994,7 +1010,11 @@ async def user_info(
             ),
         )
 
-        return response_data
+        return (
+            response_data.model_copy(update={"admin_mcp_permissions": mcp_permissions})
+            if mcp_permissions is not None
+            else response_data
+        )
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)

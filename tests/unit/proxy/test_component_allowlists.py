@@ -452,7 +452,10 @@ def test_admin_mcp_survives_only_management_component_lifespans(
 
     @application.get("/user/info")
     async def user_info() -> dict[str, object]:
-        return {"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+        return {
+            "user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"},
+            "admin_mcp_permissions": {"tools": ["list_teams"], "action_allowed": True},
+        }
 
     if component_lifespan is not None:
         application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
