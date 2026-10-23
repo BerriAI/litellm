@@ -26,7 +26,10 @@ function requestOptions(overrides: Partial<Parameters<typeof runChatRequest>[0]>
   };
 }
 
-const event: MCPEvent = { type: "response.mcp_call.completed", item_id: "tool-call-1" };
+const event: MCPEvent = {
+  type: "response.output_item.done",
+  item: { type: "mcp_call", id: "tool-call-1", name: "lookup", arguments: "{}", output: "Saved result" },
+};
 
 describe("runChatRequest", () => {
   beforeEach(() => {
@@ -64,7 +67,7 @@ describe("runChatRequest", () => {
     expect(args[14]).toBe("previous-response");
   });
 
-  it("should preserve partial text on abort without persisting partial tools or late response ids", async () => {
+  it("should preserve completed tool results and partial text on abort without retaining late response ids", async () => {
     const controller = new AbortController();
     const options = requestOptions({ signal: controller.signal });
     vi.mocked(makeOpenAIResponsesRequest).mockImplementation(async (...args) => {
@@ -76,8 +79,8 @@ describe("runChatRequest", () => {
     });
 
     await runChatRequest(options);
-    expect(options.onUpdate).toHaveBeenLastCalledWith({ content: "Partial answer [stopped]" });
-    expect(options.onUpdate).not.toHaveBeenCalledWith({ mcpEvents: [event] });
+    expect(options.onUpdate).toHaveBeenCalledWith({ content: "Partial answer [stopped]" });
+    expect(options.onUpdate).toHaveBeenLastCalledWith({ mcpEvents: [event] });
     expect(options.onResponseId).toHaveBeenCalledExactlyOnceWith(null);
   });
 
@@ -89,8 +92,8 @@ describe("runChatRequest", () => {
       throw new Error("Provider unavailable");
     });
     await runChatRequest(options);
-    expect(options.onUpdate).toHaveBeenLastCalledWith({ content: "Partial answer" });
-    expect(options.onUpdate).not.toHaveBeenCalledWith({ mcpEvents: [event] });
+    expect(options.onUpdate).toHaveBeenCalledWith({ content: "Partial answer" });
+    expect(options.onUpdate).toHaveBeenLastCalledWith({ mcpEvents: [event] });
     expect(options.onResponseId).toHaveBeenCalledWith(null);
   });
 

@@ -45,13 +45,9 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
     return null;
   }
 
-  const defaultOpenKeys = new Set<string>(
-    toolsEvent ? ["list-tools"] : mcpCallEvents.map((_, index) => `mcp-call-${index}`),
-  );
-
   return (
     <div className={cn("mcp-events-display", className)}>
-      <MCPEventsPanels toolsEvent={toolsEvent} mcpCallEvents={mcpCallEvents} defaultOpenKeys={defaultOpenKeys} />
+      <MCPEventsPanels toolsEvent={toolsEvent} mcpCallEvents={mcpCallEvents} />
     </div>
   );
 };
@@ -59,22 +55,13 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
 interface MCPEventsPanelsProps {
   toolsEvent: MCPEvent | undefined;
   mcpCallEvents: MCPEvent[];
-  defaultOpenKeys: Set<string>;
 }
 
-function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEventsPanelsProps) {
-  const [openKeys, setOpenKeys] = useState<Set<string>>(defaultOpenKeys);
+function MCPEventsPanels({ toolsEvent, mcpCallEvents }: MCPEventsPanelsProps) {
+  const [openPanels, setOpenPanels] = useState<Record<string, boolean>>({});
 
   const toggleKey = (key: string, open: boolean) => {
-    setOpenKeys((prev) => {
-      const next = new Set(prev);
-      if (open) {
-        next.add(key);
-      } else {
-        next.delete(key);
-      }
-      return next;
-    });
+    setOpenPanels((prev) => ({ ...prev, [key]: open }));
   };
 
   return (
@@ -86,7 +73,7 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEven
           <MCPEventPanel
             panelKey="list-tools"
             title="List tools"
-            open={openKeys.has("list-tools")}
+            open={openPanels["list-tools"] ?? false}
             onOpenChange={(open) => toggleKey("list-tools", open)}
           >
             <div>
@@ -109,7 +96,7 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEven
               key={key}
               panelKey={key}
               title={callEvent.item?.name || "Tool call"}
-              open={openKeys.has(key)}
+              open={openPanels[key] ?? true}
               onOpenChange={(open) => toggleKey(key, open)}
             >
               <div>
