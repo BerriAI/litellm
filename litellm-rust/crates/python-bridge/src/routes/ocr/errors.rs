@@ -80,9 +80,12 @@ mod tests {
         Error::Provider {
             status: 429,
             body: r#"{"message":"rate limited"}"#.into(),
-            headers: vec![("Retry-After".into(), "17".into())],
+            headers: reqwest::header::HeaderMap::from_iter([(
+                reqwest::header::RETRY_AFTER,
+                reqwest::header::HeaderValue::from_static("17"),
+            )]),
         },
-        vec![("Retry-After".into(), "17".into())]
+        vec![("retry-after".into(), "17".into())]
     )]
     #[case::transport(litellm_http::Error::upstream(429, r#"{"message":"rate limited"}"#.into()).into(), vec![])]
     fn a_provider_answer_keeps_its_status_body_and_headers(

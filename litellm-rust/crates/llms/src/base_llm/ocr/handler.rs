@@ -136,7 +136,7 @@ pub async fn ocr<C: BaseOcrConfig>(
         .map_err(litellm_http::Error::from)?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let headers = header_pairs(response.headers());
+        let headers = response.headers().clone();
         let body = read_error_body(response, request.connection.max_response_bytes).await?;
         return Err(config.get_error_class(body, status, headers));
     }
@@ -168,7 +168,7 @@ pub async fn read_response_bytes(
 ) -> Result<Bytes, Error> {
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let headers = header_pairs(response.headers());
+        let headers = response.headers().clone();
         let body = read_error_body(response, limit).await?;
         return Err(Error::Provider {
             status,

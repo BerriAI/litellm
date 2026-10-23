@@ -6,12 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-error.workspace = true
 axum = { workspace = true, features = ["json", "original-uri", "query"] }
 axum-login.workspace = true
 base64.workspace = true
 governor = { version = "0.10.4", default-features = false, features = ["std"] }
 jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
-litellm-error.workspace = true
 litellm-gateway-auth.workspace = true
 rand.workspace = true
 serde.workspace = true

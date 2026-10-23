@@ -95,7 +95,7 @@ async fn an_upstream_error_keeps_its_status_whole_body_and_headers(
     let (status, body, headers) = error.upstream_response().expect("the provider answered");
     assert_eq!(status, 422);
     assert_eq!(body, expected_body);
-    let header = |name: &str| litellm_http::request::header_value(headers, name);
+    let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
     assert_eq!(header("retry-after"), Some("17"));
     assert_eq!(header("x-request-id"), Some("request-123"));
     assert_eq!(header("x-future-header"), Some("retained"));

@@ -68,11 +68,9 @@ impl Error {
     pub fn is_request(&self) -> bool {
         match self {
             Self::InvalidConfiguration(_)
-            | Self::CredentialAcquisition(_)
             | Self::EmptyCallerCredential { .. }
-            | Self::Provider(_)
-            | Self::CredentialChain(_)
             | Self::InvalidHeader => true,
+            Self::CredentialAcquisition(_) | Self::Provider(_) | Self::CredentialChain(_) => false,
             Self::MissingParam { spec, .. } => match spec.kind {
                 ParamKind::Setting => true,
                 ParamKind::Credential => false,
@@ -273,6 +271,11 @@ mod tests {
     #[case::api_key(Error::MissingApiKey { provider: "Example", environment_variable: "EXAMPLE_API_KEY" }, false)]
     #[case::invalid_configuration(Error::InvalidConfiguration(ErrorDetail::PlanNotAllowed), true)]
     #[case::invalid_header(Error::InvalidHeader, true)]
+    #[case::identity_provider_outage(
+        Error::CredentialAcquisition(ErrorDetail::MissingResolver),
+        false
+    )]
+    #[case::provider_sdk_failure(Error::provider(denied()), false)]
     fn a_setting_the_caller_can_pass_is_theirs_to_fix_but_credentials_and_api_bases_are_not(
         #[case] error: Error,
         #[case] expected: bool,

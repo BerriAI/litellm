@@ -144,7 +144,7 @@ pub(super) async fn execute(
 /// implementation must not retry those, so collapse them to one variant that
 /// can only mean the provider was already called.
 pub(super) fn as_response_error(err: Error) -> Error {
-    if err.is_response() {
+    if err.is_response() || err.upstream_response().is_some() {
         return err;
     }
     Error::invalid_response(litellm_llms::ErrorDetail::invalid(
@@ -339,5 +339,14 @@ mod tests {
         });
         let report = litellm_error::Report::new(&as_response_error(original)).to_string();
         assert!(!report.contains("chat completions response"), "{report}");
+    }
+
+    #[test]
+    fn a_provider_answer_keeps_its_status_and_body() {
+        let upstream = Error::from(litellm_http::Error::upstream(429, "slow down".into()));
+        assert_eq!(
+            as_response_error(upstream).upstream_response(),
+            Some((429, "slow down"))
+        );
     }
 }

@@ -48,12 +48,26 @@ impl Error {
     }
 }
 
+impl Error {
+    fn message(&self) -> String {
+        match self {
+            Self::Body(_) | Self::Query(_) => litellm_error::Report::new(self).to_string(),
+            Self::InvalidCredentials
+            | Self::RateLimited
+            | Self::Login(_)
+            | Self::Session(_)
+            | Self::Token(_)
+            | Self::Auth(_) => self.to_string(),
+        }
+    }
+}
+
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let status = self.status();
         let body = Json(ErrorBody {
             error: ErrorMessage {
-                message: litellm_error::Report::new(&self).to_string(),
+                message: self.message(),
             },
         });
         match status {
@@ -98,5 +112,17 @@ mod tests {
                 .contains_key(header::RETRY_AFTER),
             retry_after
         );
+    }
+
+    #[tokio::test]
+    async fn a_body_never_shows_what_the_backend_said() {
+        let backend = std::io::Error::other("vault token rejected");
+        let response = Error::Auth(AuthError::Unavailable(litellm_error::Source::new(backend)))
+            .into_response();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(!body.contains("vault token rejected"), "{body}");
     }
 }

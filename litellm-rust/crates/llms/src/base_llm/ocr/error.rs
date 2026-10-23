@@ -2,8 +2,9 @@ use std::{io, path::PathBuf, sync::Arc};
 
 use litellm_core_utils::call_arguments::ArgumentError;
 use litellm_error::Source;
+use reqwest::header::HeaderMap;
 
-pub type Headers = [(String, String)];
+static NO_HEADERS: std::sync::LazyLock<HeaderMap> = std::sync::LazyLock::new(HeaderMap::new);
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
@@ -11,7 +12,7 @@ pub enum Error {
     Provider {
         status: u16,
         body: String,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
     },
     #[error("File is empty or could not be read")]
     EmptyFile,
@@ -146,7 +147,7 @@ impl Error {
         }
     }
 
-    pub fn upstream_response(&self) -> Option<(u16, &str, &Headers)> {
+    pub fn upstream_response(&self) -> Option<(u16, &str, &HeaderMap)> {
         match self {
             Self::Provider {
                 status,
@@ -155,7 +156,7 @@ impl Error {
             } => Some((*status, body, headers)),
             Self::Http(error) => error
                 .upstream_response()
-                .map(|(status, body)| (status, body, &[][..])),
+                .map(|(status, body)| (status, body, &*NO_HEADERS)),
             Self::EmptyFile
             | Self::FileRead { .. }
             | Self::DocumentTask(_)

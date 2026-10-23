@@ -6,6 +6,7 @@ use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
 };
+use reqwest::header::HeaderMap;
 
 pyo3::create_exception!(
     _native,
@@ -27,10 +28,19 @@ pub(crate) fn upstream_error(
     py: Python<'_>,
     status: u16,
     body: &str,
-    headers: &[(String, String)],
+    headers: &HeaderMap,
 ) -> PyResult<PyErr> {
     let error = RustUpstreamError::new_err((status, body.to_owned()));
-    error.value(py).setattr("headers", headers.to_vec())?;
+    let pairs: Vec<(&str, String)> = headers
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str(),
+                String::from_utf8_lossy(value.as_bytes()).into_owned(),
+            )
+        })
+        .collect();
+    error.value(py).setattr("headers", pairs)?;
     Ok(error)
 }
 
@@ -64,7 +74,7 @@ pub(crate) fn route_failure(
         return Ok(raised);
     }
     if let Some((status, body)) = error.upstream_response() {
-        return public(upstream_error(py, status, body, &[])?);
+        return public(upstream_error(py, status, body, &HeaderMap::new())?);
     }
     let native = match (marker, error.rejected_request()) {
         (RequestMarker::Messages, Some(rejection)) => {
@@ -87,6 +97,8 @@ pub(crate) fn route_error_to_pyerr(error: Error) -> PyErr {
 
 #[cfg(test)]
 mod tests {
+    use reqwest::header::{HeaderValue, RETRY_AFTER};
+
     use super::*;
 
     fn upstream_payload(py: Python<'_>, failure: &PyErr) -> ((u16, String), Vec<(String, String)>) {
@@ -155,11 +167,14 @@ mod tests {
     fn upstream_error_keeps_the_provider_headers() {
         Python::initialize();
         Python::attach(|py| {
-            let headers = [("Retry-After".to_string(), "17".to_string())];
+            let headers = HeaderMap::from_iter([(RETRY_AFTER, HeaderValue::from_static("17"))]);
             let upstream = upstream_error(py, 503, "busy", &headers).unwrap();
             assert_eq!(
                 upstream_payload(py, &upstream),
-                ((503, "busy".into()), headers.to_vec())
+                (
+                    (503, "busy".into()),
+                    vec![("retry-after".into(), "17".into())]
+                )
             );
         });
     }

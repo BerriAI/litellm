@@ -320,7 +320,7 @@ mod tests {
         StatusCode::INTERNAL_SERVER_ERROR
     )]
     #[case::ocr_provider_answer(
-        Error::Ocr(OcrError::Provider { status: 429, body: "slow".into(), headers: vec![] }),
+        Error::Ocr(OcrError::Provider { status: 429, body: "slow".into(), headers: Default::default() }),
         StatusCode::TOO_MANY_REQUESTS
     )]
     #[case::ocr_missing_credential(

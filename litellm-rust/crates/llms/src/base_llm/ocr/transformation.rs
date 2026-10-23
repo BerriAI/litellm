@@ -361,7 +361,7 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         &self,
         error_message: String,
         status_code: u16,
-        headers: Vec<(String, String)>,
+        headers: reqwest::header::HeaderMap,
     ) -> Error {
         Error::Provider {
             status: status_code,

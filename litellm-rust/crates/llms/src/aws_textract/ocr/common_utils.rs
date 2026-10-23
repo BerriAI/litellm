@@ -321,7 +321,7 @@ struct AwsError {
 /// Textract answers both an unsupported format and a multi-page PDF or TIFF
 /// with a bare "unsupported document format", which reads like a corrupt file.
 /// Say what the synchronous API accepts.
-pub(super) fn error_class(body: String, status: u16, headers: Vec<(String, String)>) -> Error {
+pub(super) fn error_class(body: String, status: u16, headers: reqwest::header::HeaderMap) -> Error {
     let unsupported = serde_json::from_str::<AwsError>(&body)
         .ok()
         .filter(|error| error.kind.ends_with(UNSUPPORTED_DOCUMENT));
@@ -559,7 +559,10 @@ mod tests {
         #[case] body: &str,
         #[case] hinted_message: Option<&str>,
     ) {
-        let response_headers = vec![("x-amzn-requestid".to_string(), "abc".to_string())];
+        let response_headers = reqwest::header::HeaderMap::from_iter([(
+            reqwest::header::HeaderName::from_static("x-amzn-requestid"),
+            reqwest::header::HeaderValue::from_static("abc"),
+        )]);
 
         let Error::Provider {
             status,
