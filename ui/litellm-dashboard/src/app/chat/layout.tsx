@@ -4,11 +4,11 @@ import { Suspense, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ChatShellProvider } from "@/contexts/ChatShellContext";
 import ChatShell from "@/components/chat/ChatShell";
 import { uiHref } from "@/utils/uiHref";
+import "@/components/chat/moyai/moyai-chat.css";
 
 // The nuqs Next adapter uses useSearchParams, so keep the chat tree behind Suspense.
 function ChatLayoutContent({ children }: { children: React.ReactNode }) {
@@ -37,8 +37,10 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeProvider accessToken={accessToken}>
-      <div className="flex h-screen flex-col">
-        <Navbar accessToken={accessToken} isPublicPage={false} />
+      <link rel="preconnect" href="https://api.fontshare.com" />
+      <link rel="preconnect" href="https://cdn.fontshare.com" crossOrigin="anonymous" />
+      <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=general-sans@1&display=swap" />
+      <div className="flex h-dvh flex-col">
         <div className="min-h-0 flex-1">
           <ChatShellProvider
             accessToken={accessToken ?? ""}
