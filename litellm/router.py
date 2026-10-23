@@ -8508,7 +8508,9 @@ class Router:
             e,
             (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
         )
-        _request_team_id: Final[str | None] = (kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")
+        _request_team_id: Final[str | None] = get_request_team_id(
+            kwargs  # pyright: ignore[reportUnknownArgumentType]  # legacy kwargs lack type arguments
+        )
         # Use wildcard-aware lookup so order-based fallback also works for model
         # groups resolved via pattern routing (e.g. `openai/*` -> `openai/gpt-4.1-mini`).
         order_model_group: Final = get_pre_routing_selection(kwargs) or original_model_group

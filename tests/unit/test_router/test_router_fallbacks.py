@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from itertools import product
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
@@ -1006,3 +1007,181 @@ async def test_unknown_default_fallback_raises_after_primary_failure(
 
     assert route.call_count == 1
     assert "missing" in str(exc_info.value)
+
+
+def _team_ordered_fallback_router(public_model: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": f"{team_id}-{public_model}-{order}",
+                "litellm_params": {
+                    "model": f"openai/{public_model}-order-{order}",
+                    "api_key": f"test-{team_id}",
+                    "api_base": "https://ordered-fallback.local/v1",
+                    "order": order,
+                },
+                "model_info": {
+                    "id": f"{team_id}-{public_model}-{order}",
+                    "team_id": team_id,
+                    "team_public_model_name": public_model,
+                },
+            }
+            for team_id, order in product(("env-dev", "env-preview", "env-prod"), (1, 2))
+        ],
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "public_model, surface, metadata, team_id",
+    (
+        *(
+            pytest.param(
+                "general-model", "responses", {"litellm_metadata": {"user_api_key_team_id": team}}, team, id=team
+            )
+            for team in ("env-dev", "env-preview", "env-prod")
+        ),
+        pytest.param(
+            "compact-model",
+            "responses",
+            {"litellm_metadata": {"user_api_key_team_id": "env-prod"}},
+            "env-prod",
+            id="second-alias",
+        ),
+        pytest.param(
+            "general-model",
+            "responses",
+            {"metadata": {}, "litellm_metadata": {"user_api_key_team_id": "env-prod"}},
+            "env-prod",
+            id="empty-metadata",
+        ),
+        pytest.param(
+            "general-model",
+            "responses",
+            {"metadata": {"purpose": "test"}, "litellm_metadata": {"user_api_key_team_id": "env-prod"}},
+            "env-prod",
+            id="business-metadata",
+        ),
+        pytest.param(
+            "general-model",
+            "responses",
+            {
+                "metadata": {"user_api_key_team_id": "env-prod"},
+                "litellm_metadata": {"user_api_key_team_id": "env-prod"},
+            },
+            "env-prod",
+            id="matching-metadata",
+        ),
+        pytest.param(
+            "general-model",
+            "responses",
+            {"metadata": {"user_api_key_team_id": "env-dev"}, "litellm_metadata": {"user_api_key_team_id": "env-prod"}},
+            "env-dev",
+            id="metadata-takes-precedence",
+        ),
+        pytest.param(
+            "general-model",
+            "responses",
+            {"metadata": {"user_api_key_team_id": ""}, "litellm_metadata": {"user_api_key_team_id": "env-prod"}},
+            "env-prod",
+            id="empty-team",
+        ),
+        pytest.param(
+            "general-model",
+            "chat/completions",
+            {"metadata": {"user_api_key_team_id": "env-prod"}},
+            "env-prod",
+            id="chat-control",
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_ordered_fallback_preserves_request_team(
+    public_model: str,
+    surface: Literal["responses", "chat/completions"],
+    metadata: dict[str, dict[str, str]],
+    team_id: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _team_ordered_fallback_router(public_model)
+    answer: Final = "served by the same team's backup"
+    backup_model: Final = f"{public_model}-order-2"
+    route: Final = respx_mock.post(f"https://ordered-fallback.local/v1/{surface}").mock(
+        side_effect=(
+            httpx.Response(400, json={"error": {"message": "invalid input", "type": "invalid_request_error"}}),
+            httpx.Response(
+                200,
+                json={
+                    "id": "resp_team_fallback",
+                    "object": "response",
+                    "created_at": 1,
+                    "status": "completed",
+                    "model": backup_model,
+                    "output": [
+                        {
+                            "id": "msg_team_fallback",
+                            "type": "message",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": answer, "annotations": []}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                },
+            )
+            if surface == "responses"
+            else _fallback_chat_response(backup_model, answer),
+        )
+    )
+
+    if surface == "responses":
+        responses_result: Final = await router.aresponses(model=public_model, input="fallback prompt", **metadata)
+        assert responses_result.output[0].content[0].text == answer
+        assert responses_result._hidden_params["model_id"] == f"{team_id}-{public_model}-2"
+    else:
+        chat_result: Final = await router.acompletion(
+            model=public_model, messages=[{"role": "user", "content": "fallback prompt"}], **metadata
+        )
+        assert chat_result.choices[0].message.content == answer
+        assert chat_result._hidden_params["model_id"] == f"{team_id}-{public_model}-2"
+
+    outbound: Final = tuple(
+        (json.loads(call.request.content)["model"], call.request.headers["authorization"]) for call in route.calls
+    )
+    assert outbound == (
+        (f"{public_model}-order-1", f"Bearer test-{team_id}"),
+        (backup_model, f"Bearer test-{team_id}"),
+    )
+
+
+@pytest.mark.parametrize("metadata", ({}, {"litellm_metadata": {"user_api_key_team_id": "unknown-team"}}))
+@pytest.mark.asyncio
+async def test_ordered_fallback_without_matching_team_never_sends(
+    metadata: dict[str, dict[str, str]], respx_mock: respx.MockRouter
+) -> None:
+    router: Final = _team_ordered_fallback_router("general-model")
+    error: Final = litellm.BadRequestError(message="invalid input", model="general-model", llm_provider="openai")
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await router.async_function_with_fallbacks_common_utils(
+            e=error,
+            disable_fallbacks=False,
+            fallbacks=None,
+            context_window_fallbacks=None,
+            content_policy_fallbacks=None,
+            model_group="general-model",
+            args=(),
+            kwargs={
+                "model": "general-model",
+                "original_function": router._ageneric_api_call_with_fallbacks_helper,
+                "original_generic_function": litellm.aresponses,
+                "input": "fallback prompt",
+                **metadata,
+            },
+        )
+
+    assert exc_info.value is error
+    assert tuple(respx_mock.calls) == ()
