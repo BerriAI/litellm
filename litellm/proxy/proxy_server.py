@@ -11254,6 +11254,19 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
+        ### TOOL DISCOVERY (own lock, same interval, never rides the spend commit) ###
+        from litellm.proxy.utils import commit_tool_discoveries
+
+        scheduler.add_job(
+            commit_tool_discoveries,
+            "interval",
+            seconds=batch_writing_interval,
+            args=[prisma_client, proxy_logging_obj],
+            id="commit_tool_discoveries_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
         ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
         ## Reduces QPS as there are more tags for a single request
         tag_spend_update_interval: Final = int(batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER)

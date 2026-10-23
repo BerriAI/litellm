@@ -33,6 +33,7 @@ from litellm.constants import (
     DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
     DB_SPEND_UPDATE_JOB_NAME,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    TOOL_DISCOVERY_COMMIT_JOB_NAME,
 )
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -1657,8 +1658,6 @@ class DBSpendUpdateWriter:
             window_spend_update_queue=self.window_spend_update_queue,
         )
 
-        await self.redis_update_buffer.store_tool_discoveries_in_redis(tool_discovery_queue=self.tool_discovery_queue)
-
         # Only commit from redis to db if this pod is the leader
         if await self.pod_lock_manager.acquire_lock(
             cronjob_id=DB_SPEND_UPDATE_JOB_NAME,
@@ -1783,7 +1782,6 @@ class DBSpendUpdateWriter:
                             )
                         raise
                 uncommitted.pop("window_spend_update_transactions", None)
-                await self._commit_tool_discoveries_from_redis(prisma_client=prisma_client)
             except Exception as e:
                 spend_log_error(
                     "Spend tracking - failed to commit spend updates from Redis to DB. "
@@ -1957,9 +1955,6 @@ class DBSpendUpdateWriter:
                     exc=e,
                 )
 
-        ################## Tool Registry Upserts ##################
-        await self._flush_tool_discovery_queue(prisma_client=prisma_client)
-
     async def commit_daily_tag_spend_to_db(
         self,
         prisma_client: PrismaClient,
@@ -2105,8 +2100,24 @@ class DBSpendUpdateWriter:
         except Exception as e:
             verbose_proxy_logger.debug("_flush_tool_discovery_queue error (non-blocking): %s", e)
 
+    async def commit_tool_discoveries(self, prisma_client: PrismaClient, use_redis_buffer: bool) -> None:
+        """Scheduled alongside update_spend on its own lock, so tool table writes never ride the spend commit.
+
+        With the Redis buffer every worker hands its rows to Redis and the holder of the tool lock writes them all in
+        one statement. Without it each worker writes its own rows."""
+        if not use_redis_buffer:
+            await self._flush_tool_discovery_queue(prisma_client=prisma_client)
+            return
+        await self.redis_update_buffer.store_tool_discoveries_in_redis(tool_discovery_queue=self.tool_discovery_queue)
+        if not await self.pod_lock_manager.acquire_lock(cronjob_id=TOOL_DISCOVERY_COMMIT_JOB_NAME):
+            return
+        try:
+            await self._commit_tool_discoveries_from_redis(prisma_client=prisma_client)
+        finally:
+            await self.pod_lock_manager.release_lock(cronjob_id=TOOL_DISCOVERY_COMMIT_JOB_NAME)
+
     async def _commit_tool_discoveries_from_redis(self, prisma_client: PrismaClient) -> None:
-        """Leader only: drain every worker's tool rows from Redis and write them in one statement."""
+        """Tool lock holder only: drain every worker's tool rows from Redis and write them in one statement."""
         from litellm.proxy.db.tool_registry_writer import batch_upsert_tools
 
         items: Final = await self.redis_update_buffer.get_all_tool_discoveries_from_redis_buffer()

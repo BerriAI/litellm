@@ -23,6 +23,7 @@ from litellm.constants import (
     DB_SPEND_UPDATE_JOB_NAME,
     REDIS_TOOL_DISCOVERY_BUFFER_KEY,
     SPEND_ROLLUP_LOCK_TIMEOUT_MS,
+    TOOL_DISCOVERY_COMMIT_JOB_NAME,
 )
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
@@ -2399,13 +2400,17 @@ class _InMemoryRedis:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("lock_held_by_another_pod", [False, True])
-async def test_commit_with_redis_writes_every_workers_tools_in_one_statement_from_the_leader_only(
-    lock_held_by_another_pod: bool,
+@pytest.mark.parametrize(
+    "lock_held_by_another_pod",
+    [None, DB_SPEND_UPDATE_JOB_NAME, TOOL_DISCOVERY_COMMIT_JOB_NAME],
+    ids=["free", "spend_lock_held", "tool_lock_held"],
+)
+async def test_commit_with_redis_writes_every_workers_tools_in_one_statement_from_the_tool_lock_holder_only(
+    lock_held_by_another_pod: str | None,
 ):
     redis = _InMemoryRedis()
-    if lock_held_by_another_pod:
-        assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=DB_SPEND_UPDATE_JOB_NAME)
+    if lock_held_by_another_pod is not None:
+        assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=lock_held_by_another_pod)
     other_worker = DBSpendUpdateWriter(redis_cache=redis)
     other_worker.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "mcp_server"})
     other_worker.tool_discovery_queue.add_update({"tool_name": "search", "origin": "user_defined"})
@@ -2419,24 +2424,41 @@ async def test_commit_with_redis_writes_every_workers_tools_in_one_statement_fro
     prisma_client.db.execute_raw = AsyncMock(return_value=2)
     prisma_client.db.litellm_tooltable.upsert = AsyncMock()
 
-    await db_writer._commit_spend_updates_to_db_with_redis(
-        prisma_client=prisma_client,
-        n_retry_times=0,
-        proxy_logging_obj=MagicMock(),
-    )
+    await db_writer.commit_tool_discoveries(prisma_client=prisma_client, use_redis_buffer=True)
 
     assert db_writer.tool_discovery_queue.flush() == [], "every worker hands its tools to redis each tick"
     prisma_client.db.litellm_tooltable.upsert.assert_not_awaited()
-    if lock_held_by_another_pod:
+    if lock_held_by_another_pod == TOOL_DISCOVERY_COMMIT_JOB_NAME:
         prisma_client.db.execute_raw.assert_not_awaited()
-        assert len(redis.lists[REDIS_TOOL_DISCOVERY_BUFFER_KEY]) == 2, "non-leaders leave their tools for the leader"
+        assert len(redis.lists[REDIS_TOOL_DISCOVERY_BUFFER_KEY]) == 2, "non-holders leave their tools for the holder"
         return
-    assert REDIS_TOOL_DISCOVERY_BUFFER_KEY not in redis.lists
+    assert REDIS_TOOL_DISCOVERY_BUFFER_KEY not in redis.lists, "the spend lock must not gate the tool drain"
     prisma_client.db.execute_raw.assert_awaited_once()
     sql, *params = prisma_client.db.execute_raw.call_args.args
     assert sql.startswith('INSERT INTO "LiteLLM_ToolTable"') and 'ON CONFLICT ("tool_name")' in sql
     rows = {params[i + 1]: params[i + 3] for i in range(0, len(params), 10)}
     assert rows == {"get_weather": 3, "search": 1}, f"one row per tool summed across workers, got {params}"
+
+
+@pytest.mark.asyncio
+async def test_commit_without_redis_writes_only_this_workers_tools_in_one_statement_and_never_touches_redis():
+    redis = _InMemoryRedis()
+    db_writer = DBSpendUpdateWriter(redis_cache=redis)
+    db_writer.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    db_writer.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    db_writer.tool_discovery_queue.add_update({"tool_name": "search", "origin": "user_defined"})
+    prisma_client = MagicMock()
+    prisma_client.db.execute_raw = AsyncMock(return_value=2)
+
+    await db_writer.commit_tool_discoveries(prisma_client=prisma_client, use_redis_buffer=False)
+
+    assert redis.lists == {}, "without the buffer flag nothing goes through redis"
+    assert db_writer.tool_discovery_queue.flush() == []
+    prisma_client.db.execute_raw.assert_awaited_once()
+    sql, *params = prisma_client.db.execute_raw.call_args.args
+    assert 'ON CONFLICT ("tool_name")' in sql
+    rows = {params[i + 1]: params[i + 3] for i in range(0, len(params), 10)}
+    assert rows == {"get_weather": 2, "search": 1}, f"got {params}"
 
 
 @pytest.mark.asyncio
@@ -3287,7 +3309,6 @@ async def test_failed_window_spend_commit_requeues_the_increments_and_continues_
     await db_writer.window_spend_update_queue.add_update(transaction)
     db = _WindowSpendFakeDB()
     db.query_raw = AsyncMock(side_effect=Exception("connection reset"))
-    db_writer._flush_tool_discovery_queue = AsyncMock()
 
     await db_writer._commit_spend_updates_to_db_without_redis_buffer(
         prisma_client=_WindowSpendFakePrisma(db),
@@ -3295,7 +3316,6 @@ async def test_failed_window_spend_commit_requeues_the_increments_and_continues_
         proxy_logging_obj=MagicMock(),
     )
 
-    db_writer._flush_tool_discovery_queue.assert_called_once()
     requeued = await db_writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
     assert requeued == (transaction,)
 
@@ -3371,7 +3391,6 @@ async def test_failed_daily_spend_commit_is_requeued_only_when_the_rows_are_prov
     db_writer = DBSpendUpdateWriter()
     await db_writer.daily_spend_update_queue.add_update({"user-key": _daily_txn(user_id="user-1")})
     db = _DailySpendFakeDB(failing_table="LiteLLM_DailyUserSpend", failure=failure)
-    db_writer._flush_tool_discovery_queue = AsyncMock()
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.failure_handler = AsyncMock()
 
@@ -3397,7 +3416,6 @@ async def test_failed_daily_spend_commit_drops_only_the_batch_that_was_sent():
         {f"user-{i:03d}": _daily_txn(user_id=f"user-{i:03d}") for i in range(150)}
     )
     db = _DailySpendFakeDB(failing_table="LiteLLM_DailyUserSpend", failure=httpx.ReadTimeout("no reply"))
-    db_writer._flush_tool_discovery_queue = AsyncMock()
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.failure_handler = AsyncMock()
 
@@ -3425,7 +3443,6 @@ async def test_failed_daily_spend_commit_requeues_the_rows_and_flushes_the_other
     team_txn = {key: value for key, value in _daily_txn().items() if key != "user_id"} | {"team_id": "team-1"}
     await db_writer.daily_team_spend_update_queue.add_update({"team-key": team_txn})
     db = _DailySpendFakeDB(failing_table="LiteLLM_DailyUserSpend")
-    db_writer._flush_tool_discovery_queue = AsyncMock()
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.failure_handler = AsyncMock()
 
@@ -3436,7 +3453,6 @@ async def test_failed_daily_spend_commit_requeues_the_rows_and_flushes_the_other
     assert _daily_upserts(db, "LiteLLM_DailyUserSpend") == []
     (team_upsert,) = _daily_upserts(db, "LiteLLM_DailyTeamSpend")
     assert _row_values(team_upsert, "team_id") == ["team-1"]
-    db_writer._flush_tool_discovery_queue.assert_called_once()
 
     db.failing_table = None
     await db_writer._commit_spend_updates_to_db_without_redis_buffer(
@@ -3663,7 +3679,6 @@ async def test_failed_window_spend_commit_is_requeued_only_when_the_rows_are_pro
     )
     await db_writer.window_spend_update_queue.add_update(transaction)
     db = _WindowSpendFailureDB(failure)
-    db_writer._flush_tool_discovery_queue = AsyncMock()
 
     await db_writer._commit_spend_updates_to_db_without_redis_buffer(
         prisma_client=_WindowSpendFakePrisma(db),
@@ -5271,11 +5286,7 @@ async def test_failed_tool_table_write_requeues_the_rows_only_when_they_provably
     prisma_client = MagicMock()
     prisma_client.db.execute_raw = AsyncMock(side_effect=failure)
 
-    await db_writer._commit_spend_updates_to_db_with_redis(
-        prisma_client=prisma_client,
-        n_retry_times=0,
-        proxy_logging_obj=MagicMock(),
-    )
+    await db_writer.commit_tool_discoveries(prisma_client=prisma_client, use_redis_buffer=True)
 
     prisma_client.db.execute_raw.assert_awaited_once()
     left_in_redis = [json.loads(entry) for entry in redis.lists.get(REDIS_TOOL_DISCOVERY_BUFFER_KEY, [])]
