@@ -12198,7 +12198,27 @@ class Router:
         else:
             model_info_name = model
 
-        model_info: Final = litellm.get_model_info(model=model_info_name)
+        try:
+            model_info: Final = litellm.get_model_info(model=model_info_name)
+        except Exception as e:
+            if e.__class__.__name__ == "ModelNotMappedError" or "not mapped" in str(e).lower():
+                verbose_router_logger.warning(
+                    "Model '%s' not mapped in model_cost; returning fallback info for compaction/budget checks: %s",
+                    model_info_name,
+                    e,
+                )
+                fallback: Final[ModelMapInfo] = {
+                    "key": model_info_name,
+                    "max_tokens": None,
+                    "max_input_tokens": None,
+                    "max_output_tokens": None,
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                    "litellm_provider": custom_llm_provider or "",
+                    "mode": "chat",
+                }
+                return fallback
+            raise
         if model_info is None:
             return model_info
 
