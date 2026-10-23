@@ -592,6 +592,17 @@ class RedisUpdateBuffer:
                 tool_discovery_queue.add_update(item)
 
     @with_service_target(SPEND_QUEUE_TARGET)
+    async def restore_tool_discoveries_to_redis(self, items: Sequence[ToolDiscoveryQueueItem]) -> None:
+        """Put drained tool rows back for the next drain after a write that provably did not apply."""
+        if self.redis_cache is None or not items:
+            return
+        _ = await self.redis_cache.async_rpush_pipeline(
+            rpush_list=[
+                RedisPipelineRpushOperation(key=REDIS_TOOL_DISCOVERY_BUFFER_KEY, values=[safe_dumps(list(items))])
+            ]
+        )
+
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def get_all_tool_discoveries_from_redis_buffer(self) -> tuple[ToolDiscoveryQueueItem, ...]:
         """Drain every worker's tool rows and fold them to one row per tool_name."""
         if self.redis_cache is None:

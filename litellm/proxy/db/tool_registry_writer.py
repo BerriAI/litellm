@@ -167,16 +167,14 @@ async def batch_upsert_tools(
     prisma_client: "PrismaClient",
     items: Sequence[ToolDiscoveryQueueItem],
 ) -> None:
-    """Write a batch of discovered tools to LiteLLM_ToolTable in a single statement."""
+    """Write a batch of discovered tools to LiteLLM_ToolTable in a single statement. Raises on failure so the
+    caller decides whether the rows can be retried."""
     rows: Final = aggregate_tool_discoveries(items)
     if not rows:
         return
-    try:
-        sql, params = build_tool_bulk_upsert(rows)
-        await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
-        verbose_proxy_logger.debug("tool_registry_writer: upserted %d tool(s)", len(rows))
-    except Exception as e:
-        verbose_proxy_logger.error("tool_registry_writer batch_upsert_tools error: %s", e)
+    sql, params = build_tool_bulk_upsert(rows)
+    await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
+    verbose_proxy_logger.debug("tool_registry_writer: upserted %d tool(s)", len(rows))
 
 
 _NO_OWNERS: Final[Mapping[str, ToolDiscoveryUser]] = MappingProxyType({})

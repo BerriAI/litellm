@@ -2110,8 +2110,23 @@ class DBSpendUpdateWriter:
         from litellm.proxy.db.tool_registry_writer import batch_upsert_tools
 
         items: Final = await self.redis_update_buffer.get_all_tool_discoveries_from_redis_buffer()
-        if items:
+        if not items:
+            return
+        try:
             await batch_upsert_tools(prisma_client=prisma_client, items=items)
+        except Exception as e:  # noqa: BLE001  # the rows go back to redis or are dropped, the spend commit must not fail
+            if _spend_commit_failure_is_requeue_safe(e):
+                await self.redis_update_buffer.restore_tool_discoveries_to_redis(items)
+                verbose_proxy_logger.error(
+                    "Tool discovery - %d tool rows went back to Redis for the next tick. Error: %s", len(items), str(e)
+                )
+                return
+            verbose_proxy_logger.error(
+                "Tool discovery - dropped %d tool rows: the failed statement may have applied or the database "
+                "refused the data, so re-sending it is not safe. Error: %s",
+                len(items),
+                str(e),
+            )
 
     @staticmethod
     async def handle_spend_update_failure(

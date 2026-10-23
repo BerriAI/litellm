@@ -5250,3 +5250,34 @@ def test_record_request_error_feeds_the_failure_rollup_with_the_logged_status() 
             status_code=503,
         ): 1
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "requeued"),
+    [
+        (Exception("connection reset"), True),
+        (_postgres_rejection("23502"), False),
+    ],
+    ids=["connection_error_goes_back_to_redis", "rejected_row_is_dropped"],
+)
+async def test_failed_tool_table_write_requeues_the_rows_only_when_they_provably_did_not_apply(
+    failure: Exception, requeued: bool
+):
+    redis = _InMemoryRedis()
+    db_writer = DBSpendUpdateWriter(redis_cache=redis)
+    db_writer.pod_lock_manager.redis_cache = redis
+    db_writer.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    prisma_client = MagicMock()
+    prisma_client.db.execute_raw = AsyncMock(side_effect=failure)
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    prisma_client.db.execute_raw.assert_awaited_once()
+    left_in_redis = [json.loads(entry) for entry in redis.lists.get(REDIS_TOOL_DISCOVERY_BUFFER_KEY, [])]
+    expected = [[{"tool_name": "get_weather", "origin": "user_defined", "call_count": 1}]] if requeued else []
+    assert left_in_redis == expected, f"requeued={requeued} but redis holds {left_in_redis}"
