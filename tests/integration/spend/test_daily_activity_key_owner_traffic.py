@@ -6,7 +6,6 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
 
@@ -31,8 +30,7 @@ from integration._support.daily_activity import (
     user_row,
     user_with_an_email,
 )
-from integration._support.database import read_rows, scratch_database
-from integration._support.process import owned_proxy
+from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
@@ -51,22 +49,6 @@ UNIFIED_ENDPOINTS: Final = ("/v1/chat/completions", "/v1/messages", "/v1/respons
 REQUESTS_OF_A_BURST: Final = 21
 READS_DURING_A_BURST: Final = 30
 TOKEN_LIMIT_DISCOVERY: Final = ("GET", "/v1/models")
-TOOL_CALL: Final = "call_integration_usage"
-ANSWER: Final = "One request cost $0.25"
-SUMMARY_OF_ONE_SEEDED_ROW: Final = "\n".join(
-    (
-        "Total Spend: $0.2500",
-        "Total Requests: 1",
-        "Successful: 1 | Failed: 0",
-        "Total Tokens: 15",
-        "",
-        "Top Models by Spend:",
-        "  - gpt-4o-mini: $0.2500 (1 reqs, 15 tokens)",
-        "",
-        "Top Providers by Spend:",
-        "  - openai: $0.2500 (1 reqs)",
-    )
-)
 
 
 def _chat_completion() -> dict[str, JsonValue]:
@@ -103,55 +85,6 @@ def _response() -> dict[str, JsonValue]:
 def _provider(request: Request) -> Reply:
     body: Final = _response() if request.target.endswith("/responses") else _chat_completion()
     return Reply(body=json.dumps(body).encode())
-
-
-def _usage_tool_call() -> dict[str, JsonValue]:
-    call: Final[dict[str, JsonValue]] = {
-        "id": TOOL_CALL,
-        "type": "function",
-        "function": {
-            "name": "get_usage_data",
-            "arguments": json.dumps({"start_date": DAY, "end_date": DAY}),
-        },
-    }
-    return {
-        "id": f"chatcmpl-{uuid.uuid4().hex}",
-        "object": "chat.completion",
-        "created": 1,
-        "model": "gpt-4o-mini",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": None, "tool_calls": [call]},
-                "finish_reason": "tool_calls",
-            }
-        ],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-    }
-
-
-def _streamed_chunk(delta: dict[str, JsonValue], finish_reason: str | None) -> bytes:
-    chunk: Final = {
-        "id": "chatcmpl-integration-usage",
-        "object": "chat.completion.chunk",
-        "created": 1,
-        "model": "gpt-4o-mini",
-        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
-    }
-    return f"data: {json.dumps(chunk)}\n\n".encode()
-
-
-def _usage_analyst(request: Request) -> Reply:
-    if json.loads(request.body).get("stream"):
-        return Reply(
-            chunks=(
-                _streamed_chunk({"role": "assistant", "content": ANSWER}, None),
-                _streamed_chunk({}, "stop"),
-                b"data: [DONE]\n\n",
-            ),
-            content_type="text/event-stream",
-        )
-    return Reply(body=json.dumps(_usage_tool_call()).encode())
 
 
 def _sent_for_callers(requests: Iterable[Request]) -> tuple[Request, ...]:
@@ -320,65 +253,6 @@ def test_cli_session_spend_is_reported_with_the_user_and_team_of_the_session(
             key_metadata(alias=stored, team=team, user=owner, email=email),
             _totals_of_requests(1),
         )
-
-
-@pytest.mark.timeout(300)
-def test_usage_ai_chat_hands_the_model_the_usage_summary_without_any_key_owner(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    question: Final = f"what did we spend {uuid.uuid4().hex}"
-    owner: Final = f"integration-{uuid.uuid4().hex}"
-    ownerless_key: Final = f"integration-ownerless-{uuid.uuid4().hex}"
-    with (
-        scratch_database() as scratch_url,
-        wire_server(_usage_analyst) as wire,
-        owned_proxy(
-            gateway,
-            tmp_path,
-            {
-                "DATABASE_URL": scratch_url,
-                "OPENAI_API_BASE": f"{wire.url}/v1",
-                "OPENAI_BASE_URL": f"{wire.url}/v1",
-                "OPENAI_API_KEY": "integration-provider-key",
-            },
-            remove_environment=("DATABASE_URL_READ_REPLICA",),
-        ) as candidate,
-    ):
-        candidate.post("/user/new", {"user_id": owner, "user_email": f"{owner}@example.com", "auto_create_key": False})
-        with daily_rows((user_row(owner, ownerless_key, DAY),), database_url=scratch_url):
-            answer: Final = candidate.request(
-                "POST",
-                "/usage/ai/chat",
-                {"messages": [{"role": "user", "content": question}], "model": "openai/gpt-4o-mini"},
-            )
-        assert answer.status_code == 200, answer.text
-        tool_call: Final = {
-            "type": "tool_call",
-            "tool_name": "get_usage_data",
-            "tool_label": "global usage data",
-            "arguments": {"start_date": DAY, "end_date": DAY},
-        }
-        events: Final = [
-            json.loads(line.removeprefix("data: ")) for line in answer.text.splitlines() if line.startswith("data: ")
-        ]
-        assert events == [
-            {"type": "status", "message": "Thinking..."},
-            {**tool_call, "status": "running"},
-            {**tool_call, "status": "complete"},
-            {"type": "status", "message": "Analyzing results..."},
-            {"type": "chunk", "content": ANSWER},
-            {"type": "done"},
-        ], answer.text
-        asked, analysed = wire.drain()
-        assert [asked.target, analysed.target] == ["/v1/chat/completions", "/v1/chat/completions"]
-        assert json.loads(asked.body)["messages"][-1] == {"role": "user", "content": question}
-        assert json.loads(analysed.body)["messages"][-1] == {
-            "role": "tool",
-            "tool_call_id": TOOL_CALL,
-            "content": SUMMARY_OF_ONE_SEEDED_ROW,
-        }
-        assert owner not in analysed.body.decode()
-        assert ownerless_key not in analysed.body.decode()
 
 
 @pytest.mark.timeout(300)

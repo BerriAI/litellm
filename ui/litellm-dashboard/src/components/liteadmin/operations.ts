@@ -15,7 +15,12 @@ export interface LiteAdminAction {
 
 export type ActionResult = { status: "completed"; key?: string } | { status: "unknown"; message: string };
 
+export type AriaAccess =
+  | { mode: "admin" }
+  | { mode: "usage"; scope: { type: "global" } | { type: "user"; userId: string } };
+
 export interface OperationContext {
+  access: AriaAccess;
   accessToken: string;
   signal: AbortSignal;
   assertCurrent: () => void;
@@ -183,6 +188,46 @@ export function createLiteAdminOperations(context: OperationContext) {
       return zodFunction(definition);
     };
 
+  if (context.access.mode === "usage" && context.access.scope.type === "user") {
+    const userId = context.access.scope.userId;
+    return [
+      operation("read", "usage")(
+        "get_usage_data",
+        "View your dated usage totals, daily trends, and top models, providers and keys",
+        dated({}),
+        (a) => {
+          if (!userId.trim()) throw new Error("A signed-in user is required to query usage.");
+          return apiClient.get<unknown>("/user/daily/activity/aggregated", {
+            ...auth,
+            query: { ...a, user_id: userId, api_key_limit: 20 },
+          });
+        },
+      ),
+    ];
+  }
+
+  const usageOperations = [
+    operation("read", "usage")(
+      "get_usage_data",
+      "View dated global or user usage totals, daily trends, and top models, providers and keys",
+      dated({ user_id: optionalText }),
+      (a) => apiClient.get<unknown>("/user/daily/activity/aggregated", { ...auth, query: { ...a, api_key_limit: 20 } }),
+    ),
+    operation("read", "usage")(
+      "get_team_usage_data",
+      "View dated usage by team, including model and provider breakdowns. Omit team_ids for all teams",
+      dated({ team_ids: optionalText }),
+      (a) => apiClient.get<unknown>("/team/daily/activity/aggregated", { ...auth, query: { ...a, api_key_limit: 20 } }),
+    ),
+    operation("read", "usage")(
+      "get_tag_usage_data",
+      "View dated usage by tag, including model and provider breakdowns. Omit tags for all tags",
+      dated({ tags: optionalText }),
+      (a) => apiClient.get<unknown>("/tag/daily/activity/aggregated", { ...auth, query: { ...a, api_key_limit: 20 } }),
+    ),
+  ];
+  if (context.access.mode === "usage") return usageOperations;
+
   return [
     operation("read", "key")("keys_list", "List virtual keys", object(keysListFields), (a) =>
       apiClient.get<unknown>("/key/list", {
@@ -329,6 +374,7 @@ export function createLiteAdminOperations(context: OperationContext) {
       dated({ api_key: hash }),
       (a) => apiClient.get<unknown>("/key/spend/report", { ...auth, query: a }),
     ),
+    ...usageOperations,
     operation("read", "log")(
       "request_logs",
       "List request cost, timing and status, excluding prompts and responses",

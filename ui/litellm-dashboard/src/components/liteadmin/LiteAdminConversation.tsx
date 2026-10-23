@@ -11,6 +11,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import type { ActionEntry, ConversationEntry } from "./useLiteAdmin";
+import { AriaAvatar } from "./AriaAvatar";
+import { ARIA_AGENT_LABEL } from "./aria-brand";
 
 const ACTION_STATUS: Record<ActionEntry["status"], string> = {
   review: "Review change",
@@ -20,21 +22,39 @@ const ACTION_STATUS: Record<ActionEntry["status"], string> = {
   unknown: "Check result",
 };
 
+const SUGGESTED_QUESTIONS = [
+  "How much have I spent this week?",
+  "Which models are costing the most?",
+  "How can I reduce my spend?",
+];
+
 interface ConversationProps {
   entries: ConversationEntry[];
   thinking: boolean;
+  readOnly?: boolean;
   open: boolean;
   reviewRef: RefObject<HTMLDivElement | null>;
   onAnswer: (id: string, approved: boolean) => void;
+  onQuestion: (question: string) => void;
+  questionsDisabled: boolean;
 }
 
-export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAnswer }: ConversationProps) {
+export function LiteAdminConversation({
+  entries,
+  thinking,
+  open,
+  readOnly = false,
+  reviewRef,
+  onAnswer,
+  onQuestion,
+  questionsDisabled,
+}: ConversationProps) {
   return (
     <MessageScroller.Provider autoScroll>
       <MessageScroller.Root className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <MessageScroller.Viewport
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain data-pending-scroll:invisible"
-          aria-label="LiteAdmin conversation"
+          aria-label={`${ARIA_AGENT_LABEL} conversation`}
         >
           <MessageScroller.Content className="flex flex-col gap-4 p-4" aria-busy={thinking}>
             {entries.map((entry) => (
@@ -59,7 +79,7 @@ export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAn
             ))}
             {thinking && (
               <MessageScroller.Item messageId="thinking">
-                <div role="status" aria-label="LiteAdmin is working" className="space-y-2">
+                <div role="status" aria-label={`${ARIA_AGENT_LABEL} is working`} className="space-y-2">
                   <Skeleton className="h-3 w-3/4" />
                   <Skeleton className="h-3 w-1/2" />
                   <span className="sr-only">Working…</span>
@@ -69,10 +89,26 @@ export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAn
           </MessageScroller.Content>
         </MessageScroller.Viewport>
         {entries.length === 0 && (
-          <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-2 p-6">
-            <p className="font-medium">How can I help?</p>
-            <p className="text-sm text-muted-foreground">
-              Check budgets, inspect usage, or manage keys and teams. You review every change before it runs.
+          <div className="absolute inset-0 flex flex-col items-center gap-4 overflow-y-auto p-5 text-center">
+            <div className="flex items-center gap-2 pt-2">
+              <AriaAvatar size={40} />
+              <p className="text-base font-semibold">Hi, I’m Aria.</p>
+            </div>
+            <div className="flex w-full flex-col gap-2" aria-label="Suggested questions">
+              {SUGGESTED_QUESTIONS.map((question) => (
+                <Button
+                  key={question}
+                  variant="outline"
+                  className="h-auto min-h-10 justify-start whitespace-normal px-3 py-2 text-left font-normal"
+                  disabled={questionsDisabled}
+                  onClick={() => onQuestion(question)}
+                >
+                  {question}
+                </Button>
+              ))}
+            </div>
+            <p className="max-w-64 text-xs leading-relaxed text-muted-foreground">
+              {readOnly ? "Answers use usage data your account can access." : "You review every change before it runs."}
             </p>
           </div>
         )}

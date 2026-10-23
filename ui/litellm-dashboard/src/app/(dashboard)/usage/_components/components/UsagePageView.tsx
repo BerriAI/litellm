@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { Download, Link2, Search, Sparkles, X } from "lucide-react";
+import { Download, Link2, Search, X } from "lucide-react";
 import { useQueryStates } from "nuqs";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -72,7 +72,7 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
 import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
-import UsageAIChatPanel from "./UsageAIChatPanel";
+import { AriaUsageComposer, AriaUsageTrigger } from "@/components/liteadmin/LiteAdmin";
 import { allowedUsageOptions, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 import UserRecordLink from "./UserRecordLink";
 import {
@@ -154,7 +154,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const [modelQuery, setModelQuery] = useState("");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
-  const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const selectedUsageView = usageViewFromParams(urlParams);
   const selectedTab = usageTabFromParams(urlParams, isAdmin);
   const usageView = allowedViews.includes(selectedUsageView) ? selectedUsageView : DEFAULT_USAGE_VIEW;
@@ -490,6 +489,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
           </div>
         </div>
       </header>
+      <AriaUsageComposer />
       {aggregatedFailed && (
         <ErrorState title="Failed to load spend data" message={aggregatedError} onRetry={reloadAggregated} />
       )}
@@ -530,10 +530,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                     )}
                   </TabsList>
                   <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => setIsAiChatOpen(true)}>
-                      <Sparkles />
-                      Ask AI
-                    </Button>
+                    <AriaUsageTrigger />
                     <Button variant="outline" size="sm" onClick={() => setIsGlobalExportModalOpen(true)}>
                       <Download />
                       Export Data
@@ -850,9 +847,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
         selectedFilters={[]}
         customTitle="Export Usage Data"
       />
-
-      {/* AI Chat Panel */}
-      <UsageAIChatPanel open={isAiChatOpen} onClose={() => setIsAiChatOpen(false)} accessToken={accessToken} />
     </div>
   );
 };
