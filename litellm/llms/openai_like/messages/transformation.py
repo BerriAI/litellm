@@ -95,10 +95,11 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         model the cost map does not know (see #40890). Pop them before the
         base transform so no drop warning fires, restore afterwards.
         """
-        stashed: dict = {}
-        for _key in ("thinking", "output_config", "temperature"):
-            if _key in anthropic_messages_optional_request_params:
-                stashed[_key] = anthropic_messages_optional_request_params.pop(_key)
+        stashed: Final = {
+            _key: anthropic_messages_optional_request_params.pop(_key)
+            for _key in ("thinking", "output_config", "temperature")
+            if _key in anthropic_messages_optional_request_params
+        }
         request: Final = super().transform_anthropic_messages_request(
             model=model,
             messages=messages,
@@ -109,7 +110,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         if self.supports_cache_control_ttl():
             request.update(stashed)
             return request
-        normalized = normalize_cache_control_in_anthropic_payload(request)
+        normalized: Final = normalize_cache_control_in_anthropic_payload(request)
         normalized.update(stashed)
         return normalized
 
