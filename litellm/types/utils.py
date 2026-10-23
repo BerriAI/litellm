@@ -195,6 +195,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_vision: bool | None
     supports_function_calling: bool | None
     supports_tool_choice: bool | None
+    supports_tool_choice_required: ReadOnly[bool | None]
     supports_assistant_prefill: bool | None
     supports_prompt_caching: bool | None
     supports_prompt_cache_breakpoint: ReadOnly[bool | None]
@@ -225,7 +226,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
     reasoning_effort_levels: ReadOnly[Sequence[str] | None]
-    default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
+    default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
     supports_anthropic_thinking_payload: ReadOnly[bool | None]

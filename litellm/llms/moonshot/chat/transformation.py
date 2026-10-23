@@ -12,7 +12,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import supports_reasoning
+from litellm.types.utils import CacheCreationTokenDetails, Usage
+from litellm.utils import is_explicitly_disabled_factory, supports_factory, supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -26,7 +27,46 @@ def _reasoning_effort_string(value: object) -> str | None:
     return effort if isinstance(effort, str) else None
 
 
+def _cache_write_token_count(value: str | None) -> int | None:
+    if value is None:
+        return 0
+    if not value.isascii() or not value.isdecimal():
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 class MoonshotChatConfig(OpenAIGPTConfig):
+    def transform_response_usage(self, usage: Usage, response_headers: Mapping[str, str]) -> Usage:
+        details: Final = usage.prompt_tokens_details
+        if details is None:
+            return usage
+        headers: Final = {key.lower(): value for key, value in response_headers.items()}
+        header_5m: Final = headers.get("msh-usage-cache-write-tokens-5m")
+        header_1h: Final = headers.get("msh-usage-cache-write-tokens-1h")
+        if header_5m is None and header_1h is None:
+            return usage
+        writes_5m: Final = _cache_write_token_count(header_5m)
+        writes_1h: Final = _cache_write_token_count(header_1h)
+        if writes_5m is None or writes_1h is None:
+            return usage
+        if writes_5m + writes_1h != getattr(details, "cache_write_tokens", None):
+            return usage
+        return usage.model_copy(
+            update={
+                "prompt_tokens_details": details.model_copy(
+                    update={
+                        "cache_creation_token_details": CacheCreationTokenDetails(
+                            ephemeral_5m_input_tokens=writes_5m,
+                            ephemeral_1h_input_tokens=writes_1h,
+                        )
+                    }
+                )
+            }
+        )
+
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
@@ -102,7 +142,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
 
         Moonshot AI limitations:
         - functions parameter is not supported (use tools instead)
-        - tool_choice doesn't support "required" value
+        - legacy models need a prompt fallback for tool_choice="required"
         - kimi-thinking-preview doesn't support tool calls at all
 
         A reasoning model additionally takes `reasoning_effort`, which the OpenAI base list this
@@ -111,8 +151,17 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         excluded_params: Final = frozenset(
             ("functions", "tools", "tool_choice") if "kimi-thinking-preview" in model else ("functions",)
         )
+        fixed_sampling_params: Final[frozenset[str]] = (
+            frozenset(("temperature", "top_p", "n", "presence_penalty", "frequency_penalty"))
+            if is_explicitly_disabled_factory(
+                model=model, custom_llm_provider="moonshot", key="supports_sampling_params"
+            )
+            else frozenset()
+        )
         base_openai_params: Final = super().get_supported_openai_params(model=model)
-        supported: Final = [param for param in base_openai_params if param not in excluded_params]
+        supported: Final = [
+            param for param in base_openai_params if param not in excluded_params | fixed_sampling_params
+        ]
         if supports_reasoning(model=model, custom_llm_provider="moonshot"):
             return [*supported, "reasoning_effort"]
         return supported
@@ -128,7 +177,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         Map OpenAI parameters to Moonshot AI parameters
 
         Handles Moonshot AI specific limitations:
-        - tool_choice doesn't support "required" value
+        - legacy models need a prompt fallback for tool_choice="required"
         - Temperature <0.3 limitation for n>1
         """
         supported_openai_params: Final = self.get_supported_openai_params(model)
@@ -219,7 +268,9 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             dict: The transformed request. Sent as the body of the API call.
         """
         # Add tool_choice="required" message if needed
-        if optional_params.get("tool_choice", None) == "required":
+        if optional_params.get("tool_choice", None) == "required" and not supports_factory(
+            model=model, custom_llm_provider="moonshot", key="supports_tool_choice_required"
+        ):
             messages = self._add_tool_choice_required_message(
                 messages=messages,
                 optional_params=optional_params,

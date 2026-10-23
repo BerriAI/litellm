@@ -5,15 +5,24 @@ These tests validate the MoonshotChatConfig class which extends OpenAIGPTConfig.
 Moonshot AI is an OpenAI-compatible provider with minor customizations.
 """
 
+import json
+from collections.abc import Mapping
+from copy import deepcopy
+from typing import Final, Literal
 from unittest.mock import patch
 
-
+import httpx
 import pytest
+from openai import AsyncOpenAI, OpenAI
 
 import litellm
 import litellm.utils
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.utils import ModelResponse, Usage
 
 
 class TestMoonshotConfig:
@@ -104,9 +113,7 @@ class TestMoonshotConfig:
         """Test that temperature > 1 is clamped to 1 (Moonshot limitation)"""
         config = MoonshotChatConfig()
 
-        non_default_params = {
-            "temperature": 1.5  # OpenAI allows up to 2, but Moonshot only allows up to 1
-        }
+        non_default_params = {"temperature": 1.5}  # OpenAI allows up to 2, but Moonshot only allows up to 1
 
         result = config.map_openai_params(
             non_default_params=non_default_params,
@@ -780,3 +787,284 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "https://gateway.example.com/moonshot/v1/chat/completions"
     )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])
+@pytest.mark.parametrize("effort", ["low", "high", "max"])
+def test_kimi_k31_sends_native_required_tool_choice_and_reasoning_effort(
+    model: str, effort: Literal["low", "high", "max"]
+) -> None:
+    tools: Final[list[ChatCompletionToolParam]] = [{"type": "function", "function": {"name": "get_weather"}}]
+    optional_params: Final = litellm.get_optional_params(
+        model=model,
+        custom_llm_provider="moonshot",
+        tools=tools,
+        tool_choice="required",
+        reasoning_effort=effort,
+        max_completion_tokens=2048,
+        stream=True,
+        drop_params=False,
+    )
+
+    result: Final = MoonshotChatConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "What is the weather?"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result == {
+        "model": model,
+        "messages": [{"role": "user", "content": "What is the weather?"}],
+        "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+        "tool_choice": "required",
+        "reasoning_effort": effort,
+        "max_tokens": 2048,
+        "stream": True,
+        "extra_body": {},
+    }
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])
+@pytest.mark.parametrize(
+    ("parameter", "value"),
+    [("temperature", 0.5), ("top_p", 0.8), ("n", 2), ("presence_penalty", 0.5), ("frequency_penalty", 0.5)],
+)
+def test_kimi_k31_rejects_fixed_sampling_overrides_unless_drop_params_is_enabled(
+    model: str, parameter: str, value: float
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match=parameter):
+        litellm.get_optional_params(
+            model=model,
+            custom_llm_provider="moonshot",
+            drop_params=False,
+            **{parameter: value},
+        )
+
+    result: Final = litellm.get_optional_params(
+        model=model,
+        custom_llm_provider="moonshot",
+        drop_params=True,
+        **{parameter: value},
+    )
+
+    assert result == {"stream": False, "extra_body": {}}
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])
+@pytest.mark.parametrize("reasoning", ["I need the weather to plan this hike.", None])
+def test_kimi_k31_preserves_image_and_tool_history_with_required_reasoning(model: str, reasoning: str | None) -> None:
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Is the weather suitable for this hike?"},
+                {"type": "image_url", "image_url": {"url": "ms://hike_fixture"}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "reasoning_content": reasoning,
+            "tool_calls": [
+                {"id": "weather_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "weather_1", "content": "Sunny, 22 C"},
+    ]
+    expected_messages: Final = deepcopy(
+        [messages[0], {**messages[1], "reasoning_content": reasoning or " "}, messages[2]]
+    )
+
+    result: Final = MoonshotChatConfig().transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result == {"model": model, "messages": expected_messages}
+
+
+@pytest.mark.parametrize("writes_1h", [0, 400, 700])
+def test_cache_write_headers_preserve_totals_and_split_write_tiers(writes_1h: int) -> None:
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        prompt_tokens_details={"cached_tokens": 100, "cache_write_tokens": 700},
+    )
+    original_usage: Final = usage.model_dump()
+    result: Final = MoonshotChatConfig().transform_response_usage(
+        usage,
+        {
+            "Msh-Usage-Cache-Write-Tokens-5m": str(700 - writes_1h),
+            "mSH-uSAGE-cACHE-wRITE-tOKENS-1H": str(writes_1h),
+        },
+    )
+    assert result.prompt_tokens == usage.prompt_tokens
+    assert result.completion_tokens == usage.completion_tokens
+    assert result.prompt_tokens_details.cached_tokens == 100
+    assert result.prompt_tokens_details.cache_write_tokens == 700
+    assert result.prompt_tokens_details.cache_creation_token_details.ephemeral_5m_input_tokens == 700 - writes_1h
+    assert result.prompt_tokens_details.cache_creation_token_details.ephemeral_1h_input_tokens == writes_1h
+    assert usage.model_dump() == original_usage
+    assert OpenAIGPTConfig().transform_response_usage(usage, {}) is usage
+
+
+@pytest.mark.parametrize("tier", ["5m", "1h"])
+def test_single_cache_write_header_can_account_for_all_written_tokens(tier: str) -> None:
+    usage: Final = Usage(prompt_tokens=1000, prompt_tokens_details={"cache_write_tokens": 700})
+    result: Final = MoonshotChatConfig().transform_response_usage(
+        usage, {f"Msh-Usage-Cache-Write-Tokens-{tier}": "700"}
+    )
+    assert result.prompt_tokens_details.cache_creation_token_details.ephemeral_5m_input_tokens == (
+        700 if tier == "5m" else 0
+    )
+    assert result.prompt_tokens_details.cache_creation_token_details.ephemeral_1h_input_tokens == (
+        700 if tier == "1h" else 0
+    )
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"msh-usage-cache-write-tokens-5m": "300"},
+        {"msh-usage-cache-write-tokens-1h": "400"},
+        {"msh-usage-cache-write-tokens-5m": "invalid", "msh-usage-cache-write-tokens-1h": "700"},
+        {"msh-usage-cache-write-tokens-5m": "0", "msh-usage-cache-write-tokens-1h": "invalid"},
+        {"msh-usage-cache-write-tokens-5m": "-1", "msh-usage-cache-write-tokens-1h": "701"},
+        {"msh-usage-cache-write-tokens-5m": "0", "msh-usage-cache-write-tokens-1h": "699"},
+        {"msh-usage-cache-write-tokens-5m": "0.0", "msh-usage-cache-write-tokens-1h": "700"},
+    ],
+)
+def test_incomplete_or_invalid_cache_headers_leave_reported_usage_unchanged(headers: Mapping[str, str]) -> None:
+    usage: Final = Usage(prompt_tokens=1000, prompt_tokens_details={"cache_write_tokens": 700})
+    assert MoonshotChatConfig().transform_response_usage(usage, headers) is usage
+
+
+def _moonshot_cache_response(model: str, stream: bool) -> httpx.Response:
+    usage: Final = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 10,
+        "total_tokens": 1010,
+        "prompt_tokens_details": {"cached_tokens": 100, "cache_write_tokens": 700},
+    }
+    headers: Final = {
+        "Msh-Usage-Cache-Write-Tokens-5m": "300",
+        "Msh-Usage-Cache-Write-Tokens-1h": "400",
+    }
+    if not stream:
+        return httpx.Response(
+            200,
+            headers=headers,
+            json={
+                "id": "chatcmpl-cache-tiers",
+                "object": "chat.completion",
+                "created": 1,
+                "model": model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": usage,
+            },
+        )
+    metadata: Final = {"id": "chatcmpl-cache-tiers", "object": "chat.completion.chunk", "created": 1, "model": model}
+    chunks: Final = (
+        {
+            **metadata,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None}],
+        },
+        {**metadata, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {**metadata, "choices": [], "usage": usage},
+    )
+    return httpx.Response(
+        200,
+        headers={**headers, "content-type": "text/event-stream"},
+        content="".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n",
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("use_http_handler", [False, True])
+@pytest.mark.asyncio
+async def test_completion_bills_cache_writes_from_response_headers(
+    model: str, stream: bool, is_async: bool, use_http_handler: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", str(use_http_handler).lower())
+    messages: Final[list[AllMessageValues]] = [{"role": "user", "content": "cached prompt"}]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        return _moonshot_cache_response(model, stream)
+
+    options: Final = {"include_usage": True} if stream else None
+    if is_async:
+        client: Final = (
+            AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+            if use_http_handler
+            else AsyncOpenAI(
+                api_key="transport-only", http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond))
+            )
+        )
+        try:
+            response: Final = await litellm.acompletion(
+                model=f"moonshot/{model}",
+                api_key="transport-only",
+                client=client,
+                messages=messages,
+                stream=stream,
+                stream_options=options,
+                num_retries=0,
+                max_retries=0,
+            )
+            completed: Final = (
+                litellm.stream_chunk_builder([chunk async for chunk in response], messages=messages)
+                if stream
+                else response
+            )
+            _assert_moonshot_cache_cost(completed, model)
+        finally:
+            await client.close()
+    else:
+        with httpx.Client(transport=httpx.MockTransport(respond)) as sync_http_client:
+            sync_client: Final = (
+                HTTPHandler(client=sync_http_client)
+                if use_http_handler
+                else OpenAI(api_key="transport-only", http_client=sync_http_client)
+            )
+            sync_response: Final = litellm.completion(
+                model=f"moonshot/{model}",
+                api_key="transport-only",
+                client=sync_client,
+                messages=messages,
+                stream=stream,
+                stream_options=options,
+                num_retries=0,
+                max_retries=0,
+            )
+            sync_completed: Final = (
+                litellm.stream_chunk_builder(list(sync_response), messages=messages) if stream else sync_response
+            )
+            _assert_moonshot_cache_cost(sync_completed, model)
+
+
+def _assert_moonshot_cache_cost(response: ModelResponse, model: str) -> None:
+    assert response.choices[0].message.content == "ok"
+    assert response.usage.prompt_tokens_details.cache_creation_token_details.ephemeral_5m_input_tokens == 300
+    assert response.usage.prompt_tokens_details.cache_creation_token_details.ephemeral_1h_input_tokens == 400
+    info: Final = litellm.get_model_info(model=f"moonshot/{model}")
+    expected: Final = (
+        200 * info["input_cost_per_token"]
+        + 100 * info["cache_read_input_token_cost"]
+        + 300 * info["cache_creation_input_token_cost"]
+        + 400 * info["cache_creation_input_token_cost_above_1hr"]
+        + 10 * info["output_cost_per_token"]
+    )
+    assert litellm.completion_cost(completion_response=response, model=f"moonshot/{model}") == pytest.approx(expected)

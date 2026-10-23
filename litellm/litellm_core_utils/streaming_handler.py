@@ -61,6 +61,8 @@ from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
 
 if TYPE_CHECKING:
+    from litellm.llms.base_llm.chat.transformation import BaseConfig
+
     from .litellm_logging import BilledRoundsSpend
 
 # Constants for special delta attribute names
@@ -282,7 +284,9 @@ class CustomStreamWrapper:
         make_call: Callable | None = None,
         _response_headers: dict | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
+        provider_config: "BaseConfig | None" = None,
     ):
+        self._provider_config = provider_config
         self.model = model
         self.make_call = make_call
         self.count_prompt_tokens = count_prompt_tokens
@@ -1568,13 +1572,13 @@ class CustomStreamWrapper:
                     setattr(
                         model_response,
                         "usage",
-                        response_obj["usage"],
+                        self._transform_response_usage(Usage.model_validate(response_obj["usage"])),
                     )
                 elif isinstance(response_obj["usage"], BaseModel):
                     setattr(
                         model_response,
                         "usage",
-                        litellm.Usage(**response_obj["usage"].model_dump()),
+                        self._transform_response_usage(litellm.Usage(**response_obj["usage"].model_dump())),
                     )
         return _ProviderChunkParsed(response_obj)
 
@@ -1691,9 +1695,9 @@ class CustomStreamWrapper:
 
             chunk_usage: Final = getattr(chunk, "usage", None)
             if isinstance(chunk_usage, Usage):
-                model_response.usage = chunk_usage
+                model_response.usage = self._transform_response_usage(chunk_usage)
             elif isinstance(chunk_usage, BaseModel):
-                model_response.usage = Usage(**chunk_usage.model_dump())
+                model_response.usage = self._transform_response_usage(Usage(**chunk_usage.model_dump()))
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(
@@ -1710,6 +1714,16 @@ class CustomStreamWrapper:
             traceback.format_exc()
             setattr(e, "message", str(e))
             raise self._map_stream_exception(e)
+
+    def _transform_response_usage(self, usage: Usage) -> Usage:
+        if self._provider_config is None:
+            return usage
+        return self._provider_config.transform_response_usage(
+            usage,
+            cast(  # cast-ok: HTTP clients supply string headers; the wrapper retains its legacy dict storage.
+                Mapping[str, str], stored_attribute(self, "_response_headers") or {}
+            ),
+        )
 
     def set_logging_event_loop(self, loop):
         """
