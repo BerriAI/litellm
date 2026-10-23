@@ -54,7 +54,7 @@ import httpx
 from typing_extensions import Never, ReadOnly, TypedDict
 
 from litellm import _custom_logger_compatible_callbacks_literal
-from litellm.caching.cache_scope import apply_cache_scope
+from litellm.caching.cache_scope import CacheScopePolicy
 from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     FILE_USAGE_MAX_TRACKED_COUNTERS,
@@ -2819,7 +2819,7 @@ class ProxyLogging:
             return request
         if guardrails_only or litellm.cache is None or call_type not in DEFAULT_CACHING_SUPPORTED_CALL_TYPES:
             return dict(request)
-        return dict(apply_cache_scope(request, user_api_key_dict, litellm.cache))
+        return dict(CacheScopePolicy(litellm.cache).apply(request, user_api_key_dict))
 
     async def _run_pre_call_hooks(
         self,

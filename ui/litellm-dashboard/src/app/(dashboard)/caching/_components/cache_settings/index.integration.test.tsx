@@ -59,6 +59,7 @@ describe("CacheSettings advanced settings round-trip", () => {
       ssl: true,
       ssl_check_hostname: false,
       namespace: "prod-ns",
+      cache_scope: "global",
       ttl: 300,
       max_connections: 50,
     });
@@ -147,6 +148,8 @@ describe("CacheSettings advanced settings round-trip", () => {
     renderSettings();
     const trigger = await screen.findByLabelText("Semantic Cache Scope");
     expect(trigger).toHaveTextContent("Key (shared by all end users of the key/team/org)");
+    await user.click(screen.getByRole("button", { name: "Advanced Settings" }));
+    expect(screen.queryByLabelText("Cache isolation")).not.toBeInTheDocument();
 
     await user.click(trigger);
     await user.click(await screen.findByRole("option", { name: "End user (isolated per end user)" }));
@@ -157,6 +160,45 @@ describe("CacheSettings advanced settings round-trip", () => {
       type: "redis-semantic",
       semantic_cache_scope: "end_user",
     });
+    expect(updateCacheSettingsCall.mock.calls[0][1]).not.toHaveProperty("cache_scope");
+  });
+
+  it.each([
+    ["team", "Team"],
+    ["key", "Key"],
+  ])("should save and reload %s isolation and allow switching it off", async (scope, label) => {
+    const user = userEvent.setup();
+    renderSettings();
+    await screen.findByText("Connection Settings");
+    await user.click(screen.getByRole("button", { name: "Advanced Settings" }));
+    const trigger = await screen.findByRole("combobox", { name: "Cache isolation" });
+    expect(trigger).toHaveTextContent("Off (shared cache)");
+
+    await user.click(trigger);
+    await user.click(await screen.findByRole("option", { name: label, exact: true }));
+    getCacheSettingsCall.mockResolvedValue({
+      current_values: { ...LOADED_WITH_ADVANCED.current_values, cache_scope: scope },
+    });
+    await save(user);
+
+    await waitFor(() =>
+      expect(updateCacheSettingsCall).toHaveBeenCalledWith("sk-test", expect.objectContaining({ cache_scope: scope })),
+    );
+    await waitFor(() => expect(getCacheSettingsCall).toHaveBeenCalledTimes(2));
+    expect(trigger).toHaveTextContent(label);
+
+    await user.click(trigger);
+    await user.click(await screen.findByRole("option", { name: "Off (shared cache)" }));
+    getCacheSettingsCall.mockResolvedValue(LOADED_WITH_ADVANCED);
+    await save(user);
+    await waitFor(() =>
+      expect(updateCacheSettingsCall).toHaveBeenLastCalledWith(
+        "sk-test",
+        expect.objectContaining({ cache_scope: "global" }),
+      ),
+    );
+    await waitFor(() => expect(getCacheSettingsCall).toHaveBeenCalledTimes(3));
+    expect(trigger).toHaveTextContent("Off (shared cache)");
   });
 
   it("does not block the save on a malformed value inside a collapsed advanced section", async () => {

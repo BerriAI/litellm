@@ -55,6 +55,7 @@ async def test_pre_call_hook_scopes_cache_without_callbacks(
 
     cache: Final = Cache(
         type="local",
+        cache_scope=CacheScope.TEAM,
         supported_call_types=list(supported_call_types or DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
     )
     monkeypatch.setattr(litellm, "cache", cache)

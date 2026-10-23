@@ -6218,7 +6218,7 @@ class ProxyConfig:
             litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
         cache_config: Final = TypeAdapter(Mapping[str, object]).validate_python(cache_params)
-        scope: Final = CacheScope(cache_config.get("cache_scope", CacheScope.TEAM))
+        scope: Final = CacheScope(cache_config.get("cache_scope", CacheScope.GLOBAL))
         litellm.cache = Cache(
             cache_scope=scope,
             **{key: cache_params[key] for key in cache_config if key != "cache_scope"},

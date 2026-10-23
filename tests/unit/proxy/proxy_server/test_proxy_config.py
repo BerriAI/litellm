@@ -28,7 +28,7 @@ from prisma.errors import DataError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.caching.cache_scope import apply_cache_scope
+from litellm.caching.cache_scope import CacheScopePolicy
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings, UserAPIKeyAuth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.proxy_server import (
@@ -1657,20 +1657,21 @@ def test_ProxyConfig__init_cache_sets_litellm_cache(monkeypatch):
 
 @pytest.mark.parametrize(
     ("scope", "same_team_hits", "other_team_hits"),
-    [("global", True, True), ("team", True, False), ("key", False, False)],
+    [(None, True, True), ("global", True, True), ("team", True, False), ("key", False, False)],
 )
 def test_proxy_config_serialized_cache_scope_controls_sharing(
-    monkeypatch: pytest.MonkeyPatch, scope: str, same_team_hits: bool, other_team_hits: bool
+    monkeypatch: pytest.MonkeyPatch, scope: str | None, same_team_hits: bool, other_team_hits: bool
 ) -> None:
     monkeypatch.setattr(litellm, "cache", None)
-    ProxyConfig().init_cache(cache_params={"type": "local", "cache_scope": scope})
+    scope_config: Final = {"cache_scope": scope} if scope is not None else {}
+    ProxyConfig().init_cache(cache_params={"type": "local", **scope_config})
     cache: Final = litellm.cache
     assert cache is not None
     request: Final = {"model": "cache-test-model", "messages": [{"role": "user", "content": "cached prompt"}]}
     response: Final = {"answer": "cached response"}
-    first: Final = apply_cache_scope(request, UserAPIKeyAuth(api_key="key-a", team_id="team-a"), cache)
-    same_team: Final = apply_cache_scope(request, UserAPIKeyAuth(api_key="key-b", team_id="team-a"), cache)
-    other_team: Final = apply_cache_scope(request, UserAPIKeyAuth(api_key="key-c", team_id="team-b"), cache)
+    first: Final = CacheScopePolicy(cache).apply(request, UserAPIKeyAuth(api_key="key-a", team_id="team-a"))
+    same_team: Final = CacheScopePolicy(cache).apply(request, UserAPIKeyAuth(api_key="key-b", team_id="team-a"))
+    other_team: Final = CacheScopePolicy(cache).apply(request, UserAPIKeyAuth(api_key="key-c", team_id="team-b"))
 
     cache.add_cache(response, **first)
 

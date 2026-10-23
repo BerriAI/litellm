@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import pytest
@@ -8,7 +8,7 @@ import litellm
 from litellm.caching.caching import Cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching.cache_scope import apply_cache_scope
+from litellm.caching.cache_scope import CacheScopePolicy
 from litellm.types.caching import CacheScope, LiteLLMCacheType, SemanticCacheScope
 from litellm.types.utils import Choices, Message, ModelResponse
 
@@ -16,6 +16,25 @@ _MODEL: Final = "gpt-6.1-sol"
 _MESSAGES: Final = [{"role": "user", "content": "cache scope regression"}]
 _REQUEST: Final[Mapping[str, object]] = {"model": _MODEL, "messages": _MESSAGES}
 _CACHED_RESPONSE: Final = {"answer": "previously cached response"}
+
+
+@pytest.mark.parametrize("cache_factory", [Cache, litellm.enable_cache, litellm.update_cache])
+def test_omitted_scope_shares_cache_across_teams(
+    monkeypatch: pytest.MonkeyPatch, cache_factory: Callable[[], Cache | None]
+) -> None:
+    monkeypatch.setattr(litellm, "cache", None)
+    configured: Final = cache_factory()
+    cache: Final = configured if configured is not None else litellm.cache
+    assert cache is not None
+    policy: Final = CacheScopePolicy(cache)
+    request: Final = {**_REQUEST, "cache": {"namespace": "application"}}
+    first: Final = policy.apply(request, UserAPIKeyAuth(api_key="key-a", team_id="team-a"))
+    other_team: Final = policy.apply(request, UserAPIKeyAuth(api_key="key-b", team_id="team-b"))
+
+    cache.add_cache(_CACHED_RESPONSE, **first)
+
+    assert cache.get_cache(**other_team) == _CACHED_RESPONSE
+    assert cache.get_cache(**request) == _CACHED_RESPONSE
 
 
 @pytest.mark.parametrize(
@@ -41,8 +60,8 @@ def test_cache_hits_follow_authenticated_scope(
     shares_hit: bool,
 ) -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL, cache_scope=scope)
-    first: Final = apply_cache_scope(_REQUEST, UserAPIKeyAuth(api_key=first_key, team_id=first_team), cache)
-    second: Final = apply_cache_scope(_REQUEST, UserAPIKeyAuth(api_key=second_key, team_id=second_team), cache)
+    first: Final = CacheScopePolicy(cache).apply(_REQUEST, UserAPIKeyAuth(api_key=first_key, team_id=first_team))
+    second: Final = CacheScopePolicy(cache).apply(_REQUEST, UserAPIKeyAuth(api_key=second_key, team_id=second_team))
 
     cache.add_cache(_CACHED_RESPONSE, **first)
 
@@ -59,12 +78,12 @@ def test_key_scope_separates_cli_sessions_with_the_same_logging_alias(second_tea
     second_auth: Final = UserAPIKeyAuth(
         token="session-credential-b", is_session_token=True, key_alias="cli-session-user", team_id=second_team
     )
-    first: Final = apply_cache_scope(_REQUEST, first_auth, cache)
-    second: Final = apply_cache_scope(_REQUEST, second_auth, cache)
+    first: Final = CacheScopePolicy(cache).apply(_REQUEST, first_auth)
+    second: Final = CacheScopePolicy(cache).apply(_REQUEST, second_auth)
 
     cache.add_cache(_CACHED_RESPONSE, **first)
 
-    assert cache.get_cache(**apply_cache_scope(_REQUEST, first_auth, cache)) == _CACHED_RESPONSE
+    assert cache.get_cache(**CacheScopePolicy(cache).apply(_REQUEST, first_auth)) == _CACHED_RESPONSE
     assert cache.get_cache(**second) is None
 
 
@@ -76,7 +95,7 @@ async def test_caller_cache_keys_and_namespaces_cannot_read_another_identity(
 ) -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL, cache_scope=scope, namespace="gateway")
     monkeypatch.setattr(litellm, "cache", cache)
-    victim: Final = apply_cache_scope(_REQUEST, UserAPIKeyAuth(api_key="victim-key", team_id="victim-team"), cache)
+    victim: Final = CacheScopePolicy(cache).apply(_REQUEST, UserAPIKeyAuth(api_key="victim-key", team_id="victim-team"))
     victim_key: Final = cache.get_cache_key(**victim)
     forged_override: Final = (
         {"litellm_params": {"preset_cache_key": victim_key}}
@@ -93,7 +112,9 @@ async def test_caller_cache_keys_and_namespaces_cannot_read_another_identity(
             "user_api_key_team_id": "victim-team",
         },
     }
-    attacker: Final = apply_cache_scope(forged, UserAPIKeyAuth(api_key="attacker-key", team_id="attacker-team"), cache)
+    attacker: Final = CacheScopePolicy(cache).apply(
+        forged, UserAPIKeyAuth(api_key="attacker-key", team_id="attacker-team")
+    )
     seeded: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="victim response"))])
     cache.add_cache(seeded, **victim)
 
@@ -118,9 +139,13 @@ def test_scope_retains_existing_namespace_partitions(
 ) -> None:
     auth: Final = UserAPIKeyAuth(api_key="same-key", team_id="same-team")
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL, cache_scope=CacheScope.TEAM, namespace="gateway")
-    first: Final = apply_cache_scope({**_REQUEST, **namespace_request}, auth, cache)
-    same_namespace: Final = apply_cache_scope({**_REQUEST, "cache": {"namespace": expected_namespace}}, auth, cache)
-    other_namespace: Final = apply_cache_scope({**_REQUEST, "cache": {"namespace": "other-application"}}, auth, cache)
+    first: Final = CacheScopePolicy(cache).apply({**_REQUEST, **namespace_request}, auth)
+    same_namespace: Final = CacheScopePolicy(cache).apply(
+        {**_REQUEST, "cache": {"namespace": expected_namespace}}, auth
+    )
+    other_namespace: Final = CacheScopePolicy(cache).apply(
+        {**_REQUEST, "cache": {"namespace": "other-application"}}, auth
+    )
     cache.add_cache(_CACHED_RESPONSE, **first)
 
     assert cache.get_cache(**same_namespace) == _CACHED_RESPONSE
@@ -145,8 +170,8 @@ async def test_missing_identity_neither_reads_nor_overwrites_shared_cache(
     monkeypatch.setattr(litellm, "cache", cache)
     seeded: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="cached response"))])
     cache.add_cache(seeded, **_REQUEST)
-    request: Final = apply_cache_scope(
-        {"cache": {"use-cache": True, "no-cache": False, "no-store": False}}, identity, cache
+    request: Final = CacheScopePolicy(cache).apply(
+        {"cache": {"use-cache": True, "no-cache": False, "no-store": False}}, identity
     )
 
     response: Final = await litellm.acompletion(
@@ -162,7 +187,7 @@ async def test_missing_identity_neither_reads_nor_overwrites_shared_cache(
 def test_global_scope_preserves_explicit_cache_keys() -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL, cache_scope=CacheScope.GLOBAL)
     request: Final = {**_REQUEST, "cache_key": "application-managed-cache-key"}
-    prepared: Final = apply_cache_scope(request, UserAPIKeyAuth(), cache)
+    prepared: Final = CacheScopePolicy(cache).apply(request, UserAPIKeyAuth())
     cache.add_cache(_CACHED_RESPONSE, **request)
 
     assert cache.get_cache(**prepared) == _CACHED_RESPONSE
@@ -182,7 +207,7 @@ def test_exact_scope_preserves_semantic_end_user_buckets(cache_type: LiteLLMCach
     first: Final = {**_REQUEST, "metadata": {"user_api_key": "same-key", "user_api_key_end_user_id": "user-a"}}
     paraphrase: Final = {**first, "messages": [{"role": "user", "content": "a differently worded prompt"}]}
     other_user: Final = {**_REQUEST, "metadata": {"user_api_key": "same-key", "user_api_key_end_user_id": "user-b"}}
-    prepared: Final = apply_cache_scope(first, UserAPIKeyAuth(), cache)
+    prepared: Final = CacheScopePolicy(cache).apply(first, UserAPIKeyAuth())
 
     assert prepared == first
     assert cache.get_cache_key(**prepared) == cache.get_cache_key(**first)

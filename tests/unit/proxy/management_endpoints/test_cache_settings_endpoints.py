@@ -4,10 +4,13 @@ Unit tests for cache settings management endpoints
 
 import asyncio
 import json
+from collections.abc import Mapping
+from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
+from pydantic import ValidationError
 
 import litellm
 from litellm.proxy._types import LitellmTableNames, LitellmUserRoles
@@ -21,15 +24,68 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
     _merge_over_saved,
     _overlay_environment,
     _parse_stored_settings,
-    _redact_credentials,
     _resolve_cache_url_precedence,
     get_cache_settings,
     test_cache_connection,
     update_cache_settings,
 )
+from litellm.types.caching import CacheScope
 from litellm.types.management_endpoints.cache_settings_endpoints import (
     CACHE_SETTINGS_FIELDS,
 )
+
+
+@pytest.mark.parametrize("request_type", (CacheTestRequest, CacheSettingsUpdateRequest))
+@pytest.mark.parametrize("invalid_scope", ("unsupported", None, 42))
+def test_cache_settings_rejects_invalid_scope(
+    request_type: type[CacheTestRequest] | type[CacheSettingsUpdateRequest], invalid_scope: object
+) -> None:
+    with pytest.raises(ValidationError, match="type=enum"):
+        request_type(cache_settings={"cache_scope": invalid_scope})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", tuple(CacheScope))
+async def test_cache_scope_is_saved_reloaded_and_applied(monkeypatch: pytest.MonkeyPatch, scope: CacheScope) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "cache-settings-test-salt")
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    stored: Final = SimpleNamespace(cache_settings=None)
+
+    async def save_row(*, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> SimpleNamespace:
+        stored.cache_settings = data["update"]["cache_settings"]
+        return stored
+
+    table: Final = SimpleNamespace(find_unique=AsyncMock(return_value=stored), upsert=AsyncMock(side_effect=save_row))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=SimpleNamespace(litellm_cacheconfig=table)))
+    await update_cache_settings(
+        request=CacheSettingsUpdateRequest(cache_settings={"type": "local", "cache_scope": scope.value}),
+        user_api_key_dict=_admin_auth(),
+        litellm_changed_by=None,
+    )
+    response: Final = await get_cache_settings(user_api_key_dict=_admin_auth())
+    assert response.current_values["cache_scope"] == scope.value
+    proxy_server.ProxyConfig().init_cache(cache_params=response.current_values)
+    assert litellm.cache is not None
+    assert litellm.cache.cache_scope is scope
+
+
+@pytest.mark.asyncio
+async def test_saved_semantic_cache_retains_its_settings_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    stored: Final = SimpleNamespace(cache_settings={"type": "redis-semantic", "semantic_cache_scope": "end_user"})
+    table: Final = SimpleNamespace(find_unique=AsyncMock(return_value=stored))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=SimpleNamespace(litellm_cacheconfig=table)))
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    response: Final = await get_cache_settings(user_api_key_dict=_admin_auth())
+    assert response.current_values["redis_type"] == "semantic"
+    assert response.current_values["semantic_cache_scope"] == "end_user"
 
 
 @pytest.mark.asyncio
@@ -464,7 +520,6 @@ class TestCacheSettingsManager:
             invocations.append(None)
             if len(invocations) == 1:
                 raise prisma.errors.ClientNotConnectedError()
-            return None  # No config → function returns early after retry.
 
         mock_prisma_client = MagicMock()
         mock_prisma_client.db.litellm_cacheconfig.find_unique = AsyncMock(side_effect=_flaky_find_unique)
@@ -823,9 +878,7 @@ async def test_get_cache_settings_redacts_password_with_marker(monkeypatch):
     for var in ("REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_USERNAME"):
         monkeypatch.delenv(var, raising=False)
     cache_row = MagicMock()
-    cache_row.cache_settings = json.dumps(
-        {"type": "redis", "host": "h", "password": "supersecret", "namespace": "ns"}
-    )
+    cache_row.cache_settings = json.dumps({"type": "redis", "host": "h", "password": "supersecret", "namespace": "ns"})
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=cache_row)
     proxy_config = MagicMock()
@@ -967,9 +1020,7 @@ async def test_update_applies_new_password(monkeypatch):
         patch("litellm.proxy.proxy_server.store_model_in_db", True),
     ):
         await update_cache_settings(
-            request=CacheSettingsUpdateRequest(
-                cache_settings={"type": "redis", "host": "h", "password": "brandnewpw"}
-            ),
+            request=CacheSettingsUpdateRequest(cache_settings={"type": "redis", "host": "h", "password": "brandnewpw"}),
             user_api_key_dict=_admin_auth(),
             litellm_changed_by=None,
         )
@@ -1109,9 +1160,7 @@ async def test_test_cache_connection_does_not_replay_saved_password_to_new_host(
     ):
         mock_cache_class.return_value = cache_instance
         await test_cache_connection(
-            request=CacheTestRequest(
-                cache_settings={"type": "redis", "host": "attacker.example.com", "port": "6379"}
-            ),
+            request=CacheTestRequest(cache_settings={"type": "redis", "host": "attacker.example.com", "port": "6379"}),
             user_api_key_dict=_admin_auth(),
         )
 

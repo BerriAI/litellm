@@ -125,6 +125,7 @@ describe("CacheSettings", () => {
         expect(updateCacheSettingsCall).toHaveBeenCalledWith("sk-test", {
           type: "redis",
           host: "localhost",
+          cache_scope: "global",
           port: "6379",
           ssl: false,
           ssl_check_hostname: false,

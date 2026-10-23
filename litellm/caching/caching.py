@@ -147,7 +147,7 @@ class Cache:
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
         _backend: BaseCache | None = None,
-        cache_scope: CacheScope = CacheScope.TEAM,
+        cache_scope: CacheScope = CacheScope.GLOBAL,
         **kwargs,
     ):
         """
@@ -173,7 +173,7 @@ class Cache:
             semantic_cache_embedding_max_input_tokens (int, optional): Truncate prompts to this many tokens before embedding them for semantic caching. Defaults to the embedding deployment's configured max_input_tokens.
             semantic_cache_embedding_timeout (float, optional): Seconds a semantic-cache lookup may spend embedding the prompt before it gives up and lets the request continue to the LLM. Defaults to SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS.
             semantic_cache_scope (str, optional): "key" isolates semantic-cache buckets per key/team/org. "end_user" additionally isolates per end user (falls back to the key scope when the request carries no end-user id). Defaults to "key".
-            cache_scope (CacheScope, optional): Proxy exact-cache sharing policy. Semantic caches use semantic_cache_scope. Defaults to CacheScope.TEAM.
+            cache_scope (CacheScope, optional): Proxy exact-cache sharing policy. Semantic caches use semantic_cache_scope. Defaults to CacheScope.GLOBAL.
             max_messages (int, optional): Requests with more `messages` (or Responses API `input` items) than this are neither looked up nor stored, so long agent conversations never serve or create a cache entry. None disables the limit. Defaults to 4.
 
             # Disk Cache Args
@@ -1025,7 +1025,7 @@ def enable_cache(
     port: str | None = None,
     password: str | None = None,
     supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
-    cache_scope: CacheScope = CacheScope.TEAM,
+    cache_scope: CacheScope = CacheScope.GLOBAL,
     **kwargs,
 ):
     """
@@ -1074,7 +1074,7 @@ def update_cache(
     port: str | None = None,
     password: str | None = None,
     supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
-    cache_scope: CacheScope = CacheScope.TEAM,
+    cache_scope: CacheScope = CacheScope.GLOBAL,
     **kwargs,
 ):
     """

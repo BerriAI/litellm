@@ -26,6 +26,7 @@ describe("buildInitialValues", () => {
     expect(values.port).toBe("6379");
     expect(values.similarity_threshold).toBe("0.8");
     expect(values.semantic_cache_scope).toBe("key");
+    expect(values.cache_scope).toBe("global");
     expect(values.ssl).toBe(false);
     expect(values.db).toBe("");
   });
@@ -82,6 +83,15 @@ describe("buildCachePayload", () => {
     const node = buildCachePayload("node", { semantic_cache_scope: "end_user" }, { forTesting: false });
     expect(node).not.toHaveProperty("semantic_cache_scope");
   });
+
+  it.each(["node", "cluster", "sentinel"] as const)(
+    "should include isolation only for exact caches using %s",
+    (redisType) => {
+      const values = buildInitialValues({ cache_scope: "team" });
+      expect(buildCachePayload(redisType, values, { forTesting: false }).cache_scope).toBe("team");
+      expect(buildCachePayload("semantic", values, { forTesting: false })).not.toHaveProperty("cache_scope");
+    },
+  );
 
   it("should keep type redis when testing a semantic cache so the test endpoint accepts it", () => {
     const payload = buildCachePayload("semantic", { similarity_threshold: 0.9 }, { forTesting: true });

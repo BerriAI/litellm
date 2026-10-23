@@ -15,7 +15,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.semantic_text_index import EmbeddingFailed, SemanticTextIndex, Vector, router_embedder
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import ProxyLogging
-from litellm.types.caching import LiteLLMCacheType
+from litellm.types.caching import CacheScope, LiteLLMCacheType
 
 QUERY: Final = "weather query"
 TEXTS: Final = (
@@ -45,7 +45,7 @@ async def test_router_embedder_enforces_cache_scope_and_missing_identity_control
     second_auth: UserAPIKeyAuth,
     shares_hit: bool,
 ) -> None:
-    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, cache_scope=CacheScope.TEAM))
     monkeypatch.setattr(litellm, "callbacks", [])
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://embedding.test/v1/embeddings").mock(

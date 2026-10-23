@@ -29,7 +29,7 @@ export interface CacheField {
   readonly type: CacheFieldType;
   readonly section: CacheSection;
   readonly helpText: string;
-  readonly redisType: RedisType | null;
+  readonly redisType: RedisType | readonly RedisType[] | null;
   readonly defaultValue?: string | number | boolean;
   readonly options?: readonly CacheFieldOption[];
   readonly rules?: CacheFieldRule[];
@@ -232,6 +232,21 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     helpText: "Enable SSL hostname verification",
     redisType: null,
     defaultValue: false,
+  },
+  {
+    name: "cache_scope",
+    label: "Cache isolation",
+    type: "select",
+    section: "cacheManagement",
+    helpText:
+      "Choose who can share cached responses. Team isolates by team, falling back to key for requests without a team.",
+    redisType: ["node", "cluster", "sentinel"],
+    defaultValue: "global",
+    options: [
+      { value: "global", label: "Off (shared cache)" },
+      { value: "team", label: "Team" },
+      { value: "key", label: "Key" },
+    ],
   },
   {
     name: "namespace",
