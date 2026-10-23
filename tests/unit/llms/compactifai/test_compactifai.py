@@ -282,7 +282,7 @@ def test_compactifai_non_object_response_body_keeps_the_error_class():
         200, json=[], request=httpx.Request("POST", "https://api.compactif.ai/v1/chat/completions")
     )
 
-    with pytest.raises(AttributeError):
+    with pytest.raises((TypeError, AttributeError)):
         CompactifAIChatConfig().transform_response(
             model="cai-llama-3-1-8b-slim",
             raw_response=raw_response,

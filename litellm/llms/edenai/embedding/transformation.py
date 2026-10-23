@@ -16,7 +16,7 @@ from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 from litellm.utils import convert_to_model_response_object
 
-from ..common_utils import EdenAIException, endpoint_url, json_headers, pick, reported_cost
+from ..common_utils import EdenAIException, endpoint_url, json_headers, object_body, pick, reported_cost
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -92,7 +92,7 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=body)
         cost: Final = reported_cost(body)
         response: Final[EmbeddingResponse] = convert_to_model_response_object(
-            response_object=body if isinstance(body, dict) else None,
+            response_object=object_body(body),
             model_response_object=model_response,
             response_type="embedding",
         )

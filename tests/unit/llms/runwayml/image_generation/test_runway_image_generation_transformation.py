@@ -61,3 +61,26 @@ def test_non_object_task_body_raises_the_base_error_class():
             litellm_params={},
             encoding=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_async_non_object_task_body_raises_the_base_error_class():
+    created = httpx.Response(
+        200,
+        json=["unexpected"],
+        request=httpx.Request(
+            "POST", "https://api.dev.runwayml.com/v1/text_to_image", headers={"Authorization": "Bearer k"}
+        ),
+    )
+
+    with pytest.raises(AttributeError):
+        await RunwayMLImageGenerationConfig().async_transform_image_generation_response(
+            model="gen4_image",
+            raw_response=created,
+            model_response=ImageResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )

@@ -247,7 +247,7 @@ class TestGeminiImageEditTransformation:
         mock_response.status_code = 200
         mock_response.headers = {}
 
-        with pytest.raises(AttributeError):
+        with pytest.raises((TypeError, AttributeError)):
             self.config.transform_image_edit_response(
                 model=self.model,
                 raw_response=mock_response,

@@ -61,9 +61,16 @@ def migrate(ctx: click.Context, check_only: bool, dry_run: bool):
 
     rich.print_json(data=response)
 
-    report: Final = as_str_mapping((as_str_mapping(response) or {}).get("report", {})) or {}
+    report_value: Final = (as_str_mapping(response) or {}).get("report", {})
+    report: Final = as_str_mapping(report_value)
+    if report is None:
+        raise click.ClickException(f"Unexpected report in the proxy response: {report_value!r}")
     residual: Final = report.get("residual_legacy")
-    if isinstance(residual, int | float) and residual > 0:
+    if residual is None:
+        return
+    if not isinstance(residual, int | float):
+        raise click.ClickException(f"Unexpected residual_legacy in the proxy response: {residual!r}")
+    if residual > 0:
         rich.print(f"[yellow]Residual legacy values remaining: {residual}[/yellow]")
-    elif residual == 0:
+    else:
         rich.print("[green]No legacy values remaining (residual_legacy == 0).[/green]")

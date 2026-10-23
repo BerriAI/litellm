@@ -48,6 +48,12 @@ def require_api_key(api_key: str | None, model: str) -> str:
     return resolved
 
 
+def object_body(body: object) -> dict[str, object]:
+    if isinstance(body, dict):
+        return body
+    raise TypeError(f"EdenAI returned a non-object body: {body!r}")
+
+
 def reported_cost(payload: object) -> float | None:
     try:
         extras: Final = (
