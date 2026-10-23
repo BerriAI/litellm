@@ -9,19 +9,32 @@ use axum::{
     Router,
     body::{Body, Bytes, to_bytes},
     extract::{ConnectInfo, DefaultBodyLimit},
-    http::{HeaderMap, Request, StatusCode},
+    http::{
+        HeaderMap, HeaderValue, Request, StatusCode,
+        header::{
+            AUTHORIZATION, CONNECTION, HOST, ORIGIN, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_PROTOCOL,
+            SEC_WEBSOCKET_VERSION, UPGRADE,
+        },
+    },
     response::{IntoResponse, Response},
 };
-use futures_util::{StreamExt, stream};
+use futures_util::{SinkExt, StreamExt, stream};
 use litellm_config::Config;
 use litellm_gateway::{Fallback, Forward};
 use litellm_gateway_inference::MAX_BODY_BYTES;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 use tokio::{
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::{mpsc, oneshot},
     time::timeout,
+};
+use tokio_tungstenite::{
+    accept_async, accept_hdr_async, client_async,
+    tungstenite::{
+        Message,
+        handshake::server::{Request as WebSocketRequest, Response as WebSocketResponse},
+    },
 };
 use tower::ServiceExt;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
@@ -210,6 +223,367 @@ async fn gateway_in_front_of(python: SocketAddr) -> SocketAddr {
         "http://127.0.0.1:1",
     ))
     .await
+}
+
+#[fixture]
+async fn websocket_python() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let Ok(mut socket) = accept_async(stream).await else {
+            return;
+        };
+        socket.send(Message::text("from python")).await.unwrap();
+        if let Some(Ok(message)) = socket.next().await {
+            socket.send(message).await.unwrap();
+            socket.close(None).await.unwrap();
+        }
+    });
+    address
+}
+
+#[rstest]
+#[case::direct_text(false, Message::text("hello"))]
+#[case::direct_binary(false, Message::binary(vec![0, 1, 255]))]
+#[case::forwarded_text(true, Message::text("hello"))]
+#[case::forwarded_binary(true, Message::binary(vec![0, 1, 255]))]
+#[tokio::test]
+async fn python_serves_websocket_messages(
+    #[future(awt)] websocket_python: SocketAddr,
+    #[case] forwarded: bool,
+    #[case] message: Message,
+) {
+    timeout(Duration::from_secs(5), async {
+        let address = if forwarded {
+            gateway_in_front_of(websocket_python).await
+        } else {
+            websocket_python
+        };
+        let stream = TcpStream::connect(address).await.unwrap();
+        let (mut socket, response) = client_async(
+            format!("ws://{address}/realtime?model=public/model"),
+            stream,
+        )
+        .await
+        .expect("the client should receive a successful WebSocket upgrade");
+
+        assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+        assert_eq!(
+            socket.next().await.unwrap().unwrap(),
+            Message::text("from python")
+        );
+        socket.send(message.clone()).await.unwrap();
+        assert_eq!(socket.next().await.unwrap().unwrap(), message);
+        assert_eq!(socket.next().await.unwrap().unwrap(), Message::Close(None));
+    })
+    .await
+    .expect("the WebSocket exchange should finish without hanging");
+}
+
+#[rstest]
+#[tokio::test]
+// Tungstenite's handshake callback uses a full HTTP response as its error type.
+#[allow(clippy::result_large_err)]
+async fn forwarded_websocket_preserves_handshake_headers_and_control_frames() {
+    timeout(Duration::from_secs(5), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let python = listener.local_addr().unwrap();
+        let (seen_sender, seen_receiver) = oneshot::channel();
+        let upstream = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(
+                stream,
+                move |request: &WebSocketRequest, mut response: WebSocketResponse| {
+                    seen_sender
+                        .send((request.uri().to_string(), request.headers().clone()))
+                        .unwrap();
+                    response
+                        .headers_mut()
+                        .insert(SEC_WEBSOCKET_PROTOCOL, HeaderValue::from_static("chat"));
+                    Ok(response)
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                timeout(Duration::from_secs(2), socket.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap(),
+                Message::Ping(vec![7, 8])
+            );
+            socket.send(Message::Pong(vec![7, 8])).await.unwrap();
+            socket.send(Message::text("from python")).await.unwrap();
+            assert_eq!(
+                timeout(Duration::from_secs(2), socket.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap(),
+                Message::text("to python")
+            );
+            socket.send(Message::text("echo")).await.unwrap();
+        });
+
+        let gateway = gateway_in_front_of(python).await;
+        let stream = TcpStream::connect(gateway).await.unwrap();
+        let request = Request::builder()
+            .uri(format!(
+                "ws://{gateway}/realtime?model=public/model&trace=1"
+            ))
+            .header(HOST, gateway.to_string())
+            .header(AUTHORIZATION, "Bearer gateway-key")
+            .header(ORIGIN, "https://client.example")
+            .header(SEC_WEBSOCKET_PROTOCOL, "chat, superchat")
+            .header(SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==")
+            .header(SEC_WEBSOCKET_VERSION, "13")
+            .header(UPGRADE, "websocket")
+            .header(CONNECTION, "Upgrade, x-hop")
+            .header("x-hop", "remove")
+            .body(())
+            .unwrap();
+        let (mut socket, response) = client_async(request, stream).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+        assert_eq!(
+            response.headers().get(SEC_WEBSOCKET_PROTOCOL).unwrap(),
+            "chat"
+        );
+        let (uri, headers) = timeout(Duration::from_secs(2), seen_receiver)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(uri, "/realtime?model=public/model&trace=1");
+        assert_eq!(headers.get(AUTHORIZATION).unwrap(), "Bearer gateway-key");
+        assert_eq!(headers.get(ORIGIN).unwrap(), "https://client.example");
+        assert_eq!(
+            headers.get(SEC_WEBSOCKET_PROTOCOL).unwrap(),
+            "chat, superchat"
+        );
+        assert_eq!(headers.get(CONNECTION).unwrap(), "upgrade");
+        assert!(!headers.contains_key("x-hop"));
+
+        socket.send(Message::Ping(vec![7, 8])).await.unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(2), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            Message::Pong(vec![7, 8])
+        );
+        assert_eq!(
+            timeout(Duration::from_secs(2), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            Message::text("from python")
+        );
+        socket.send(Message::text("to python")).await.unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(2), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            Message::text("echo")
+        );
+        drop(socket);
+        upstream.await.unwrap();
+    })
+    .await
+    .expect("the forwarded WebSocket should preserve its negotiated behavior");
+}
+
+#[rstest]
+#[tokio::test]
+async fn forwarded_websocket_rejection_preserves_status_body_challenge_and_filters_hops() {
+    let python = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(
+            ResponseTemplate::new(401)
+                .insert_header("www-authenticate", "Bearer realm=upstream")
+                .insert_header("connection", "x-upstream-hop")
+                .insert_header("x-upstream-hop", "remove")
+                .set_body_string("upstream denied"),
+        )
+        .mount(&python)
+        .await;
+    let gateway = gateway_in_front_of(*python.address()).await;
+    let stream = TcpStream::connect(gateway).await.unwrap();
+    let request = Request::builder()
+        .uri(format!("ws://{gateway}/realtime?model=public/model"))
+        .header(HOST, gateway.to_string())
+        .header(AUTHORIZATION, "Bearer gateway-key")
+        .header(CONNECTION, "Upgrade")
+        .header(SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==")
+        .header(SEC_WEBSOCKET_VERSION, "13")
+        .header(UPGRADE, "websocket")
+        .body(())
+        .unwrap();
+
+    let error = timeout(Duration::from_secs(5), client_async(request, stream))
+        .await
+        .unwrap()
+        .unwrap_err();
+    let response = match error {
+        tokio_tungstenite::tungstenite::Error::Http(response) => response,
+        error => panic!("expected an HTTP rejection, got {error}"),
+    };
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers().get("www-authenticate").unwrap(),
+        "Bearer realm=upstream"
+    );
+    assert!(!response.headers().contains_key("x-upstream-hop"));
+    assert_eq!(
+        response.body().as_deref(),
+        Some(b"upstream denied".as_slice())
+    );
+
+    let requests = python.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].headers.get("authorization").unwrap(),
+        "Bearer gateway-key"
+    );
+}
+
+#[rstest]
+#[case::missing_connection("websocket", "keep-alive")]
+#[case::non_websocket_upgrade("h2c", "upgrade")]
+#[tokio::test]
+async fn malformed_upgrade_is_forwarded_as_http(#[case] upgrade: &str, #[case] connection: &str) {
+    let python = python().await;
+    let response = app(&python.uri(), "anthropic/test-model", "http://127.0.0.1:1")
+        .oneshot(
+            Request::get("/realtime?model=public/model")
+                .header("upgrade", upgrade)
+                .header("connection", connection)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), 1024).await.unwrap(),
+        "from python"
+    );
+    let requests = python.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(!requests[0].headers.contains_key("upgrade"));
+    assert!(!requests[0].headers.contains_key("connection"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn downstream_disconnect_reaches_upstream_as_eof() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let python = listener.local_addr().unwrap();
+    let (ready_sender, ready_receiver) = oneshot::channel();
+    let (eof_sender, eof_receiver) = oneshot::channel();
+    let upstream = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(stream).await.unwrap();
+        ready_sender.send(()).unwrap();
+        let result = timeout(Duration::from_secs(2), socket.next())
+            .await
+            .unwrap();
+        eof_sender
+            .send(result.is_none_or(|message| message.is_err()))
+            .unwrap();
+    });
+
+    let gateway = gateway_in_front_of(python).await;
+    let stream = TcpStream::connect(gateway).await.unwrap();
+    let (socket, response) = timeout(
+        Duration::from_secs(2),
+        client_async(format!("ws://{gateway}/realtime"), stream),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    timeout(Duration::from_secs(2), ready_receiver)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(socket);
+
+    assert!(
+        timeout(Duration::from_secs(2), eof_receiver)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    upstream.await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn upstream_disconnect_reaches_downstream_as_eof() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let python = listener.local_addr().unwrap();
+    let upstream = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let socket = accept_async(stream).await.unwrap();
+        drop(socket);
+    });
+
+    let gateway = gateway_in_front_of(python).await;
+    let stream = TcpStream::connect(gateway).await.unwrap();
+    let (mut socket, response) = timeout(
+        Duration::from_secs(2),
+        client_async(format!("ws://{gateway}/realtime"), stream),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    let result = timeout(Duration::from_secs(2), socket.next())
+        .await
+        .unwrap();
+    assert!(result.is_none_or(|message| message.is_err()));
+    upstream.await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn established_websocket_survives_the_handshake_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let python = listener.local_addr().unwrap();
+    let upstream = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(stream).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(11)).await;
+        socket.send(Message::text("still alive")).await.unwrap();
+    });
+
+    let gateway = gateway_in_front_of(python).await;
+    let stream = TcpStream::connect(gateway).await.unwrap();
+    let (mut socket, response) = timeout(
+        Duration::from_secs(5),
+        client_async(format!("ws://{gateway}/realtime"), stream),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    assert_eq!(
+        timeout(Duration::from_secs(12), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+        Message::text("still alive")
+    );
+    upstream.await.unwrap();
 }
 
 async fn recording_python(
