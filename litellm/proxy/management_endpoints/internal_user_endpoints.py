@@ -2129,8 +2129,9 @@ def _validate_sort_params(
 
     if sort_by in {"status", "key_count"}:
         return None
-    if sort_by in {"user_alias", "max_budget", "updated_at", "sso_user_id"}:
-        return ({sort_by: {"sort": sort_order.lower(), "nulls": "last"}}, {"user_id": "asc"})
+    if sort_by in {"max_budget", "updated_at", "sso_user_id"}:
+        nulls: Final = "first" if sort_by == "max_budget" and sort_order.lower() == "desc" else "last"
+        return ({sort_by: {"sort": sort_order.lower(), "nulls": nulls}}, {"user_id": "asc"})
     order_by[sort_by] = sort_order.lower()
 
     return order_by

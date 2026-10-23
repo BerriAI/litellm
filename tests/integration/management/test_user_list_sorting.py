@@ -17,7 +17,7 @@ def test_user_list_sorts_all_pages(field: str, direction: str, gateway: Gateway,
         scenario.user(
             user_id=f"{prefix}-{index}",
             user_role="internal_user",
-            user_alias=f"Alias {value:03}",
+            user_alias=f"Alias {value if index != 2 else 4:03}",
             user_email=f"{prefix}-{index}@example.com",
             max_budget=value,
             metadata={"scim_active": value != 3},
@@ -50,7 +50,7 @@ def test_user_list_sorts_all_pages(field: str, direction: str, gateway: Gateway,
         if field == "key_count"
         else (20, 3, 4, 100, None)
         if field == "sso_user_id"
-        else (20, 3, 3, 100, 0)
+        else (20, 3, 4, 100, 0)
         if field == "user_alias"
         else (20, 3, 3, 100, None)
     )
@@ -58,7 +58,11 @@ def test_user_list_sorts_all_pages(field: str, direction: str, gateway: Gateway,
         user_id
         for _, user_id in sorted(
             ((value, user_id) for value, user_id in zip(values, ids, strict=True)),
-            key=lambda item: (item[0] is None, (item[0] or 0) * (1 if direction == "asc" else -1), item[1]),
+            key=lambda item: (
+                (item[0] is not None if field == "max_budget" and direction == "desc" else item[0] is None),
+                (item[0] or 0) * (1 if direction == "asc" else -1),
+                item[1],
+            ),
         )
     )
     pages: Final = tuple(
@@ -86,8 +90,8 @@ def test_computed_user_sorts_preserve_filters(field: str, gateway: Gateway, scen
     member: Final = scenario.member(team)
     other: Final = scenario.user(user_role="internal_user")
     for filters in ({"team": team}, {"user_ids": member}, {"user_ids": f"{member},{other}"}, {"role": "internal_user"}):
-        baseline: Final = gateway.get("/user/list", {**filters, "user_ids": f"{member},{other}", "sort_by": "user_id"})
-        response: Final = gateway.get("/user/list", {**filters, "user_ids": f"{member},{other}", "sort_by": field})
+        baseline: Final = gateway.get("/user/list", {"user_ids": f"{member},{other}", **filters, "sort_by": "user_id"})
+        response: Final = gateway.get("/user/list", {"user_ids": f"{member},{other}", **filters, "sort_by": field})
         assert response["total"] == baseline["total"]
         assert sorted(user["user_id"] for user in response["users"]) == sorted(
             user["user_id"] for user in baseline["users"]
@@ -95,3 +99,81 @@ def test_computed_user_sorts_preserve_filters(field: str, gateway: Gateway, scen
     ordinary_key: Final = scenario.key(user_id=other)
     denied: Final = gateway.request("GET", "/user/list", key=ordinary_key, params={"sort_by": field})
     assert denied.status_code == 403, denied.text
+
+
+@pytest.mark.parametrize("field", ("status", "key_count"))
+@pytest.mark.parametrize("direction", ("asc", "desc"))
+def test_computed_user_sorts_preserve_org_admin_scope(
+    field: str, direction: str, gateway: Gateway, scenario: Scenario
+) -> None:
+    prefix: Final = f"sort-org-users-{uuid4().hex}"
+    owner: Final = scenario.user(user_role="internal_user")
+    members: Final = tuple(
+        scenario.user(user_id=f"{prefix}-{index}", user_role="internal_user", metadata={"scim_active": index != 1})
+        for index in range(4)
+    )
+    budget: Final = scenario.budget(max_budget=10)
+    orgs: Final = (f"{prefix}-allowed", f"{prefix}-outside")
+    try:
+        for org in orgs:
+            write_rows(
+                'INSERT INTO "LiteLLM_OrganizationTable" '
+                "(organization_id, organization_alias, budget_id, created_by, updated_by, updated_at) "
+                "VALUES (%s, %s, %s, 'sorting-test', 'sorting-test', NOW())",
+                (org, org, budget),
+            )
+        write_rows(
+            'INSERT INTO "LiteLLM_OrganizationMembership" (user_id, organization_id, user_role) '
+            "VALUES (%s, %s, 'org_admin')",
+            (owner, orgs[0]),
+        )
+        for index, member in enumerate(members):
+            write_rows(
+                'INSERT INTO "LiteLLM_OrganizationMembership" (user_id, organization_id, user_role) '
+                "VALUES (%s, %s, 'internal_user')",
+                (member, orgs[0] if index < 3 else orgs[1]),
+            )
+            for _ in range(index):
+                scenario.key(user_id=member)
+        caller: Final = scenario.key(user_id=owner)
+        values: Final = (0, 1, 0) if field == "status" else (0, 1, 2)
+        expected: Final = tuple(
+            member
+            for value, member in sorted(
+                zip(values, members[:3], strict=True),
+                key=lambda item: (item[0] * (-1 if direction == "desc" else 1), item[1]),
+            )
+        )
+        pages: Final = tuple(
+            gateway.request(
+                "GET",
+                "/user/list",
+                key=caller,
+                params={
+                    "search": prefix,
+                    "sort_by": field,
+                    "sort_order": direction,
+                    "page_size": "2",
+                    "page": str(page),
+                },
+            )
+            for page in (1, 2)
+        )
+        assert all(page.status_code == 200 for page in pages), [page.text for page in pages]
+        assert all(page.json()["total"] == 3 for page in pages)
+        returned: Final = tuple(row["user_id"] for row in chain.from_iterable(page.json()["users"] for page in pages))
+        assert returned == expected
+        denied: Final = gateway.request(
+            "GET",
+            "/user/list",
+            key=caller,
+            params={
+                "organization_ids": orgs[1],
+                "sort_by": field,
+            },
+        )
+        assert denied.status_code == 403, denied.text
+    finally:
+        for org in orgs:
+            write_rows('DELETE FROM "LiteLLM_OrganizationMembership" WHERE organization_id = %s', (org,))
+            write_rows('DELETE FROM "LiteLLM_OrganizationTable" WHERE organization_id = %s', (org,))
