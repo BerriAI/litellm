@@ -16,6 +16,7 @@ import litellm
 from litellm import TranscriptionResponse, model_cost
 from litellm.constants import REALTIME_METERED_USAGE_KEY
 from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
+from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
@@ -3337,14 +3338,7 @@ def test_anthropic_us_data_residency_uplift_on_claude_4_6_and_later_models(_loca
 
 
 def test_gemini_cache_tokens_details_no_negative_values():
-    """
-    Test for Issue #18750: Negative text_tokens with Gemini caching
-
-    When using Gemini with explicit caching, the response includes cacheTokensDetails
-    which breaks down cached tokens by modality. This test ensures that:
-    1. text_tokens is never negative
-    2. We correctly subtract cached tokens per modality (not total)
-    """
+    """Ensure issue #18750 cache details remain non-negative after cost parsing."""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
@@ -3372,27 +3366,17 @@ def test_gemini_cache_tokens_details_no_negative_values():
 
     usage = VertexGeminiConfig.calculate_usage(completion_response)
 
-    # Text tokens should be non-cached text only: 9402 - 9393 = 9
-    assert usage.prompt_tokens_details.text_tokens == 9, (
-        f"Expected text_tokens=9, got {usage.prompt_tokens_details.text_tokens}"
-    )
+    prompt_details: Final = parse_prompt_tokens_details(usage)
 
-    # Image tokens should be non-cached image only: 258 - 258 = 0
-    assert usage.prompt_tokens_details.image_tokens == 0, (
-        f"Expected image_tokens=0, got {usage.prompt_tokens_details.image_tokens}"
+    assert usage.prompt_tokens_details.text_tokens == 9402
+    assert usage.prompt_tokens_details.image_tokens == 258
+    assert usage.prompt_tokens_details.cached_tokens == 9651
+    assert usage.prompt_tokens_details.cached_tokens_details == CachedTokensDetails(
+        text_tokens=9393, image_tokens=258
     )
-
-    # Total cached should match
-    assert usage.prompt_tokens_details.cached_tokens == 9651, (
-        f"Expected cached_tokens=9651, got {usage.prompt_tokens_details.cached_tokens}"
-    )
-
-    # MOST IMPORTANT: text_tokens should NEVER be negative
-    assert usage.prompt_tokens_details.text_tokens >= 0, (
-        f"BUG: text_tokens is negative ({usage.prompt_tokens_details.text_tokens})! This was the issue in #18750"
-    )
-
-    print("✅ Issue #18750 fix verified: text_tokens is correctly calculated and non-negative")
+    assert prompt_details["text_tokens"] == 9
+    assert prompt_details["image_tokens"] == 0
+    assert prompt_details["text_tokens"] >= 0
 
 
 def test_gemini_without_cache_tokens_details():
