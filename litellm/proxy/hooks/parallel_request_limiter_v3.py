@@ -42,7 +42,11 @@ from litellm.caching.redis_batch import (
     active_request_redis_batch,
 )
 from litellm.caching.redis_cache import log_redis_failure
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.constants import (
+    DEFAULT_IMAGE_TOKEN_COUNT,
+    DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+)
 from litellm.cost_calculator import get_usage_object
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -109,6 +113,7 @@ else:
 
 
 _REQUEST_RATE_LIMIT_DATA: Final = TypeAdapter(Mapping[str, object])
+_MESSAGE_CONTENT_OBJECTS: Final = TypeAdapter(list[Mapping[str, object]])
 _MCP_KEY_RPM_LIMITS: Final[TypeAdapter[dict[str, int] | None]] = TypeAdapter(dict[str, int] | None)
 
 
@@ -1232,7 +1237,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if not isinstance(data, dict):
             return 0, 0
         translated_data: Final = self._translate_google_genai_native_request(data, call_type)
-        estimable_data: Final = translated_data if translated_data is not None else data
+        estimable_data: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(
+            translated_data if translated_data is not None else data
+        )
         selected_fields: Final[tuple[object | None, object | None, object | None]] = (
             (None, None, estimable_data.get("input"))
             if call_type in RESPONSES_API_CALL_TYPES or call_type in EMBEDDING_API_CALL_TYPES
@@ -1253,6 +1260,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             billable_input_since_newest_compaction(raw_input) if call_type in RESPONSES_API_CALL_TYPES else raw_input
         )
 
+        estimated_media_tokens: Final = self._estimate_message_media_tokens(messages)
         total_chars: Final = (
             len(get_str_from_messages(messages))
             if isinstance(messages, list) and messages
@@ -1267,7 +1275,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             else 0
         )
 
-        estimated_input_tokens: Final = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
+        estimated_text_tokens: Final = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
+        estimated_input_tokens: Final = estimated_text_tokens + estimated_media_tokens
 
         explicit_max_tokens: Final = self._get_explicit_output_cap(data, call_type)
         generates_no_output: Final = (
@@ -1283,7 +1292,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         max_tokens_estimate: Final = (
             0
             if generates_no_output
-            or (explicit_max_tokens is None and total_chars == 0 and configured_output_tokens is None)
+            or (explicit_max_tokens is None and estimated_input_tokens == 0 and configured_output_tokens is None)
             else explicit_max_tokens
             if explicit_max_tokens is not None
             else configured_output_tokens
@@ -3752,6 +3761,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     descriptor_key=descriptor_key,
                 )
 
+    @classmethod
+    def _estimate_message_media_tokens(cls, messages: object) -> int:
+        if not isinstance(messages, list):
+            return 0
+        return sum(
+            cls._estimate_content_media_tokens(message.get("content"))
+            for message in _MESSAGE_CONTENT_OBJECTS.validate_python(messages)
+        )
+
+    @classmethod
+    def _estimate_content_media_tokens(cls, content: object) -> int:
+        if not isinstance(content, list):
+            return 0
+        return sum(
+            DEFAULT_IMAGE_TOKEN_COUNT
+            if block.get("type") in ("image_url", "image")
+            else cls._estimate_audio_block_tokens(block)
+            if block.get("type") == "input_audio"
+            else 0
+            for block in _MESSAGE_CONTENT_OBJECTS.validate_python(content)
+        )
+
     @staticmethod
     def _estimate_audio_block_tokens(block: object) -> int:
         """
@@ -3958,7 +3989,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception:  # noqa: BLE001  # tokenizer failures degrade to the cheap estimate
             if call_type in RERANK_API_CALL_TYPES and isinstance(selected_text, str):
                 return max(0, len(selected_text) // DEFAULT_CHARS_PER_TOKEN)
-            estimated_input_tokens, _ = self._estimate_input_and_output_tokens(data=data, call_type=call_type)
+            estimated_input_tokens, _ = self._estimate_input_and_output_tokens(
+                data={**data, "messages": countable_messages}, call_type=call_type
+            )
             return estimated_input_tokens + audio_token_estimate
 
     async def _reserve_project_io_tokens_or_raise(

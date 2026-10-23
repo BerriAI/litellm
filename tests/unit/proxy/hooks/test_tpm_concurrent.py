@@ -22,7 +22,9 @@ from typing import Any, Dict, Final
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROJECT_OTPM_DESCRIPTOR_KEY,
@@ -51,6 +53,96 @@ def rate_limiter():
     cache = DualCache()
     handler = RateLimitHandler(internal_usage_cache=InternalUsageCache(cache))
     return handler, cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("media_type", ["image_url", "image", "input_audio"])
+async def test_combined_tpm_rejects_media_before_dispatch(
+    rate_limiter: tuple[RateLimitHandler, DualCache], media_type: str,
+) -> None:
+    handler, cache = rate_limiter
+    media: Final = {
+        "type": media_type,
+        "image_url": {"url": "https://example.invalid/image.png", "detail": "high"},
+        "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"},
+        "input_audio": {"data": "AAAA", "format": "wav"},
+    }
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-media-tpm"), tpm_limit=100)
+    data: Final = {
+        "model": "unknown-deployment",
+        "messages": [{"role": "user", "content": [media]}],
+        "max_tokens": 16,
+    }
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth, cache=cache, data=data, call_type="acompletion",
+        )
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.parametrize("output_cap", [None, 0, 16])
+@pytest.mark.parametrize("configured_output", [None, 32])
+def test_combined_tpm_media_is_bounded_and_not_contentless(
+    rate_limiter: tuple[RateLimitHandler, DualCache],
+    output_cap: int | None, configured_output: int | None,
+) -> None:
+    handler, _ = rate_limiter
+    for image_data in ("AAAA", "A" * 4_000_000):
+        data: Final = {
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {
+                    "url": "data:image/png;base64," + image_data,
+                }},
+            ]}],
+            "n": 2,
+            **({"max_tokens": output_cap} if output_cap is not None else {}),
+        }
+        input_tokens, output_tokens = handler._estimate_input_and_output_tokens(
+            data, call_type="acompletion", configured_output_tokens=configured_output,
+        )
+        expected_output: Final = (
+            output_cap if output_cap is not None else configured_output
+            if configured_output is not None else max(
+                DEFAULT_IMAGE_TOKEN_COUNT, handler.no_max_tokens_output_floor(None),
+            )
+        )
+        assert input_tokens == DEFAULT_IMAGE_TOKEN_COUNT
+        assert output_tokens == expected_output * 2
+
+
+def test_combined_tpm_preserves_text_and_counts_each_media_block_once(
+    rate_limiter: tuple[RateLimitHandler, DualCache],
+) -> None:
+    handler, _ = rate_limiter
+    audio: Final = {
+        "type": "input_audio", "input_audio": {"data": "A" * 4_000_000, "format": "wav"},
+    }
+    image: Final = {"type": "image_url", "image_url": "https://example.invalid/image.png"}
+    data: Final = {
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "abcd" * 10}, image, image, audio,
+        ]}], "max_tokens": 0,
+    }
+    assert handler._estimate_input_and_output_tokens(data) == (
+        10 + 2 * DEFAULT_IMAGE_TOKEN_COUNT + handler._estimate_audio_block_tokens(audio), 0,
+    )
+
+
+def test_project_itpm_fallback_counts_chat_audio_once(
+    rate_limiter: tuple[RateLimitHandler, DualCache],
+) -> None:
+    handler, _ = rate_limiter
+    audio: Final = {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}
+    data: Final = {
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "abcd" * 10}, audio,
+            {"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}},
+            {"type": "unsupported_counter_block"},
+        ]}],
+    }
+    assert handler._estimate_precise_input_tokens(data, "unknown-deployment", "acompletion") == (
+        10 + DEFAULT_IMAGE_TOKEN_COUNT + handler._estimate_audio_block_tokens(audio)
+    )
 
 
 @pytest.fixture(autouse=True)
