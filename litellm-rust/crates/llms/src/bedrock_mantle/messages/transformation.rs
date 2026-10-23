@@ -164,7 +164,7 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
             .into_iter()
             .chain(REGION_ENVS.iter().copied())
             .chain(
-                AwsParams::secret_names()
+                litellm_auth::AwsKeys::ENV_NAMES
                     .iter()
                     .copied()
                     .filter(|name| !REGION_ENVS.contains(name)),

@@ -1,6 +1,7 @@
 pub(crate) mod audio_transcription;
 pub(crate) mod chat_completions;
 pub(crate) mod clickhouse_spend;
+mod credential_globals;
 pub(crate) mod embeddings;
 mod inference;
 pub(crate) mod messages;

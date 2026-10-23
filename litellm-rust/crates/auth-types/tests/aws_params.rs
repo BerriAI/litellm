@@ -1,10 +1,11 @@
-use litellm_auth_types::AwsParams;
+use litellm_auth_types::{AwsKeys, AwsParams};
 use rstest::rstest;
 use serde_json::{Map, Value};
 
 #[rstest]
 fn fields_name_every_param_once_and_in_declaration_order() {
-    let filled: Map<String, Value> = AwsParams::fields()
+    let filled: Map<String, Value> = AwsKeys::LITELLM_PARAMS
+        .iter()
         .map(|name| (name.to_string(), Value::from(format!("value-of-{name}"))))
         .collect();
     let typed = AwsParams::from_optional_params(&filled);
@@ -16,7 +17,7 @@ fn fields_name_every_param_once_and_in_declaration_order() {
             .keys()
             .map(String::as_str)
             .collect::<Vec<_>>(),
-        AwsParams::fields().collect::<Vec<_>>()
+        AwsKeys::LITELLM_PARAMS
     );
     assert_eq!(serialized, Value::Object(filled.clone()));
     assert_eq!(

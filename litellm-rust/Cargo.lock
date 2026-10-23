@@ -3366,6 +3366,7 @@ dependencies = [
  "aws-types",
  "litellm-auth-types",
  "litellm-http",
+ "litellm-layered",
  "moka",
  "reqwest 0.12.28",
  "rstest",
@@ -3402,6 +3403,7 @@ dependencies = [
  "google-cloud-auth",
  "http 1.4.2",
  "litellm-auth-types",
+ "litellm-layered",
  "moka",
  "rstest",
  "serde",
@@ -3416,6 +3418,7 @@ dependencies = [
 name = "litellm-auth-types"
 version = "0.1.0"
 dependencies = [
+ "litellm-layered",
  "rstest",
  "serde",
  "serde_json",

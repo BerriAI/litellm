@@ -2,6 +2,7 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
+use litellm_auth::Sources;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
@@ -22,8 +23,7 @@ use serde_json::{Map, Value};
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
-    python_settings::missing_module,
-    routes::RequestView,
+    routes::{RequestView, credential_globals},
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
@@ -41,31 +41,16 @@ fn merge_headers(
     (!merged.is_empty()).then_some(merged)
 }
 
-/// Reads `litellm.<name>`, the module global a param spec names, the way
-/// `VertexBase.get_vertex_ai_project` reads `litellm.vertex_project`.
-fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let module = match py.import("litellm") {
-        Ok(module) => module,
-        Err(error) if missing_module(py, &error, "litellm")? => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    let value = module.getattr(name)?;
-    Ok((!value.is_none()).then_some(value))
-}
-
 /// The caller's litellm params, read from the kwargs by the names the typed params declare,
-/// so a key the configs do not read is never converted; a spec whose spellings the call all
-/// leaves out falls back to the module global it names, which stays the host's concern.
+/// so a key the configs do not read is never converted. A setting the call leaves unset or
+/// blank takes its `litellm.*` global, as Python's `or` chain does.
 fn project_litellm_params<'py>(
     argument: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
-    global: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+    fold: impl Fn(Map<String, Value>, &[&Sources]) -> PyResult<Map<String, Value>>,
 ) -> PyResult<Result<LitellmParams, Error>> {
     let fields = project_optional_fields(LitellmParams::fields(), &argument)?;
-    let globals = LitellmParams::specs()
-        .filter(|spec| !spec.wire.iter().any(|name| fields.contains_key(*name)))
-        .filter_map(|spec| spec.module_global);
-    let folded = project_optional_fields(globals, &global)?;
-    Ok(litellm_params(fields.into_iter().chain(folded).collect()))
+    let unset = credential_globals::unset(&fields, LitellmParams::litellm_settings());
+    Ok(litellm_params(fold(fields, &unset)?))
 }
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
@@ -136,7 +121,9 @@ impl MessagesPythonHost {
         let api_base = string("api_base")?;
         let extra_headers = self.merged_headers(py, arguments)?;
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
-        let litellm_params = project_litellm_params(argument, |name| module_global(py, name))?;
+        let litellm_params = project_litellm_params(argument, |fields, unset| {
+            credential_globals::fold(py, fields, unset)
+        })?;
         Ok(messages_body(body).and_then(|body| {
             Ok(MessagesCall {
                 body,
@@ -336,6 +323,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::python_settings::PythonSettings;
 
     fn map(value: Value) -> Map<String, Value> {
         serde_json::from_value(value).unwrap()
@@ -404,7 +392,12 @@ mod tests {
         json!({"vertex_project": "from-global"}),
         Ok(json!({"model": "m", "vertex_project": "from-global"})),
     )]
-    #[case::a_global_of_the_wrong_type_is_a_request_error(
+    #[case::a_blank_value_in_the_call_falls_back(
+        json!({"model": "m", "vertex_project": "", "vertex_ai_project": " "}),
+        json!({"vertex_project": "from-global"}),
+        Ok(json!({"model": "m", "vertex_project": "from-global", "vertex_ai_project": " "})),
+    )]
+    #[case::a_global_of_the_wrong_type_is_an_error(
         json!({"model": "m"}),
         json!({"vertex_location": 5}),
         Err(()),
@@ -447,19 +440,27 @@ mod tests {
                     .unwrap()
             };
             let kwargs = dict(&kwargs);
-            let globals = dict(&globals);
+            let defaults = dict(&json!({"vertex_project": null, "vertex_location": null}));
+            defaults.update(dict(&globals).as_mapping()).unwrap();
+            let namespace = py
+                .import("types")
+                .unwrap()
+                .getattr("SimpleNamespace")
+                .unwrap()
+                .call((), Some(&defaults))
+                .unwrap();
+            let snapshot = PythonSettings::ProviderDefaults.snapshot(namespace);
             let bound = PyDict::new(py);
             let projected = project_litellm_params(
                 |name| present(&kwargs, &bound, name),
-                |name| present(&globals, &bound, name),
-            )
-            .unwrap();
+                |fields, unset| credential_globals::fold_from(fields, unset, &snapshot),
+            );
             match (projected, expected) {
-                (Ok(projected), Ok(fields)) => assert_eq!(
+                (Ok(Ok(projected)), Ok(fields)) => assert_eq!(
                     projected,
                     litellm_params(serde_json::from_value(fields).unwrap()).unwrap()
                 ),
-                (Err(error), Err(())) => assert!(matches!(error, Error::InvalidRequest(_))),
+                (Err(_) | Ok(Err(_)), Err(())) => {}
                 (projected, expected) => panic!("got {projected:?}, expected {expected:?}"),
             }
         });

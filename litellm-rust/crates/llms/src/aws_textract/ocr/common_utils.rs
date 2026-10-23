@@ -239,8 +239,12 @@ pub(super) async fn environment(
 ) -> Result<TextractEnvironment, Error> {
     let env_lookup = |name: &str| request.connection.secret(name);
     let params = AwsParams::from_optional_params(&request.optional_params);
-    let region = resolve_aws_region(None, &params, &env_lookup)
-        .ok_or_else(|| Error::Auth(AwsParams::REGION.missing("AWS")))?;
+    let region = resolve_aws_region(None, &params, &env_lookup).ok_or_else(|| {
+        Error::Auth(litellm_auth::Error::missing(
+            "AWS",
+            litellm_auth::AwsKeys::REGION,
+        ))
+    })?;
     let signer = SigV4Signer::resolve(
         auth,
         region.clone(),
