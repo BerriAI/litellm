@@ -20,6 +20,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     HUGGING_FACE_SOURCE,
+    KIMI_K3_RANKS_FILE,
+    KIMI_K3_REVISION,
     KimiK3Encodings,
     KimiK3TokenizerSource,
     kimi_k3_anthropic_tokens,
@@ -546,3 +548,18 @@ def test_offline_mode_and_disabled_downloads_never_ask_hugging_face_for_the_toke
         with contextlib.suppress(Exception):
             HUGGING_FACE_SOURCE.ranks_path()
     assert hub.called is asks_hub
+
+
+def test_offline_mode_reads_the_tokenizer_from_the_hugging_face_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    import huggingface_hub.constants
+
+    cached: Final = tmp_path / "models--moonshotai--Kimi-K3" / "snapshots" / KIMI_K3_REVISION / KIMI_K3_RANKS_FILE
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(b"cached ranks")
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path))
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
+    with respx.mock(assert_all_called=False) as router:
+        hub: Final = router.route(host="huggingface.co").mock(return_value=httpx.Response(503))
+        path: Final = HUGGING_FACE_SOURCE.ranks_path()
+    assert Path(path).read_bytes() == b"cached ranks"
+    assert not hub.called
