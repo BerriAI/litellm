@@ -65,7 +65,9 @@ def test_server_credential_occupies_authorization(auth_type, token, header, expe
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("auth_type", AUTHORIZATION_AUTH_TYPES)
-async def test_tools_list_skips_signer_when_server_key_rides_authorization(auth_type):
+async def test_tools_list_skips_signer_when_server_key_rides_authorization(  # test-quality-ok: signer is a process-wide singleton with no injection seam; the hook call is the observable
+    auth_type,
+):
     manager = MCPServerManager()
     manager.create_mcp_client = AsyncMock(return_value=object())
     manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
@@ -96,7 +98,9 @@ async def test_tools_list_skips_signer_when_server_key_rides_authorization(auth_
         ),
     ],
 )
-async def test_tools_list_still_runs_signer_when_authorization_is_free(server):
+async def test_tools_list_still_runs_signer_when_authorization_is_free(  # test-quality-ok: signer is a process-wide singleton with no injection seam; the hook call is the observable
+    server,
+):
     manager = MCPServerManager()
     manager.create_mcp_client = AsyncMock(return_value=object())
     manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
