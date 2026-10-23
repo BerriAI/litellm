@@ -282,7 +282,13 @@ class TestResponseCompliance:
 
     @pytest.mark.parametrize(
         "schema_name",
-        ["Interaction", "InteractionStatusUpdate", "CreateModelInteractionParams", "CreateAgentInteractionParams"],
+        [
+            "Interaction",
+            "InteractionStatusUpdate",
+            "CreateModelInteractionParams",
+            "CreateAgentInteractionParams",
+            "UrlContextResult",
+        ],
     )
     def test_status_enum_values(self, spec_dict, schema_name):
         from litellm.types.interactions import generated

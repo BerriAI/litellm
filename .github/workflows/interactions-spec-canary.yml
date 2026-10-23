@@ -12,6 +12,8 @@ on:
 
 permissions: {}
 
+concurrency: interactions-spec-canary
+
 jobs:
   interactions-spec-canary:
     name: interactions-spec-canary
@@ -51,13 +53,13 @@ jobs:
   tracking-issue:
     name: tracking-issue
     needs: interactions-spec-canary
-    if: always() && github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
+    if: always() && github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch && github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       issues: write
     steps:
-      - name: File the tracking issue on a red compliance step, close it on a green one
+      - name: File the tracking issue unless the compliance step passed, close it when it did
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           COMPLIANCE_OUTCOME: ${{ needs.interactions-spec-canary.outputs.compliance }}
@@ -68,22 +70,22 @@ jobs:
             const outcome = process.env.COMPLIANCE_OUTCOME;
             const runUrl = process.env.RUN_URL;
             const query = `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:title "${title}"`;
-            const { data: found } = await github.rest.search.issuesAndPullRequests({ q: query, per_page: 1 });
-            const open = found.items[0];
+            const { data: found } = await github.rest.search.issuesAndPullRequests({ q: query, per_page: 20 });
+            const open = found.items.find((issue) => issue.title === title);
             if (outcome === "success") {
               if (open === undefined) return;
               await github.rest.issues.createComment({ ...context.repo, issue_number: open.number, body: `Green again: ${runUrl}` });
               await github.rest.issues.update({ ...context.repo, issue_number: open.number, state: "closed" });
               return;
             }
-            if (outcome !== "failure") return;
+            const state = outcome === "failure" ? "red" : `not run (compliance step outcome: ${outcome || "none"})`;
             if (open !== undefined) {
-              await github.rest.issues.createComment({ ...context.repo, issue_number: open.number, body: `Still red: ${runUrl}` });
+              await github.rest.issues.createComment({ ...context.repo, issue_number: open.number, body: `Still ${state}: ${runUrl}` });
               return;
             }
             await github.rest.issues.create({
               ...context.repo,
               title,
               assignees: ["mateo-berri"],
-              body: `The scheduled run of tests/unit/interactions/test_openapi_compliance.py against Google's live Interactions spec failed: ${runUrl}\n\nlitellm/types/interactions/README.md says how to refresh the snapshot and regenerate the types.`,
+              body: `The scheduled run of tests/unit/interactions/test_openapi_compliance.py against Google's live Interactions spec is ${state}: ${runUrl}\n\nlitellm/types/interactions/README.md says how to refresh the snapshot and regenerate the types.`,
             });

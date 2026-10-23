@@ -15,7 +15,9 @@ The compliance tests in `tests/unit/interactions/test_openapi_compliance.py` rea
 files the issue "Interactions spec canary is red" on a red run and closes it once a run is green again. A red run
 means the spec moved in a way these types no longer cover
 
-When that happens, refresh the snapshot and regenerate the types from it:
+When the red run names one new status, the small fix is a hand edit adding that member to the enum the failing
+schema's model carries, the way `queued` was added in #34135. When the spec moved further than that, refresh the
+snapshot and regenerate the types from it:
 
 ```bash
 curl -fsSL https://ai.google.dev/static/api/interactions.openapi.json \
