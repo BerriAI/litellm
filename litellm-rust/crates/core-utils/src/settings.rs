@@ -11,6 +11,7 @@ impl<F: Fn(&str) -> Option<String>> Lookup for F {
 pub struct ProcessEnvironment;
 
 impl Lookup for ProcessEnvironment {
+    #[allow(clippy::disallowed_methods)] // the live process environment Lookup for the Python runtimes
     fn get(&self, name: &str) -> Option<String> {
         std::env::var(name).ok()
     }

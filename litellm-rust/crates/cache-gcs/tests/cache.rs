@@ -99,6 +99,7 @@ async fn cache_exposes_its_configuration(#[future(awt)] server: MockServer) {
         },
         litellm_http::Client::plain_for_test(),
         litellm_cache::JsonCodec::<Value>::new(),
+        std::sync::Arc::new(litellm_layered::Env::default()),
     );
     assert_eq!(cache.bucket_name(), "bucket");
     assert_eq!(cache.key_prefix(), "folder/");

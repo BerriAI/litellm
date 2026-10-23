@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
     let config = Config::load(settings.litellm_config)?;
-    let inference = litellm_gateway::build_inference(&config)?;
+    let inference = litellm_gateway::build_inference(&config, &env)?;
     let ui = match &settings.ui_path {
         Some(directory) => {
             let ui_settings = UiSettings::try_from(UiKeysPartial::from_env(&env)?)?;

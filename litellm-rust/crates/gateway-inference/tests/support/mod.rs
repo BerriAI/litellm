@@ -85,6 +85,7 @@ fn configured_app(
         resources,
         http,
         OcrSettings::default(),
+        Arc::new(litellm_layered::Env::default()),
         secrets,
         [(
             "public/model".into(),

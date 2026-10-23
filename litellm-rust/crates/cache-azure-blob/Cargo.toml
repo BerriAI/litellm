@@ -10,6 +10,7 @@ litellm-http.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-types.workspace = true
 litellm-cache.workspace = true
+litellm-layered.workspace = true
 
 async-trait = "0.1"
 azure_core = "1.1.0"

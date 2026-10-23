@@ -6,6 +6,7 @@ use litellm_cache::{
     FlushCache,
 };
 use litellm_http::Client;
+use litellm_layered::SharedLookup;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_encode};
 
 use crate::{GcpTokenSource, TokenSource};
@@ -53,8 +54,11 @@ pub struct GcsCache<S: CacheCodec> {
 }
 
 impl<S: CacheCodec> GcsCache<S> {
-    pub fn new(config: GcsConfig, client: Client, codec: S) -> Self {
-        let token = Arc::new(GcpTokenSource::new(config.path_service_account.clone()));
+    pub fn new(config: GcsConfig, client: Client, codec: S, env: SharedLookup) -> Self {
+        let token = Arc::new(GcpTokenSource::new(
+            config.path_service_account.clone(),
+            env,
+        ));
         Self::with_token_source(config, client, codec, token)
     }
 

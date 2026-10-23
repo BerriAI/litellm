@@ -103,6 +103,7 @@ impl NativeCacheHandle {
                 )
             })
             .map_err(cache_error)?
+            .with_env(&litellm_core_utils::settings::ProcessEnvironment)
             .with_namespace(Some(namespace.clone())),
         );
         let backend = Arc::new(ResponseCache::new(storage.clone()).with_config(

@@ -4,6 +4,7 @@ use std::{
 };
 
 use litellm_cache::{BatchEntry, CacheCodec, Error};
+use litellm_layered::Lookup;
 
 use crate::{
     connection::{ConnectionRef, Connections},
@@ -20,6 +21,7 @@ pub struct RedisCache<S, C = redis::Connection> {
     pub(crate) topology: RedisTopology,
     /// The server's major version, read from `INFO` once, like Python's `redis_version`.
     pub(crate) major_version: Arc<OnceLock<u32>>,
+    default_major_version: u32,
 }
 
 impl<S: CacheCodec> RedisCache<S> {
@@ -41,6 +43,7 @@ impl<S: CacheCodec> RedisCache<S> {
             namespace: None,
             topology: topology.clone(),
             major_version: Arc::default(),
+            default_major_version: DEFAULT_MAJOR_VERSION,
         })
     }
 }
@@ -58,6 +61,18 @@ where
             namespace: None,
             topology: RedisTopology::Standalone,
             major_version: Arc::default(),
+            default_major_version: DEFAULT_MAJOR_VERSION,
+        }
+    }
+
+    /// `DEFAULT_REDIS_MAJOR_VERSION`, the version assumed when `INFO` does not answer.
+    pub fn with_env(self, env: &(impl Lookup + ?Sized)) -> Self {
+        Self {
+            default_major_version: env
+                .get("DEFAULT_REDIS_MAJOR_VERSION")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(DEFAULT_MAJOR_VERSION),
+            ..self
         }
     }
 
@@ -109,7 +124,7 @@ where
         let version = info
             .ok()
             .and_then(|info| parse_major_version(&info))
-            .unwrap_or_else(default_major_version);
+            .unwrap_or(self.default_major_version);
         *self.major_version.get_or_init(|| version)
     }
 
@@ -184,9 +199,4 @@ fn parse_major_version(info: &str) -> Option<u32> {
     }
 }
 
-fn default_major_version() -> u32 {
-    std::env::var("DEFAULT_REDIS_MAJOR_VERSION")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(7)
-}
+const DEFAULT_MAJOR_VERSION: u32 = 7;
