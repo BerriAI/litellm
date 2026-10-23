@@ -18,7 +18,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
-from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
@@ -31,6 +31,7 @@ from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
 _LAST_OPENAI_PATH_SEGMENT: Final = re.compile(r"^(.*/openai)(?=/|$)")
+_OPENAI_V1_ROUTE_PREFIX: Final = re.compile(r"^/?openai(?:/v1)?(?=/)")
 
 
 class _AzureAdTokenJson(TypedDict, total=False):
@@ -889,11 +890,21 @@ class BaseAzureLLM(BaseOpenAILLM):
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
 
+        v1_endpoint: Final = (
+            _OPENAI_V1_ROUTE_PREFIX.sub("", route)
+            if BaseAzureLLM._is_azure_v1_api_version(query_params.get("api-version"))
+            and _OPENAI_V1_ROUTE_PREFIX.match(route)
+            else None
+        )
+        base_path: Final = original_url.path.rstrip("/")
+
         # Add the path to the base URL
-        if route not in api_base:
-            new_url = add_path_to_api_base(api_base=api_base, ending_path=route)
-        else:
+        if route in api_base or (v1_endpoint is not None and base_path.endswith(f"/openai/v1{v1_endpoint}")):
             new_url = api_base
+        elif v1_endpoint is not None and base_path.endswith("/openai/v1"):
+            new_url = join_api_base(str(original_url.copy_with(params={})), v1_endpoint)
+        else:
+            new_url = add_path_to_api_base(api_base=api_base, ending_path=route)
 
         if BaseAzureLLM._is_azure_v1_api_version(api_version):
             # ensure the request go to /openai/v1 and not just /openai
