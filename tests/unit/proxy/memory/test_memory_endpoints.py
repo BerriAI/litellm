@@ -197,6 +197,7 @@ def _make_team(team_id: str, *, admin_user_ids: List[str]) -> Any:
         created_at=now,
         updated_at=now,
         spend=0.0,
+        tokens_used=0,
         model_spend="{}",
         model_max_budget="{}",
         admins=[],
