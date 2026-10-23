@@ -34,6 +34,7 @@ from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import create_response
+from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
 from litellm.proxy.proxy_server import (
     _apply_streaming_chunk_hooks,
     _fast_serialize_simple_model_response_stream,
@@ -144,6 +145,31 @@ async def test_responses_stream_dispatches_named_events_without_a_chat_done_sent
         )
         assert payload["type"] == event_type
     assert json.loads(frames[1].split("data: ", 1)[1])["delta"] == "hello"
+
+@pytest.mark.parametrize("binary", [False, True])
+@pytest.mark.parametrize(
+    ("event_type", "event_line"),
+    [
+        (None, ""),
+        ("", ""),
+        ("response.delta\ninjected", ""),
+        ("response.delta\rinjected", ""),
+        ("response.delta\r\ninjected", ""),
+        ("response.vendor_delta", "event: response.vendor_delta\n"),
+    ],
+)
+def test_responses_event_names_preserve_payload_without_injecting_sse_lines(
+    event_type: str | None, event_line: str, binary: bool
+) -> None:
+    payload: Final = {"type": event_type, "sequence_number": 0}
+    data_line: Final = f"data: {json.dumps(payload)}\n\n"
+    frame: Final = data_line.encode("utf-8") if binary else data_line
+    expected: Final = (event_line + data_line).encode("utf-8") if binary else event_line + data_line
+    state: Final = ResponsesStreamErrorState()
+    state.observe_chunk(payload)
+
+    assert state.mark_emitted(frame) == expected
+
 
 class _FakeStream:
     def __init__(self, chunks, hidden_params=None):

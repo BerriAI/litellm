@@ -251,6 +251,7 @@ _TOOL_SEARCH_CALL_TYPE: Final = "tool_search_call"
 _OUTPUT_TOOL_CALL_ITEM_TYPES: Final = _TOOL_CALL_ITEM_TYPES | {_TOOL_SEARCH_CALL_TYPE}
 _SCANNED_TOOL_SEARCH_NAME: Final = "tool_search"
 _TOOL_SEARCH_ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_STREAM_EVENT_TYPE_ADAPTER: Final = TypeAdapter(str)
 _TOOL_CALL_PAYLOAD_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call": "arguments", "custom_tool_call": "input"}
 )
@@ -1796,7 +1797,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             else self._standalone_block_events(exc)
         )
         return tuple(
-            f"event: {event.type.value if isinstance(event.type, ResponsesAPIStreamEvents) else event.type}\n"
+            f"event: {_STREAM_EVENT_TYPE_ADAPTER.validate_python(stream_item_field(event, 'type'))}\n"
             f"data: {event.model_dump_json(exclude_none=True, exclude_unset=True, serialize_as_any=True)}\n\n".encode()
             for event in events
         )
