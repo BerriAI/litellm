@@ -6772,6 +6772,13 @@ def get_model_info_helper(
                 ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
                 cache_read_input_audio_token_cost=_model_info.get("cache_read_input_audio_token_cost", None),
+                cache_read_input_audio_token_cost_flex=_model_info.get("cache_read_input_audio_token_cost_flex", None),
+                cache_read_input_audio_token_cost_priority=_model_info.get(
+                    "cache_read_input_audio_token_cost_priority", None
+                ),
+                cache_read_input_audio_token_cost_batches=_model_info.get(
+                    "cache_read_input_audio_token_cost_batches", None
+                ),
                 explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
@@ -6839,6 +6846,8 @@ def get_model_info_helper(
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_text_message=_model_info.get("input_cost_per_text_message", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
+                input_cost_per_audio_token_flex=_model_info.get("input_cost_per_audio_token_flex", None),
+                input_cost_per_audio_token_priority=_model_info.get("input_cost_per_audio_token_priority", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
                 input_cost_per_audio_token_batches=_model_info.get("input_cost_per_audio_token_batches", None),
