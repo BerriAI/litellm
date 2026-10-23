@@ -7,6 +7,7 @@
 
 import fnmatch
 import os
+import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
@@ -34,7 +35,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GenericGuardrailAPIResponse,
     GuardrailToolParam,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailTracingDetail
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -252,6 +253,8 @@ class GenericGuardrailAPI(CustomGuardrail):
     {
         "action": "BLOCKED" | "NONE" | "GUARDRAIL_INTERVENED",
         "blocked_reason": str (optional, only if action is BLOCKED),
+        "intervention_reason": str (optional, only if action is GUARDRAIL_INTERVENED; logged and recorded
+            as a guardrail_intervened entry),
         "text": str (optional, modified text if action is GUARDRAIL_INTERVENED)
     }
     """
@@ -542,6 +545,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         Raises:
             Exception: If the guardrail blocks the request
         """
+        start_time: Final = time.time()
         verbose_proxy_logger.debug("Generic Guardrail API: Applying guardrail to text")
 
         # Extract texts and images from inputs
@@ -616,6 +620,25 @@ class GenericGuardrailAPI(CustomGuardrail):
                     message=error_message,
                     should_wrap_with_default_message=False,
                     blocked_content=True,
+                )
+
+            if guardrail_response.action == "GUARDRAIL_INTERVENED" and guardrail_response.intervention_reason:
+                end_time: Final = time.time()
+                verbose_proxy_logger.warning(
+                    "Generic Guardrail API intervened: %s", guardrail_response.intervention_reason
+                )
+                self.add_standard_logging_guardrail_information_to_request_data(
+                    guardrail_json_response={
+                        "action": "GUARDRAIL_INTERVENED",
+                        "intervention_reason": guardrail_response.intervention_reason,
+                    },
+                    request_data=request_data,
+                    guardrail_status="guardrail_intervened",
+                    start_time=start_time,
+                    end_time=end_time,
+                    duration=end_time - start_time,
+                    guardrail_provider=GUARDRAIL_NAME,
+                    tracing_detail=GuardrailTracingDetail(guardrail_action="GUARDRAIL_INTERVENED"),
                 )
 
             return self._build_guardrail_return_inputs(
