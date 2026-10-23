@@ -10151,6 +10151,14 @@ def _format_streaming_sse_chunk(chunk: object) -> str | bytes:
     return f"data: {chunk}\n\n"
 
 
+def _should_emit_openai_done(request_data: Mapping[str, object], *, responses_stream_errors: bool) -> bool:
+    if responses_stream_errors:
+        return False
+    if request_data.get("_litellm_skip_openai_stream_done"):
+        return False
+    return True
+
+
 _SSE_FRAME_DELIMITERS: Final = ("\r\n\r\n", "\n\n", "\r\r")
 _OPENAI_STREAM_DONE_FRAME: Final = "data: [DONE]\n\n"
 _MAX_RAW_SSE_BUFFER_CHARS: Final = 8 * 1024 * 1024
@@ -10390,8 +10398,8 @@ async def async_data_generator(
     stream_completed = False
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
-    ends_with_openai_done: Final = not responses_stream_errors and not request_data.get(
-        "_litellm_skip_openai_stream_done"
+    ends_with_openai_done: Final = _should_emit_openai_done(
+        request_data, responses_stream_errors=responses_stream_errors
     )
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
     stream_iterator: Final = _object_stream(

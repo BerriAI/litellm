@@ -273,6 +273,12 @@ _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
 _EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
 
 
+def _serialize_block_sse_event(event: ResponsesAPIStreamingResponse) -> bytes:
+    event_type: Final = _STREAM_EVENT_TYPE_ADAPTER.validate_python(stream_item_field(event, "type"))
+    payload: Final = event.model_dump_json(exclude_none=True, exclude_unset=True, serialize_as_any=True)
+    return f"event: {event_type}\ndata: {payload}\n\n".encode("utf-8")
+
+
 def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
     item_type: Final = item.get("type")
     if item_type is None:
@@ -1774,7 +1780,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         exc: "ModifyResponseException",
         stream_started: bool = False,
         responses_so_far: Sequence[object] | None = None,
-    ) -> Sequence[bytes]:
+    ) -> tuple[bytes, ...]:
         """
         Build Responses API SSE events that deliver the guardrail block message
         and terminate the stream cleanly, mirroring the non-streaming block
@@ -1796,11 +1802,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             if stream_started
             else self._standalone_block_events(exc)
         )
-        return tuple(
-            f"event: {_STREAM_EVENT_TYPE_ADAPTER.validate_python(stream_item_field(event, 'type'))}\n"
-            f"data: {event.model_dump_json(exclude_none=True, exclude_unset=True, serialize_as_any=True)}\n\n".encode()
-            for event in events
-        )
+        return tuple(_serialize_block_sse_event(event) for event in events)
 
     @staticmethod
     def _standalone_block_events(exc: "ModifyResponseException") -> Sequence[ResponsesAPIStreamingResponse]:

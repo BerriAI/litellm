@@ -28,6 +28,16 @@ class _StreamEvent(LiteLLMBaseModel):
     sequence_number: int | None = None
     response: _ResponseIdentity | None = None
 
+    def add_sse_event_header(self, frame: str | bytes) -> str | bytes:
+        if self.type is None or self.type == "":
+            return frame
+        if "\n" in self.type or "\r" in self.type:
+            return frame
+        event_header: Final = f"event: {self.type}\n"
+        if isinstance(frame, bytes):
+            return event_header.encode("utf-8") + frame
+        return event_header + frame
+
 
 class _FailureDetails(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
@@ -131,10 +141,7 @@ class ResponsesStreamErrorState:
                 self.created_at = event.response.created_at
         if event.type in ("response.completed", "response.failed", "response.incomplete"):
             self.terminal_emitted = True
-        if not event.type or "\n" in event.type or "\r" in event.type:
-            return frame
-        prefix: Final = f"event: {event.type}\n"
-        return prefix.encode("utf-8") + frame if isinstance(frame, bytes) else prefix + frame
+        return event.add_sse_event_header(frame)
 
     def format_failure(self, exception: Exception) -> str | None:
         if self.terminal_emitted:
