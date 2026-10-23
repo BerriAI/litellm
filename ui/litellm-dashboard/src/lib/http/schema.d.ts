@@ -9280,8 +9280,9 @@ export interface paths {
          *     way to page, sort or filter it.
          *
          *     `sort` takes a comma-separated list of `budget_id`, `max_budget`, `tpm_limit`,
-         *     `rpm_limit`, `tpd_limit` or `created_at`, each optionally prefixed with `-` for descending,
-         *     and defaults to `-created_at`. `budget_id` is appended to every sort as the
+         *     `rpm_limit`, `tpd_limit`, `created_at` or `budget_duration`, each optionally prefixed with `-` for descending,
+         *     and defaults to `-created_at`. Reset periods sort by elapsed time, with calendar months
+         *     measured from the current UTC date and unset periods last. `budget_id` is appended to every sort as the
          *     tiebreaker. `q` is a case-insensitive substring match on `budget_id`.
          *     `page_size` defaults to 50 and is capped at 100. Filters are
          *     `filter[budget_duration][in|is_null]`, `filter[max_budget][gte|lte|is_null]`
