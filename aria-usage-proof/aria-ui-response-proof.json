@@ -1,0 +1,658 @@
+{
+  "source": "Read-only export of existing isolated local LiteLLM spend logs. No new inference was run for this export.",
+  "format_note": "These are stored provider records, not raw browser or chat API response captures. Aria calls chat.completions.runTools; the provider adapter used OpenAI Responses, whose original output items are preserved here. Full system prompts and tool-definition metadata are omitted. Exact observed user messages, tool calls, tool results, final output, IDs, dates and token usage remain.",
+  "redactions": "Only allowlisted request and response fields are included. Headers, authentication, request metadata, API keys, and provider credentials are excluded. Secret-like identifiers inside text are redacted.",
+  "frozen_internal_usage": {
+    "user_id": "aria-live-internal",
+    "date": "2026-10-23",
+    "prompt_tokens": 14,
+    "completion_tokens": 8,
+    "total_tokens": 22,
+    "api_requests": 1,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0
+  },
+  "records": [
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMGYyNWIzYjRhM2MyZDBlYzAwNmFkYmM3YTdhYWJjODdkMTgyMjU0YzI2ODc4NGRiZDk=",
+      "start_time": "2026-10-23T20:46:31.220000+00:00",
+      "end_time": "2026-10-23T20:46:33.885000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "For user aria-live-internal on 2026-10-23, use get_usage_data with that user_id and that start_date and end_date. Return one Markdown table for gpt-6.1-sol with prompt, completion, cache-read, cache-creation, and total tokens. Report unavailable counters as unavailable."
+          },
+          {
+            "role": "user",
+            "content": "For user aria-live-internal on 2026-10-23, use get_usage_data with that user_id and that start_date and end_date. Return one Markdown table for gpt-6.1-sol with prompt, completion, cache-read, cache-creation, and total tokens. Report unavailable counters as unavailable."
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMGYyNWIzYjRhM2MyZDBlYzAwNmFkYmM3YTdhYWJjODdkMTgyMjU0YzI2ODc4NGRiZDk=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792788391,
+        "output": [
+          {
+            "id": "fc_0f25b3b4a3c2d0ec006adbc7a8f8c487d1a2e03f737833d030",
+            "type": "function_call",
+            "status": "completed",
+            "name": "get_usage_data",
+            "call_id": "call_pbgezZbNJMyT3YM76G4K61pX",
+            "arguments": "{\"start_date\":\"2026-10-23\",\"end_date\":\"2026-10-23\",\"user_id\":\"aria-live-internal\"}"
+          }
+        ],
+        "usage": {
+          "total_tokens": 1529,
+          "prompt_tokens": 1486,
+          "completion_tokens": 43,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 0,
+            "cache_write_tokens": 1483,
+            "cache_creation_tokens": 1483,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 1486,
+        "completion_tokens": 43,
+        "total_tokens": 1529,
+        "spend_usd": 0.0041435
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMGU3NWQwNjUyZDEwMDNkZTAwNmFkYmM3YWEyNmRjODdkMWFhNjQ4NmU3OGRmNTg1NWY=",
+      "start_time": "2026-10-23T20:46:33.919000+00:00",
+      "end_time": "2026-10-23T20:46:36.641000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "For user aria-live-internal on 2026-10-23, use get_usage_data with that user_id and that start_date and end_date. Return one Markdown table for gpt-6.1-sol with prompt, completion, cache-read, cache-creation, and total tokens. Report unavailable counters as unavailable."
+          },
+          {
+            "role": "user",
+            "content": "For user aria-live-internal on 2026-10-23, use get_usage_data with that user_id and that start_date and end_date. Return one Markdown table for gpt-6.1-sol with prompt, completion, cache-read, cache-creation, and total tokens. Report unavailable counters as unavailable."
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_pbgezZbNJMyT3YM76G4K61pX",
+                "type": "function",
+                "function": {
+                  "name": "get_usage_data",
+                  "arguments": "{\"start_date\":\"2026-10-23\",\"end_date\":\"2026-10-23\",\"user_id\":\"aria-live-internal\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_pbgezZbNJMyT3YM76G4K61pX",
+            "content": "{\"operation\":\"get_usage_data\",\"success\":true,\"result\":{\"totals\":{\"total_spend\":0.000108,\"total_api_requests\":1,\"total_tokens\":22,\"total_prompt_tokens\":14,\"total_completion_tokens\":8,\"total_successful_requests\":1,\"total_failed_requests\":0,\"total_api_keys\":1,\"api_key_limit\":20},\"daily\":[{\"date\":\"2026-10-23\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22}],\"breakdown_limit\":20,\"top_models\":[{\"name\":\"openai/gpt-6.1-sol\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22}],\"top_providers\":[{\"name\":\"openai\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22}],\"top_entities\":[],\"top_api_keys\":[{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22}]}}"
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMGU3NWQwNjUyZDEwMDNkZTAwNmFkYmM3YWEyNmRjODdkMWFhNjQ4NmU3OGRmNTg1NWY=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792788394,
+        "output": [
+          {
+            "id": "msg_0e75d0652d1003de006adbc7ab331887d19f575ea1d6a4180c",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "| User | Date | Model | Prompt tokens | Completion tokens | Cache-read tokens | Cache-creation tokens | Total tokens |\n|---|---|---|---:|---:|---|---|---:|\n| aria-live-internal | 2026-10-23 | gpt-6.1-sol | 14 | 8 | unavailable | unavailable | 22 |"
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "total_tokens": 1868,
+          "prompt_tokens": 1784,
+          "completion_tokens": 84,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1483,
+            "cache_write_tokens": 298,
+            "cache_creation_tokens": 298,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 1784,
+        "completion_tokens": 84,
+        "total_tokens": 1868,
+        "spend_usd": 0.0017393
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDJmZDlhMDhjMGFjYzE1NzAwNmFkYmM3YmY2NmEwODdkMTk4YTExMjA3NWRmNWE4ODM=",
+      "start_time": "2026-10-23T20:46:55.110000+00:00",
+      "end_time": "2026-10-23T20:46:57.333000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "For user aria-live-internal on 2026-10-23, use get_usage_data with that user_id and that start_date and end_date. Return one Markdown table for gpt-6.1-sol with prompt, completion, cache-read, cache-creation, and total tokens. Report unavailable counters as unavailable."
+          },
+          {
+            "role": "user",
+            "content": "For user aria-live-internal on 2026-10-23, use get_usage_data with that user_id and that start_date and end_date. Return one Markdown table for gpt-6.1-sol with prompt, completion, cache-read, cache-creation, and total tokens. Report unavailable counters as unavailable."
+          },
+          {
+            "role": "assistant",
+            "content": "| User | Date | Model | Prompt tokens | Completion tokens | Cache-read tokens | Cache-creation tokens | Total tokens |\n|---|---|---|---:|---:|---|---|---:|\n| aria-live-internal | 2026-10-23 | gpt-6.1-sol | 14 | 8 | unavailable | unavailable | 22 |"
+          },
+          {
+            "role": "user",
+            "content": "Show that same usage as a two-column Metric | Tokens Markdown table. Include prompt, completion, cache read, cache creation, total. Show unavailable when absent."
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDJmZDlhMDhjMGFjYzE1NzAwNmFkYmM3YmY2NmEwODdkMTk4YTExMjA3NWRmNWE4ODM=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792788415,
+        "output": [
+          {
+            "id": "rs_02fd9a08c0acc157006adbc7c07b7087d19fe36446ae6b8fe1",
+            "type": "reasoning",
+            "content": []
+          },
+          {
+            "id": "fc_02fd9a08c0acc157006adbc7c0c16c87d1b4d2e97ece5838de",
+            "type": "function_call",
+            "status": "completed",
+            "name": "get_usage_data",
+            "call_id": "call_krijFjxyjocjgXPXnKXiHBis",
+            "arguments": "{\"start_date\":\"2026-10-23\",\"end_date\":\"2026-10-23\",\"user_id\":\"aria-live-internal\"}"
+          }
+        ],
+        "usage": {
+          "total_tokens": 1664,
+          "prompt_tokens": 1608,
+          "completion_tokens": 56,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1483,
+            "cache_write_tokens": 122,
+            "cache_creation_tokens": 122,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 11,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 1608,
+        "completion_tokens": 56,
+        "total_tokens": 1664,
+        "spend_usd": 0.0010193
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDVmNzFkMTNmNTliNzUxOTAwNmFkYmM3YzE5YTY4ODdkMWFkMmJkNmZhZTc0Y2M3MWU=",
+      "start_time": "2026-10-23T20:46:57.363000+00:00",
+      "end_time": "2026-10-23T20:46:59.705000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "For user aria-live-internal on 2026-10-23, use get_usage_data with that user_id and that start_date and end_date. Return one Markdown table for gpt-6.1-sol with prompt, completion, cache-read, cache-creation, and total tokens. Report unavailable counters as unavailable."
+          },
+          {
+            "role": "user",
+            "content": "For user aria-live-internal on 2026-10-23, use get_usage_data with that user_id and that start_date and end_date. Return one Markdown table for gpt-6.1-sol with prompt, completion, cache-read, cache-creation, and total tokens. Report unavailable counters as unavailable."
+          },
+          {
+            "role": "assistant",
+            "content": "| User | Date | Model | Prompt tokens | Completion tokens | Cache-read tokens | Cache-creation tokens | Total tokens |\n|---|---|---|---:|---:|---|---|---:|\n| aria-live-internal | 2026-10-23 | gpt-6.1-sol | 14 | 8 | unavailable | unavailable | 22 |"
+          },
+          {
+            "role": "user",
+            "content": "Show that same usage as a two-column Metric | Tokens Markdown table. Include prompt, completion, cache read, cache creation, total. Show unavailable when absent."
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_krijFjxyjocjgXPXnKXiHBis",
+                "type": "function",
+                "function": {
+                  "name": "get_usage_data",
+                  "arguments": "{\"start_date\":\"2026-10-23\",\"end_date\":\"2026-10-23\",\"user_id\":\"aria-live-internal\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_krijFjxyjocjgXPXnKXiHBis",
+            "content": "{\"operation\":\"get_usage_data\",\"success\":true,\"result\":{\"totals\":{\"total_spend\":0.000108,\"total_api_requests\":1,\"total_tokens\":22,\"total_prompt_tokens\":14,\"total_completion_tokens\":8,\"total_successful_requests\":1,\"total_failed_requests\":0,\"total_api_keys\":1,\"api_key_limit\":20},\"daily\":[{\"date\":\"2026-10-23\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22}],\"breakdown_limit\":20,\"top_models\":[{\"name\":\"openai/gpt-6.1-sol\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22}],\"top_providers\":[{\"name\":\"openai\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22}],\"top_entities\":[],\"top_api_keys\":[{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22}]}}"
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDVmNzFkMTNmNTliNzUxOTAwNmFkYmM3YzE5YTY4ODdkMWFkMmJkNmZhZTc0Y2M3MWU=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792788417,
+        "output": [
+          {
+            "id": "msg_05f71d13f59b7519006adbc7c2d87087d1ae8dfd18068de366",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "| Metric | Tokens |\n|---|---:|\n| Prompt | 14 |\n| Completion | 8 |\n| Cache read | unavailable |\n| Cache creation | unavailable |\n| Total | 22 |"
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "total_tokens": 1951,
+          "prompt_tokens": 1906,
+          "completion_tokens": 45,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1605,
+            "cache_write_tokens": 298,
+            "cache_creation_tokens": 298,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 1906,
+        "completion_tokens": 45,
+        "total_tokens": 1951,
+        "spend_usd": 0.0013615
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDZlOGJhN2YxODEyZDhjNzAwNmFkYmM3ZDRhMmE4ODdkMTk3ZjU3NWIxZDBkOTExZGI=",
+      "start_time": "2026-10-23T20:47:16.365000+00:00",
+      "end_time": "2026-10-23T20:47:18.231000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "For user aria-live-internal on 2026-10-23, use get_usage_data with that user_id and that start_date and end_date. Return one Markdown table for gpt-6.1-sol with prompt, completion, cache-read, cache-creation, and total tokens. Report unavailable counters as unavailable."
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDZlOGJhN2YxODEyZDhjNzAwNmFkYmM3ZDRhMmE4ODdkMTk3ZjU3NWIxZDBkOTExZGI=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792788436,
+        "output": [
+          {
+            "id": "fc_06e8ba7f1812d8c7006adbc7d5b3bc87d1b5f3922db72072b4",
+            "type": "function_call",
+            "status": "completed",
+            "name": "get_usage_data",
+            "call_id": "call_g9caaywcclUwNfZA1oNLWaUM",
+            "arguments": "{\"start_date\":\"2026-10-23\",\"end_date\":\"2026-10-23\",\"user_id\":\"aria-live-internal\"}"
+          }
+        ],
+        "usage": {
+          "total_tokens": 1532,
+          "prompt_tokens": 1489,
+          "completion_tokens": 43,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 0,
+            "cache_write_tokens": 1486,
+            "cache_creation_tokens": 1486,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 1489,
+        "completion_tokens": 43,
+        "total_tokens": 1532,
+        "spend_usd": 0.004151
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDMzMzkwODk2NjA3ODY1YTAwNmFkYmM3ZDY3YTg0ODdkMTljMjg2NjVlMTg2ZmM0YTM=",
+      "start_time": "2026-10-23T20:47:18.258000+00:00",
+      "end_time": "2026-10-23T20:47:20.687000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "For user aria-live-internal on 2026-10-23, use get_usage_data with that user_id and that start_date and end_date. Return one Markdown table for gpt-6.1-sol with prompt, completion, cache-read, cache-creation, and total tokens. Report unavailable counters as unavailable."
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_g9caaywcclUwNfZA1oNLWaUM",
+                "type": "function",
+                "function": {
+                  "name": "get_usage_data",
+                  "arguments": "{\"start_date\":\"2026-10-23\",\"end_date\":\"2026-10-23\",\"user_id\":\"aria-live-internal\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_g9caaywcclUwNfZA1oNLWaUM",
+            "content": "{\"operation\":\"get_usage_data\",\"success\":true,\"result\":{\"totals\":{\"total_spend\":0.000108,\"total_api_requests\":1,\"total_tokens\":22,\"total_prompt_tokens\":14,\"total_completion_tokens\":8,\"total_cache_read_input_tokens\":0,\"total_cache_creation_input_tokens\":0,\"total_successful_requests\":1,\"total_failed_requests\":0,\"total_api_keys\":1,\"api_key_limit\":20},\"daily\":[{\"date\":\"2026-10-23\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}],\"breakdown_limit\":20,\"top_models\":[{\"name\":\"openai/gpt-6.1-sol\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}],\"top_providers\":[{\"name\":\"openai\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}],\"top_entities\":[],\"top_api_keys\":[{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}]}}"
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDMzMzkwODk2NjA3ODY1YTAwNmFkYmM3ZDY3YTg0ODdkMTljMjg2NjVlMTg2ZmM0YTM=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792788438,
+        "output": [
+          {
+            "id": "msg_033390896607865a006adbc7d76fb087d190b46d89c9832d29",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "| User | Date | Model | Prompt tokens | Completion tokens | Cache-read tokens | Cache-creation tokens | Total tokens |\n|---|---|---|---:|---:|---:|---:|---:|\n| aria-live-internal | 2026-10-23 | gpt-6.1-sol | 14 | 8 | 0 | 0 | 22 |"
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "total_tokens": 1987,
+          "prompt_tokens": 1899,
+          "completion_tokens": 88,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1486,
+            "cache_write_tokens": 410,
+            "cache_creation_tokens": 410,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 1899,
+        "completion_tokens": 88,
+        "total_tokens": 1987,
+        "spend_usd": 0.0020596
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDJiMzMxOTkxNzU2NjliMjAwNmFkYmM3ZTg4MGY0ODdkMWFmYjczZDg2NTIzMGEzYmQ=",
+      "start_time": "2026-10-23T20:47:36.194000+00:00",
+      "end_time": "2026-10-23T20:47:38.293000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "For user aria-live-internal on 2026-10-23, use get_usage_data with that user_id and that start_date and end_date. Return one Markdown table for gpt-6.1-sol with prompt, completion, cache-read, cache-creation, and total tokens. Report unavailable counters as unavailable."
+          },
+          {
+            "role": "assistant",
+            "content": "| User | Date | Model | Prompt tokens | Completion tokens | Cache-read tokens | Cache-creation tokens | Total tokens |\n|---|---|---|---:|---:|---:|---:|---:|\n| aria-live-internal | 2026-10-23 | gpt-6.1-sol | 14 | 8 | 0 | 0 | 22 |"
+          },
+          {
+            "role": "user",
+            "content": "Show that same usage as a two-column Metric | Tokens Markdown table. Include prompt, completion, cache read, cache creation, total. Show unavailable when absent."
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDJiMzMxOTkxNzU2NjliMjAwNmFkYmM3ZTg4MGY0ODdkMWFmYjczZDg2NTIzMGEzYmQ=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792788456,
+        "output": [
+          {
+            "id": "fc_02b33199175669b2006adbc7e9c5e487d184132dfd0b9c50a9",
+            "type": "function_call",
+            "status": "completed",
+            "name": "get_usage_data",
+            "call_id": "call_H4Nwn23kM500wBLJca0wixSj",
+            "arguments": "{\"start_date\":\"2026-10-23\",\"end_date\":\"2026-10-23\",\"user_id\":\"aria-live-internal\"}"
+          }
+        ],
+        "usage": {
+          "total_tokens": 1658,
+          "prompt_tokens": 1615,
+          "completion_tokens": 43,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1486,
+            "cache_write_tokens": 126,
+            "cache_creation_tokens": 126,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 1615,
+        "completion_tokens": 43,
+        "total_tokens": 1658,
+        "spend_usd": 0.0008996000000000001
+      }
+    },
+    {
+      "request_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDM5YjZhZDBkYWI1N2MwMzAwNmFkYmM3ZWE4NzgwODdkMTgwNzIyMzg2N2RiY2VhYzQ=",
+      "start_time": "2026-10-23T20:47:38.320000+00:00",
+      "end_time": "2026-10-23T20:47:40.401000+00:00",
+      "status": "success",
+      "request": {
+        "model": "gpt-6.1-sol",
+        "messages": [
+          {
+            "role": "user",
+            "content": "For user aria-live-internal on 2026-10-23, use get_usage_data with that user_id and that start_date and end_date. Return one Markdown table for gpt-6.1-sol with prompt, completion, cache-read, cache-creation, and total tokens. Report unavailable counters as unavailable."
+          },
+          {
+            "role": "assistant",
+            "content": "| User | Date | Model | Prompt tokens | Completion tokens | Cache-read tokens | Cache-creation tokens | Total tokens |\n|---|---|---|---:|---:|---:|---:|---:|\n| aria-live-internal | 2026-10-23 | gpt-6.1-sol | 14 | 8 | 0 | 0 | 22 |"
+          },
+          {
+            "role": "user",
+            "content": "Show that same usage as a two-column Metric | Tokens Markdown table. Include prompt, completion, cache read, cache creation, total. Show unavailable when absent."
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_H4Nwn23kM500wBLJca0wixSj",
+                "type": "function",
+                "function": {
+                  "name": "get_usage_data",
+                  "arguments": "{\"start_date\":\"2026-10-23\",\"end_date\":\"2026-10-23\",\"user_id\":\"aria-live-internal\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_H4Nwn23kM500wBLJca0wixSj",
+            "content": "{\"operation\":\"get_usage_data\",\"success\":true,\"result\":{\"totals\":{\"total_spend\":0.000108,\"total_api_requests\":1,\"total_tokens\":22,\"total_prompt_tokens\":14,\"total_completion_tokens\":8,\"total_cache_read_input_tokens\":0,\"total_cache_creation_input_tokens\":0,\"total_successful_requests\":1,\"total_failed_requests\":0,\"total_api_keys\":1,\"api_key_limit\":20},\"daily\":[{\"date\":\"2026-10-23\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}],\"breakdown_limit\":20,\"top_models\":[{\"name\":\"openai/gpt-6.1-sol\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}],\"top_providers\":[{\"name\":\"openai\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}],\"top_entities\":[],\"top_api_keys\":[{\"name\":\"[REDACTED_IDENTIFIER]\",\"spend\":0.000108,\"api_requests\":1,\"total_tokens\":22,\"prompt_tokens\":14,\"completion_tokens\":8,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}]}}"
+          }
+        ]
+      },
+      "response": {
+        "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDozYmIzMzlhMTc5ODkwMTY1NWVjNmViNmUzOWNkMDM0NTliNDgxOGZhOTBjZjZiNDhhYmM5Y2RiNjkzNGJhYjgxO3Jlc3BvbnNlX2lkOnJlc3BfMDM5YjZhZDBkYWI1N2MwMzAwNmFkYmM3ZWE4NzgwODdkMTgwNzIyMzg2N2RiY2VhYzQ=",
+        "object": "response",
+        "model": "gpt-6.1-sol",
+        "status": "completed",
+        "created_at": 1792788458,
+        "output": [
+          {
+            "id": "msg_039b6ad0dab57c03006adbc7eb9a0487d18e95323491fcb0fe",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "| Metric | Tokens |\n|---|---:|\n| Prompt | 14 |\n| Completion | 8 |\n| Cache read | 0 |\n| Cache creation | 0 |\n| Total | 22 |"
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "total_tokens": 2072,
+          "prompt_tokens": 2025,
+          "completion_tokens": 47,
+          "prompt_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "cached_tokens": 1612,
+            "cache_write_tokens": 410,
+            "cache_creation_tokens": 410,
+            "initial_prompt_tokens": null
+          },
+          "completion_tokens_details": {
+            "text_tokens": null,
+            "audio_tokens": null,
+            "image_tokens": null,
+            "video_tokens": null,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        }
+      },
+      "recorded_usage": {
+        "prompt_tokens": 2025,
+        "completion_tokens": 47,
+        "total_tokens": 2072,
+        "spend_usd": 0.0016622
+      }
+    }
+  ]
+}

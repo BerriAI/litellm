@@ -1,0 +1,170 @@
+{
+  "code_commit": "0bb8e5b352cee5b3d9c6e0327e87f2d819a27d72",
+  "environment": "Local proxy with isolated PostgreSQL and real external model calls. Test account names are fixtures; assistant text and counters are provider responses.",
+  "seed_request": {
+    "method": "POST",
+    "path": "/chat/completions",
+    "status": 200,
+    "json": {
+      "model": "gpt-6.1-sol",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Return exactly: Internal usage verification ready."
+        }
+      ],
+      "max_tokens": 32
+    }
+  },
+  "seed_response": {
+    "id": "chatcmpl-EcGRFJr0mmwweATPLQ5a3nnNhFUvo",
+    "model": "gpt-6.1-sol",
+    "created": 1792788361,
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "Internal usage verification ready.",
+          "role": "assistant",
+          "annotations": [],
+          "refusal": null
+        },
+        "provider_specific_fields": {}
+      }
+    ],
+    "usage": {
+      "completion_tokens": 8,
+      "prompt_tokens": 14,
+      "total_tokens": 22,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "cache_creation_tokens": 0
+      }
+    }
+  },
+  "usage_request": {
+    "method": "GET",
+    "path": "/user/daily/activity/aggregated",
+    "query": {
+      "user_id": "aria-live-internal",
+      "start_date": "2026-10-23",
+      "end_date": "2026-10-23",
+      "api_key_limit": 20
+    }
+  },
+  "verification": [
+    {
+      "check": "/v1/models",
+      "status": 200,
+      "models": [
+        "gpt-6.1-sol"
+      ]
+    },
+    {
+      "check": "/model_group/info",
+      "status": 200,
+      "models": [
+        "claude-sonnet-5-5",
+        "gpt-6.1-sol"
+      ]
+    },
+    {
+      "check": "viewer-allowed-model",
+      "status": 200,
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 13,
+        "total_tokens": 20,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": 0,
+          "audio_tokens": 0,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": 0
+        },
+        "prompt_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "cache_creation_tokens": 0
+        }
+      }
+    },
+    {
+      "check": "viewer-forbidden-model",
+      "status": 403,
+      "message": "The requested model 'claude-sonnet-5-5' is not available for this API key, or the model name is invalid. Check the models available to you and try again."
+    },
+    {
+      "check": "budget-fixture-user",
+      "status": 200
+    },
+    {
+      "check": "zero-budget-denied",
+      "status": 422,
+      "message": "Budget has been exceeded! Key=Aria isolated budget verification ([REDACTED_KEY]) Current cost: 0.0, Max budget: 0.0"
+    },
+    {
+      "check": "internal-seed-completion",
+      "status": 200,
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 14,
+        "total_tokens": 22,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": 0,
+          "audio_tokens": 0,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": 0
+        },
+        "prompt_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "cache_creation_tokens": 0
+        }
+      }
+    },
+    {
+      "check": "viewer-reads-internal-usage",
+      "status": 200
+    },
+    {
+      "check": "internal-real-usage-totals",
+      "metadata": {
+        "total_spend": 0.000108,
+        "total_flat_cost": 0.0,
+        "total_ptu_hours": 0.0,
+        "total_prompt_tokens": 14,
+        "total_completion_tokens": 8,
+        "total_tokens": 22,
+        "total_api_requests": 1,
+        "total_successful_requests": 1,
+        "total_failed_requests": 0,
+        "total_cache_read_input_tokens": 0,
+        "total_cache_creation_input_tokens": 0,
+        "total_compression_saved_tokens": 0,
+        "total_compression_savings_spend": 0.0,
+        "total_prompt_caching_savings_spend": 0.0,
+        "total_gateway_injected_caching_savings_spend": 0.0,
+        "total_autorouter_savings_spend": 0.0,
+        "total_response_time_ms": 1813,
+        "total_timed_requests": 1,
+        "page": 1,
+        "total_pages": 1,
+        "has_more": false,
+        "api_key_limit": 20,
+        "total_api_keys": 1,
+        "entity_total_api_keys": null
+      }
+    }
+  ]
+}
