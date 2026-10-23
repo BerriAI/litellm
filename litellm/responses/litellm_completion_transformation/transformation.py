@@ -2297,41 +2297,6 @@ class LiteLLMCompletionResponsesConfig:
         return ChatCompletionImageObject(type="image_url", image_url=image_url_obj)
 
     @staticmethod
-    def _chat_completion_part_from_responses_dict_item(
-        item: dict[str, object],
-    ) -> str | dict[str, object] | None:
-        """Map one Responses content dict to a chat part, or None to drop it.
-
-        Empty/None text parts are dropped so tool-only turns do not become
-        content=[{"type":"text","text":""}] (rejected by backends like Z.ai 1210).
-        """
-        item_type: Final = item.get("type")
-        if item_type == "input_file":
-            return LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(item)
-        if item_type == "input_image":
-            image_block: Final = _STR_KEY_DICT_ADAPTER.validate_python(
-                dict(LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item))
-            )
-            if "cache_control" in item:
-                image_block["cache_control"] = item["cache_control"]
-            return image_block
-        if item_type == "encrypted_content":
-            encrypted_content: Final = item.get("encrypted_content")
-            if encrypted_content is None:
-                return None
-            return OpenAIChatCompletionTextObject(type="text", text=str(encrypted_content))
-        text_value: Final = item.get("text")
-        if text_value is None or text_value == "":
-            return None
-        content_block: Final[dict[str, object]] = {  # mutable-ok: outbound chat content part
-            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(item_type or "text"),
-            "text": text_value,
-        }
-        if "cache_control" in item:
-            content_block["cache_control"] = item["cache_control"]
-        return content_block
-
-    @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
         content: object,
     ) -> str | list[str | dict[str, object]]:
@@ -2345,22 +2310,51 @@ class LiteLLMCompletionResponsesConfig:
             # Defensive check: should not happen if callers check first
             # Return empty string as fallback to avoid type errors
             return ""
-        if isinstance(content, str):
+        elif isinstance(content, str):
             return content
-        if isinstance(content, list):
-            content_list: Final[list[str | dict[str, object]]] = []  # mutable-ok: accumulator
+        elif isinstance(content, list):
+            content_list: Final[list[str | dict[str, object]]] = []
             for item in content:
                 if isinstance(item, str):
-                    if item != "":
+                    if item:
                         content_list.append(item)
-                    continue
-                if isinstance(item, dict):
-                    part = LiteLLMCompletionResponsesConfig._chat_completion_part_from_responses_dict_item(item)
-                    if part is not None:
-                        content_list.append(part)
-            # Prefer content="" over [] — empty text-item lists are flagged invalid.
+                elif isinstance(item, dict):
+                    if item.get("type") == "input_file":
+                        content_list.append(
+                            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(item)
+                        )
+                    elif item.get("type") == "input_image":
+                        image_block = _STR_KEY_DICT_ADAPTER.validate_python(
+                            dict(LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item))
+                        )
+                        if "cache_control" in item:
+                            image_block["cache_control"] = item["cache_control"]
+                        content_list.append(image_block)
+                    elif item.get("type") == "encrypted_content":
+                        encrypted_content = item.get("encrypted_content")
+                        if encrypted_content is not None:
+                            content_list.append(
+                                OpenAIChatCompletionTextObject(type="text", text=str(encrypted_content))
+                            )
+                    else:
+                        # Skip None/empty text blocks: content=[{"type":"text","text":""}]
+                        # is rejected by some backends (e.g. Z.ai 1210).
+                        text_value = item.get("text")
+                        if text_value is None or text_value == "":
+                            continue
+                        content_block: dict[str, object] = {
+                            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                                item.get("type") or "text"
+                            ),
+                            "text": text_value,
+                        }
+                        if "cache_control" in item:
+                            content_block["cache_control"] = item["cache_control"]
+                        content_list.append(content_block)
+            # Prefer content="" over [] when every part was dropped.
             return content_list if content_list else ""
-        raise ValueError(f"Invalid content type: {type(content)}")
+        else:
+            raise ValueError(f"Invalid content type: {type(content)}")
 
     @staticmethod
     def _get_chat_completion_request_content_type(
