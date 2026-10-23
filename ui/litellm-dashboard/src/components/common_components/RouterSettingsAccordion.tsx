@@ -327,8 +327,6 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       setFallbacks(newFallbacks);
     };
 
-    const availableModels = Array.from(new Set(modelInfo.map((option) => option.model_group))).sort();
-
     // Expose getValue method via ref
     useImperativeHandle(ref, () => ({
       getValue: () => {
@@ -363,7 +361,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
               <FallbackSelectionForm
                 groups={fallbackGroups}
                 onGroupsChange={handleFallbackGroupsChange}
-                availableModels={availableModels}
+                modelGroups={modelInfo}
                 maxGroups={5}
               />
             </TabsContent>

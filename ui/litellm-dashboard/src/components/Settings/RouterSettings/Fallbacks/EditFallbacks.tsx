@@ -11,6 +11,7 @@ import React, { useMemo, useState } from "react";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { toast } from "@/lib/toast";
 import { AddFallbacksModal } from "./AddFallbacksModal";
+import { fallbackChainOptions, primaryModelOptions } from "./fallbackOptions";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
 
 export type FallbackEntry = { [modelName: string]: string[] };
@@ -51,10 +52,8 @@ export default function EditFallbacks({
     enabled: Boolean(accessToken),
   });
 
-  const availableModels = useMemo(
-    () => Array.from(new Set(modelGroups.map((option) => option.model_group))).sort(),
-    [modelGroups],
-  );
+  const primaryOptions = useMemo(() => primaryModelOptions(modelGroups), [modelGroups]);
+  const chainOptions = useMemo(() => fallbackChainOptions(modelGroups), [modelGroups]);
 
   const handleSave = async () => {
     const primaryModel = group.primaryModel;
@@ -83,7 +82,8 @@ export default function EditFallbacks({
       <FallbackGroupConfig
         group={group}
         onChange={setGroup}
-        availableModels={availableModels}
+        primaryOptions={primaryOptions}
+        fallbackOptions={chainOptions}
         maxFallbacks={maxFallbacks}
         disablePrimaryModel
       />

@@ -4,9 +4,11 @@
  */
 
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { SearchSelect } from "@/components/shared/SearchSelect";
+import { SearchSelect, SearchSelectOption } from "@/components/shared/SearchSelect";
+import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { AlertCircle, ArrowDown, X } from "lucide-react";
 import React, { useId } from "react";
+import { FallbackOption } from "./fallbackOptions";
 
 export interface FallbackGroup {
   id: string;
@@ -17,20 +19,27 @@ export interface FallbackGroup {
 interface FallbackGroupConfigProps {
   group: FallbackGroup;
   onChange: (updatedGroup: FallbackGroup) => void;
-  availableModels: string[];
+  primaryOptions: FallbackOption[];
+  fallbackOptions: FallbackOption[];
   maxFallbacks: number;
   disablePrimaryModel?: boolean;
 }
 
+const withWildcardIcons = (options: FallbackOption[]): SearchSelectOption[] =>
+  options.map((option) =>
+    option.value.endsWith("/*") ? { ...option, icon: <ProviderLogo provider={option.value.slice(0, -2)} /> } : option,
+  );
+
 export function FallbackGroupConfig({
   group,
   onChange,
-  availableModels,
+  primaryOptions,
+  fallbackOptions,
   maxFallbacks,
   disablePrimaryModel = false,
 }: FallbackGroupConfigProps) {
-  // Filter available options for fallbacks (exclude primary only, allow already selected to be shown for deselection)
-  const availableFallbackOptions = availableModels.filter((m) => m !== group.primaryModel);
+  // Exclude the primary only, allow already selected to be shown for deselection
+  const availableFallbackOptions = fallbackOptions.filter((option) => option.value !== group.primaryModel);
 
   const handlePrimaryChange = (value: string | null) => {
     const newFallbacks = group.fallbackModels.filter((model) => model !== value);
@@ -71,7 +80,7 @@ export function FallbackGroupConfig({
         </label>
         <SearchSelect
           inputId={primaryModelInputId}
-          options={availableModels.map((m) => ({ label: m, value: m }))}
+          options={withWildcardIcons(primaryOptions)}
           value={group.primaryModel}
           onValueChange={handlePrimaryChange}
           placeholder="Select primary model"
@@ -110,7 +119,7 @@ export function FallbackGroupConfig({
           {/* Add Fallback Input */}
           <div className="mb-4">
             <MultiSelect
-              options={availableFallbackOptions.map((m) => ({ label: m, value: m }))}
+              options={availableFallbackOptions}
               value={group.fallbackModels}
               onValueChange={handleFallbackSelect}
               placeholder={
