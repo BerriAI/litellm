@@ -75,6 +75,12 @@ def messages_carry_output_config(messages: Sequence[object]) -> bool:
 _messages_carry_output_config = messages_carry_output_config
 
 
+def _ensure_stop_sequence(response: AnthropicMessagesResponse) -> AnthropicMessagesResponse:
+    if "stop_sequence" in response:
+        return response
+    return {**response, "stop_sequence": None}
+
+
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     _workload_identity_eligible: ClassVar[bool] = True
 
@@ -720,7 +726,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         except Exception:
             raise AnthropicError(message=raw_response.text, status_code=raw_response.status_code)
         response: Final = AnthropicMessagesResponse(**raw_response_json)
-        return {**response, "stop_sequence": response.get("stop_sequence")}
+        return _ensure_stop_sequence(response)
 
     def get_async_streaming_response_iterator(
         self,
