@@ -57,9 +57,8 @@ pub(super) fn resolve_request(
     })?;
     if messages.is_empty() {
         return Err(Error::invalid_request(
-            litellm_llms::ErrorDetail::Expected {
-                subject: "chat completions messages",
-                expected: "non-empty",
+            litellm_llms::ErrorDetail::NoMessages {
+                route: "chat completions",
             },
         ));
     }

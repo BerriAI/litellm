@@ -6,7 +6,7 @@ use axum::{
 };
 use serde_json::{Map, Value};
 
-use crate::{Deployment, Error, Gateway};
+use crate::{BodyError, Deployment, Error, Gateway};
 
 pub(crate) const MAX_FILE_BYTES: usize = 50 * 1024 * 1024;
 pub(crate) const MAX_BODY_BYTES: usize = MAX_FILE_BYTES + 1024 * 1024;
@@ -43,10 +43,10 @@ impl<S: Send + Sync> FromRequest<S> for JsonObject {
             if error.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
                 Error::BodyTooLarge
             } else {
-                Error::InvalidBody(error.to_string())
+                BodyError::Read(error).into()
             }
         })?;
-        object(&body).map(Self)
+        Ok(Self(object(&body)?))
     }
 }
 
@@ -77,16 +77,16 @@ impl<S: Send + Sync> FromRequest<S> for InferenceBody {
         }
         let multipart = Multipart::from_request(request, state)
             .await
-            .map_err(|error| Error::InvalidBody(error.to_string()))?;
+            .map_err(BodyError::Multipart)?;
         parse_multipart(multipart).await
     }
 }
 
-fn object(body: &[u8]) -> Result<Map<String, Value>, Error> {
+fn object(body: &[u8]) -> Result<Map<String, Value>, BodyError> {
     match serde_json::from_slice(body) {
         Ok(Value::Object(body)) => Ok(body),
-        Ok(_) => Err(Error::InvalidBody("expected a JSON object".into())),
-        Err(error) => Err(Error::InvalidBody(error.to_string())),
+        Ok(_) => Err(BodyError::NotAnObject),
+        Err(error) => Err(BodyError::Json(error)),
     }
 }
 
@@ -98,7 +98,7 @@ pub(crate) async fn authorize_model(
     let name = body
         .get("model")
         .and_then(Value::as_str)
-        .ok_or_else(|| Error::InvalidBody("model is required".into()))?;
+        .ok_or(BodyError::MissingModel)?;
     let access = litellm_gateway_auth::AccessRequest::Model {
         name: name.into(),
         deployment: deployment.model.clone(),
@@ -112,16 +112,20 @@ pub(crate) async fn authorize_model(
 
 pub(crate) fn resolve_deployment<'a>(
     gateway: &'a Gateway,
+    route: &'static str,
     body: &Map<String, Value>,
 ) -> Result<&'a Deployment, Error> {
     let model = body
         .get("model")
         .and_then(Value::as_str)
-        .ok_or_else(|| Error::InvalidBody("model is required".into()))?;
+        .ok_or(BodyError::MissingModel)?;
     gateway
         .models
         .get(model)
-        .ok_or_else(|| Error::UnknownModel(model.to_owned()))
+        .ok_or_else(|| Error::UnknownModel {
+            route,
+            model: model.to_owned(),
+        })
 }
 
 async fn parse_multipart(mut multipart: Multipart) -> Result<InferenceBody, Error> {
@@ -159,7 +163,7 @@ fn multipart_error(error: axum::extract::multipart::MultipartError) -> Error {
     if error.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
         return Error::BodyTooLarge;
     }
-    Error::InvalidBody(error.to_string())
+    BodyError::MultipartField(error).into()
 }
 
 pub(crate) async fn unsupported(OriginalUri(uri): OriginalUri) -> impl IntoResponse {

@@ -9,6 +9,29 @@ use pyo3::{
     types::{PyBytes, PyString, PyType},
 };
 
+/// A `type='file'` document the bridge cannot read, with the text Python's OCR path raises.
+#[derive(Debug, thiserror::Error)]
+enum DocumentError {
+    #[error(
+        "document with type='file' must include a 'file' field containing a pathlib.Path, file-like object, or bytes"
+    )]
+    MissingFile,
+    #[error(
+        "OCR file input does not accept bare str values. Pass bytes, a pathlib.Path, or a file-like object."
+    )]
+    BareString,
+    #[error(
+        "Unsupported file input type: {0}. Expected pathlib.Path, bytes, or a file-like object."
+    )]
+    UnsupportedType(String),
+}
+
+impl From<DocumentError> for PyErr {
+    fn from(error: DocumentError) -> Self {
+        PyValueError::new_err(litellm_error::Report::new(&error).to_string())
+    }
+}
+
 /// A `type='file'` document as projected: paths and bytes are typed inputs already; a
 /// file-like object is a reader the projection consumes once every other field is read.
 pub(super) enum FileDocumentInput {
@@ -45,25 +68,18 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
             Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => None,
             Err(error) => return Err(error),
         };
-        let missing = || {
-            PyValueError::new_err(
-                "document with type='file' must include a 'file' field containing a pathlib.Path, file-like object, or bytes",
-            )
-        };
-        let file = document.get_item("file").map_err(|error| {
-            if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) {
-                missing()
-            } else {
-                error
+        let file = match document.get_item("file") {
+            Ok(file) => file,
+            Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => {
+                return Err(DocumentError::MissingFile.into());
             }
-        })?;
+            Err(error) => return Err(error),
+        };
         if file.is_none() {
-            return Err(missing());
+            return Err(DocumentError::MissingFile.into());
         }
         if file.is_instance_of::<PyString>() {
-            return Err(PyValueError::new_err(
-                "OCR file input does not accept bare str values. Pass bytes, a pathlib.Path, or a file-like object.",
-            ));
+            return Err(DocumentError::BareString.into());
         }
         static PATH_LIKE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
         if file.is_instance(PATH_LIKE.import(py, "os", "PathLike")?)? {
@@ -81,10 +97,7 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
         }
         match PythonFileReader::from_file_like(&file)? {
             Some(reader) => Ok(Self::Deferred { reader, mime_type }),
-            None => Err(PyValueError::new_err(format!(
-                "Unsupported file input type: {}. Expected pathlib.Path, bytes, or a file-like object.",
-                file.get_type(),
-            ))),
+            None => Err(DocumentError::UnsupportedType(file.get_type().to_string()).into()),
         }
     }
 }

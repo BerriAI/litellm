@@ -22,7 +22,7 @@ The two native classes come from `create_exception!` in `crates/python-bridge/sr
 
 Python decodes a `RustUpstreamError` in `litellm/rust_bridge/failures.py`, which validates `args` and `headers` with a `TypeAdapter` and rebuilds the provider's `httpx.Response`. `litellm/rust_bridge/runtime.py` catches `RustBridgeDeclined` and reads its reason. `_raise_upstream` in `runtime.py` still reads `args` a second time by hand for the `attempt` path, which is the one decode to fold into `failures.py`. A new fact goes into `args` or `headers`, and the decoder learns to read it in the same change
 
-Two routes also flag a request fault with a boolean attribute, read by their Python route module: `ocr_request_format_error` in `host/routes/ocr.py` and `messages_request_error` in `host/routes/messages.py`. OCR additionally sets `status_code` and `message` for Python parity. Do not add another attribute, nothing on the Python side types them
+Two routes also flag a request fault with a boolean attribute, read by their Python route module: `ocr_request_format_error` in `host/routes/ocr.py` and `messages_request_error` in `host/routes/messages.py`. OCR additionally sets `status_code` and `message` for Python parity, and `native_settings_error`, which only the OCR host reads back to tell a settings failure from the caller's exception. Do not add another attribute, nothing on the Python side types them
 
 ## Why args, not a typed subclass
 
@@ -41,7 +41,7 @@ OCR puts Python parity arms in front of that order, each matching a top-level va
 | `FileRead` whose cause is `NotFound` | `FileNotFoundError` naming the path |
 | other `FileRead` | `OSError` with the io message |
 
-OCR also treats every auth failure as the caller's, so a missing `litellm_auth` key is a `ValueError` there, while the inference routes raise `RuntimeError`
+Both routes ask `litellm_auth::Error::is_request()` through their own `is_request()`, so a missing key or API base is a `RuntimeError` on both, and a missing setting the caller can pass, such as a region, is a `ValueError`
 
 Use the standard class whose Python meaning matches. `PyFileNotFoundError` for a missing file is right, a `RuntimeError` whose text says the file is missing is not. `import_exception!` exists for an exception defined in Python, none is used today because `failures.py` maps to LiteLLM's public exceptions through `litellm.exception_type`
 

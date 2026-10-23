@@ -152,8 +152,7 @@ async fn routes_prompts_and_resources_without_rewriting_uris(#[future] harness: 
         .gateway
         .execute(read.clone(), context(None))
         .await
-        .err()
-        .expect("read without a server scope");
+        .expect_err("read without a server scope");
     assert_eq!(ambiguous.status(), axum::http::StatusCode::BAD_REQUEST);
     let result = harness
         .gateway

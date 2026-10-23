@@ -31,12 +31,12 @@ Do not reach into a nested enum's variants from the gateway. When a new nested f
 
 ## Render by surface and framing
 
-Rendering is separate from classification. The surface picks the envelope and the moment picks the framing, a JSON body before the headers went out and an `event: error` SSE frame after. Both framings of one surface render the same envelope, so a streaming failure and a JSON failure of the same error agree on everything but framing
+Rendering is separate from classification. The surface picks the envelope and the moment picks the framing, a JSON body before the headers went out and an `event: error` SSE frame after. Both framings of one surface render the same status, type and `Report` message, so a streaming failure and a JSON failure of the same error agree on everything but framing
 
 | Surface | JSON | SSE |
 |---|---|---|
 | Anthropic, `/v1/messages` | `body(request_id)` | `sse_frame()` |
-| OpenAI, chat, responses and the rest | `openai_response()` | `openai_sse_frame()` |
+| OpenAI, chat, responses and the rest | `openai_response()` | `responses_sse_frame()`, the Responses API `error` event |
 
 Two rules hold for both. The error `type` string is derived from the status by `error_type()`, so a new failure never names its own type, and the message of anything that is not a provider answer is the `litellm_error::Report` of the error. The Anthropic envelope passes a provider body already in its shape through untouched and extracts the message from anything else. The OpenAI envelope always wraps, because that is what the Python proxy returns there
 

@@ -55,7 +55,7 @@ impl Error {
             | Self::Unsupported(_)
             | Self::Headers(_) => true,
             Self::Llm(error) => error.is_request(),
-            Self::Auth(error) => !error.is_missing_credential(),
+            Self::Auth(error) => error.is_request(),
             Self::Http(error) => error.is_request(),
             Self::Secret(_) | Self::Host(_) | Self::PostCallHook(_) => false,
         }
@@ -117,6 +117,21 @@ impl Error {
             | Self::Auth(_)
             | Self::Headers(_)
             | Self::Secret(_) => false,
+        }
+    }
+
+    pub fn rejected_request(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Llm(error) => error.rejected_request(),
+            Self::InvalidProvider(_)
+            | Self::UnresolvedProvider { .. }
+            | Self::Unsupported(_)
+            | Self::Auth(_)
+            | Self::Headers(_)
+            | Self::Http(_)
+            | Self::Secret(_)
+            | Self::Host(_)
+            | Self::PostCallHook(_) => None,
         }
     }
 
@@ -275,6 +290,37 @@ mod tests {
         )));
         assert_eq!(error.upstream_response(), Some((429, "slow down")));
         assert!(error.dispatched());
+    }
+
+    #[rstest]
+    #[case::invalid_request(
+        Error::invalid_request(ErrorDetail::Expected {
+            subject: "messages",
+            expected: "non-empty",
+        }),
+        Some("messages must be non-empty")
+    )]
+    #[case::missing_field(
+        LlmError::MissingField("max_tokens").into(),
+        Some("missing required field: max_tokens")
+    )]
+    #[case::invalid_response(
+        Error::invalid_response(ErrorDetail::MissingField {
+            subject: "response",
+            field: "usage",
+        }),
+        None
+    )]
+    #[case::provider_rejection(litellm_http::Error::upstream(400, "bad".into()).into(), None)]
+    #[case::unresolved_provider(Error::InvalidProvider("unknown".into()), None)]
+    fn a_rejected_request_names_only_what_the_caller_got_wrong(
+        #[case] error: Error,
+        #[case] expected: Option<&str>,
+    ) {
+        let rejection = error
+            .rejected_request()
+            .map(|rejection| litellm_error::Report::new(rejection).to_string());
+        assert_eq!(rejection.as_deref(), expected);
     }
 
     #[test]

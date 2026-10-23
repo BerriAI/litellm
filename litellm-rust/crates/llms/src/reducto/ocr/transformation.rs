@@ -539,9 +539,7 @@ async fn upload_bytes_async(
         headers,
         litellm_http::request::HeaderPolicy::Except(&["content-type", "content-length"]),
     );
-    let response = litellm_http::request::http_request(builder)
-        .await
-        .map_err(litellm_http::Error::from)?;
+    let response = litellm_http::request::http_request(builder).await?;
     let uploaded = crate::base_llm::ocr::handler::read_json_response::<ReductoUploadResponse>(
         response,
         false,

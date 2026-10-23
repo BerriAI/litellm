@@ -28,7 +28,7 @@ impl Error {
             | Self::MissingField(_)
             | Self::InvalidRequest(_)
             | Self::Unsupported(_) => true,
-            Self::Auth(error) => !error.is_missing_credential(),
+            Self::Auth(error) => error.is_request(),
             Self::Http(error) => error.is_request(),
             Self::InvalidResponse(_) => false,
         }
@@ -72,6 +72,16 @@ impl Error {
         }
     }
 
+    /// Why the transformation rejected the caller's request, rendered as Python's own
+    /// validation renders it, without this layer's "invalid request" prefix.
+    pub fn rejected_request(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidRequest(detail) => Some(detail),
+            Self::InvalidType { .. } | Self::MissingField(_) => Some(self),
+            Self::InvalidResponse(_) | Self::Unsupported(_) | Self::Auth(_) | Self::Http(_) => None,
+        }
+    }
+
     pub fn upstream_response(&self) -> Option<(u16, &str)> {
         match self {
             Self::Http(error) => error.upstream_response(),
@@ -99,6 +109,8 @@ pub enum ErrorDetail {
         #[source]
         cause: Source,
     },
+    #[error("{route} requires at least one message")]
+    NoMessages { route: &'static str },
     #[error("{subject} must be {expected}")]
     Expected {
         subject: &'static str,

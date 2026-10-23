@@ -3,6 +3,8 @@ use std::{io, path::PathBuf, sync::Arc};
 use litellm_core_utils::call_arguments::ArgumentError;
 use litellm_error::Source;
 
+pub type Headers = [(String, String)];
+
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     #[error("upstream OCR error ({status}): {body}")]
@@ -144,7 +146,7 @@ impl Error {
         }
     }
 
-    pub fn upstream_response(&self) -> Option<(u16, &str, &[(String, String)])> {
+    pub fn upstream_response(&self) -> Option<(u16, &str, &Headers)> {
         match self {
             Self::Provider {
                 status,
@@ -301,7 +303,7 @@ impl Error {
             | Self::InvalidModel { .. }
             | Self::Params(_)
             | Self::Headers(_) => true,
-            Self::Auth(error) => !error.is_missing_credential(),
+            Self::Auth(error) => error.is_request(),
             Self::Http(error) => error.is_request(),
             Self::Provider { .. }
             | Self::FileRead { .. }

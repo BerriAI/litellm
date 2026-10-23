@@ -2,6 +2,7 @@ mod operation;
 
 pub(super) use operation::{Failure, FailureKind, FailureStage, delete, rotate, write};
 
+use litellm_error::Report;
 use litellm_secrets::hashicorp::{Error, RawOperationError};
 use pyo3::prelude::*;
 
@@ -63,7 +64,7 @@ pub(super) fn failure_value(
 
 fn cause_message(py: Python<'_>, kind: FailureKind, context: &ErrorContext) -> PyResult<String> {
     Ok(match kind {
-        FailureKind::Native(RawOperationError::Local(error)) => error.to_string(),
+        FailureKind::Native(RawOperationError::Local(error)) => Report::new(&error).to_string(),
         FailureKind::UnsafeName(name) => {
             format!("Invalid secret_name {}", name.into_pyobject(py)?.repr()?)
         }
@@ -126,7 +127,7 @@ fn cause_message(py: Python<'_>, kind: FailureKind, context: &ErrorContext) -> P
         }) => {
             let message = match source {
                 Error::LoginStatus { status } => http_message(py, "POST", &url, status)?,
-                error => error.to_string(),
+                error => Report::new(&error).to_string(),
             };
             let mechanism = if certificate { "TLS cert" } else { "AppRole" };
             format!("Could not authenticate to Vault via {mechanism}: {message}")

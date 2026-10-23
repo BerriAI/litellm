@@ -37,3 +37,21 @@ pub enum Error {
     #[error(transparent)]
     Operation(#[from] litellm_secrets_types::Error),
 }
+
+impl Error {
+    pub fn is_unsafe_secret_name(&self) -> bool {
+        match self {
+            Self::Operation(error) => error.is_unsafe_secret_name(),
+            Self::Timeout
+            | Self::Http(_)
+            | Self::AuthStatus(_)
+            | Self::Status(_)
+            | Self::MissingCredentials
+            | Self::ClientCertificate(_)
+            | Self::Client(_)
+            | Self::RefreshInterval(_)
+            | Self::Endpoint(_)
+            | Self::EnterpriseRequired => false,
+        }
+    }
+}

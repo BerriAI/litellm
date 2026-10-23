@@ -11,12 +11,12 @@ use serde_json::{Map, Value, json};
 pub enum Error {
     #[error(transparent)]
     Auth(#[from] litellm_gateway_auth::Error),
-    #[error("invalid request body: {0}")]
-    InvalidBody(String),
+    #[error("invalid request body")]
+    InvalidBody(#[from] BodyError),
     #[error(
-        "/v1/messages: Invalid model name passed in model={0}. Call `/v1/models` to view available models for your key."
+        "{route}: Invalid model name passed in model={model}. Call `/v1/models` to view available models for your key."
     )]
-    UnknownModel(String),
+    UnknownModel { route: &'static str, model: String },
     #[error(transparent)]
     Route(#[from] InferenceError),
     #[error(transparent)]
@@ -25,8 +25,30 @@ pub enum Error {
     Unsupported(String),
     #[error("request body exceeds the size limit")]
     BodyTooLarge,
-    #[error("{0}")]
-    Internal(String),
+    #[error("unexpected HTTP host operation")]
+    Internal,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BodyError {
+    #[error("could not read the body")]
+    Read(#[source] axum::extract::rejection::BytesRejection),
+    #[error("invalid JSON")]
+    Json(#[source] serde_json::Error),
+    #[error("expected a JSON object")]
+    NotAnObject,
+    #[error("invalid multipart body")]
+    Multipart(#[source] axum::extract::multipart::MultipartRejection),
+    #[error("invalid multipart field")]
+    MultipartField(#[source] axum::extract::multipart::MultipartError),
+    #[error("model is required")]
+    MissingModel,
+    #[error("invalid cache controls")]
+    CacheControls(#[source] serde_json::Error),
+    #[error("invalid caching flag")]
+    Caching(#[source] serde_json::Error),
+    #[error("cache durations must be finite and positive")]
+    CacheDuration(#[source] Option<std::time::TryFromFloatSecsError>),
 }
 
 impl IntoResponse for Error {
@@ -39,7 +61,7 @@ impl From<litellm_host_http::Error<InferenceError>> for Error {
     fn from(error: litellm_host_http::Error<InferenceError>) -> Self {
         match error {
             litellm_host_http::Error::Call(error) => Self::Route(error),
-            litellm_host_http::Error::Protocol => Self::Internal(error.to_string()),
+            litellm_host_http::Error::Protocol => Self::Internal,
         }
     }
 }
@@ -50,29 +72,37 @@ impl Error {
             Self::Auth(error) => error.status(),
             Self::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::InvalidBody(_) | Self::UnknownModel(_) => StatusCode::BAD_REQUEST,
-            Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
+            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             Self::Ocr(error) => ocr_status(error),
             Self::Route(error) => route_status(error),
         }
     }
 
     pub fn openai_response(self) -> Response {
+        (self.status(), Json(self.openai_body())).into_response()
+    }
+
+    /// The OpenAI envelope as an `event: error` frame, for a stream that fails after its
+    /// headers went out.
+    pub fn responses_sse_frame(&self) -> String {
+        let event = json!({
+            "type": "error",
+            "code": self.status().as_u16().to_string(),
+            "message": litellm_error::Report::new(self).to_string(),
+            "param": null,
+        });
+        format!("event: error\ndata: {event}\n\n")
+    }
+
+    fn openai_body(&self) -> Value {
         let status = self.status();
-        let message = match &self {
-            Self::UnknownModel(model) => format!("Invalid model name passed in model={model}"),
-            _ => litellm_error::Report::new(&self).to_string(),
-        };
-        (
-            status,
-            Json(json!({"error": {
-                "message": message,
-                "type": error_type(status),
-                "param": null,
-                "code": status.as_u16(),
-            }})),
-        )
-            .into_response()
+        json!({"error": {
+            "message": litellm_error::Report::new(self).to_string(),
+            "type": error_type(status),
+            "param": null,
+            "code": status.as_u16(),
+        }})
     }
 
     /// The Anthropic error envelope Python's `AnthropicExceptionMapping` builds: an upstream
@@ -120,6 +150,9 @@ fn route_status(error: &InferenceError) -> StatusCode {
 fn ocr_status(error: &OcrError) -> StatusCode {
     if error.is_unsupported() {
         return StatusCode::NOT_IMPLEMENTED;
+    }
+    if let Some((status, ..)) = error.upstream_response() {
+        return StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
     }
     if error.is_missing_credential() {
         return StatusCode::UNAUTHORIZED;
@@ -191,8 +224,19 @@ mod tests {
         Error::Route(litellm_http::Error::upstream(status, body.into()).into())
     }
 
+    fn invalid_json() -> Error {
+        BodyError::Json(serde_json::from_str::<Value>("{").unwrap_err()).into()
+    }
+
+    fn unknown_model() -> Error {
+        Error::UnknownModel {
+            route: "/v1/messages",
+            model: "nope".into(),
+        }
+    }
+
     #[rstest]
-    #[case::anthropic_body_passes_through(
+    #[case::anthropic_body(
         upstream(529, r#"{"type":"error","error":{"type":"overloaded_error","message":"busy","extra":1}}"#),
         Some("req_1"),
         json!({"type": "error", "error": {"type": "overloaded_error", "message": "busy", "extra": 1}, "request_id": "req_1"}),
@@ -202,35 +246,45 @@ mod tests {
         Some("caller"),
         json!({"type": "error", "error": {"type": "x", "message": "m"}, "request_id": "upstream"}),
     )]
-    #[case::bedrock_detail(
-        upstream(403, r#"{"detail":{"message":"denied"}}"#),
-        None,
-        json!({"type": "error", "error": {"type": "permission_error", "message": "denied"}}),
-    )]
-    #[case::aws_message(
-        upstream(429, r#"{"Message":"slow down"}"#),
-        None,
-        json!({"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}}),
-    )]
-    #[case::plain_text_with_unmapped_status(
-        upstream(502, "bad gateway"),
-        None,
-        json!({"type": "error", "error": {"type": "api_error", "message": "bad gateway"}}),
-    )]
-    #[case::unknown_model(
-        Error::UnknownModel("nope".into()),
-        None,
-        json!({"type": "error", "error": {
-            "type": "invalid_request_error",
-            "message": "/v1/messages: Invalid model name passed in model=nope. Call `/v1/models` to view available models for your key.",
-        }}),
-    )]
-    fn body_follows_the_anthropic_exception_mapping(
+    fn an_anthropic_provider_body_passes_through(
         #[case] error: Error,
         #[case] request_id: Option<&str>,
         #[case] expected: Value,
     ) {
         assert_eq!(error.body(request_id), expected);
+    }
+
+    #[rstest]
+    #[case::bedrock_detail(
+        upstream(403, r#"{"detail":{"message":"denied"}}"#),
+        "permission_error",
+        "denied"
+    )]
+    #[case::aws_message(
+        upstream(429, r#"{"Message":"slow down"}"#),
+        "rate_limit_error",
+        "slow down"
+    )]
+    #[case::plain_text_with_unmapped_status(
+        upstream(502, "bad gateway"),
+        "api_error",
+        "bad gateway"
+    )]
+    #[case::unknown_model(
+        unknown_model(),
+        "invalid_request_error",
+        "/v1/messages: Invalid model name passed in model=nope. Call `/v1/models` to view available models for your key."
+    )]
+    fn other_failures_get_the_anthropic_envelope_with_their_message(
+        #[case] error: Error,
+        #[case] error_type: &str,
+        #[case] message: &str,
+    ) {
+        let body = error.body(Some("req_1"));
+        assert_eq!(body["type"], "error");
+        assert_eq!(body["error"]["type"], error_type);
+        assert_eq!(body["error"]["message"], message);
+        assert_eq!(body["request_id"], "req_1");
     }
 
     #[rstest]
@@ -256,7 +310,59 @@ mod tests {
         ),
         StatusCode::INTERNAL_SERVER_ERROR,
     )]
+    #[case::invalid_body(invalid_json(), StatusCode::BAD_REQUEST)]
+    #[case::missing_model(BodyError::MissingModel.into(), StatusCode::BAD_REQUEST)]
+    #[case::unknown_model(unknown_model(), StatusCode::BAD_REQUEST)]
+    #[case::oversized_body(Error::BodyTooLarge, StatusCode::PAYLOAD_TOO_LARGE)]
+    #[case::unserved_path(Error::Unsupported("/v1/completions".into()), StatusCode::NOT_IMPLEMENTED)]
+    #[case::host_protocol(
+        litellm_host_http::Error::<InferenceError>::Protocol.into(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    )]
+    #[case::ocr_provider_answer(
+        Error::Ocr(OcrError::Provider { status: 429, body: "slow".into(), headers: vec![] }),
+        StatusCode::TOO_MANY_REQUESTS
+    )]
+    #[case::ocr_missing_credential(
+        Error::Ocr(OcrError::MissingCredential { credential: "Azure AI credentials", guidance: "set a key" }),
+        StatusCode::UNAUTHORIZED
+    )]
+    #[case::ocr_request_fault(Error::Ocr(OcrError::MissingDocumentUrl), StatusCode::BAD_REQUEST)]
+    #[case::ocr_response_fault(
+        Error::Ocr(OcrError::EmptyContent),
+        StatusCode::INTERNAL_SERVER_ERROR
+    )]
     fn status_follows_who_is_at_fault(#[case] error: Error, #[case] status: StatusCode) {
         assert_eq!(error.status(), status);
+    }
+
+    #[test]
+    fn a_body_fault_names_the_body_and_keeps_its_cause_once() {
+        let cause = serde_json::from_str::<Value>("{").unwrap_err().to_string();
+        let body = invalid_json().openai_body();
+        let message = body["error"]["message"].as_str().unwrap();
+        assert!(
+            message.starts_with("invalid request body: invalid JSON: "),
+            "{message}"
+        );
+        assert_eq!(message.matches(&cause).count(), 1, "{message}");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["code"], 400);
+    }
+
+    #[rstest]
+    #[case::provider_answer(upstream(429, "slow down"))]
+    #[case::caller_fault(invalid_json())]
+    #[case::host_bug(litellm_host_http::Error::<InferenceError>::Protocol.into())]
+    fn the_responses_sse_frame_is_the_responses_error_event(#[case] error: Error) {
+        let frame = error.responses_sse_frame();
+        let data = frame
+            .strip_prefix("event: error\ndata: ")
+            .and_then(|data| data.strip_suffix("\n\n"))
+            .unwrap_or_else(|| panic!("an event: error frame, got {frame:?}"));
+        let event = serde_json::from_str::<Value>(data).unwrap();
+        assert_eq!(event["type"], "error");
+        assert_eq!(event["code"], error.status().as_u16().to_string());
+        assert_eq!(event["message"], error.openai_body()["error"]["message"]);
     }
 }

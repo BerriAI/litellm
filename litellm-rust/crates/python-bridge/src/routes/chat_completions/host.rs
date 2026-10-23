@@ -78,8 +78,8 @@ impl PythonBinding for ChatCompletionsPythonHost {
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
         self.0.error(py, error)
     }
-    fn host_error(_: &PyErr) -> Error {
-        Error::invalid_request(litellm_llms::ErrorDetail::HostCall)
+    fn host_error(error: &PyErr) -> Error {
+        crate::routes::inference::host_call_error(error)
     }
 }
 

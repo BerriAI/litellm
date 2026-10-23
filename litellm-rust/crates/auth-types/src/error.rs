@@ -48,8 +48,6 @@ impl Error {
         Self::Provider(Source::new(cause))
     }
 
-    /// The environment lacks the credential the provider needs, as opposed to the caller
-    /// having sent a bad one.
     pub fn is_missing_credential(&self) -> bool {
         match self {
             Self::MissingApiKey { .. } => true,
@@ -67,22 +65,19 @@ impl Error {
         }
     }
 
-    /// A connection setting the caller can pass on the call, such as a region, a project or an
-    /// API base, is unset everywhere it is read from.
-    pub fn is_missing_setting(&self) -> bool {
+    pub fn is_request(&self) -> bool {
         match self {
-            Self::MissingApiBase { .. } => true,
-            Self::MissingParam { spec, .. } => match spec.kind {
-                ParamKind::Setting => true,
-                ParamKind::Credential => false,
-            },
             Self::InvalidConfiguration(_)
             | Self::CredentialAcquisition(_)
             | Self::EmptyCallerCredential { .. }
             | Self::Provider(_)
             | Self::CredentialChain(_)
-            | Self::MissingApiKey { .. }
-            | Self::InvalidHeader => false,
+            | Self::InvalidHeader => true,
+            Self::MissingParam { spec, .. } => match spec.kind {
+                ParamKind::Setting => true,
+                ParamKind::Credential => false,
+            },
+            Self::MissingApiKey { .. } | Self::MissingApiBase { .. } => false,
         }
     }
 }
@@ -273,14 +268,15 @@ mod tests {
     #[rstest]
     #[case::vertex_project(VertexParams::PROJECT.missing("Vertex AI"), true)]
     #[case::aws_region(AwsParams::REGION.missing("AWS"), true)]
-    #[case::api_base(Error::MissingApiBase { provider: "Example", guidance: "Pass api_base" }, true)]
+    #[case::api_base(Error::MissingApiBase { provider: "Example", guidance: "Pass api_base" }, false)]
     #[case::vertex_credentials(VertexParams::CREDENTIALS.missing("Vertex AI"), false)]
     #[case::api_key(Error::MissingApiKey { provider: "Example", environment_variable: "EXAMPLE_API_KEY" }, false)]
-    #[case::invalid_configuration(Error::InvalidConfiguration(ErrorDetail::PlanNotAllowed), false)]
-    fn an_absent_connection_setting_is_a_missing_setting(
+    #[case::invalid_configuration(Error::InvalidConfiguration(ErrorDetail::PlanNotAllowed), true)]
+    #[case::invalid_header(Error::InvalidHeader, true)]
+    fn a_setting_the_caller_can_pass_is_theirs_to_fix_but_credentials_and_api_bases_are_not(
         #[case] error: Error,
         #[case] expected: bool,
     ) {
-        assert_eq!(error.is_missing_setting(), expected);
+        assert_eq!(error.is_request(), expected);
     }
 }

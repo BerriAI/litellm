@@ -11,7 +11,7 @@ use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use litellm_router_types::LitellmParams;
 use pyo3::{
-    exceptions::{PyException, PyValueError},
+    exceptions::PyException,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyBytes, PyDict},
@@ -19,14 +19,16 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
+    errors::{RequestMarker, route_failure},
+    marshal::{
+        ArgumentError, optional_timeout, project_optional_fields, public_response,
+        python_timeout_seconds,
+    },
     python_settings::missing_module,
     routes::RequestView,
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
-const REQUEST_ERROR_MARKER: &str = "messages_request_error";
 
 fn merge_headers(
     forwarded: Option<Map<String, Value>>,
@@ -67,29 +69,6 @@ fn project_litellm_params<'py>(
     Ok(litellm_params(fields.into_iter().chain(folded).collect()))
 }
 
-fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
-    if let Some((status, body)) = error.upstream_response() {
-        let error = RustUpstreamError::new_err((status, body.to_owned()));
-        error
-            .value(py)
-            .setattr("headers", Vec::<(String, String)>::new())?;
-        return Ok(error);
-    }
-    match error {
-        Error::Llm(litellm_llms::Error::InvalidRequest(message)) => {
-            let error = PyValueError::new_err(litellm_error::Report::new(&message).to_string());
-            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
-            Ok(error)
-        }
-        Error::Llm(litellm_llms::Error::MissingField(field)) => {
-            let error = PyValueError::new_err(format!("missing required field: {field}"));
-            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
-            Ok(error)
-        }
-        other => Ok(route_error_to_pyerr(other)),
-    }
-}
-
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
@@ -114,9 +93,8 @@ impl MessagesPythonHost {
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
-        let model = string("model")?.ok_or_else(|| PyValueError::new_err("model is required"))?;
-        let messages =
-            argument("messages")?.ok_or_else(|| PyValueError::new_err("messages is required"))?;
+        let model = string("model")?.ok_or(ArgumentError::Required("model"))?;
+        let messages = argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
         let fields = self.view.body_params(py, arguments, ROUTE_HOST_MODULE)?;
         let body = [
             ("model".to_string(), Value::String(model.clone())),
@@ -275,16 +253,13 @@ impl PythonBinding for MessagesPythonHost {
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
-        if let Error::Secret(source) = &error
-            && let Some(original) = crate::secrets::python_error(py, source.source_error())
-        {
-            return Ok(original);
-        }
-        Ok(self.map_failure(py, native_error(py, error)?))
+        route_failure(py, error, RequestMarker::Messages, |native| {
+            Ok(self.map_failure(py, native))
+        })
     }
 
-    fn host_error(_: &PyErr) -> Error {
-        Error::invalid_request(litellm_llms::ErrorDetail::HostCall)
+    fn host_error(error: &PyErr) -> Error {
+        crate::routes::inference::host_call_error(error)
     }
 }
 
@@ -461,38 +436,6 @@ mod tests {
                 (Err(error), Err(())) => assert!(error.is_request(), "{error:?}"),
                 (projected, expected) => panic!("got {projected:?}, expected {expected:?}"),
             }
-        });
-    }
-
-    #[rstest]
-    #[case::rejected_request(
-        Error::invalid_request(litellm_llms::ErrorDetail::UnsupportedParameter {
-            model: "claude".into(),
-            param: "top_k".into(),
-            value: "5".into(),
-            hint: String::new(),
-        }),
-        true
-    )]
-    #[case::missing_field(litellm_llms::Error::MissingField("max_tokens").into(), true)]
-    #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
-    #[case::upstream_failure(
-        litellm_http::Error::upstream(400, "bad".into()).into(),
-        false,
-    )]
-    fn only_request_rejections_carry_the_request_error_marker(
-        #[case] error: Error,
-        #[case] marked: bool,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            let native = native_error(py, error).unwrap();
-            let marker = native
-                .value(py)
-                .getattr_opt(REQUEST_ERROR_MARKER)
-                .unwrap()
-                .map(|value| value.extract::<bool>().unwrap());
-            assert_eq!(marker.unwrap_or(false), marked);
         });
     }
 }

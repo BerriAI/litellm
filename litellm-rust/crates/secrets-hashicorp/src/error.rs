@@ -48,3 +48,27 @@ pub enum Error {
     #[error("invalid HashiCorp Vault refresh interval")]
     RefreshInterval(#[source] Option<std::num::ParseIntError>),
 }
+
+impl Error {
+    pub fn is_unsafe_secret_name(&self) -> bool {
+        match self {
+            Self::InvalidSecretName(error) | Self::Operation(error) => {
+                error.is_unsafe_secret_name()
+            }
+            Self::EnterpriseRequired
+            | Self::Client(_)
+            | Self::ClientSettings(_)
+            | Self::TlsIdentity { .. }
+            | Self::LoginStatus { .. }
+            | Self::MalformedLogin(_)
+            | Self::NoAuthConfigured
+            | Self::Status { .. }
+            | Self::MalformedPayload(_)
+            | Self::NonStringValue
+            | Self::DataKeyConflictsWithDescription
+            | Self::CasVersionOverflow(_)
+            | Self::Timeout
+            | Self::RefreshInterval(_) => false,
+        }
+    }
+}

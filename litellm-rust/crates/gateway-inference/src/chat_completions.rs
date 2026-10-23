@@ -40,7 +40,7 @@ async fn handle(
     identity: &AuthenticatedRequest,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, "/chat/completions", &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.chat_completions.clone();

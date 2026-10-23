@@ -21,10 +21,27 @@ pub(crate) struct RouteOptions {
     pub(crate) timeout: Option<Duration>,
 }
 
-fn required_object(name: &'static str, value: Value) -> PyResult<Map<String, Value>> {
+/// A caller argument the bridge cannot use, raised as a `ValueError`.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ArgumentError {
+    #[error("{0} is required")]
+    Required(&'static str),
+    #[error("{0} must be a dict")]
+    NotADict(&'static str),
+    #[error("header values must be strings")]
+    HeaderValue,
+}
+
+impl From<ArgumentError> for PyErr {
+    fn from(error: ArgumentError) -> Self {
+        PyValueError::new_err(litellm_error::Report::new(&error).to_string())
+    }
+}
+
+fn required_object(name: &'static str, value: Value) -> Result<Map<String, Value>, ArgumentError> {
     match value {
         Value::Object(values) => Ok(values),
-        _ => Err(PyValueError::new_err(format!("{name} must be a dict"))),
+        _ => Err(ArgumentError::NotADict(name)),
     }
 }
 
@@ -35,7 +52,7 @@ fn optional_object(
     if value.is_none() {
         return Ok(None);
     }
-    required_object(name, from_py_argument(value)?).map(Some)
+    Ok(Some(required_object(name, from_py_argument(value)?)?))
 }
 
 pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration> {
@@ -57,11 +74,11 @@ pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyRe
 
 pub(crate) fn required_field<'py>(
     fields: &Bound<'py, PyDict>,
-    name: &str,
+    name: &'static str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    fields
+    Ok(fields
         .get_item(name)?
-        .ok_or_else(|| PyValueError::new_err(format!("{name} is required")))
+        .ok_or(ArgumentError::Required(name))?)
 }
 
 pub(crate) fn optional_field<T: DeserializeOwned>(
@@ -171,21 +188,18 @@ pub(crate) fn request_input_sources<'a>(
         .collect())
 }
 
-pub(crate) fn marshal_headers(headers: Option<Value>) -> PyResult<HashMap<String, String>> {
-    let value = match headers {
-        Some(headers) => headers,
-        None => Value::Object(Map::new()),
-    };
-    let Value::Object(headers) = value else {
-        return Err(PyValueError::new_err("headers must be a dict"));
+pub(crate) fn marshal_headers(
+    headers: Option<Value>,
+) -> Result<HashMap<String, String>, ArgumentError> {
+    let headers = match headers {
+        Some(headers) => required_object("headers", headers)?,
+        None => Map::new(),
     };
     headers
         .into_iter()
-        .map(|(name, value)| {
-            value
-                .as_str()
-                .map(|value| (name, value.to_string()))
-                .ok_or_else(|| PyValueError::new_err("header values must be strings"))
+        .map(|(name, value)| match value {
+            Value::String(value) => Ok((name, value)),
+            _ => Err(ArgumentError::HeaderValue),
         })
         .collect()
 }

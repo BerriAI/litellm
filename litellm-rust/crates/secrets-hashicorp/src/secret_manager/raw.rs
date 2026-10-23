@@ -32,6 +32,18 @@ pub enum RawOperationError {
     Timeout { method: String, elapsed: Duration },
 }
 
+impl RawOperationError {
+    pub fn is_unsafe_secret_name(&self) -> bool {
+        match self {
+            Self::Local(error) => error.is_unsafe_secret_name(),
+            Self::Authentication { .. }
+            | Self::Http { .. }
+            | Self::Transport(_)
+            | Self::Timeout { .. } => false,
+        }
+    }
+}
+
 impl HashicorpVault {
     pub async fn write_raw(
         &self,

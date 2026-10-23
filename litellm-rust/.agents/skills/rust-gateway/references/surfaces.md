@@ -5,7 +5,8 @@ Each surface mirrors what the Python proxy returns there, so the shapes differ o
 | Surface | Envelope | Where |
 |---|---|---|
 | `/v1/messages` | Anthropic, `{"type": "error", "error": {"type", "message"}, "request_id"}` | `Error::body()` and `sse_frame()` in `crates/gateway-inference/src/error.rs` |
-| OpenAI-shaped routes | `{"error": {"message", "type", "param", "code"}}` | `Error::openai_response()` and `openai_sse_frame()` in the same file |
+| OpenAI-shaped routes | `{"error": {"message", "type", "param", "code"}}` | `Error::openai_response()` in the same file |
+| `/v1/responses` stream | the Responses `error` event, `{"type": "error", "code", "message", "param"}` | `Error::responses_sse_frame()` in the same file |
 | MCP | `{"detail": message}` | `crates/gateway-mcp/src/error.rs` |
 | UI | `{"error": {"message"}}`, plus `Retry-After` on 429 | `crates/gateway-ui/src/error.rs` |
 | auth rejections | plain text, the top-level message only | `crates/gateway-auth/src/error.rs` |

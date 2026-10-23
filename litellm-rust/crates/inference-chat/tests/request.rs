@@ -250,7 +250,7 @@ async fn rejects_a_model_with_no_resolvable_provider() {
 }
 
 #[rstest]
-#[case::empty(json!([]), "chat completions messages must be non-empty")]
+#[case::empty(json!([]), "chat completions requires at least one message")]
 #[case::malformed(json!("not a list"), "invalid chat completions messages")]
 #[tokio::test]
 async fn rejects_an_empty_or_malformed_message_list(#[case] messages: Value, #[case] reason: &str) {
