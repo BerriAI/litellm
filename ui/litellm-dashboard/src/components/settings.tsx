@@ -25,6 +25,7 @@ import { toast } from "@/lib/toast";
 
 import AlertingSettings from "./alerting/alerting_settings";
 import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
+import TernaryCostTracking from "./TernaryCostTracking/TernaryCostTracking";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import {
   deleteCallback,
@@ -574,6 +575,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           <TabsList variant="line">
             <TabsTrigger value="logging-callbacks">Logging Callbacks</TabsTrigger>
             <TabsTrigger value="cloudzero-cost-tracking">CloudZero Cost Tracking</TabsTrigger>
+            <TabsTrigger value="ternary-cost-export">Ternary Cost Export</TabsTrigger>
             <TabsTrigger value="alerting-types">Alerting Types</TabsTrigger>
             <TabsTrigger value="alerting-settings">Alerting Settings</TabsTrigger>
             <TabsTrigger value="email-alerts">Email Alerts</TabsTrigger>
@@ -603,6 +605,11 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           <TabsContent value="cloudzero-cost-tracking" keepMounted>
             <div className="p-8">
               <CloudZeroCostTracking />
+            </div>
+          </TabsContent>
+          <TabsContent value="ternary-cost-export" keepMounted>
+            <div className="p-8">
+              <TernaryCostTracking />
             </div>
           </TabsContent>
           <TabsContent value="alerting-types" keepMounted>

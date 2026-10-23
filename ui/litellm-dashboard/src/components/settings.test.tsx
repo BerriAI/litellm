@@ -29,6 +29,11 @@ vi.mock("./CloudZeroCostTracking/CloudZeroCostTracking", () => ({
   default: () => <div>Mock CloudZero Cost Tracking</div>,
 }));
 
+vi.mock("./TernaryCostTracking/TernaryCostTracking", () => ({
+  __esModule: true,
+  default: () => <div>Mock Ternary Cost Export</div>,
+}));
+
 // Polyfill ResizeObserver for components relying on it in tests
 if (typeof window !== "undefined" && !window.ResizeObserver) {
   window.ResizeObserver = class ResizeObserver {
@@ -557,6 +562,15 @@ describe("Settings", () => {
     });
 
     expect(screen.getByText("CloudZero Cost Tracking")).toBeInTheDocument();
+  });
+
+  it("should show the Ternary setup when its tab is opened", async () => {
+    const user = userEvent.setup();
+    render(<Settings {...defaultProps} />);
+
+    await user.click(await screen.findByRole("tab", { name: "Ternary Cost Export" }));
+
+    expect(await screen.findByText("Mock Ternary Cost Export")).toBeVisible();
   });
 });
 
