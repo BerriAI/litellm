@@ -7945,8 +7945,10 @@ def text_completion(
         # Support for token IDs as prompt (list of integers or list of lists of integers)
         messages = [{"role": "user", "content": prompt}]
     else:
-        raise Exception(
-            f"Unmapped prompt format. Your prompt is neither a list of strings nor a string. prompt={prompt}. File an issue - https://github.com/BerriAI/litellm/issues"
+        raise litellm.BadRequestError(
+            message=f"Unmapped prompt format. Your prompt is neither a list of strings nor a string. prompt={prompt}. File an issue - https://github.com/BerriAI/litellm/issues",
+            model=model or "",
+            llm_provider=custom_llm_provider or "",
         )
 
     kwargs.pop("prompt", None)

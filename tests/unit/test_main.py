@@ -9814,3 +9814,48 @@ async def test_converse_fallback_prices_the_current_attempt(
     else:
         client.close()
     configuration.reset_rust_configuration()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_unknown_chat_content_is_a_non_retryable_bad_request(asynchronous: bool) -> None:
+    from litellm.proxy.common_request_processing import proxy_exception_from_route_error
+
+    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "future_block"}]}]
+    with pytest.raises(litellm.BadRequestError, match="Invalid user message at index 0") as raised:
+        if asynchronous:
+            await litellm.acompletion(model="hosted_vllm/local-qa", messages=messages, api_key="local-fixture")
+        else:
+            litellm.completion(model="hosted_vllm/local-qa", messages=messages, api_key="local-fixture")
+
+    assert raised.value.status_code == 400
+    assert not litellm.should_retry(raised.value.status_code)
+    mapped: Final = proxy_exception_from_route_error(raised.value)
+    assert mapped.type == "invalid_request_error"
+    assert mapped.code == "400"
+    with pytest.raises(litellm.BadRequestError) as router_error:
+        litellm.Router().should_retry_this_error(raised.value, healthy_deployments=[{}])
+    assert router_error.value is raised.value
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_object_text_prompt_is_a_non_retryable_bad_request(asynchronous: bool) -> None:
+    from litellm.proxy.common_request_processing import proxy_exception_from_route_error
+
+    with pytest.raises(litellm.BadRequestError, match="Unmapped prompt format") as raised:
+        if asynchronous:
+            await litellm.atext_completion(
+                model="hosted_vllm/local-qa", prompt={"not": "a prompt"}, api_key="local-fixture"
+            )
+        else:
+            litellm.text_completion(model="hosted_vllm/local-qa", prompt={"not": "a prompt"}, api_key="local-fixture")
+
+    assert raised.value.status_code == 400
+    assert not litellm.should_retry(raised.value.status_code)
+    mapped: Final = proxy_exception_from_route_error(raised.value)
+    assert mapped.type == "invalid_request_error"
+    assert mapped.code == "400"
+    with pytest.raises(litellm.BadRequestError) as router_error:
+        litellm.Router().should_retry_this_error(raised.value, healthy_deployments=[{}])
+    assert router_error.value is raised.value
