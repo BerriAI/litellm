@@ -258,7 +258,6 @@ class UIEventsEnabledResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool
-    chat_posthog_enabled: bool
 
 
 def telemetry_consent() -> TelemetryConsent:
@@ -268,23 +267,9 @@ def telemetry_consent() -> TelemetryConsent:
     return sink.consent if sink is not None else OFF
 
 
-async def _chat_posthog_enabled(runtime: TelemetryRuntime) -> bool:
-    policy: Final = runtime.policy
-    if policy is None or policy.locked_off or not runtime.settings.chat_posthog_enabled:
-        return False
-    stored: Final = await _stored(runtime)
-    chosen_consent: Final = policy.pinned if policy.pinned is not None else stored.consent
-    destination: Final = policy.effective_destination(stored.destination)
-    return chosen_consent != OFF and destination is not TelemetryDestination.LOCAL_TABLE
-
-
 @router.get("/telemetry/ui_events/enabled", tags=["Telemetry"], response_model=UIEventsEnabledResponse)
 async def ui_events_enabled(
     _user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     consent: Annotated[TelemetryConsent, Depends(telemetry_consent)],
-    runtime: Annotated[TelemetryRuntime, Depends(telemetry_runtime_dependency)],
 ) -> UIEventsEnabledResponse:
-    return UIEventsEnabledResponse(
-        enabled=consent.allows(TelemetryGroup.PAGE_NAVIGATION),
-        chat_posthog_enabled=await _chat_posthog_enabled(runtime),
-    )
+    return UIEventsEnabledResponse(enabled=consent.allows(TelemetryGroup.PAGE_NAVIGATION))

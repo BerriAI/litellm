@@ -1,13 +1,7 @@
 // Public ingestion token shared with BerriAI/litellm-docs (posthog-docusaurus).
 const PROJECT_TOKEN = "phc_upsFA5iBuDFKnznEdV9pA5HYW8fwsLMJ8pF2p4xZzzpD";
 
-export type ChatPosthogEvent = "LiteLLM Chat UI" | "LiteLLM Chat UI Query";
-
-export async function captureChatEvents(
-  distinctId: string,
-  events: ChatPosthogEvent[],
-  timestamp: string,
-): Promise<void> {
+export async function captureChatRequest(distinctId: string, timestamp: string): Promise<void> {
   const request: RequestInit = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -17,12 +11,14 @@ export async function captureChatEvents(
     signal: AbortSignal.timeout(5000),
     body: JSON.stringify({
       api_key: PROJECT_TOKEN,
-      batch: events.map((event) => ({
-        event,
-        distinct_id: distinctId,
-        timestamp,
-        properties: { $process_person_profile: false, $geoip_disable: true },
-      })),
+      batch: [
+        {
+          event: "LiteLLM Chat UI",
+          distinct_id: distinctId,
+          timestamp,
+          properties: { $process_person_profile: false, $geoip_disable: true },
+        },
+      ],
     }),
   };
   const response = await fetch("https://us.i.posthog.com/batch/", request);

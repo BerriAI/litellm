@@ -40,10 +40,6 @@ class TelemetrySettings(BaseSettings):
     groups: Annotated[str | None, AfterValidator(_valid_groups)] = None
     endpoint: HttpUrl | None = None
     destination: TelemetryDestination | None = None
-    chat_posthog_enabled: bool = Field(
-        default=True,
-        description="Send anonymous usage metrics when Chat UI is used to the PostHog project used by LiteLLM's public docs",
-    )
     settle_timeout_seconds: float = Field(default=2.0, ge=0)
     retention_days: int = Field(default=30, gt=0)
 

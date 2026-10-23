@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen } from "@testing-library/react";
 import { renderWithProviders as render } from "@/../tests/test-utils";
 import ChatLayout from "./layout";
 
-const { mockUseAuthorized, mockUseUISettings, mockReplace, mockUiHref, recordChatActive, state } = vi.hoisted(() => {
+const { mockUseAuthorized, mockUseUISettings, mockReplace, mockUiHref, recordChatQuery, state } = vi.hoisted(() => {
   const state = {
     enableChatUI: false,
     isUISettingsLoading: false,
@@ -14,7 +14,7 @@ const { mockUseAuthorized, mockUseUISettings, mockReplace, mockUiHref, recordCha
   return {
     state,
     mockReplace: vi.fn(),
-    recordChatActive: vi.fn(async () => {}),
+    recordChatQuery: vi.fn(async () => {}),
     mockUiHref: vi.fn((segment: string) => `/mocked-ui/${segment}`),
     mockUseAuthorized: vi.fn(() => ({
       accessToken: "token-123",
@@ -38,7 +38,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: mockUseAuthorized }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: mockUseUISettings }));
 vi.mock("@/utils/uiHref", () => ({ uiHref: mockUiHref }));
-vi.mock("@/lib/telemetry/chat", () => ({ recordChatActive }));
+vi.mock("@/lib/telemetry/chat", () => ({ recordChatQuery }));
 vi.mock("@/components/navbar", () => ({ default: () => <div data-testid="navbar" /> }));
 vi.mock("@/contexts/ThemeContext", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -54,6 +54,10 @@ vi.mock("@/components/chat/ChatShell", () => ({
 }));
 
 describe("ChatLayout", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
   afterEach(() => {
     state.enableChatUI = false;
     state.isUISettingsLoading = false;
@@ -62,11 +66,12 @@ describe("ChatLayout", () => {
     state.userId = "user-1";
     mockReplace.mockClear();
     mockUiHref.mockClear();
-    recordChatActive.mockClear();
+    recordChatQuery.mockClear();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it("should render the chat shell and record activity when enable_chat_ui is on", () => {
+  it("should render the chat shell without recording a query when enable_chat_ui is on", () => {
     state.enableChatUI = true;
     render(
       <ChatLayout>
@@ -76,10 +81,10 @@ describe("ChatLayout", () => {
     expect(screen.getByTestId("chat-shell")).toBeInTheDocument();
     expect(screen.getByTestId("page-content")).toBeInTheDocument();
     expect(mockReplace).not.toHaveBeenCalled();
-    expect(recordChatActive).toHaveBeenCalledExactlyOnceWith("user-1");
+    expect(recordChatQuery).not.toHaveBeenCalled();
   });
 
-  it("should redirect without recording activity when enable_chat_ui is off", () => {
+  it("should redirect without recording a query when enable_chat_ui is off", () => {
     state.enableChatUI = false;
     render(
       <ChatLayout>
@@ -88,10 +93,10 @@ describe("ChatLayout", () => {
     );
     expect(screen.queryByTestId("chat-shell")).not.toBeInTheDocument();
     expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/");
-    expect(recordChatActive).not.toHaveBeenCalled();
+    expect(recordChatQuery).not.toHaveBeenCalled();
   });
 
-  it("should wait for UI settings without recording activity", () => {
+  it("should wait for UI settings without recording a query", () => {
     state.isUISettingsLoading = true;
     render(
       <ChatLayout>
@@ -100,10 +105,10 @@ describe("ChatLayout", () => {
     );
     expect(screen.queryByTestId("chat-shell")).not.toBeInTheDocument();
     expect(mockReplace).not.toHaveBeenCalled();
-    expect(recordChatActive).not.toHaveBeenCalled();
+    expect(recordChatQuery).not.toHaveBeenCalled();
   });
 
-  it("should wait for the signed-in user's identity without recording activity", () => {
+  it("should wait for the signed-in user's identity without recording a query", () => {
     state.enableChatUI = true;
     state.isIdentityLoading = true;
     render(
@@ -113,10 +118,10 @@ describe("ChatLayout", () => {
     );
     expect(screen.queryByTestId("chat-shell")).not.toBeInTheDocument();
     expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
-    expect(recordChatActive).not.toHaveBeenCalled();
+    expect(recordChatQuery).not.toHaveBeenCalled();
   });
 
-  it("should hide Chat without recording activity when the signed-in user's identity cannot be confirmed", () => {
+  it("should hide Chat without recording a query when the signed-in user's identity cannot be confirmed", () => {
     state.enableChatUI = true;
     state.isAuthorized = false;
     render(
@@ -126,47 +131,48 @@ describe("ChatLayout", () => {
     );
     expect(screen.queryByTestId("chat-shell")).not.toBeInTheDocument();
     expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
-    expect(recordChatActive).not.toHaveBeenCalled();
+    expect(recordChatQuery).not.toHaveBeenCalled();
   });
 
-  it("should record foreground activity and stop listening when Chat is unmounted", () => {
+  it("should not record a query or fetch telemetry when opening, focusing, or revisiting Chat", () => {
     state.enableChatUI = true;
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     const view = render(<ChatLayout>Chat content</ChatLayout>);
 
     act(() => fireEvent.focus(window));
-    expect(recordChatActive).not.toHaveBeenCalled();
+    expect(recordChatQuery).not.toHaveBeenCalled();
 
     visibility.mockReturnValue("visible");
     act(() => fireEvent(document, new Event("visibilitychange")));
-    expect(recordChatActive).toHaveBeenCalledExactlyOnceWith("user-1");
+    expect(recordChatQuery).not.toHaveBeenCalled();
 
     view.rerender(<ChatLayout>Another Chat page</ChatLayout>);
-    expect(recordChatActive).toHaveBeenCalledTimes(1);
     act(() => fireEvent.focus(window));
-    expect(recordChatActive).toHaveBeenCalledTimes(2);
 
     view.unmount();
+    render(<ChatLayout>Chat revisited</ChatLayout>);
     act(() => {
       fireEvent.focus(window);
       fireEvent(document, new Event("visibilitychange"));
     });
-    expect(recordChatActive).toHaveBeenCalledTimes(2);
+    expect(recordChatQuery).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("should wait for a known user and remove activity listeners when access is revoked", () => {
+  it("should not record a query or fetch telemetry when the signed-in account changes", () => {
     state.enableChatUI = true;
-    state.userId = null;
     const view = render(<ChatLayout>Chat content</ChatLayout>);
-    expect(recordChatActive).not.toHaveBeenCalled();
+    expect(recordChatQuery).not.toHaveBeenCalled();
 
     state.userId = "user-2";
     view.rerender(<ChatLayout>Chat content</ChatLayout>);
-    expect(recordChatActive).toHaveBeenCalledExactlyOnceWith("user-2");
+    expect(screen.getByTestId("chat-shell")).toBeInTheDocument();
 
+    state.userId = null;
     state.isAuthorized = false;
     view.rerender(<ChatLayout>Chat content</ChatLayout>);
     act(() => fireEvent.focus(window));
-    expect(recordChatActive).toHaveBeenCalledTimes(1);
+    expect(recordChatQuery).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

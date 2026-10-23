@@ -186,7 +186,7 @@ class TelemetryRuntime:
         if isinstance(stored.consent, TelemetryConsent):
             return StoredChoice(stored.consent, stored.destination)
         verbose_proxy_logger.warning("telemetry: ignoring stored groups, %s", stored.consent.message())
-        return StoredChoice(consent=OFF, destination=stored.destination)
+        return StoredChoice(destination=stored.destination)
 
     async def _instance_info(self) -> InstanceInfo:
         known: Final = self._instance
