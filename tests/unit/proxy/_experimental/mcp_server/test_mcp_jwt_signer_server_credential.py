@@ -19,7 +19,9 @@ from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 SIGNER_SINGLETON = "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.get_mcp_jwt_signer"
-SIGNER_INJECT = "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.inject_mcp_jwt_headers_for_upstream"
+SIGNER_INJECT = (
+    "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.inject_mcp_jwt_headers_for_upstream"
+)
 
 AUTHORIZATION_AUTH_TYPES = [MCPAuth.bearer_token, MCPAuth.token, MCPAuth.authorization, MCPAuth.basic]
 
@@ -158,8 +160,6 @@ async def test_tools_call_drops_hook_authorization_when_server_key_rides_authori
 
 @pytest.mark.asyncio
 async def test_tools_call_keeps_hook_authorization_when_server_key_rides_x_api_key():
-    headers = await _call_tool_and_capture_extra_headers(
-        _server(MCPAuth.api_key), {"Authorization": "Bearer hook-jwt"}
-    )
+    headers = await _call_tool_and_capture_extra_headers(_server(MCPAuth.api_key), {"Authorization": "Bearer hook-jwt"})
 
     assert headers.get("Authorization") == "Bearer hook-jwt"

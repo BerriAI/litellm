@@ -7806,7 +7806,8 @@ class MCPServerManager:
             for offset in range(0, len(unique_server_ids), batch_size)
         ]
         return [server for batch in batches for server in batch if server is not None]
-    
+
+
 _STATIC_CREDENTIAL_AUTH_TYPES: Final = frozenset(
     (MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.token, MCPAuth.authorization, MCPAuth.basic)
 )
@@ -7823,5 +7824,6 @@ def _server_credential_occupies_authorization(server: MCPServer) -> bool:
         return False
     default_slot: Final = "X-API-Key" if server.auth_type == MCPAuth.api_key else "Authorization"
     return (server.upstream_token_header or default_slot).lower() == "authorization"
+
 
 global_mcp_server_manager: Final[MCPServerManager] = MCPServerManager()
