@@ -183,21 +183,18 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         prompt: Final = transform_prompt(messages)
-        openai_params: dict = {}
-        extra_body: dict = dict(optional_params.get("extra_body") or {})
-        for k, v in optional_params.items():
-            if k == "extra_body":
-                continue
-            if k in OPENAI_TEXT_COMPLETION_PARAMS:
-                openai_params[k] = v
-            else:
-                extra_body[k] = v
-
-        result: dict = {
+        user_extra: Final = optional_params.get("extra_body")
+        passthrough_params: Final = {
+            k: v for k, v in optional_params.items() if k != "extra_body" and k not in OPENAI_TEXT_COMPLETION_PARAMS
+        }
+        extra_body: Final = {
+            **(dict(user_extra) if isinstance(user_extra, (dict, Mapping)) else {}),
+            **passthrough_params,
+        }
+        standard_params: Final = {k: v for k, v in optional_params.items() if k in OPENAI_TEXT_COMPLETION_PARAMS}
+        return {
             "model": model,
             "prompt": prompt,
-            **openai_params,
+            **standard_params,
+            **({"extra_body": extra_body} if extra_body else {}),
         }
-        if extra_body:
-            result["extra_body"] = extra_body
-        return result
