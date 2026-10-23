@@ -2651,7 +2651,6 @@ _DEEPSEEK_TOKENIZER_MODEL: Final = re.compile(
 _BUNDLED_TOKENIZER_LOAD_LOCKS: Final[Mapping[HuggingFaceTokenizerKind, threading.Lock]] = MappingProxyType(
     {"anthropic": threading.Lock(), "deepseek": threading.Lock()}
 )
-_DOWNLOADED_TOKENIZER_KINDS: Final[frozenset[HuggingFaceTokenizerKind]] = frozenset({"cohere", "llama2", "llama3"})
 
 
 def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
@@ -2685,7 +2684,7 @@ def _warn_huggingface_tokenizer_fallback(model: str, reason: str) -> None:
 
 def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | _HuggingFaceTokenizerLoadFailure | None:
     kind: Final = huggingface_tokenizer_kind(model)
-    if kind is None or (kind in _DOWNLOADED_TOKENIZER_KINDS and is_offline_mode()):
+    if kind is None or (kind not in _BUNDLED_TOKENIZER_LOAD_LOCKS and is_offline_mode()):
         return None
     backend: Final = _huggingface_tokenizer_backend()
     key: Final = _huggingface_tokenizer_failure_key(kind, backend)
