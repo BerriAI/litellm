@@ -51,6 +51,7 @@ from litellm.proxy.auth.authorization_dependencies import (
     LogTeamLookupDependency,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     ProviderBillingCredentialMissing,
@@ -3315,17 +3316,18 @@ class _SessionHeadWalk:
                 size=next_size,
             )
         if len(frozenset(row["sort_time"] for row in all_heads)) < len(all_heads):
-            page_rows: Final[Sequence[_SessionPageRow]] = await _query_raw(
-                self.prisma_client,
-                """SELECT session_key, api_key, last_activity
-                   FROM unnest($1::text[], $2::text[], $3::text[]) AS heads(session_key, api_key, last_activity)
-                   ORDER BY last_activity::timestamp DESC, session_key DESC, api_key DESC
-                   LIMIT $4""",
-                [row["session_key"] for row in all_heads],
-                [row["api_key"] for row in all_heads],
-                [row["last_activity"] for row in all_heads],
-                self.page_limit + 1,
-            )
+            async with db_span("find_many", "LiteLLM_SpendLogs"):
+                page_rows: Final[Sequence[_SessionPageRow]] = await _query_raw(
+                    self.prisma_client,
+                    """SELECT session_key, api_key, last_activity
+                       FROM unnest($1::text[], $2::text[], $3::text[]) AS heads(session_key, api_key, last_activity)
+                       ORDER BY last_activity::timestamp DESC, session_key DESC, api_key DESC
+                       LIMIT $4""",
+                    [row["session_key"] for row in all_heads],
+                    [row["api_key"] for row in all_heads],
+                    [row["last_activity"] for row in all_heads],
+                    self.page_limit + 1,
+                )
             return tuple(page_rows)
         in_page_order: Final = sorted(
             all_heads, key=lambda row: (row["sort_time"], row["session_key"], row["api_key"]), reverse=True

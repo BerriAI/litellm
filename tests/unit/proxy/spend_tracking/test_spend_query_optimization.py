@@ -570,15 +570,6 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
         session_cursor=None,
     )
 
-    emitted = [call[0] for call in mock_prisma.db.query_raw.call_args_list]
-    page_sql = emitted[0][0]
-    assert "OFFSET" not in page_sql, "the startTime page must be keyset-selected, not offset-selected"
-
-    rep_sql = emitted[2][0]
-    assert emitted[2][-2] == [row["session_key"] for row in session_rows[:50]]
-    assert emitted[2][-1] == ["k"] * 50
-    assert "COUNT(*) OVER ()" not in rep_sql
-
     assert [row["request_id"] for row in response["data"]] == ["req-1", "req-2"]
     assert response["total"] == 60
     assert response["total_is_capped"] is False

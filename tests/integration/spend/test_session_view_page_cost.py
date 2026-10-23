@@ -62,6 +62,7 @@ class _SeedRow:
     start_time: str
     api_key: str = "K"
     call_type: str = "acompletion"
+    end_time: str | None = None
 
 
 def _hand_placed_rows(marker: str) -> tuple[_SeedRow, ...]:
@@ -104,7 +105,15 @@ def _insert_rows(rows: tuple[_SeedRow, ...]) -> None:
             'request_id, call_type, api_key, session_id, "startTime", "endTime", model, metadata, messages, response'
             ") VALUES (%s, %s, %s, %s, %s, %s, 'm', jsonb_build_object('user_api_key_alias', %s::text), '{}', '{}')",
             [
-                (row.request_id, row.call_type, row.api_key, row.session_id, row.start_time, row.start_time, KEY_ALIAS)
+                (
+                    row.request_id,
+                    row.call_type,
+                    row.api_key,
+                    row.session_id,
+                    row.start_time,
+                    row.end_time or row.start_time,
+                    KEY_ALIAS,
+                )
                 for row in rows
             ],
         )
@@ -364,6 +373,8 @@ def _small_rows(marker: str) -> tuple[_SeedRow, ...]:
         _SeedRow(f"{marker}-mcp-old", f"{marker}-mcp", at(45)),
         _SeedRow(f"{marker}-mcp-llm", f"{marker}-mcp", at(80)),
         _SeedRow(f"{marker}-mcp-tool", f"{marker}-mcp", at(90), call_type="call_mcp_tool"),
+        _SeedRow(f"{marker}-mcp-agent-final", f"{marker}-mcp", at(50), call_type="asend_message", end_time=at(85)),
+        _SeedRow(f"{marker}-mcp-agent-newer", f"{marker}-mcp", at(70), call_type="asend_message", end_time=at(75)),
         _SeedRow(f"{marker}-shared", f"{marker}-other", at(95), api_key=f"{marker}-key-b"),
     )
 
@@ -406,7 +417,7 @@ def _tie_as_one(request_id: str) -> str:
 def _newest_first(marker: str) -> list[tuple[str, str]]:
     return [
         (f"{marker}-shared", f"{marker}-key-b"),
-        (f"{marker}-mcp-llm", "K"),
+        (f"{marker}-mcp-agent-final", "K"),
         (f"{marker}-tie", "K"),
         (f"{marker}-shared-b", f"{marker}-key-b"),
         (f"{marker}-shared-a", f"{marker}-key-a"),
@@ -419,7 +430,8 @@ def test_session_view_lists_each_session_once(gateway: Gateway, small_seed: str)
     page: Final = _small_page(gateway, sort_order="desc", page_size="50", page="1")
 
     assert _sessions(page) == _newest_first(small_seed), (
-        "each session once, represented by its newest non-MCP row: a row without a session_id newer than the rows "
+        "each session once, preferring the final agent outcome, then the newest non-MCP row: "
+        "a row without a session_id newer than the rows "
         "adopting its request_id joins them, two rows at one startTime are one session, one session_id under two "
         "api_keys is two sessions, and a row whose request_id equals another session's key stays in its own session"
     )

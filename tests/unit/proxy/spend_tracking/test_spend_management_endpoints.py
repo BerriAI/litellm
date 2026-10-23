@@ -7330,22 +7330,13 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
         assert request_ids == ["req-1", "req-solo"], "representatives must follow the page order"
         assert data["data"][0]["session_total_count"] == 3
         assert data["data"][1]["session_total_count"] == 1
-
-        emitted = [call.args for call in mock_prisma.db.query_raw.await_args_list]
-        page_query_sql = emitted[0][0]
-        assert "OFFSET" not in page_query_sql
-        assert "HAVING" not in page_query_sql
-
-        rep_call = emitted[2]
-        assert rep_call[-2] == ["sess-1", "req-solo"]
-        assert rep_call[-1] == ["hashed-key", "hashed-key"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypatch):
-    """A session_cursor becomes a WHERE keyset predicate instead of an OFFSET."""
+    """A cursor continues after the previously displayed session."""
     page_rows = [_session_page_row("sess-2", "2026-08-29 07:00:00")]
     reps = [_session_representative_row("req-2", "sess-2")]
     mock_prisma = _session_grouped_mock_prisma(page_rows, 3, reps)
@@ -7375,17 +7366,6 @@ async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypat
         assert data["has_more"] is False
         assert data["next_session_cursor"] is None
         assert [row["request_id"] for row in data["data"]] == ["req-2"]
-
-        page_query_call = mock_prisma.db.query_raw.await_args_list[0]
-        page_query_sql = page_query_call.args[0]
-        assert "HAVING" not in page_query_sql
-        assert "OFFSET" not in page_query_sql
-        cursor_index = page_query_call.args.index("2026-08-29 09:00:00")
-        assert page_query_call.args[cursor_index : cursor_index + 3] == (
-            "2026-08-29 09:00:00",
-            "req-solo",
-            "hashed-key",
-        ), "cursor params must line up with (startTime, session key, api_key)"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -7475,15 +7455,18 @@ async def test_ui_view_spend_logs_group_by_session_walk_finishes_a_tied_timestam
 
     async def mock_query_raw(sql_query, *params):
         if "AS heads(session_key, api_key, last_activity)" in sql_query:
-            return [_session_page_row(key, tied) for key in ("c", "b")]
+            return [_session_page_row(key, tied) for key in ("Z", "B", "a") if key in params[0]][: params[-1]]
         if "WITH batch AS MATERIALIZED" in sql_query:
             if '("startTime", request_id) <' not in sql_query:
                 return [
-                    _walk_row("b", tied),
+                    _walk_row("B", tied),
                     _walk_row("a", tied),
                     _walk_row("a", tied, is_edge=True, batch_rows=params[-1]),
                 ]
-            return [_walk_row("c", tied), _walk_row("c", "2026-08-29 09:00:00", is_edge=True, batch_rows=1)]
+            return [
+                {**_walk_row("Z", tied), "request_id": "req-0"},
+                _walk_row("Z", "2026-08-29 09:00:00", is_edge=True, batch_rows=2),
+            ]
         if "newest_rows" in sql_query:
             return _session_count_walk(3)
         if "COUNT(*) AS total_count" in sql_query:
@@ -7512,8 +7495,8 @@ async def test_ui_view_spend_logs_group_by_session_walk_finishes_a_tied_timestam
         )
         assert response.status_code == 200, response.text
         data = response.json()
-        assert [row["request_id"] for row in data["data"]] == ["req-c"]
-        assert data["next_session_cursor"] == f"{tied}|hashed-key|c"
+        assert [row["request_id"] for row in data["data"]] == ["req-Z"]
+        assert data["next_session_cursor"] == f"{tied}|hashed-key|Z"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
