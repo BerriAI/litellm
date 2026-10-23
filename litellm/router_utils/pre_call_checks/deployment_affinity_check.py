@@ -24,12 +24,14 @@ from litellm.caching.affinity_cache import (
     ROUTER_SESSION_PINS_TARGET,
     claim_affinity_pin,
     claim_affinity_pin_in_memory,
+    delete_affinity_pin_if_model_id,
     set_local_affinity_pin,
 )
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.common_utils import get_request_team_id
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
 
@@ -330,6 +332,38 @@ class DeploymentAffinityCheck(CustomLogger):
     def _set_local_pin(self, cache_key: str, value: object, ttl_seconds: int) -> None:
         set_local_affinity_pin(self.cache, cache_key, value, ttl_seconds)
 
+    async def _drop_stale_pin(self, cache_key: str, stale_model_id: str) -> None:
+        """Best-effort invalidation of a pin whose deployment is no longer healthy.
+
+        The compare-and-delete is atomic (one Lua script on Redis, one synchronous
+        tick in memory): a sibling worker that re-pinned the session after our read
+        keeps its fresh pin. The post-call hook re-claims the pin for the deployment
+        actually chosen through an atomic first-writer-wins SET, so concurrent
+        requests still converge on a single winner.
+        """
+        try:
+            await delete_affinity_pin_if_model_id(self.cache, cache_key=cache_key, model_id=stale_model_id)
+        except Exception as e:  # noqa: BLE001  # affinity is best-effort; never break routing
+            verbose_router_logger.debug(
+                "DeploymentAffinityCheck: failed to drop stale session pin. error=%s",
+                e,
+            )
+
+    @staticmethod
+    def _request_may_exclude_deployments(request_kwargs: dict) -> bool:
+        """True when router filtering may have removed healthy deployments for this request only.
+
+        Mirrors the request-scoped filters in Router.async_get_available_deployment
+        (team-based and web-search): those exclusions must not be mistaken for the
+        pinned deployment going unhealthy, or one special turn would permanently
+        migrate the session away from its warm deployment.
+        """
+        tools: Final = request_kwargs.get("tools") or []
+        for tool in tools:
+            if isinstance(tool, dict) and tool.get("type") in ("web_search", "web_search_preview"):
+                return True
+        return get_request_team_id(request_kwargs) is not None
+
     async def _claim_pin(self, cache_key: str, pin_value: DeploymentAffinityCacheValue, ttl_seconds: int) -> str | None:
         winner: Final = await claim_affinity_pin(self.cache, cache_key, pin_value, ttl_seconds)
         return self._pinned_model_id(winner)
@@ -439,6 +473,21 @@ class DeploymentAffinityCheck(CustomLogger):
                         )
                         return [session_deployment]
                     else:
+                        # The pinned deployment is not in the healthy set. When the
+                        # request itself subsets deployments (e.g. web-search or team
+                        # scoping), the pin must be preserved: the deployment is fine,
+                        # this turn just cannot use it, and deleting the pin would
+                        # permanently migrate the session away from its warm
+                        # deployment. Otherwise the pin is stale (e.g. the deployment
+                        # went on cooldown): drop it so the post-call hook re-pins to
+                        # the deployment actually chosen. Without this,
+                        # first-writer-wins keeps the dead row for the rest of the
+                        # TTL and every call re-shuffles (see #45145).
+                        if not self._request_may_exclude_deployments(request_kwargs):
+                            await self._drop_stale_pin(
+                                cache_key=session_cache_key,
+                                stale_model_id=session_model_id,
+                            )
                         verbose_router_logger.debug(
                             "DeploymentAffinityCheck: session-id pinned deployment=%s not found in healthy_deployments",
                             session_model_id,

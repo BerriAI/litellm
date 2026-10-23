@@ -771,3 +771,276 @@ def test_complexity_router_with_deployment_affinity_registers_affinity_callback(
         _cleanup_router_callbacks(enabled)
         _cleanup_router_callbacks(session_only)
         _cleanup_router_callbacks(disabled)
+
+
+@pytest.mark.asyncio
+async def test_stale_session_pin_is_dropped_and_reclaimed():
+    """A session pin naming a deployment that went on cooldown is dropped and re-claimed.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/45145.
+    """
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+
+    deployments: Final = (
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-a"},
+            "model_info": {"id": "dep-a"},
+        },
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-b"},
+            "model_info": {"id": "dep-b"},
+        },
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-c"},
+            "model_info": {"id": "dep-c"},
+        },
+    )
+    healthy_without_dep_a: Final = [deployments[1], deployments[2]]
+    session_kwargs: Final = {"metadata": {"session_id": "s1"}}
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-a"})
+
+    filtered_before_repin: Final = await callback.async_filter_deployments(
+        model="group",
+        healthy_deployments=healthy_without_dep_a,
+        messages=[],
+        request_kwargs=session_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered_before_repin] == ["dep-b", "dep-c"], (
+        "with dep-a on cooldown the filter must fall through instead of narrowing to the stale pin"
+    )
+    assert await cache.async_get_cache(session_cache_key) is None, (
+        "the stale pin must be dropped so the post-call hook can claim a fresh one"
+    )
+
+    await callback.async_pre_call_deployment_hook(
+        kwargs={
+            "model_info": {"id": "dep-b"},
+            "metadata": {"session_id": "s1", "deployment_model_name": "group"},
+        },
+        call_type=None,
+    )
+    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-b"}, (
+        "the hook must re-pin the session to the deployment actually chosen"
+    )
+
+    filtered_after_repin: Final = await callback.async_filter_deployments(
+        model="group",
+        healthy_deployments=healthy_without_dep_a,
+        messages=[],
+        request_kwargs=session_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered_after_repin] == ["dep-b"], (
+        "later calls must stick to the re-pinned deployment instead of re-shuffling"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_pin_drop_backs_off_when_sibling_worker_already_repinned():
+    """Dropping a stale pin must not erase a fresh pin written by a sibling worker."""
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-b"})
+    await callback._drop_stale_pin(cache_key=session_cache_key, stale_model_id="dep-a")
+    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-b"}, (
+        "the drop must compare the stored value first and leave a re-pinned session alone"
+    )
+
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-a"})
+    await callback._drop_stale_pin(cache_key=session_cache_key, stale_model_id="dep-a")
+    assert await cache.async_get_cache(session_cache_key) is None, (
+        "the drop must still remove the pin when it names the stale deployment"
+    )
+
+
+@pytest.mark.asyncio
+async def test_request_scoped_exclusion_preserves_session_pin():
+    """A web-search turn that excludes the pinned deployment must not migrate the session."""
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    deployments: Final = [
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-a"},
+            "model_info": {"id": "dep-a"},
+        },
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-b"},
+            "model_info": {"id": "dep-b"},
+        },
+    ]
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-a"})
+
+    web_search_kwargs: Final = {
+        "metadata": {"session_id": "s1"},
+        "tools": [{"type": "web_search"}],
+    }
+    filtered: Final = await callback.async_filter_deployments(
+        model="group",
+        healthy_deployments=[deployments[1]],
+        messages=[],
+        request_kwargs=web_search_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered] == ["dep-b"], (
+        "the web-search turn still routes to a supporting deployment"
+    )
+    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-a"}, (
+        "a request-only exclusion must not drop the pin, so ordinary turns keep the warm deployment"
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_scoped_request_preserves_session_pin():
+    """A team-scoped turn that excludes the pinned deployment must not migrate the session."""
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    deployments: Final = [
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-a"},
+            "model_info": {"id": "dep-a"},
+        },
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-b"},
+            "model_info": {"id": "dep-b"},
+        },
+    ]
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-a"})
+
+    team_kwargs: Final = {"metadata": {"session_id": "s1", "user_api_key_team_id": "team-1"}}
+    filtered: Final = await callback.async_filter_deployments(
+        model="group",
+        healthy_deployments=[deployments[1]],
+        messages=[],
+        request_kwargs=team_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered] == ["dep-b"], (
+        "the team-scoped turn still routes to a deployment on its team"
+    )
+    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-a"}, (
+        "a request-only exclusion must not drop the pin, so ordinary turns keep the warm deployment"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_pin_drop_never_breaks_routing_on_cache_failure():
+    """A cache failure during stale-pin cleanup must not break the request."""
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-a"})
+
+    with patch.object(InMemoryCache, "delete_cache", side_effect=RuntimeError("cache down")):
+        await callback._drop_stale_pin(cache_key=session_cache_key, stale_model_id="dep-a")
+
+    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-a"}, (
+        "a failed cleanup must leave the pin untouched and never raise"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_pin_delete_is_atomic_compare_and_delete():
+    """The stale-pin delete must be one atomic step, not read-then-delete.
+
+    Regression test for review feedback on #45198: a sibling worker that re-pins
+    the session after our filter observed the stale pin must keep its fresh pin.
+    """
+    redis_store: Final = {}
+
+    async def fake_atomic_script(keys, args):
+        key: Final = keys[0]
+        expected: Final = args[0]
+        raw: Final = redis_store.get(key)
+        stored_id: Final = json.loads(raw)["model_id"] if raw is not None else None
+        if stored_id == expected:
+            del redis_store[key]
+            return 1
+        return 0
+
+    registered: Final = {}
+
+    def capture_script(source):
+        registered["source"] = source
+        return fake_atomic_script
+
+    fake_redis: Final = MagicMock()
+    fake_redis.async_register_script = MagicMock(side_effect=capture_script)
+    cache: Final = DualCache()
+    cache.redis_cache = fake_redis
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+
+    redis_store[session_cache_key] = json.dumps({"model_id": "dep-a"})
+    # Sibling worker re-pins after our filter observed dep-a but before the delete runs.
+    redis_store[session_cache_key] = json.dumps({"model_id": "dep-b"})
+
+    with (
+        patch.object(DualCache, "async_get_cache", new=AsyncMock()) as get_spy,
+        patch.object(DualCache, "async_delete_cache", new=AsyncMock()) as delete_spy,
+    ):
+        await callback._drop_stale_pin(cache_key=session_cache_key, stale_model_id="dep-a")
+
+    assert json.loads(redis_store[session_cache_key]) == {"model_id": "dep-b"}, (
+        "the atomic compare-and-delete must leave the sibling's fresh pin untouched"
+    )
+    get_spy.assert_not_called()
+    delete_spy.assert_not_called()
+    script_source: Final = registered["source"]
+    predicate: Final = "if tostring(stored_id) == ARGV[1] then"
+    assert predicate in script_source, (
+        "the Lua must compare the stored model id before deleting: the fake script "
+        "above hardcodes that contract, so only this assertion catches a Lua that "
+        "deletes unconditionally and would erase a sibling's fresh pin"
+    )
+    assert script_source.count("redis.call('DEL'") == 1, (
+        "the script must contain exactly one DEL, guarded by the predicate"
+    )
+    guarded_block: Final = script_source.split(predicate, 1)[1].split("end", 1)[0]
+    assert "redis.call('DEL', KEYS[1])" in guarded_block, "the DEL must sit inside the predicate's conditional block"
