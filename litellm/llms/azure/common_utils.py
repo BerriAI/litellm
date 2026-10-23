@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from types import MappingProxyType
@@ -25,6 +26,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
+_LAST_OPENAI_PATH_SEGMENT: Final = re.compile(r"^(.*/openai)(?=/|$)")
 
 
 class _AzureAdTokenJson(TypedDict, total=False):
@@ -799,6 +801,10 @@ class BaseAzureLLM(BaseOpenAILLM):
         return cls._base_validate_azure_environment(headers, litellm_params)
 
     @staticmethod
+    def resolve_azure_api_base(api_base: str | None) -> str | None:
+        return api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+
+    @staticmethod
     def _get_base_azure_url(
         api_base: str | None,
         litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
@@ -815,7 +821,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             default_api_version: The default API version to use if no api_version is provided. If 'latest', it will use `openai/v1/...` route.
         """
 
-        api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+        api_base = BaseAzureLLM.resolve_azure_api_base(api_base)
         if api_base is None:
             raise ValueError(
                 f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
@@ -843,7 +849,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             # ensure the request go to /openai/v1 and not just /openai
             if "/openai/v1" not in new_url:
                 parsed_url: Final = httpx.URL(new_url)
-                new_url = str(parsed_url.copy_with(path=parsed_url.path.replace("/openai", "/openai/v1")))
+                new_url = str(parsed_url.copy_with(path=_LAST_OPENAI_PATH_SEGMENT.sub(r"\1/v1", parsed_url.path, 1)))
 
         # Use the new query_params dictionary
         final_url: Final = httpx.URL(new_url).copy_with(params=query_params)

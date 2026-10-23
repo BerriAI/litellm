@@ -763,7 +763,7 @@ def is_openai_finetune_model(key: str) -> bool:
 
 
 def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
-    for key, value in model_cost_map.items():
+    for key, value in tuple(model_cost_map.items()):
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
         elif value.get("litellm_provider") == "text-completion-openai":
@@ -1177,7 +1177,9 @@ def _build_models_by_provider() -> dict:
         "edenai": edenai_models,
         "datarobot": datarobot_models,
         "vertex_ai": vertex_chat_models
+        | vertex_code_chat_models
         | vertex_text_models
+        | vertex_code_text_models
         | vertex_anthropic_models
         | vertex_vision_models
         | vertex_language_models
@@ -1185,7 +1187,7 @@ def _build_models_by_provider() -> dict:
         | vertex_minimax_models
         | vertex_moonshot_models
         | vertex_zai_models,
-        "ai21": ai21_models,
+        "ai21": ai21_models | ai21_chat_models,
         "bedrock": bedrock_models | bedrock_converse_models,
         "petals": petals_models,
         "ollama": ollama_models,
