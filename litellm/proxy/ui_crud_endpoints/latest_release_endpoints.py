@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -90,7 +91,7 @@ def _default_fetch_lock() -> asyncio.Lock:
 
 
 def _default_release_check_enabled() -> bool:
-    return os.getenv("LITELLM_DISABLE_LATEST_RELEASE_CHECK", "").strip().lower() != "true"
+    return not is_offline_mode() and os.getenv("LITELLM_DISABLE_LATEST_RELEASE_CHECK", "").strip().lower() != "true"
 
 
 def _bucket_for(line: str) -> _Bucket | None:
