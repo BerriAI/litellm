@@ -1720,6 +1720,41 @@ def test_azure_v1_api_client_targets_openai_v1_once_whatever_the_api_base_ends_i
     assert str(client.base_url) == "https://test.openai.azure.com/openai/v1/"
 
 
+@pytest.mark.parametrize(
+    ("api_base", "litellm_params", "expected_url"),
+    [
+        (api_base, {"api_version": "v1"}, "https://test.openai.azure.com/openai/v1/responses?api-version=v1")
+        for api_base in (
+            "https://test.openai.azure.com",
+            "https://test.openai.azure.com/",
+            "https://test.openai.azure.com/openai/v1",
+            "https://test.openai.azure.com/openai/v1/",
+            "https://test.openai.azure.com/openai/v1/responses",
+        )
+    ]
+    + [
+        (
+            "https://test.openai.azure.com/openai/v1?api-version=preview",
+            {},
+            "https://test.openai.azure.com/openai/v1/responses?api-version=preview",
+        ),
+        (
+            "https://gateway.example.com/foundry/openai/openai/v1",
+            {"api_version": "v1"},
+            "https://gateway.example.com/foundry/openai/openai/v1/responses?api-version=v1",
+        ),
+    ],
+)
+def test_azure_v1_responses_url_targets_openai_v1_once_whatever_the_api_base_ends_in(
+    api_base: str, litellm_params: dict[str, str], expected_url: str
+):
+    url: Final = BaseAzureLLM.get_base_azure_url(
+        api_base=api_base, litellm_params=litellm_params, route="/openai/responses"
+    )
+
+    assert url == expected_url
+
+
 @pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
 def test_azure_v1_api_with_azure_ad_token_provider(api_version):
     """
