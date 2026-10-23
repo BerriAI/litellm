@@ -258,3 +258,65 @@ def test_translate_responses_chunk_passthrough_chat_completion_chunk():
     assert result.choices[0].delta.content == "Hi! How can I help?"
     assert result.choices[0].finish_reason is None
 
+
+def test_multi_turn_responses_input_preserves_assistant_turns_for_models_and_validated_params():
+    from openai.types.responses import ResponseInputParam, ResponseOutputMessage, ResponseOutputText
+    from pydantic import TypeAdapter
+
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+    from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+    validated_input = TypeAdapter(ResponseInputParam).validate_python(
+        [
+            {"role": "user", "content": [{"type": "input_text", "text": "Turn 1 user"}]},
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Turn 1 assistant", "annotations": []}],
+            },
+            {"role": "user", "content": [{"type": "input_text", "text": "Turn 2 user"}]},
+        ]
+    )
+    messages_from_validated = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=validated_input,
+        responses_api_request={},
+    )
+    assert messages_from_validated == [
+        {"role": "user", "content": [{"type": "text", "text": "Turn 1 user"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Turn 1 assistant"}]},
+        {"role": "user", "content": [{"type": "text", "text": "Turn 2 user"}]},
+    ]
+
+    messages_from_sdk_items = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=[
+            {"role": "user", "content": "Turn 1 user"},
+            GenericResponseOutputItem(
+                type="message",
+                id="msg_1",
+                status="completed",
+                role="assistant",
+                content=[OutputText(type="output_text", text="Turn 1 assistant", annotations=[])],
+            ),
+            ResponseOutputMessage(
+                id="msg_2",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[ResponseOutputText(type="output_text", text="Turn 1b assistant", annotations=[])],
+            ),
+            {"role": "user", "content": "Turn 2 user"},
+        ],
+        responses_api_request={},
+    )
+    assert messages_from_sdk_items == [
+        {"role": "user", "content": "Turn 1 user"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Turn 1 assistant"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Turn 1b assistant"}]},
+        {"role": "user", "content": "Turn 2 user"},
+    ]
+
+

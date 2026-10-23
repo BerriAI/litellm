@@ -747,6 +747,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         ]
         return tools if all(new is old for new, old in zip(sanitized, tools, strict=True)) else sanitized
 
+    @staticmethod
+    def _materialize_input_value(value: object) -> object:
+        return _as_input_param(value)
+
     def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         """
         Ensure all input fields if pydantic are converted to dict
@@ -756,7 +760,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """
         if isinstance(input, list):
             validated_input: Final = []
-            for item in input:
+            for raw_item in input:
+                item = self._materialize_input_value(raw_item)
                 # if it's pydantic, convert to dict
                 if isinstance(item, BaseModel):
                     validated_input.append(item.model_dump(exclude_none=True))

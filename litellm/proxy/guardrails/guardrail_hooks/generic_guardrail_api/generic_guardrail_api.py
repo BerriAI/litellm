@@ -32,6 +32,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
+    structured_messages_from_response,
     GuardrailToolParam,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -590,11 +591,20 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
 
             headers: Final = self._build_request_headers()
+            request_payload: Final = self._request_body(guardrail_request, structured_messages)
+            shown_from_payload: Final = structured_messages_from_response(
+                request_payload.get("structured_messages")
+            )
+            shown_messages: Final = (
+                shown_from_payload
+                if shown_from_payload is not None
+                else guardrail_request.structured_messages
+            )
 
             # Make the API request
             # Use mode="json" to ensure all iterables are converted to lists
             response: Final = await self._post_check(
-                self._request_body(guardrail_request, structured_messages),
+                request_payload,
                 headers,
                 self.num_retries,
             )
@@ -623,7 +633,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 images=images,
                 tools=tools,
                 structured_messages=structured_messages,
-                shown_messages=guardrail_request.structured_messages,
+                shown_messages=shown_messages,
                 guardrail_response=guardrail_response,
             )
 

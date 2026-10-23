@@ -2621,3 +2621,57 @@ class TestNumRetries:
 
         assert sent.qsize() == num_retries + 1
         assert result == {"texts": ["hi"]}
+
+    @pytest.mark.asyncio
+    async def test_echoed_multi_turn_block_content_assistant_row_is_recognized_as_shown(self) -> None:
+        from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
+        from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+        assistant_item: Final = GenericResponseOutputItem(
+            type="message",
+            id="msg_1",
+            status="completed",
+            role="assistant",
+            content=[OutputText(type="output_text", text="Turn 1 assistant", annotations=[])],
+        )
+        echoed_structured_messages: Final = [
+            {"role": "user", "content": "Turn 1 user"},
+            {"role": "assistant", "content": [{"type": "text", "text": "Turn 1 assistant"}]},
+            {"role": "user", "content": "Turn 2 user"},
+        ]
+        transport, sent = _scripted(
+            partial(
+                httpx.Response,
+                200,
+                json={
+                    "action": "GUARDRAIL_INTERVENED",
+                    "texts": ["Turn 1 user", "Turn 1 assistant", "Turn 2 user redacted"],
+                    "structured_messages": echoed_structured_messages,
+                },
+            )
+        )
+        guardrail: Final = _guardrail_on(transport, num_retries=0)
+        handler: Final = OpenAIResponsesHandler()
+        data: Final[dict[str, object]] = {
+            "model": "gpt-4o",
+            "input": [
+                {"role": "user", "content": "Turn 1 user"},
+                assistant_item,
+                {"role": "user", "content": "Turn 2 user"},
+            ],
+        }
+
+        processed: Final = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+        assert sent.qsize() == 1
+        assert processed["input"] == [
+            {"role": "user", "content": "Turn 1 user"},
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Turn 1 assistant", "annotations": []}],
+            },
+            {"role": "user", "content": "Turn 2 user redacted"},
+        ]
+

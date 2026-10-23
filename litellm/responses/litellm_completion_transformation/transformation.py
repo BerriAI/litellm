@@ -34,7 +34,7 @@ from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -473,15 +473,75 @@ def without_item_cache_control(input: str | ResponseInputParam) -> str | Respons
     )
 
 
+def _expand_param_node(
+    node: object,
+) -> tuple[str, object, object, tuple[object, ...]] | None:
+    if isinstance(node, BaseModel):
+        return ("forward", node, 1, (node.model_dump(exclude_none=True),))
+    if isinstance(node, dict):
+        keys: Final = tuple(node.keys())
+        return ("dict", node, keys, tuple(node[k] for k in keys))
+    if isinstance(node, (list, tuple)):
+        kind: Final = "list" if isinstance(node, list) else "tuple"
+        return (kind, node, len(node), tuple(node))
+    if isinstance(node, Iterable) and not isinstance(node, (str, bytes, bytearray, Mapping)):
+        items: Final = tuple(node)
+        return ("iter", items, len(items), items)
+    return None
+
+
+def _rebuild_param_container(
+    op: str,
+    node: object,
+    extra: object,
+    children: Sequence[object],
+) -> object:
+    if op == "forward":
+        return children[0]
+    if op == "dict" and isinstance(node, dict) and isinstance(extra, tuple):
+        rebuilt: Final = dict(zip(extra, children, strict=True))
+        return node if all(rebuilt[k] is node[k] for k in extra) else rebuilt
+    if op == "list" and isinstance(node, list):
+        return node if all(new is old for new, old in zip(children, node, strict=True)) else list(children)
+    if op == "tuple" and isinstance(node, tuple):
+        return node if all(new is old for new, old in zip(children, node, strict=True)) else tuple(children)
+    return list(children)
+
+
 def _as_input_param(item: object) -> object:
-    return item.model_dump(exclude_none=True) if isinstance(item, ResponseCompactionItem) else item
+    work: Final[list[tuple[str, object, object]]] = [  # mutable-ok: iterative post-order stack, recursion is banned
+        ("visit", item, None)
+    ]
+    out: Final[list[object]] = []  # mutable-ok: post-order value stack
+    while work:
+        op, current, extra = work.pop()
+        if op == "visit":
+            expanded = _expand_param_node(current)
+            if expanded is None:
+                out.append(current)
+            else:
+                kind, target, meta, children = expanded
+                work.append((kind, target, meta))
+                for child in reversed(children):
+                    work.append(("visit", child, None))
+        else:
+            arity = len(extra) if isinstance(extra, tuple) else extra
+            assert isinstance(arity, int)
+            built_children = out[-arity:] if arity else []
+            if arity:
+                del out[-arity:]
+            out.append(_rebuild_param_container(op, current, extra, built_children))
+    return out[0]
 
 
 def with_compaction_items_as_params(input: str | ResponseInputParam) -> str | ResponseInputParam:
     if not isinstance(input, list):
         return input
-    return cast(  # cast-ok: the same input items, a compaction item replayed from SDK output dumped to its param dict
-        ResponseInputParam, [_as_input_param(item) for item in input]
+    materialized: Final = [_as_input_param(item) for item in input]
+    if all(new is old for new, old in zip(materialized, input, strict=True)):
+        return input
+    return cast(  # cast-ok: the same input items, SDK output models and single-pass iterables dumped to param dicts
+        ResponseInputParam, materialized
     )
 
 
@@ -1339,7 +1399,10 @@ class LiteLLMCompletionResponsesConfig:
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
             existing_tool_call_ids: Final[set[str]] = set()
-            for _input in input:
+            for _raw_input in input:
+                _input = cast(  # cast-ok: _as_input_param converts SDK output models and iterators to param dicts
+                    Mapping[str, object], _as_input_param(_raw_input)
+                )
                 chat_completion_messages = (
                     LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                         input_item=_input,
@@ -2061,35 +2124,38 @@ class LiteLLMCompletionResponsesConfig:
         - ResponseReasoningItemParam
         - ItemReference
         """
-        if input_item.get("type") == "web_search_call":
-            search: Final = ResponseFunctionWebSearch.model_validate(input_item)
+        normalized_item: Final = cast(  # cast-ok: _as_input_param converts SDK output models to param dicts
+            Mapping[str, object], _as_input_param(input_item)
+        )
+        if normalized_item.get("type") == "web_search_call":
+            search: Final = ResponseFunctionWebSearch.model_validate(normalized_item)
             return [
                 GenericChatCompletionMessage(
                     role="assistant",
                     content="Hosted web search: " + search.model_dump_json(exclude_none=True),
                 )
             ]
-        if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(input_item):
+        if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(normalized_item):
             # handle executed tool call results
             return (
                 LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
-                    tool_call_output=input_item
+                    tool_call_output=normalized_item
                 )
             )
-        elif LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item):
+        elif LiteLLMCompletionResponsesConfig._is_input_item_function_call(normalized_item):
             # handle function call input items
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=cast(  # cast-ok: callee coerces every field it reads with `or ""` / str()
-                    Mapping[str, str], input_item
+                    Mapping[str, str], normalized_item
                 )
             )
-        elif input_item.get("type") == "compaction":
+        elif normalized_item.get("type") == "compaction":
             return list(
                 LiteLLMCompletionResponsesConfig._transform_compaction_item_to_chat_completion_messages(
-                    input_item, native_compaction
+                    normalized_item, native_compaction
                 )
             )
-        elif input_item.get("type") == "reasoning":
+        elif normalized_item.get("type") == "reasoning":
             # A ResponseReasoningItemParam carries the prior-turn chain-of-thought.
             # Chat-completions providers (DeepSeek V4, Kimi K2.6, ...) expect this
             # to be replayed as `reasoning_content` on an assistant message, not as
@@ -2103,26 +2169,26 @@ class LiteLLMCompletionResponsesConfig:
                 # would replay; an empty or block-only `content` falls back to
                 # the summary text, which is what that branch replays instead.
                 inspectable: Final[object] = (
-                    input_item.get("content")
-                    if LiteLLMCompletionResponsesConfig._reasoning_text_from_content(input_item) is not None
-                    else LiteLLMCompletionResponsesConfig._reasoning_text_from_summary(input_item)
-                    or input_item.get("content")
+                    normalized_item.get("content")
+                    if LiteLLMCompletionResponsesConfig._reasoning_text_from_content(normalized_item) is not None
+                    else LiteLLMCompletionResponsesConfig._reasoning_text_from_summary(normalized_item)
+                    or normalized_item.get("content")
                 )
                 if inspectable is None:
                     return []
                 return [
                     GenericChatCompletionMessage(
-                        role=_input_item_role(input_item),
+                        role=_input_item_role(normalized_item),
                         content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
                             inspectable
                         ),
                     )
                 ]
             reasoning_text = LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(  # rebind-ok: extraction result
-                input_item
+                normalized_item
             )
             thinking_blocks = LiteLLMCompletionResponsesConfig._decode_thinking_blocks_from_input_item(  # rebind-ok: extraction result
-                input_item
+                normalized_item
             )
             if not reasoning_text and not thinking_blocks:
                 return []
@@ -2133,12 +2199,12 @@ class LiteLLMCompletionResponsesConfig:
                 )
             ]
         else:
-            content: Final[object] = input_item.get("content")
+            content: Final[object] = normalized_item.get("content")
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
-            return [LiteLLMCompletionResponsesConfig._transform_responses_api_message_item(input_item, content)]
+            return [LiteLLMCompletionResponsesConfig._transform_responses_api_message_item(normalized_item, content)]
 
     @staticmethod
     def _transform_compaction_item_to_chat_completion_messages(
@@ -2535,9 +2601,10 @@ class LiteLLMCompletionResponsesConfig:
             return ""
         elif isinstance(content, str):
             return content
-        elif isinstance(content, list):
+        elif isinstance(content, Iterable) and not isinstance(content, (bytes, bytearray, Mapping)):
             content_list: Final[list[str | dict[str, object]]] = []
-            for item in content:
+            for raw_item in content:
+                item = raw_item.model_dump(exclude_none=True) if isinstance(raw_item, BaseModel) else raw_item
                 if isinstance(item, str):
                     content_list.append(item)
                 elif isinstance(item, dict):
@@ -3523,7 +3590,11 @@ class LiteLLMCompletionResponsesConfig:
         messages: Final[list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall]] = []
         output_items: Final = responses_api_output.output
         for _output_item in output_items:
-            output_item: dict = dict(_output_item)
+            output_item: dict = (
+                _output_item.model_dump(exclude_none=True)
+                if isinstance(_output_item, BaseModel)
+                else dict(_output_item)
+            )
             if output_item.get("type") == "function_call":
                 # handle function call output
                 messages.append(
