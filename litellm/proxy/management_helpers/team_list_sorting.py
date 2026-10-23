@@ -1,4 +1,6 @@
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
@@ -20,9 +22,14 @@ COMPUTED_TEAM_SORTS: Final = MappingProxyType(
 _WHERE: Final = TypeAdapter(dict[str, JsonValue])
 
 
-def _field_sql(field: str, value: JsonValue, index: int) -> tuple[str, tuple[object, ...]]:
+@dataclass(frozen=True, slots=True)
+class UnsupportedTeamFilter:
+    field: str
+
+
+def _field_sql(field: str, value: JsonValue, index: int) -> tuple[str, tuple[object, ...]] | UnsupportedTeamFilter:
     if field not in ("team_id", "team_alias", "organization_id"):
-        raise ValueError(f"Unsupported team filter: {field}")
+        return UnsupportedTeamFilter(field)
     column: Final = f't."{field}"'
     match value:
         case str(text):
@@ -34,28 +41,40 @@ def _field_sql(field: str, value: JsonValue, index: int) -> tuple[str, tuple[obj
         case {"startsWith": str(text)}:
             return f"{column} LIKE ${index}", (f"{text}%",)
         case _:
-            raise ValueError(f"Unsupported team filter operation: {field}")
+            return UnsupportedTeamFilter(field)
 
 
-def _join_sql(
-    clauses: tuple[tuple[str, JsonValue], ...],
-    index: int,
-    joiner: str,
-) -> tuple[str, tuple[object, ...]]:
-    if not clauses:
-        return ("FALSE" if joiner == "OR" else "TRUE"), ()
-    field, value = clauses[0]
-    if field in ("AND", "OR") and isinstance(value, list):
-        nested: Final = tuple(("AND", item) for item in value)
-        fragment, params = _join_sql(nested, index, field)
-    elif field == "AND" and isinstance(value, dict):
-        fragment, params = _join_sql(tuple(value.items()), index, "AND")
-    else:
-        fragment, params = _field_sql(field, value, index)
-    if len(clauses) == 1:
-        return f"({fragment})", params
-    suffix, tail = _join_sql(clauses[1:], index + len(params), joiner)
-    return f"({fragment}) {joiner} {suffix}", (*params, *tail)
+def _group_tokens(
+    field: str, value: Sequence[JsonValue] | Mapping[str, JsonValue]
+) -> tuple[str | tuple[str, JsonValue], ...]:
+    children: Final = tuple(value.items()) if isinstance(value, Mapping) else tuple(("AND", item) for item in value)
+    if not children:
+        return ("FALSE" if field == "OR" else "TRUE",)
+    return (
+        "(",
+        *chain.from_iterable(((f" {field} " if index else ""), child) for index, child in enumerate(children)),
+        ")",
+    )
+
+
+def _where_sql(where: Mapping[str, JsonValue]) -> tuple[str, tuple[object, ...]] | UnsupportedTeamFilter:
+    pending: Final[list[str | tuple[str, JsonValue]]] = [("AND", dict(where))]  # mutable-ok: iterative tree traversal
+    fragments: Final[list[str]] = []  # mutable-ok: append-only SQL output avoids quadratic tuple copying
+    params: Final[list[object]] = []  # mutable-ok: append-only bindings follow traversal order
+    while pending:
+        match pending.pop():
+            case str(fragment):
+                fragments.append(fragment)
+            case (field, value) if field in ("AND", "OR") and isinstance(value, (list, dict)):
+                pending.extend(reversed(_group_tokens(field, value)))
+            case (field, value):
+                match _field_sql(field, value, len(params) + 1):
+                    case UnsupportedTeamFilter() as failure:
+                        return failure
+                    case (fragment, values):
+                        fragments.append(fragment)
+                        params.extend(values)
+    return "".join(fragments), tuple(params)
 
 
 class _TeamId(BaseModel):
@@ -74,8 +93,11 @@ async def sorted_team_ids(
     descending: bool,
     skip: int,
     take: int,
-) -> Sequence[str]:
-    predicate, params = _join_sql(tuple(_WHERE.validate_python(where).items()), 1, "AND")
+) -> Sequence[str] | UnsupportedTeamFilter:
+    result: Final = _where_sql(_WHERE.validate_python(where))
+    if isinstance(result, UnsupportedTeamFilter):
+        return result
+    predicate, params = result
     expression: Final = COMPUTED_TEAM_SORTS[sort_by]
     direction: Final = "DESC" if descending else "ASC"
     sql: Final = (

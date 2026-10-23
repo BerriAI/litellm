@@ -6109,7 +6109,11 @@ async def list_team_v2(
             "total_pages": 0,
         }
 
-    from litellm.proxy.management_helpers.team_list_sorting import COMPUTED_TEAM_SORTS, sorted_team_ids
+    from litellm.proxy.management_helpers.team_list_sorting import (
+        COMPUTED_TEAM_SORTS,
+        UnsupportedTeamFilter,
+        sorted_team_ids,
+    )
 
     valid_sort_columns: Final = (
         "team_id",
@@ -6149,6 +6153,9 @@ async def list_team_v2(
         else ()
     )
 
+    if isinstance(sorted_ids, UnsupportedTeamFilter):
+        raise HTTPException(status_code=500, detail="Unsupported team sorting filter")
+
     # Get teams with pagination
     if use_deleted_table:
         # LiteLLM_DeletedTeamTable has no litellm_model_table relation, unlike below
@@ -6162,6 +6169,7 @@ async def list_team_v2(
         total_count = await _deleted_team_db(prisma_client).count(where=where_conditions)
     else:
         teams = await _team_db(prisma_client).find_many(
+            # bounded-ok: sorted_ids comes from LIMIT page_size, capped at 100 by the route
             where={"AND": (where_conditions, {"team_id": {"in": sorted_ids}})} if computed_sort else where_conditions,
             skip=0 if computed_sort else skip,
             take=page_size,

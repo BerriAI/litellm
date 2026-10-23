@@ -138,7 +138,7 @@ def test_team_list_sorts_organization_names_and_missing_values(
             for page in (1, 2)
         )
         assert all(page.status_code == 200 for page in pages), [page.text for page in pages]
-        assert tuple(row["team_id"] for page in pages for row in page.json()["teams"]) == (*ordered, teams[-1])
+        assert tuple(row["team_id"] for row in chain.from_iterable(page.json()["teams"] for page in pages)) == (*ordered, teams[-1])
     finally:
         for team_id in teams:
             write_rows('UPDATE "LiteLLM_TeamTable" SET organization_id = NULL WHERE team_id = %s', (team_id,))
