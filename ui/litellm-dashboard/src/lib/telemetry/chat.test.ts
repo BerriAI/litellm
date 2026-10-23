@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ capture: vi.fn(), fetch: vi.fn() }));
-vi.mock("@/lib/http/chatPosthog", () => ({ captureChatRequest: mocks.capture }));
+vi.mock("@/lib/http/chatTelemetry", () => ({ captureChatRequest: mocks.capture }));
 
 let chat: typeof import("./chat");
 
@@ -27,7 +27,7 @@ describe("Chat request metrics", () => {
     expect(mocks.capture).not.toHaveBeenCalled();
   });
 
-  it("should emit once per request with a stable opaque user ID and no backend settings request", async () => {
+  it("should emit by default with a stable user ID, fresh request IDs, and no backend settings request", async () => {
     await chat.recordChatQuery("alice@example.com");
     await chat.recordChatQuery("alice@example.com");
 
@@ -35,6 +35,12 @@ describe("Chat request metrics", () => {
     const ids = mocks.capture.mock.calls.map(([id]) => id);
     expect(ids[0]).toMatch(/^[\da-f]{8}-[\da-f]{4}-5[\da-f]{3}-[\da-f]{4}-[\da-f]{12}$/);
     expect(ids[0]).toBe(ids[1]);
+    const requestIds = mocks.capture.mock.calls.map(([, requestId]) => requestId);
+    for (const requestId of requestIds) {
+      expect(requestId).toMatch(/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[\da-f]{4}-[\da-f]{12}$/);
+    }
+    expect(new Set(requestIds).size).toBe(2);
+    expect(mocks.capture.mock.calls.every((args) => args.length === 2)).toBe(true);
     expect(JSON.stringify(mocks.capture.mock.calls)).not.toContain("alice@example.com");
     expect(JSON.stringify(mocks.capture.mock.calls)).not.toContain("gateway.example.com");
     expect(mocks.fetch).not.toHaveBeenCalled();
@@ -58,17 +64,15 @@ describe("Chat request metrics", () => {
     expect(new Set(ids).size).toBe(3);
   });
 
-  it("should record requests on each UTC day with the same user ID", async () => {
+  it("should preserve user identity across days while leaving event timestamps to the collector", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-23T23:59:00Z"));
     await chat.recordChatQuery("alice");
     vi.setSystemTime(new Date("2026-10-24T00:01:00Z"));
     await chat.recordChatQuery("alice");
-    expect(mocks.capture.mock.calls.map(([, timestamp]) => timestamp)).toEqual([
-      "2026-10-23T23:59:00.000Z",
-      "2026-10-24T00:01:00.000Z",
-    ]);
     expect(mocks.capture.mock.calls[0][0]).toBe(mocks.capture.mock.calls[1][0]);
+    expect(mocks.capture.mock.calls[0][1]).not.toBe(mocks.capture.mock.calls[1][1]);
+    expect(JSON.stringify(mocks.capture.mock.calls)).not.toContain("2026-10-");
   });
 
   it("should not collect from development, unauthenticated, or server rendering", async () => {
@@ -82,9 +86,9 @@ describe("Chat request metrics", () => {
     expect(mocks.capture).not.toHaveBeenCalled();
   });
 
-  it("should count requests on HTTP deployments without Web Crypto or browser storage", async () => {
+  it("should count requests on HTTP deployments without secure-context APIs or browser storage", async () => {
     vi.stubGlobal("window", { location: { origin: "http://gateway.internal:4000" } });
-    vi.stubGlobal("crypto", undefined);
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
     vi.stubGlobal("localStorage", undefined);
     await chat.recordChatQuery("alice");
     expect(mocks.capture).toHaveBeenCalledOnce();
