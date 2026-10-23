@@ -641,6 +641,38 @@ class TestSAPTransformationIntegration:
                 == "sap_document_translation"
             )
 
+    @pytest.mark.parametrize("model", ["anthropic--claude-4.5-sonnet", "gpt-4o"])
+    @pytest.mark.parametrize(
+        "tool_choice",
+        ["auto", "required", {"type": "function", "function": {"name": "get_pump"}}],
+    )
+    def test_tool_choice_forwarded_in_model_params(
+        self, mock_config, model, tool_choice
+    ):
+        result = mock_config.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_pump",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+                "tool_choice": tool_choice,
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        model_params = result["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
+        assert model_params["tool_choice"] == tool_choice
+
 
 class TestCacheControl:
     """Unit tests for cache_control preservation on message content parts."""
