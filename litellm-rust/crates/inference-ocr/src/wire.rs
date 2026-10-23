@@ -73,9 +73,8 @@ pub fn decode_request_input<D: Into<OcrDocumentInput>>(
     let timeout = wire
         .timeout_seconds
         .map(|seconds| {
-            Duration::try_from_secs_f64(seconds).map_err(|_| Error::RequestField {
-                path: "timeout_seconds".into(),
-            })
+            Duration::try_from_secs_f64(seconds)
+                .map_err(|error| Error::request_field("timeout_seconds", error))
         })
         .transpose()?;
     LiteLLMOcrRequest::from_inputs(
@@ -123,8 +122,8 @@ mod tests {
     #[case::non_object(json!([]), "document")]
     #[case::missing_type(json!({"document_url":"https://example.com/a.pdf"}), "document")]
     #[case::unsupported_type(json!({"type":"text"}), "type")]
-    #[case::missing_document_url(json!({"type":"document_url"}), "Document URL")]
-    #[case::missing_image_url(json!({"type":"image_url"}), "Document URL")]
+    #[case::missing_document_url(json!({"type":"document_url"}), "document URL")]
+    #[case::missing_image_url(json!({"type":"image_url"}), "document URL")]
     fn ocr_contract_malformed_document_is_bad_request(
         #[case] document: Value,
         #[case] field: &str,

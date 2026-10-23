@@ -132,7 +132,11 @@ impl Authenticator for Verifier {
         Box::pin(async move {
             match self.failure {
                 Some(401) => return Err(Error::InvalidToken),
-                Some(_) => return Err(Error::Unavailable),
+                Some(_) => {
+                    return Err(Error::Unavailable(litellm_error::Source::new(
+                        std::io::Error::other("verifier offline"),
+                    )));
+                }
                 None => (),
             }
             let litellm_gateway_auth::Credential::Token(credential) = credential else {

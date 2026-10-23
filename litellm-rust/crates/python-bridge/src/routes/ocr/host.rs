@@ -143,8 +143,8 @@ impl PythonBinding for OcrPythonHost {
         Ok(self.map_failure(py, ocr_error_to_pyerr(error)))
     }
 
-    fn host_error(error: &PyErr) -> Error {
-        Error::InvalidRequest(error.to_string())
+    fn host_error(_: &PyErr) -> Error {
+        Error::HostCall
     }
 }
 

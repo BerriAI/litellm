@@ -3764,6 +3764,7 @@ dependencies = [
  "http-body-util",
  "litellm-auth-types",
  "litellm-config",
+ "litellm-error",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
@@ -3819,6 +3820,7 @@ dependencies = [
  "litellm-auth",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-error",
  "litellm-gateway-auth",
  "litellm-host",
  "litellm-host-http",
@@ -3849,6 +3851,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "litellm-auth-types",
+ "litellm-error",
  "litellm-gateway-auth",
  "rand 0.8.7",
  "rstest",
@@ -3866,6 +3869,7 @@ dependencies = [
  "http 1.4.2",
  "litellm-auth-types",
  "litellm-config",
+ "litellm-error",
  "litellm-secrets",
  "moka",
  "rmcp",
@@ -3880,6 +3884,7 @@ dependencies = [
  "tower",
  "url",
  "uuid",
+ "veil",
 ]
 
 [[package]]
@@ -3889,9 +3894,11 @@ dependencies = [
  "axum",
  "axum-login",
  "base64 0.22.1",
+ "futures-util",
  "governor",
  "jsonwebtoken",
  "litellm-auth-types",
+ "litellm-error",
  "litellm-gateway-auth",
  "rand 0.8.7",
  "rstest",
@@ -3916,6 +3923,7 @@ dependencies = [
  "litellm-coroutine",
  "rstest",
  "serde_json",
+ "thiserror 2.0.19",
  "tokio",
 ]
 
@@ -4004,6 +4012,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
+ "litellm-error",
  "litellm-framer",
  "litellm-host",
  "litellm-http",
@@ -4058,6 +4067,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
+ "litellm-error",
  "litellm-framer",
  "litellm-host",
  "litellm-host-native",

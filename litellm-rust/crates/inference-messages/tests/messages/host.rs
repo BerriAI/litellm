@@ -322,14 +322,14 @@ async fn a_before_send_failure_never_sends(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
     let host = RecordingHost::new(
         authenticated(call, upstream.uri()),
-        Box::new(|_| Err(Error::InvalidRequest("vetoed by the host".into()))),
+        Box::new(|_| Err(Error::MissingField("vetoed by the host"))),
     );
 
     let error = run_through(&host)
         .await
         .expect_err("the host failure fails the call");
 
-    assert_eq!(error, Error::InvalidRequest("vetoed by the host".into()));
+    assert_eq!(error, Error::MissingField("vetoed by the host"));
     assert!(received(&upstream).await.is_empty());
     assert!(host.raw_responses().is_empty());
 }

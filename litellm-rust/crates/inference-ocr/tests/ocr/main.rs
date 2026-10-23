@@ -209,7 +209,7 @@ impl LocalOcrHost {
                 request,
                 caller_token: false,
             })
-            .ok_or_else(|| Error::InvalidRequest("OCR request was already projected".into()))
+            .ok_or(Error::MissingField("OCR request"))
     }
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, Self, Self, ()> {
         litellm_host_native::in_process::Host {

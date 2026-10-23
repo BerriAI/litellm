@@ -28,9 +28,7 @@ impl NativeGateway {
             let state = match next {
                 None => None,
                 Some(cursor) if seen.contains(&cursor) || seen.len() >= 1000 => {
-                    return Err(Error::InvalidRequest(
-                        "MCP upstream returned invalid pagination".into(),
-                    ));
+                    return Err(Error::InvalidPagination);
                 }
                 Some(cursor) => Some((
                     Some(cursor.clone()),

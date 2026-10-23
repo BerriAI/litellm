@@ -299,9 +299,16 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
     build_http_request(request, url, headers, &body)
 }
 
+fn unsupported_source() -> Error {
+    Error::UnsupportedDocument {
+        provider: "Reducto",
+        guidance: "pass a reducto:// id or a data URI, plain HTTP URLs must be uploaded first",
+    }
+}
+
 fn uploaded_file_id(document: OcrDocument) -> Result<ReductoFileId, Error> {
     if !document.source().starts_with(REDUCTO_ID_PREFIX) {
-        return Err(Error::ReductoSource);
+        return Err(unsupported_source());
     }
     if document.source()[REDUCTO_ID_PREFIX.len()..]
         .trim()
@@ -309,6 +316,7 @@ fn uploaded_file_id(document: OcrDocument) -> Result<ReductoFileId, Error> {
     {
         return Err(Error::RequestField {
             path: "document file id".into(),
+            cause: None,
         });
     }
     Ok(ReductoFileId(document.source().into()))
@@ -392,6 +400,7 @@ fn build_pages_from_reducto(chunks: Vec<ReductoChunk>) -> Result<Vec<OcrPage>, E
                     Some(Value::String(content)) => Ok(Some(content.as_str())),
                     Some(_) => Err(Error::ResponseField {
                         path: "result.chunks.blocks.content".into(),
+                        cause: None,
                     }),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -436,9 +445,7 @@ fn complete_endpoint_url(api_base: Option<&str>, path: &str) -> Result<String, E
     ApiUrl::parse(base)
         .and_then(|url| url.complete_path(&[path]))
         .map(|url| url.into_string())
-        .map_err(|_| Error::RequestField {
-            path: "api_base".into(),
-        })
+        .map_err(|error| Error::request_field("api_base", error))
 }
 
 fn resolve_headers(
@@ -459,7 +466,10 @@ fn resolve_headers(
                 .map(|key| key.trim().to_string())
                 .filter(|key| !key.is_empty())
         })
-        .ok_or(Error::MissingReductoApiKey)?;
+        .ok_or(Error::MissingCredential {
+            credential: REDUCTO_API_KEY_ENV,
+            guidance: "set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()",
+        })?;
     Ok(
         std::iter::once(("Authorization".into(), format!("Bearer {api_key}")))
             .chain(connection.extra_headers.clone())
@@ -494,11 +504,12 @@ async fn ensure_file_id_async(
         {
             return Err(Error::RequestField {
                 path: "document file id".into(),
+                cause: None,
             });
         }
         return Ok(ReductoFileId(document.source().to_string()));
     }
-    let inline = InlineDocument::parse(document.source())?.ok_or(Error::ReductoSource)?;
+    let inline = InlineDocument::parse(document.source())?.ok_or_else(unsupported_source)?;
     let mime = inline.mime_type().to_string();
     let bytes = inline.decode(OCR_INLINE_MAX_BYTES)?;
     upload_bytes_async(bytes, &mime, headers, context).await
@@ -546,6 +557,7 @@ async fn upload_bytes_async(
     let Some(file_id) = file_id else {
         return Err(Error::ResponseField {
             path: "file_id".into(),
+            cause: None,
         });
     };
     Ok(ReductoFileId(file_id.to_string()))

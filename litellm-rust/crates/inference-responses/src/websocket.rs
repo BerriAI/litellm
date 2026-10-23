@@ -11,6 +11,8 @@ use tokio_tungstenite::tungstenite::{
     http::{HeaderMap, HeaderName, HeaderValue},
 };
 
+use litellm_llms::ErrorDetail;
+
 use super::Error;
 
 #[derive(Clone)]
@@ -36,10 +38,18 @@ impl ResponsesWebSocketConnection {
                 .iter()
                 .map(|(name, value)| {
                     Ok((
-                        name.parse::<HeaderName>()
-                            .map_err(|error| Error::InvalidRequest(error.to_string().into()))?,
-                        HeaderValue::from_str(value)
-                            .map_err(|error| Error::InvalidRequest(error.to_string().into()))?,
+                        name.parse::<HeaderName>().map_err(|error| {
+                            Error::InvalidRequest(ErrorDetail::invalid(
+                                "WebSocket header name",
+                                error,
+                            ))
+                        })?,
+                        HeaderValue::from_str(value).map_err(|error| {
+                            Error::InvalidRequest(ErrorDetail::invalid(
+                                "WebSocket header value",
+                                error,
+                            ))
+                        })?,
                     ))
                 })
                 .collect::<Result<HeaderMap, Error>>()?;
@@ -87,7 +97,9 @@ impl ResponsesWebSocketConnection {
                 Some(Ok(Message::Text(text))) => Ok(Some(text)),
                 Some(Ok(Message::Binary(bytes))) => String::from_utf8(bytes.to_vec())
                     .map(Some)
-                    .map_err(|error| Error::InvalidResponse(error.to_string().into())),
+                    .map_err(|error| {
+                        Error::InvalidResponse(ErrorDetail::invalid("WebSocket text frame", error))
+                    }),
                 Some(Ok(Message::Close(_))) | None => Ok(None),
                 Some(Ok(_)) => Ok(None),
                 Some(Err(error)) => Err(litellm_http::Error::from(error).into()),

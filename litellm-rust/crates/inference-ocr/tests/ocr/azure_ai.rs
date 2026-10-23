@@ -239,7 +239,7 @@ async fn credential_precedence(
     true,
     json!({"azure_ad_token": "static-token"}),
     |_| String::new(),
-    |error: &Error| matches!(error, Error::MissingAzureAiCredentials),
+    |error: &Error| error.is_missing_credential() && error.to_string().contains("Azure AI credentials"),
     1
 )]
 #[tokio::test]

@@ -160,8 +160,8 @@ impl PythonBinding for ResponsesPythonHost {
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
         self.host.error(py, error)
     }
-    fn host_error(error: &PyErr) -> Error {
-        Error::InvalidRequest(error.to_string().into())
+    fn host_error(_: &PyErr) -> Error {
+        Error::InvalidRequest(litellm_llms::ErrorDetail::HostCall)
     }
 }
 

@@ -95,11 +95,29 @@ async fn upstream() -> Fixture {
     }
 }
 
-#[rstest]
-#[tokio::test]
-async fn serves_configured_upstream_with_separate_admission_and_outbound_credentials(
-    #[future] upstream: Fixture,
-) {
+struct Served {
+    app: Router,
+    mcp: litellm_gateway_mcp::ConfiguredGateway,
+    shutdown: CancellationToken,
+    upstream: Fixture,
+}
+
+impl Served {
+    async fn close(self) {
+        self.shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(5), self.mcp.close())
+            .await
+            .unwrap();
+        self.upstream.shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(5), self.upstream.task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+#[fixture]
+async fn served(#[future] upstream: Fixture) -> Served {
     let upstream = upstream.await;
     let config = Config::from_yaml(&format!(
         r#"
@@ -146,30 +164,53 @@ mcp_servers:
         },
     );
     let app = litellm_gateway::router(inference, &config, None, Some(mcp_router));
-
-    for (path, method) in [
-        ("/mcp", "POST"),
-        ("/mcp", "GET"),
-        ("/mcp", "DELETE"),
-        ("/mcp/sse", "GET"),
-        ("/mcp/sse/messages", "POST"),
-        ("/mcp-rest/tools/list", "GET"),
-        ("/mcp/enabled", "GET"),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(method)
-                    .uri(path)
-                    .header("host", "localhost")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 401, "{method} {path}");
+    Served {
+        app,
+        mcp,
+        shutdown,
+        upstream,
     }
+}
+
+#[rstest]
+#[case::streamable_post("/mcp", "POST")]
+#[case::streamable_get("/mcp", "GET")]
+#[case::streamable_delete("/mcp", "DELETE")]
+#[case::legacy_sse("/mcp/sse", "GET")]
+#[case::legacy_messages("/mcp/sse/messages", "POST")]
+#[case::rest_list("/mcp-rest/tools/list", "GET")]
+#[case::enabled("/mcp/enabled", "GET")]
+#[tokio::test]
+async fn every_mcp_route_requires_admission_credentials(
+    #[future] served: Served,
+    #[case] path: &str,
+    #[case] method: &str,
+) {
+    let served = served.await;
+    let response = served
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header("host", "localhost")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 401);
+    served.close().await;
+}
+
+#[rstest]
+#[tokio::test]
+async fn serves_configured_upstream_with_separate_admission_and_outbound_credentials(
+    #[future] served: Served,
+) {
+    let served = served.await;
+    let app = served.app.clone();
     let list = app
         .clone()
         .oneshot(
@@ -211,15 +252,7 @@ mcp_servers:
         .unwrap();
     assert_eq!(blocked.status(), 403);
 
-    shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(5), mcp.close())
-        .await
-        .unwrap();
-    upstream.shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(5), upstream.task)
-        .await
-        .unwrap()
-        .unwrap();
+    served.close().await;
 }
 
 #[rstest]
@@ -252,9 +285,10 @@ async fn rejects_unsupported_or_invalid_settings_before_serving(
         &inference.http,
     )
     .await;
-    let error = result.err().expect("startup must fail").to_string();
-    assert!(error.contains(expected), "{error}");
-    assert!(!error.contains("secret-value"));
+    let error = result.err().expect("startup must fail");
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(report.contains(expected), "{report}");
+    assert!(!report.contains("secret-value"));
 }
 
 #[rstest]
@@ -341,5 +375,8 @@ async fn refuses_unimplemented_global_mcp_policy(#[case] settings: &str) {
     .await
     .err()
     .unwrap();
-    assert!(matches!(error, litellm_gateway::Error::McpSetting(_)));
+    assert!(matches!(
+        error,
+        litellm_gateway::Error::McpSetting(_) | litellm_gateway::Error::McpGuardrails
+    ));
 }

@@ -92,6 +92,7 @@ impl ProjectedDocument {
                 {
                     ocr_error_to_pyerr(Error::RequestField {
                         path: "document.type".into(),
+                        cause: None,
                     })
                 } else {
                     error

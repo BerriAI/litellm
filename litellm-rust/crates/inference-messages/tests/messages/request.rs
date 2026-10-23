@@ -957,11 +957,10 @@ async fn provider_validation_runs_before_caller_parameter_removal(
     ))
     .await;
     let error = result.expect_err("metadata is validated before removal");
+    let report = litellm_error::Report::new(&error).to_string();
     assert!(
-        error
-            .to_string()
-            .contains("metadata.user_id must be a string"),
-        "{error}"
+        report.contains("metadata.user_id must be a string"),
+        "{report}"
     );
     assert!(received(&upstream).await.is_empty());
 }

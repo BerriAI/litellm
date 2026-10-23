@@ -147,7 +147,10 @@ pub(super) fn as_response_error(err: Error) -> Error {
     match err {
         already @ Error::InvalidResponse(_) => already,
         upstream if upstream.upstream_response().is_some() => upstream,
-        other => Error::InvalidResponse(other.to_string().into()),
+        other => Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+            "chat completions response",
+            other,
+        )),
     }
 }
 
@@ -315,7 +318,10 @@ mod tests {
         for original in [
             Error::MissingField("usage"),
             Error::Unsupported("non-text response content block"),
-            Error::InvalidRequest("whatever".to_string().into()),
+            Error::InvalidRequest(litellm_llms::ErrorDetail::Expected {
+                subject: "whatever",
+                expected: "anything else",
+            }),
             Error::Auth(litellm_auth::Error::InvalidHeader),
         ] {
             let label = format!("{original:?}");

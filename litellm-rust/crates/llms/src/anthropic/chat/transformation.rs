@@ -14,23 +14,19 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     Error,
-    anthropic::{
-        chat::handler::ModelResponseIterator,
-        common_utils::{
-            API_KEY_PLACEMENT, complete_anthropic_url, forwarded_oauth_bearer,
-            resolve_anthropic_api_key,
-        },
+    anthropic::common_utils::{
+        API_KEY_PLACEMENT, complete_anthropic_url, forwarded_oauth_bearer,
+        resolve_anthropic_api_key,
     },
     base_llm::{
         auth::AuthScheme,
         chat::{
-            streaming::{ChatStream, StreamShape},
+            streaming::StreamShape,
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
                 Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
             },
         },
-        messages::streaming::event_stream as messages_event_stream,
     },
 };
 
@@ -194,13 +190,6 @@ impl BaseConfig for AnthropicConfig {
         Ok(ValidatedEnvironment { headers, auth })
     }
 
-    fn model_response_iterator(&self, shape: StreamShape) -> Option<ChatStream> {
-        Some(ChatStream::new(
-            messages_event_stream,
-            ModelResponseIterator::new(shape),
-        ))
-    }
-
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         DEFAULT_HEADERS
     }
@@ -267,7 +256,7 @@ fn anthropic_body(
 #[cfg(test)]
 mod tests {
     use crate::{
-        Error, ErrorDetail,
+        Error,
         anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
         base_llm::{
             auth::AuthScheme,
@@ -676,15 +665,11 @@ mod tests {
     #[case::missing_model(json!({"content": [], "usage": {"input_tokens": 1, "output_tokens": 1}}))]
     fn errors_on_a_response_missing_required_fields(#[case] body: Value) {
         let error = transform_response(body).expect_err("invalid response");
-        let Error::InvalidResponse(ErrorDetail::Invalid { subject, cause }) = &error else {
-            panic!("decoding failures keep their JSON cause: {error:?}");
-        };
-        assert_eq!(*subject, "messages response");
-        assert!(cause.downcast_ref::<serde_json::Error>().is_some());
-        assert_eq!(
-            error.to_string(),
-            format!("invalid response: invalid messages response: {cause}")
-        );
+        assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+        let cause = litellm_error::find::<serde_json::Error>(&error).expect("JSON cause");
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(report.contains("invalid messages response"), "{report}");
+        assert_eq!(report.matches(&cause.to_string()).count(), 1, "{report}");
     }
 
     #[test]

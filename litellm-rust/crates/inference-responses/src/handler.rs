@@ -72,7 +72,12 @@ pub(super) async fn execute(
             let stream = match wire.body.get("stream") {
                 None => false,
                 Some(serde_json::Value::Bool(value)) => *value,
-                Some(_) => return Err(Error::InvalidRequest("stream must be a boolean".into())),
+                Some(_) => {
+                    return Err(Error::InvalidRequest(litellm_llms::ErrorDetail::Expected {
+                        subject: "stream",
+                        expected: "a boolean",
+                    }));
+                }
             };
             let outbound = litellm_inference::outbound::outbound_request(
                 Authenticated {
@@ -117,8 +122,12 @@ pub(super) async fn execute(
                 .after_provider_response(raw)
                 .await
                 .map_err(Error::post_call)?;
-            let value = serde_json::from_str(&body)
-                .map_err(|error| Error::InvalidResponse(error.to_string().into()))?;
+            let value = serde_json::from_str(&body).map_err(|error| {
+                Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+                    "Responses API response JSON",
+                    error,
+                ))
+            })?;
             config
                 .transform_response_api_response(value)
                 .map(ResponsesOutput::Complete)

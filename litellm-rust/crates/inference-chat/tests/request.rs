@@ -246,12 +246,18 @@ async fn rejects_a_model_with_no_resolvable_provider() {
 }
 
 #[rstest]
-#[case::empty(json!([]), Some("chat completions requires at least one message"))]
+#[case::empty(
+    json!([]),
+    Some(litellm_llms::ErrorDetail::Expected {
+        subject: "chat completions messages",
+        expected: "non-empty",
+    })
+)]
 #[case::malformed(json!("not a list"), None)]
 #[tokio::test]
 async fn rejects_an_empty_or_malformed_message_list(
     #[case] messages: Value,
-    #[case] expected: Option<&str>,
+    #[case] expected: Option<litellm_llms::ErrorDetail>,
 ) {
     let error = complete(request(
         "anthropic/claude-sonnet-4-5",
@@ -262,7 +268,7 @@ async fn rejects_an_empty_or_malformed_message_list(
     .await
     .unwrap_err();
     if let Some(expected) = expected {
-        assert_eq!(error, Error::InvalidRequest(expected.to_string().into()));
+        assert_eq!(error, Error::InvalidRequest(expected));
     } else {
         assert!(matches!(error, Error::InvalidRequest(_)));
     }

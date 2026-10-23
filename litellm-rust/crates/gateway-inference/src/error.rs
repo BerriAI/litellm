@@ -61,7 +61,7 @@ impl Error {
         let status = self.status();
         let message = match &self {
             Self::UnknownModel(model) => format!("Invalid model name passed in model={model}"),
-            _ => self.to_string(),
+            _ => litellm_error::Report::new(&self).to_string(),
         };
         (
             status,
@@ -82,7 +82,7 @@ impl Error {
             Self::Route(error) if let Some((_, body)) = error.upstream_response() => {
                 body.to_owned()
             }
-            other => other.to_string(),
+            other => litellm_error::Report::new(other).to_string(),
         };
         let parsed = serde_json::from_str::<Value>(&raw).ok();
         let envelope = match parsed {
@@ -235,7 +235,13 @@ mod tests {
 
     #[rstest]
     #[case::upstream_status(upstream(429, ""), StatusCode::TOO_MANY_REQUESTS)]
-    #[case::rejected_request(Error::Route(InferenceError::InvalidRequest("top_k".into())), StatusCode::BAD_REQUEST)]
+    #[case::rejected_request(
+        Error::Route(InferenceError::InvalidRequest(litellm_llms::ErrorDetail::Expected {
+            subject: "top_k",
+            expected: "an integer",
+        })),
+        StatusCode::BAD_REQUEST
+    )]
     #[case::missing_key(
         Error::Route(InferenceError::Auth(litellm_auth::Error::MissingApiKey {
             provider: "Anthropic",

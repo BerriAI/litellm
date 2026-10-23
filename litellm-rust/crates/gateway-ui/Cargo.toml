@@ -11,6 +11,7 @@ axum-login.workspace = true
 base64.workspace = true
 governor = { version = "0.10.4", default-features = false, features = ["std"] }
 jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
+litellm-error.workspace = true
 litellm-gateway-auth.workspace = true
 rand.workspace = true
 serde.workspace = true
@@ -22,6 +23,7 @@ tower-http = { version = "0.6.11", features = ["fs", "set-header"] }
 tower-sessions.workspace = true
 
 [dev-dependencies]
+futures-util.workspace = true
 serde_json.workspace = true
 tower = { version = "0.5", features = ["util"] }
 litellm-auth-types.workspace = true

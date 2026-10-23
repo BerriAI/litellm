@@ -1,3 +1,8 @@
+use std::{io, path::PathBuf, sync::Arc};
+
+use litellm_core_utils::call_arguments::ArgumentError;
+use litellm_error::Source;
+
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     #[error("upstream OCR error ({status}): {body}")]
@@ -8,37 +13,41 @@ pub enum Error {
     },
     #[error("File is empty or could not be read")]
     EmptyFile,
-    #[error("Failed to read OCR file {}: {cause}", path.display())]
+    #[error("could not read OCR file {}", path.display())]
     FileRead {
-        path: std::path::PathBuf,
-        cause: std::sync::Arc<std::io::Error>,
+        path: PathBuf,
+        #[source]
+        cause: Arc<io::Error>,
     },
-    #[error("OCR document preparation task failed: {0}")]
-    DocumentTask(std::sync::Arc<tokio::task::JoinError>),
-    #[error("Invalid MIME type: {0}")]
+    #[error("OCR document preparation task failed")]
+    DocumentTask(#[source] Arc<tokio::task::JoinError>),
+    #[error("invalid MIME type {0:?}")]
     InvalidMimeType(String),
-    #[error(
-        "Cohere Parse only accepts `image_url` documents; document_url and PDF inputs are not supported"
-    )]
-    CohereImageOnly,
+    #[error("{provider} cannot read this document - {guidance}")]
+    UnsupportedDocument {
+        provider: &'static str,
+        guidance: &'static str,
+    },
     #[error("Invalid `req_format`. Expected 'native' or 'litellm'.")]
     RequestFormat,
     #[error("invalid OCR request field: {path}")]
-    RequestField { path: String },
+    RequestField {
+        path: String,
+        #[source]
+        cause: Option<Source>,
+    },
+    #[error("invalid OCR optional params")]
+    Arguments(#[from] ArgumentError),
     #[error("missing required field: {0}")]
     MissingField(&'static str),
-    #[error("Document URL is required")]
+    #[error("document URL is required")]
     MissingDocumentUrl,
     #[error("invalid OCR document data URI")]
     InvalidDataUri,
-    #[error(
-        "Reducto requires a reducto:// id or a data URI; plain HTTP URLs are not supported, upload the file first"
-    )]
-    ReductoSource,
     #[error("inline OCR document exceeds the size limit")]
     InlineDocumentTooLarge,
     #[error("invalid OCR pages: {0}")]
-    Pages(String),
+    Pages(PagesFault),
     #[error("invalid OCR features")]
     Features,
     #[error("OCR model cannot be a dot segment")]
@@ -46,7 +55,11 @@ pub enum Error {
     #[error("OCR response exceeds the size limit of {limit} bytes")]
     TooLarge { limit: usize },
     #[error("invalid OCR response field: {path}")]
-    ResponseField { path: String },
+    ResponseField {
+        path: String,
+        #[source]
+        cause: Option<Source>,
+    },
     #[error("OCR response is missing non-empty content")]
     EmptyContent,
     #[error("OCR operation ended with status {0}")]
@@ -69,24 +82,17 @@ pub enum Error {
         model: String,
         supported: &'static [&'static str],
     },
-    #[error("invalid request: {0}")]
-    InvalidRequest(String),
-    #[error("invalid response: {0}")]
-    InvalidResponse(String),
-    #[error(
-        "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
-    )]
-    MissingAzureAiCredentials,
-    #[error(
-        "invalid authentication configuration: Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID"
-    )]
-    MissingAzureDocumentIntelligenceCredentials,
-    #[error(
-        "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
-    )]
-    MissingReductoApiKey,
-    #[error("secret resolution failed: {0}")]
-    Secret(std::sync::Arc<litellm_secrets::Error>),
+    #[error("Missing {credential} - {guidance}")]
+    MissingCredential {
+        credential: &'static str,
+        guidance: &'static str,
+    },
+    #[error("secret resolution failed")]
+    Secret(#[source] Arc<litellm_secrets::Error>),
+    #[error("the OCR host driver failed")]
+    Host(#[source] litellm_host::machine::MachineFault),
+    #[error("the OCR host call raised an exception")]
+    HostCall,
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
@@ -97,71 +103,222 @@ pub enum Error {
     Http(#[from] litellm_http::Error),
 }
 
-impl From<litellm_host::machine::MachineFault> for Error {
-    fn from(fault: litellm_host::machine::MachineFault) -> Self {
-        use litellm_host::machine::MachineFault;
-        Self::InvalidRequest(match fault {
-            MachineFault::Abandoned => "OCR host driver was abandoned".into(),
-            MachineFault::Protocol(message) => format!("OCR {message}"),
-        })
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PagesFault {
+    #[error("page index is out of range")]
+    OutOfRange,
+    #[error("negative page index")]
+    Negative,
+    #[error("expected only integers or only strings")]
+    Mixed,
+    #[error("expected an array of integers or strings, or a native page range")]
+    Shape,
+    #[error("invalid native page range")]
+    Range,
 }
 
-impl From<litellm_core_utils::call_arguments::ArgumentError> for Error {
-    fn from(error: litellm_core_utils::call_arguments::ArgumentError) -> Self {
-        Self::RequestField {
-            path: format!("optional_params.{}", error.path),
-        }
+impl From<litellm_host::machine::MachineFault> for Error {
+    fn from(fault: litellm_host::machine::MachineFault) -> Self {
+        Self::Host(fault)
     }
 }
 
 impl Error {
+    pub fn request_field(
+        path: impl Into<String>,
+        cause: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::RequestField {
+            path: path.into(),
+            cause: Some(Source::new(cause)),
+        }
+    }
+
+    pub fn response_field(
+        path: impl Into<String>,
+        cause: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::ResponseField {
+            path: path.into(),
+            cause: Some(Source::new(cause)),
+        }
+    }
+
+    pub fn upstream_response(&self) -> Option<(u16, &str, &[(String, String)])> {
+        match self {
+            Self::Provider {
+                status,
+                body,
+                headers,
+            } => Some((*status, body, headers)),
+            Self::Http(error) => error
+                .upstream_response()
+                .map(|(status, body)| (status, body, &[][..])),
+            Self::EmptyFile
+            | Self::FileRead { .. }
+            | Self::DocumentTask(_)
+            | Self::InvalidMimeType(_)
+            | Self::UnsupportedDocument { .. }
+            | Self::RequestFormat
+            | Self::RequestField { .. }
+            | Self::Arguments(_)
+            | Self::MissingField(_)
+            | Self::MissingDocumentUrl
+            | Self::InvalidDataUri
+            | Self::InlineDocumentTooLarge
+            | Self::Pages(_)
+            | Self::Features
+            | Self::DotModel
+            | Self::TooLarge { .. }
+            | Self::ResponseField { .. }
+            | Self::EmptyContent
+            | Self::OperationStatus(_)
+            | Self::NumericRange(_)
+            | Self::PollLocation
+            | Self::PollOrigin
+            | Self::PollTimeout
+            | Self::Unsupported(_)
+            | Self::InvalidProvider(_)
+            | Self::InvalidModel { .. }
+            | Self::MissingCredential { .. }
+            | Self::Secret(_)
+            | Self::Host(_)
+            | Self::HostCall
+            | Self::Auth(_)
+            | Self::Params(_)
+            | Self::Headers(_) => None,
+        }
+    }
+
     pub fn is_missing_credential(&self) -> bool {
         match self {
-            Self::MissingAzureAiCredentials
-            | Self::MissingAzureDocumentIntelligenceCredentials
-            | Self::MissingReductoApiKey => true,
+            Self::MissingCredential { .. } => true,
             Self::Auth(error) => error.is_missing_credential(),
-            _ => false,
+            Self::Provider { .. }
+            | Self::EmptyFile
+            | Self::FileRead { .. }
+            | Self::DocumentTask(_)
+            | Self::InvalidMimeType(_)
+            | Self::UnsupportedDocument { .. }
+            | Self::RequestFormat
+            | Self::RequestField { .. }
+            | Self::Arguments(_)
+            | Self::MissingField(_)
+            | Self::MissingDocumentUrl
+            | Self::InvalidDataUri
+            | Self::InlineDocumentTooLarge
+            | Self::Pages(_)
+            | Self::Features
+            | Self::DotModel
+            | Self::TooLarge { .. }
+            | Self::ResponseField { .. }
+            | Self::EmptyContent
+            | Self::OperationStatus(_)
+            | Self::NumericRange(_)
+            | Self::PollLocation
+            | Self::PollOrigin
+            | Self::PollTimeout
+            | Self::Unsupported(_)
+            | Self::InvalidProvider(_)
+            | Self::InvalidModel { .. }
+            | Self::Secret(_)
+            | Self::Host(_)
+            | Self::HostCall
+            | Self::Params(_)
+            | Self::Headers(_)
+            | Self::Http(_) => false,
         }
     }
 
     pub fn is_unsupported(&self) -> bool {
-        matches!(self, Self::Unsupported(_))
+        match self {
+            Self::Unsupported(_) => true,
+            Self::Provider { .. }
+            | Self::EmptyFile
+            | Self::FileRead { .. }
+            | Self::DocumentTask(_)
+            | Self::InvalidMimeType(_)
+            | Self::UnsupportedDocument { .. }
+            | Self::RequestFormat
+            | Self::RequestField { .. }
+            | Self::Arguments(_)
+            | Self::MissingField(_)
+            | Self::MissingDocumentUrl
+            | Self::InvalidDataUri
+            | Self::InlineDocumentTooLarge
+            | Self::Pages(_)
+            | Self::Features
+            | Self::DotModel
+            | Self::TooLarge { .. }
+            | Self::ResponseField { .. }
+            | Self::EmptyContent
+            | Self::OperationStatus(_)
+            | Self::NumericRange(_)
+            | Self::PollLocation
+            | Self::PollOrigin
+            | Self::PollTimeout
+            | Self::InvalidProvider(_)
+            | Self::InvalidModel { .. }
+            | Self::MissingCredential { .. }
+            | Self::Secret(_)
+            | Self::Host(_)
+            | Self::HostCall
+            | Self::Auth(_)
+            | Self::Params(_)
+            | Self::Headers(_)
+            | Self::Http(_) => false,
+        }
     }
 
     pub fn http_status_code(&self) -> Option<u16> {
-        match self {
-            Self::Provider { status, .. } => Some(*status),
-            Self::Http(error) if error.status().is_some() => error.status(),
-            error if error.is_request() => Some(400),
-            _ => None,
+        if let Some((status, ..)) = self.upstream_response() {
+            return Some(status);
         }
+        if let Self::Http(error) = self
+            && let Some(status) = error.status()
+        {
+            return Some(status);
+        }
+        self.is_request().then_some(400)
     }
 
     pub fn is_request(&self) -> bool {
         match self {
             Self::EmptyFile
             | Self::InvalidMimeType(_)
-            | Self::CohereImageOnly
+            | Self::UnsupportedDocument { .. }
             | Self::RequestFormat
             | Self::RequestField { .. }
+            | Self::Arguments(_)
             | Self::MissingField(_)
             | Self::MissingDocumentUrl
             | Self::InvalidDataUri
-            | Self::ReductoSource
             | Self::InlineDocumentTooLarge
             | Self::Pages(_)
             | Self::Features
             | Self::DotModel
-            | Self::InvalidRequest(_)
             | Self::InvalidProvider(_)
             | Self::InvalidModel { .. }
             | Self::Params(_)
             | Self::Headers(_) => true,
-            Self::Auth(error) => error.is_missing_setting(),
+            Self::Auth(error) => !error.is_missing_credential(),
             Self::Http(error) => error.is_request(),
-            _ => false,
+            Self::Provider { .. }
+            | Self::FileRead { .. }
+            | Self::DocumentTask(_)
+            | Self::TooLarge { .. }
+            | Self::ResponseField { .. }
+            | Self::EmptyContent
+            | Self::OperationStatus(_)
+            | Self::NumericRange(_)
+            | Self::PollLocation
+            | Self::PollOrigin
+            | Self::PollTimeout
+            | Self::Unsupported(_)
+            | Self::MissingCredential { .. }
+            | Self::Secret(_)
+            | Self::Host(_)
+            | Self::HostCall => false,
         }
     }
 
@@ -174,10 +331,34 @@ impl Error {
             | Self::NumericRange(_)
             | Self::PollLocation
             | Self::PollOrigin
-            | Self::PollTimeout
-            | Self::InvalidResponse(_) => true,
+            | Self::PollTimeout => true,
             Self::Http(error) => error.is_response(),
-            _ => false,
+            Self::Provider { .. }
+            | Self::EmptyFile
+            | Self::FileRead { .. }
+            | Self::DocumentTask(_)
+            | Self::InvalidMimeType(_)
+            | Self::UnsupportedDocument { .. }
+            | Self::RequestFormat
+            | Self::RequestField { .. }
+            | Self::Arguments(_)
+            | Self::MissingField(_)
+            | Self::MissingDocumentUrl
+            | Self::InvalidDataUri
+            | Self::InlineDocumentTooLarge
+            | Self::Pages(_)
+            | Self::Features
+            | Self::DotModel
+            | Self::Unsupported(_)
+            | Self::InvalidProvider(_)
+            | Self::InvalidModel { .. }
+            | Self::MissingCredential { .. }
+            | Self::Secret(_)
+            | Self::Host(_)
+            | Self::HostCall
+            | Self::Auth(_)
+            | Self::Params(_)
+            | Self::Headers(_) => false,
         }
     }
 }

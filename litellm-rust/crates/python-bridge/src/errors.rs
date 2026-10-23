@@ -21,7 +21,10 @@ pyo3::create_exception!(
 pub(crate) fn route_error_to_pyerr(error: Error) -> PyErr {
     match error.upstream_response() {
         Some((status, body)) => RustUpstreamError::new_err((status, body.to_owned())),
-        None => by_fault(error.is_request(), error.to_string()),
+        None => by_fault(
+            error.is_request(),
+            litellm_error::Report::new(&error).to_string(),
+        ),
     }
 }
 
@@ -41,12 +44,24 @@ mod tests {
     #[rstest::rstest]
     #[case::unsupported(Error::Unsupported("test capability"), true)]
     #[case::invalid_provider(Error::InvalidProvider("unknown".into()), true)]
-    #[case::invalid_request(Error::InvalidRequest("empty messages".into()), true)]
+    #[case::invalid_request(
+        Error::InvalidRequest(litellm_llms::ErrorDetail::Expected {
+            subject: "messages",
+            expected: "non-empty",
+        }),
+        true
+    )]
     #[case::lost_connection(
         litellm_http::Error::from(tokio_tungstenite::tungstenite::Error::ConnectionClosed).into(),
         false
     )]
-    #[case::invalid_response(Error::InvalidResponse("missing usage".into()), false)]
+    #[case::invalid_response(
+        Error::InvalidResponse(litellm_llms::ErrorDetail::MissingField {
+            subject: "response",
+            field: "usage",
+        }),
+        false
+    )]
     fn route_failures_are_terminal(#[case] error: Error, #[case] is_request: bool) {
         Python::initialize();
         Python::attach(|py| {

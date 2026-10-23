@@ -144,7 +144,7 @@ impl LocalMessagesHost {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take()
-            .ok_or_else(|| Error::InvalidRequest("messages request was already projected".into()))
+            .ok_or(Error::MissingField("messages request"))
     }
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, ()> {
         litellm_host_native::in_process::Host {

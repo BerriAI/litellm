@@ -13,7 +13,7 @@ use tokio::time::Instant;
 
 use crate::base_llm::ocr::{
     document::InlineDocument,
-    error::Error,
+    error::{Error, PagesFault},
     handler::{CallHooks, OcrClient, read_json_response},
     settings::OcrSettings,
     transformation::{
@@ -259,14 +259,12 @@ fn normalize_pages_param(pages: Option<&Value>) -> Result<Option<String>, Error>
         Some(Value::Array(pages)) if pages.iter().all(Value::is_number) => pages
             .iter()
             .map(|page| {
-                let page = page
-                    .as_i64()
-                    .ok_or_else(|| Error::Pages("page index is out of range".into()))?;
+                let page = page.as_i64().ok_or(Error::Pages(PagesFault::OutOfRange))?;
                 if page < 0 {
-                    return Err(Error::Pages("negative page index".into()));
+                    return Err(Error::Pages(PagesFault::Negative));
                 }
                 page.checked_add(1)
-                    .ok_or_else(|| Error::Pages("page index is out of range".into()))
+                    .ok_or(Error::Pages(PagesFault::OutOfRange))
             })
             .collect::<Result<BTreeSet<_>, _>>()?
             .into_iter()
@@ -279,7 +277,7 @@ fn normalize_pages_param(pages: Option<&Value>) -> Result<Option<String>, Error>
                 token
                     .as_str()
                     .map(str::trim)
-                    .ok_or_else(|| Error::Pages("expected only integers or only strings".into()))
+                    .ok_or(Error::Pages(PagesFault::Mixed))
             })
             .collect::<Result<Vec<_>, _>>()?
             .join(","),
@@ -289,13 +287,11 @@ fn normalize_pages_param(pages: Option<&Value>) -> Result<Option<String>, Error>
             .collect::<Vec<_>>()
             .join(","),
         Some(_) => {
-            return Err(Error::Pages(
-                "expected an array of integers or strings, or a native page range".into(),
-            ));
+            return Err(Error::Pages(PagesFault::Shape));
         }
     };
     if !normalized.split(',').all(valid_page_token) {
-        return Err(Error::Pages("invalid native page range".into()));
+        return Err(Error::Pages(PagesFault::Range));
     }
     Ok(Some(normalized))
 }
@@ -581,9 +577,7 @@ impl AzureDocumentIntelligenceOcrConfig {
                 )
                 .into_string()
             })
-            .map_err(|_| Error::RequestField {
-                path: "api_base".into(),
-            })
+            .map_err(|error| Error::request_field("api_base", error))
     }
 
     async fn resolve_headers(
@@ -626,7 +620,10 @@ impl AzureDocumentIntelligenceOcrConfig {
         }
         let token = super::super::common_utils::resolve_entra(auth, config, env_lookup)
             .await?
-            .ok_or(Error::MissingAzureDocumentIntelligenceCredentials)?;
+            .ok_or(Error::MissingCredential {
+                credential: "Azure Document Intelligence credentials",
+                guidance: "set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID",
+            })?;
         super::super::common_utils::validate_destination(connection, token.source())?;
         Ok(
             std::iter::once(("Authorization".into(), format!("Bearer {}", token.value())))

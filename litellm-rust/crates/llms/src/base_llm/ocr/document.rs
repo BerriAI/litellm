@@ -58,9 +58,7 @@ pub async fn inline_remote_document(
         validate_inline_document(&document)?;
         return Ok(document);
     }
-    let url = Url::parse(source).map_err(|_| Error::RequestField {
-        path: "document URL".into(),
-    })?;
+    let url = Url::parse(source).map_err(|error| Error::request_field("document URL", error))?;
     let downloaded = fetcher
         .fetch(
             url,
@@ -93,20 +91,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn decodes_data_urls_and_limits_decoded_size() {
-        for (source, expected) in [
-            ("data:application/pdf;base64,YWJj", b"abc".as_slice()),
-            ("DATA:application/pdf;BASE64,YWI", b"ab".as_slice()),
-            ("data:,a%20b%00%FF", b"a b\0\xff".as_slice()),
-        ] {
-            let inline = InlineDocument::parse(source).unwrap().unwrap();
-            assert_eq!(inline.decode(expected.len()).unwrap(), expected);
-            assert!(matches!(
-                inline.decode(expected.len() - 1),
-                Err(Error::InlineDocumentTooLarge)
-            ));
-        }
+    #[rstest::rstest]
+    #[case::base64("data:application/pdf;base64,YWJj", b"abc")]
+    #[case::uppercase_unpadded("DATA:application/pdf;BASE64,YWI", b"ab")]
+    #[case::percent_encoded("data:,a%20b%00%FF", b"a b\0\xff")]
+    fn decodes_data_urls_and_limits_decoded_size(#[case] source: &str, #[case] expected: &[u8]) {
+        let inline = InlineDocument::parse(source).unwrap().unwrap();
+        assert_eq!(inline.decode(expected.len()).unwrap(), expected);
+        assert!(matches!(
+            inline.decode(expected.len() - 1),
+            Err(Error::InlineDocumentTooLarge)
+        ));
     }
 
     #[test]
@@ -124,15 +119,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rejects_invalid_inline_documents() {
-        for source in [
-            "https://example.com/document.pdf",
-            "data:application/pdf;base64",
-            "data:application/pdf;base64,INVALID!",
-        ] {
-            assert!(validate_inline_document(&document(source)).is_err());
-        }
+    #[rstest::rstest]
+    #[case::remote("https://example.com/document.pdf")]
+    #[case::no_payload("data:application/pdf;base64")]
+    #[case::invalid_base64("data:application/pdf;base64,INVALID!")]
+    fn rejects_invalid_inline_documents(#[case] source: &str) {
+        assert!(validate_inline_document(&document(source)).is_err());
     }
 
     #[tokio::test]

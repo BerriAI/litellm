@@ -5,7 +5,7 @@ use std::{
 
 use litellm_host::lifecycle::CallEvent;
 use litellm_host::lifecycle::ExecutionEvent;
-use litellm_llms::base_llm::ocr::settings::OcrSettings;
+use litellm_llms::base_llm::ocr::{error::PagesFault, settings::OcrSettings};
 
 use rstest::rstest;
 
@@ -64,10 +64,10 @@ async fn pages_features_and_extra_options_map_to_the_analyze_call() {
 }
 
 #[rstest]
-#[case(json!({"pages": [true]}), Error::Pages("expected only integers or only strings".into()))]
-#[case(json!({"pages": [1, "2"]}), Error::Pages("expected only integers or only strings".into()))]
-#[case(json!({"pages": [-1]}), Error::Pages("negative page index".into()))]
-#[case(json!({"pages": "1&&features=bad"}), Error::Pages("invalid native page range".into()))]
+#[case(json!({"pages": [true]}), Error::Pages(PagesFault::Mixed))]
+#[case(json!({"pages": [1, "2"]}), Error::Pages(PagesFault::Mixed))]
+#[case(json!({"pages": [-1]}), Error::Pages(PagesFault::Negative))]
+#[case(json!({"pages": "1&&features=bad"}), Error::Pages(PagesFault::Range))]
 #[case(json!({"features": "languages&pages=1"}), Error::Features)]
 #[case(json!({"req_format": "azure"}), Error::RequestFormat)]
 #[tokio::test]
@@ -315,7 +315,11 @@ async fn polling_does_not_follow_redirects() {
         .await
         .unwrap_err();
 
-    assert!(error.to_string().contains("status 302"), "{error}");
+    assert_eq!(
+        error.upstream_response().map(|(status, ..)| status),
+        Some(302),
+        "{error}"
+    );
     assert_eq!(received(&upstream).await.len(), 2);
 }
 

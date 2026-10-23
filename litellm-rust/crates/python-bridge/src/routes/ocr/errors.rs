@@ -33,7 +33,10 @@ pub(super) fn to_pyerr(error: Error) -> PyErr {
                 PyFileNotFoundError::new_err(format!("File not found: {}", path.display()))
             }
             Error::FileRead { cause, .. } => PyOSError::new_err(cause.to_string()),
-            other => by_fault(is_request(&other), other.to_string()),
+            other => by_fault(
+                is_request(&other),
+                litellm_error::Report::new(&other).to_string(),
+            ),
         })
     })
     .unwrap_or_else(|error| error);
@@ -46,7 +49,6 @@ fn is_request(error: &Error) -> bool {
             error,
             Error::Auth(_)
                 | Error::InvalidProvider(_)
-                | Error::InvalidRequest(_)
                 | Error::MissingField(_)
                 | Error::MissingDocumentUrl
         )
@@ -86,7 +88,10 @@ mod tests {
         Python::attach(|py| {
             let mapped = to_pyerr(Error::MissingDocumentUrl);
             assert!(mapped.is_instance_of::<pyo3::exceptions::PyValueError>(py));
-            assert_eq!(mapped.value(py).to_string(), "Document URL is required");
+            assert_eq!(
+                mapped.value(py).to_string(),
+                Error::MissingDocumentUrl.to_string()
+            );
             assert_eq!(
                 mapped
                     .value(py)
@@ -115,7 +120,7 @@ mod tests {
                 .expect("OCR failures retain status and unprefixed provider message");
             assert_eq!(args, (429, r#"{"message":"rate limited"}"#.to_string()));
 
-            let mapped = to_pyerr(Error::InvalidRequest("invalid format".into()));
+            let mapped = to_pyerr(Error::Features);
             assert!(mapped.is_instance_of::<PyValueError>(py));
             assert_eq!(
                 mapped
@@ -195,7 +200,7 @@ mod tests {
 
     #[rstest::rstest]
     #[case::oversized(Error::TooLarge { limit: 7 })]
-    #[case::malformed_field(Error::ResponseField { path: "pages[0].index".into() })]
+    #[case::malformed_field(Error::ResponseField { path: "pages[0].index".into(), cause: None })]
     fn response_failures_are_statusless_runtime_errors(#[case] error: Error) {
         Python::initialize();
         Python::attach(|py| {

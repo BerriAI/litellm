@@ -1,3 +1,5 @@
+use litellm_error::Source;
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("expected {expected}, got {actual}")]
@@ -7,29 +9,41 @@ pub enum Error {
     },
     #[error("missing required field: {0}")]
     MissingField(&'static str),
-    #[error("invalid request: {0}")]
-    InvalidRequest(ErrorDetail),
-    #[error("invalid response: {0}")]
-    InvalidResponse(ErrorDetail),
+    #[error("invalid request")]
+    InvalidRequest(#[source] ErrorDetail),
+    #[error("invalid response")]
+    InvalidResponse(#[source] ErrorDetail),
     #[error("unsupported: {0}")]
     Unsupported(&'static str),
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
+    #[error(transparent)]
+    Http(#[from] litellm_http::Error),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ErrorDetail {
-    #[error("{0}")]
-    Message(String),
-    #[error("invalid {subject}: {cause}")]
+    #[error("invalid {subject}")]
     Invalid {
         subject: &'static str,
-        cause: ErrorSource,
+        #[source]
+        cause: Source,
     },
-    #[error("{operation} failed: {cause}")]
+    #[error("{operation} failed")]
     Failed {
         operation: &'static str,
-        cause: ErrorSource,
+        #[source]
+        cause: Source,
+    },
+    #[error("{subject} must be {expected}")]
+    Expected {
+        subject: &'static str,
+        expected: &'static str,
+    },
+    #[error("{subject} is missing {field}")]
+    MissingField {
+        subject: &'static str,
+        field: &'static str,
     },
     #[error("{field} must be {expected}, got {actual}")]
     InvalidValue {
@@ -58,11 +72,18 @@ pub enum ErrorDetail {
         value: String,
         hint: String,
     },
-    #[error("invalid {subject} on line {line}: {cause}")]
+    #[error(
+        "Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({{LLM_PROVIDER}}_API_KEY) or via params"
+    )]
+    MissingApiBase,
+    #[error("the host call raised an exception")]
+    HostCall,
+    #[error("invalid {subject} on line {line}")]
     InvalidLine {
         subject: &'static str,
         line: usize,
-        cause: ErrorSource,
+        #[source]
+        cause: Source,
     },
     #[error("{operation} failed: {detail}")]
     RemoteFailure {
@@ -78,7 +99,7 @@ impl ErrorDetail {
     ) -> Self {
         Self::Invalid {
             subject,
-            cause: ErrorSource::new(cause),
+            cause: Source::new(cause),
         }
     }
 
@@ -88,50 +109,19 @@ impl ErrorDetail {
     ) -> Self {
         Self::Failed {
             operation,
-            cause: ErrorSource::new(cause),
+            cause: Source::new(cause),
+        }
+    }
+
+    pub fn invalid_line(
+        subject: &'static str,
+        line: usize,
+        cause: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::InvalidLine {
+            subject,
+            line,
+            cause: Source::new(cause),
         }
     }
 }
-
-impl From<String> for ErrorDetail {
-    fn from(message: String) -> Self {
-        Self::Message(message)
-    }
-}
-
-impl From<&str> for ErrorDetail {
-    fn from(message: &str) -> Self {
-        Self::Message(message.into())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ErrorSource(std::sync::Arc<dyn std::error::Error + Send + Sync>);
-
-impl std::ops::Deref for ErrorSource {
-    type Target = dyn std::error::Error + Send + Sync;
-
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
-
-impl std::fmt::Display for ErrorSource {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, formatter)
-    }
-}
-
-impl ErrorSource {
-    pub fn new(error: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self(std::sync::Arc::new(error))
-    }
-}
-
-impl PartialEq for ErrorSource {
-    fn eq(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Eq for ErrorSource {}

@@ -20,10 +20,10 @@ pub enum Error {
     MissingField(&'static str),
     #[error("invalid provider: {0}")]
     InvalidProvider(String),
-    #[error("invalid request: {0}")]
-    InvalidRequest(litellm_llms::ErrorDetail),
-    #[error("invalid response: {0}")]
-    InvalidResponse(litellm_llms::ErrorDetail),
+    #[error("invalid request")]
+    InvalidRequest(#[source] litellm_llms::ErrorDetail),
+    #[error("invalid response")]
+    InvalidResponse(#[source] litellm_llms::ErrorDetail),
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
     #[error(transparent)]
@@ -40,11 +40,7 @@ pub enum Error {
 
 impl From<litellm_host::machine::MachineFault> for Error {
     fn from(fault: litellm_host::machine::MachineFault) -> Self {
-        use litellm_host::machine::MachineFault;
-        Self::InvalidRequest(match fault {
-            MachineFault::Abandoned => "host driver was abandoned".into(),
-            MachineFault::Protocol(message) => format!("host {message}").into(),
-        })
+        Self::InvalidRequest(litellm_llms::ErrorDetail::failed("host driver", fault))
     }
 }
 
@@ -107,6 +103,7 @@ impl From<LlmError> for Error {
             LlmError::InvalidResponse(message) => Self::InvalidResponse(message),
             LlmError::Unsupported(reason) => Self::Unsupported(reason),
             LlmError::Auth(error) => Self::Auth(error),
+            LlmError::Http(error) => Self::from(error),
         }
     }
 }
@@ -151,8 +148,20 @@ mod tests {
             .is_request()
         );
         assert!(Error::Auth(litellm_auth::Error::InvalidHeader).is_request());
-        assert!(Error::InvalidRequest("top_k".into()).is_request());
-        assert!(!Error::InvalidResponse("bad json".into()).is_request());
+        assert!(
+            Error::InvalidRequest(ErrorDetail::Expected {
+                subject: "top_k",
+                expected: "an integer",
+            })
+            .is_request()
+        );
+        assert!(
+            !Error::InvalidResponse(ErrorDetail::MissingField {
+                subject: "response",
+                field: "usage",
+            })
+            .is_request()
+        );
     }
     #[test]
     fn a_header_the_signer_computes_is_left_to_the_host_on_every_route() {
@@ -176,12 +185,9 @@ mod tests {
         assert_eq!(error.is_request(), request);
         let category = if request { "request" } else { "response" };
         assert_eq!(
-            error.to_string(),
+            litellm_error::Report::new(&error).to_string(),
             format!("invalid {category}: invalid test payload: {source_message}")
         );
-        assert!(
-            std::error::Error::source(&error).is_none(),
-            "a cause rendered in the message is not also exposed as source()"
-        );
+        assert!(litellm_error::find::<serde_json::Error>(&error).is_some());
     }
 }

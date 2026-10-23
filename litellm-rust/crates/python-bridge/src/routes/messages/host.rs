@@ -77,7 +77,7 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
     }
     match error {
         Error::InvalidRequest(message) => {
-            let error = PyValueError::new_err(message.to_string());
+            let error = PyValueError::new_err(litellm_error::Report::new(&message).to_string());
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
             Ok(error)
         }
@@ -283,8 +283,8 @@ impl PythonBinding for MessagesPythonHost {
         Ok(self.map_failure(py, native_error(py, error)?))
     }
 
-    fn host_error(error: &PyErr) -> Error {
-        Error::InvalidRequest(error.to_string().into())
+    fn host_error(_: &PyErr) -> Error {
+        Error::InvalidRequest(litellm_llms::ErrorDetail::HostCall)
     }
 }
 
@@ -465,7 +465,15 @@ mod tests {
     }
 
     #[rstest]
-    #[case::rejected_request(Error::InvalidRequest("does not support top_k=5".into()), true)]
+    #[case::rejected_request(
+        Error::InvalidRequest(litellm_llms::ErrorDetail::UnsupportedParameter {
+            model: "claude".into(),
+            param: "top_k".into(),
+            value: "5".into(),
+            hint: String::new(),
+        }),
+        true
+    )]
     #[case::missing_field(Error::MissingField("max_tokens"), true)]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(

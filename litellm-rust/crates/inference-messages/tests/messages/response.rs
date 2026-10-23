@@ -312,8 +312,11 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
 fn a_body_that_does_not_parse_is_an_invalid_request(#[case] raw: Value) {
     let error = messages_body(object(raw)).expect_err("the body is rejected");
 
+    assert!(matches!(error, Error::InvalidRequest(_)), "{error:?}");
     assert!(
-        matches!(&error, Error::InvalidRequest(message) if message.to_string().starts_with("invalid Anthropic messages request: ")),
+        litellm_error::Report::new(&error)
+            .to_string()
+            .contains("invalid Anthropic messages request"),
         "{error:?}"
     );
 }

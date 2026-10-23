@@ -92,28 +92,13 @@ async fn an_upstream_error_keeps_its_status_whole_body_and_headers(
         .unwrap_err();
 
     assert_eq!(received(&upstream).await.len(), 1);
-    let Error::Provider {
-        status,
-        body,
-        headers,
-    } = error
-    else {
-        panic!("expected provider error, got {error:?}");
-    };
+    let (status, body, headers) = error.upstream_response().expect("the provider answered");
     assert_eq!(status, 422);
-    for (name, value) in [
-        ("retry-after", "17"),
-        ("x-request-id", "request-123"),
-        ("x-future-header", "retained"),
-    ] {
-        assert!(
-            headers
-                .iter()
-                .any(|(key, actual)| key.eq_ignore_ascii_case(name) && actual == value),
-            "{name} missing from {headers:?}"
-        );
-    }
     assert_eq!(body, expected_body);
+    let header = |name: &str| litellm_http::request::header_value(headers, name);
+    assert_eq!(header("retry-after"), Some("17"));
+    assert_eq!(header("x-request-id"), Some("request-123"));
+    assert_eq!(header("x-future-header"), Some("retained"));
 }
 
 #[rstest]

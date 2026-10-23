@@ -352,7 +352,7 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
             Ok(wire)
         }
         async fn after_provider_response(&self, _: RawResponse) -> Result<(), Error> {
-            Err(Error::InvalidRequest("callback rejected".into()))
+            Err(Error::MissingField("callback rejected"))
         }
     }
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
@@ -371,7 +371,7 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
     let Error::PostCallHook(source) = error else {
         panic!("expected retained callback error")
     };
-    assert_eq!(*source, Error::InvalidRequest("callback rejected".into()));
+    assert_eq!(*source, Error::MissingField("callback rejected"));
     assert_eq!(received(&upstream).await.len(), 1);
 }
 
