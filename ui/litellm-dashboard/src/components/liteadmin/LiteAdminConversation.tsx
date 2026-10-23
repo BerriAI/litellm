@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import type { ActionEntry, ConversationEntry } from "./useLiteAdmin";
 import { AriaAvatar } from "./AriaAvatar";
+import { ARIA_AGENT_LABEL } from "./aria-brand";
 
 const ACTION_STATUS: Record<ActionEntry["status"], string> = {
   review: "Review change",
@@ -43,7 +44,7 @@ export function LiteAdminConversation({
       <MessageScroller.Root className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <MessageScroller.Viewport
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain data-pending-scroll:invisible"
-          aria-label="Aria Agent conversation"
+          aria-label={`${ARIA_AGENT_LABEL} conversation`}
         >
           <MessageScroller.Content className="flex flex-col gap-4 p-4" aria-busy={thinking}>
             {entries.map((entry) => (
@@ -68,7 +69,7 @@ export function LiteAdminConversation({
             ))}
             {thinking && (
               <MessageScroller.Item messageId="thinking">
-                <div role="status" aria-label="Aria Agent is working" className="space-y-2">
+                <div role="status" aria-label={`${ARIA_AGENT_LABEL} is working`} className="space-y-2">
                   <Skeleton className="h-3 w-3/4" />
                   <Skeleton className="h-3 w-1/2" />
                   <span className="sr-only">Working…</span>

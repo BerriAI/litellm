@@ -2,6 +2,7 @@ import { useRef, type ReactNode } from "react";
 import { ArrowUp, BarChart3, Box, CreditCard, KeyRound, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupTextarea } from "@/components/ui/input-group";
+import { ARIA_AGENT_LABEL } from "./aria-brand";
 
 const suggestions = [
   { label: "Create a key", icon: KeyRound },
@@ -49,7 +50,7 @@ export function LiteAdminHomeComposer({
           }
         }}
         placeholder={usage ? "Ask Aria about spend, models, or usage…" : "What would you like to do?"}
-        aria-label="Message Aria Agent"
+        aria-label={`Message ${ARIA_AGENT_LABEL}`}
         disabled={disabled}
         rows={usage ? 1 : 2}
         className={`${usage ? "min-h-16" : "min-h-24"} max-h-48 w-full rounded-t-xl px-5 pt-5 pb-2 text-sm placeholder:text-muted-foreground [field-sizing:content]`}

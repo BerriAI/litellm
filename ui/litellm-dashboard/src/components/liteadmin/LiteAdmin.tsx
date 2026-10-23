@@ -33,6 +33,7 @@ import { cn } from "@/lib/cva.config";
 import { hasProxyWideSpendView, isProxyAdminRole } from "@/utils/roles";
 import { getPreferredLiteAdminModel, MAX_INPUT_LENGTH, resolveInferenceTarget } from "./agent";
 import { AriaAvatar } from "./AriaAvatar";
+import { ARIA_AGENT_LABEL } from "./aria-brand";
 import { LiteAdminConversation } from "./LiteAdminConversation";
 import { LiteAdminHomeComposer } from "./LiteAdminHomeComposer";
 import { useLiteAdmin, type ConversationEntry, type LiteAdminSession } from "./useLiteAdmin";
@@ -77,21 +78,31 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
   const configured = useLiteAdminSession();
   const sessionKey = configured?.key ?? null;
   const [open, setOpen] = useState(false);
+  const [started, setStarted] = useState(false);
   const [homeContainer, setHomeContainer] = useState<HTMLDivElement | null>(null);
-  const [usageContainer, setUsageContainer] = useState<HTMLDivElement | null>(null);
+  const [usageContainer, updateUsageContainer] = useState<HTMLDivElement | null>(null);
+  const setUsageContainer = useCallback((container: HTMLDivElement | null) => {
+    updateUsageContainer(container);
+    if (container) setStarted(true);
+  }, []);
   const [openedSession, setOpenedSession] = useState(sessionKey);
   if (openedSession !== sessionKey) {
     setOpenedSession(sessionKey);
     setOpen(false);
+    setStarted(Boolean(usageContainer));
   }
-  const toggle = () => setOpen((current) => !current);
-  const show = () => {
-    if (!open) setOpen(true);
+  const toggle = () => {
+    setStarted(true);
+    setOpen((current) => !current);
   };
-  const available = configured?.session.access.mode === "admin" || Boolean(usageContainer);
-  const showPanel = available || open;
+  const show = () => {
+    if (open) return;
+    setStarted(true);
+    setOpen(true);
+  };
+  const showPanel = configured?.session.access.mode === "admin" || started;
   useEffect(() => {
-    if (sessionKey === null || !available) return;
+    if (sessionKey === null) return;
     const onKeyDown = (event: KeyboardEvent) => {
       const modifier = event.metaKey || event.ctrlKey;
       const extraModifier = event.shiftKey || event.altKey;
@@ -101,7 +112,7 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [sessionKey, available]);
+  }, [sessionKey]);
   return (
     <LiteAdminContext.Provider
       value={
@@ -120,10 +131,27 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
       }
     >
       {children}
+      {configured && !open && <AriaLauncher show={show} />}
       {configured && showPanel && (
         <DockedPanel key={configured.key} session={configured.session} open={open} close={() => setOpen(false)} />
       )}
     </LiteAdminContext.Provider>
+  );
+}
+
+function AriaLauncher({ show }: { show: () => void }) {
+  return (
+    <Button
+      variant="outline"
+      aria-label={`Launch ${ARIA_AGENT_LABEL}`}
+      aria-keyshortcuts="Meta+J Control+J"
+      aria-expanded={false}
+      onClick={show}
+      className="fixed bottom-4 right-4 z-floating h-11 gap-2 rounded-full border-blue-200 bg-background pl-2 pr-4 text-blue-700 shadow-md hover:bg-blue-50 hover:text-blue-800 dark:border-blue-400/30 dark:text-blue-300 dark:hover:bg-blue-400/10"
+    >
+      <AriaAvatar />
+      <span>{ARIA_AGENT_LABEL}</span>
+    </Button>
   );
 }
 
@@ -132,12 +160,12 @@ export function LiteAdminHome() {
   if (!state || state.access.mode !== "admin") return null;
   const { open, show, setHomeContainer } = state;
   return (
-    <section aria-label="Ask Aria Agent" hidden={open} className="space-y-3">
+    <section aria-label={`Ask ${ARIA_AGENT_LABEL}`} hidden={open} className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <h2 className="flex items-center gap-2 text-sm font-semibold">
             <AriaAvatar size={32} />
-            Aria Agent
+            {ARIA_AGENT_LABEL}
           </h2>
           <p className="border-l pl-3 text-sm text-muted-foreground">Your gateway, a little easier.</p>
         </div>
@@ -157,16 +185,14 @@ export default function LiteAdminTrigger() {
   return (
     <Button
       variant="ghost"
-      aria-label="Aria Agent"
+      aria-label={ARIA_AGENT_LABEL}
       aria-keyshortcuts="Meta+J Control+J"
       aria-expanded={state.open}
       onClick={state.toggle}
       className="gap-2 rounded-full border border-blue-200/70 bg-blue-50/80 pl-1.5 pr-3 text-blue-700 hover:bg-blue-100 hover:text-blue-800 aria-expanded:bg-blue-100 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300 dark:hover:bg-blue-400/20"
     >
       <AriaAvatar />
-      <span className="md:hidden lg:inline">
-        Aria (agent) <span aria-hidden="true">✨</span>
-      </span>
+      <span className="md:hidden lg:inline">{ARIA_AGENT_LABEL}</span>
       <kbd className="hidden rounded-full border border-info/30 px-1.5 font-sans text-xs lg:inline">⌘J</kbd>
     </Button>
   );
@@ -179,13 +205,13 @@ export function AriaUsageTrigger() {
     <Button
       variant="outline"
       size="sm"
-      aria-label="Open Aria Agent"
+      aria-label={`Open ${ARIA_AGENT_LABEL}`}
       aria-expanded={state.open}
       onClick={state.show}
       className="gap-1.5 border-blue-200 bg-blue-50/70 pl-1.5 text-blue-700 hover:bg-blue-100 hover:text-blue-800 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300 dark:hover:bg-blue-400/20"
     >
       <AriaAvatar size={24} />
-      Aria (agent) <span aria-hidden="true">✨</span>
+      {ARIA_AGENT_LABEL}
     </Button>
   );
 }
@@ -196,10 +222,12 @@ export function AriaUsageComposer() {
   const { open, setUsageContainer } = state;
   return (
     <section aria-label="Ask Aria about usage" hidden={open} className="mb-4">
-      <h2 className="mb-2 flex items-center gap-2 text-sm font-medium">
-        <AriaAvatar size={24} /> Aria (agent) <span aria-hidden="true">✨</span>
-        <span className="font-normal text-muted-foreground">Your AI usage assistant</span>
-      </h2>
+      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <h2 className="flex items-center gap-2 text-sm font-medium">
+          <AriaAvatar size={24} /> {ARIA_AGENT_LABEL}
+        </h2>
+        <p className="text-sm text-muted-foreground">Your AI usage assistant</p>
+      </div>
       <div ref={setUsageContainer} />
     </section>
   );
@@ -268,8 +296,8 @@ function Destination({
               <CardContent className="space-y-3">
                 <p className="break-all font-mono text-xs">{target.baseUrl}</p>
                 <p className="text-muted-foreground">
-                  This gateway uses a different address. Aria Agent will send your existing session credential to the
-                  address shown above.
+                  This gateway uses a different address. Aria will send your existing session credential to the address
+                  shown above.
                 </p>
               </CardContent>
               <CardFooter>
@@ -310,7 +338,7 @@ function Panel({
   return (
     <aside
       ref={ref}
-      aria-label="Aria Agent"
+      aria-label={ARIA_AGENT_LABEL}
       tabIndex={-1}
       hidden={!open}
       className={cn(
@@ -384,7 +412,7 @@ function LiteAdminChats({ session, open, close }: { session: LiteAdminSession; o
           </Button>
         </PanelHeader>
         <TabsList
-          aria-label="Aria Agent chats"
+          aria-label={`${ARIA_AGENT_LABEL} chats`}
           className="h-auto w-full shrink-0 justify-start overflow-x-auto rounded-none border-b bg-transparent p-2"
         >
           {tabs.chats.map((tab) => (
@@ -575,7 +603,7 @@ function ModelPicker({
   if (models.isPending) return <Skeleton className="h-8 w-full" aria-label="Loading models" />;
   return (
     <SearchSelect
-      aria-label="Aria Agent model"
+      aria-label={`${ARIA_AGENT_LABEL} model`}
       options={(models.data ?? []).map((item) => ({ value: item.model_group, label: item.model_group }))}
       value={value}
       onValueChange={onChange}
@@ -602,7 +630,7 @@ function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
       )}
       {models.isSuccess && models.data.length === 0 && (
         <Alert role="status">
-          <AlertDescription>Add a chat model to your gateway to use Aria Agent.</AlertDescription>
+          <AlertDescription>Add a chat model to your gateway to use Aria.</AlertDescription>
         </Alert>
       )}
     </>
@@ -616,7 +644,7 @@ function PanelHeader({ close, children }: { close: () => void; children?: ReactN
       <div className="flex flex-col gap-1 text-sm">
         <h2 className="flex items-center gap-2 font-semibold">
           <AriaAvatar size={32} />
-          Aria Agent
+          {ARIA_AGENT_LABEL}
         </h2>
         <p className="text-muted-foreground">
           {state?.access.mode === "usage"
@@ -626,7 +654,7 @@ function PanelHeader({ close, children }: { close: () => void; children?: ReactN
       </div>
       <div className="flex shrink-0">
         {children}
-        <Button variant="ghost" size="icon-sm" aria-label="Close Aria Agent" onClick={close}>
+        <Button variant="ghost" size="icon-sm" aria-label={`Close ${ARIA_AGENT_LABEL}`} onClick={close}>
           <X className="size-4" />
         </Button>
       </div>
