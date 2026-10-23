@@ -47888,6 +47888,8 @@ export interface components {
         };
         /** UIEventsEnabledResponse */
         UIEventsEnabledResponse: {
+            /** Chat Posthog Enabled */
+            chat_posthog_enabled: boolean;
             /** Enabled */
             enabled: boolean;
         };

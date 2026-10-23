@@ -258,6 +258,7 @@ class UIEventsEnabledResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool
+    chat_posthog_enabled: bool
 
 
 def telemetry_consent() -> TelemetryConsent:
@@ -271,5 +272,12 @@ def telemetry_consent() -> TelemetryConsent:
 async def ui_events_enabled(
     _user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     consent: Annotated[TelemetryConsent, Depends(telemetry_consent)],
+    runtime: Annotated[TelemetryRuntime, Depends(telemetry_runtime_dependency)],
 ) -> UIEventsEnabledResponse:
-    return UIEventsEnabledResponse(enabled=consent.allows(TelemetryGroup.PAGE_NAVIGATION))
+    enabled: Final = consent.allows(TelemetryGroup.PAGE_NAVIGATION)
+    return UIEventsEnabledResponse(
+        enabled=enabled,
+        chat_posthog_enabled=enabled
+        and runtime.settings.chat_posthog_enabled
+        and runtime.destination is TelemetryDestination.HTTP,
+    )

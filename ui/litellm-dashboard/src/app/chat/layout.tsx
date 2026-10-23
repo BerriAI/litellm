@@ -9,6 +9,7 @@ import { ChatShellProvider } from "@/contexts/ChatShellContext";
 import { PluginModeProvider } from "@/contexts/PluginModeContext";
 import ChatShell from "@/components/chat/ChatShell";
 import { uiHref } from "@/utils/uiHref";
+import { recordChatActive } from "@/lib/telemetry/chat";
 import "@/components/chat/moyai/moyai-chat.css";
 
 // The nuqs Next adapter uses useSearchParams, so keep the chat tree behind Suspense.
@@ -33,8 +34,24 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
   }, [blocked, router]);
 
   const identityReady = !isIdentityLoading && isAuthorized;
+  const chatReady = identityReady && !isUISettingsLoading && chatEnabled;
 
-  if (!identityReady || isUISettingsLoading || blocked) return null;
+  useEffect(() => {
+    if (!chatReady || !userId) return;
+
+    const recordActivity = () => {
+      if (document.visibilityState === "visible") void recordChatActive(userId);
+    };
+    recordActivity();
+    document.addEventListener("visibilitychange", recordActivity);
+    window.addEventListener("focus", recordActivity);
+    return () => {
+      document.removeEventListener("visibilitychange", recordActivity);
+      window.removeEventListener("focus", recordActivity);
+    };
+  }, [chatReady, userId]);
+
+  if (!chatReady) return null;
 
   return (
     <ThemeProvider accessToken={accessToken}>

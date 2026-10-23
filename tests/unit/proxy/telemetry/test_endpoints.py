@@ -1,13 +1,12 @@
-from dataclasses import dataclass, field
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Final
-
-from typing_extensions import LiteralString
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient, Response
+from typing_extensions import LiteralString
 
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -295,23 +294,73 @@ async def test_env_vars_lock_the_settings_and_are_listed_without_their_values(
 
 
 @pytest.mark.parametrize(
-    ("groups", "enabled"),
+    ("groups", "destination", "posthog_opt_in", "enabled", "chat_posthog_enabled"),
     [
-        (frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.PAGE_NAVIGATION}), True),
-        (frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.REQUEST_SUCCESS}), False),
-        (frozenset[TelemetryGroup](), False),
+        (
+            frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.PAGE_NAVIGATION}),
+            TelemetryDestination.HTTP,
+            False,
+            True,
+            False,
+        ),
+        (
+            frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.PAGE_NAVIGATION}),
+            TelemetryDestination.HTTP,
+            True,
+            True,
+            True,
+        ),
+        (
+            frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.PAGE_NAVIGATION}),
+            TelemetryDestination.LOCAL_TABLE,
+            True,
+            True,
+            False,
+        ),
+        (frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.PAGE_NAVIGATION}), None, True, True, False),
+        (
+            frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.REQUEST_SUCCESS}),
+            TelemetryDestination.HTTP,
+            True,
+            False,
+            False,
+        ),
+        (frozenset[TelemetryGroup](), TelemetryDestination.HTTP, True, False, False),
+        (frozenset[TelemetryGroup](), None, False, False, False),
     ],
 )
 def test_any_ui_user_can_ask_whether_page_navigation_events_are_wanted(
-    groups: frozenset[TelemetryGroup], enabled: bool
+    groups: frozenset[TelemetryGroup],
+    destination: TelemetryDestination | None,
+    posthog_opt_in: bool,
+    enabled: bool,
+    chat_posthog_enabled: bool,
 ) -> None:
+    runtime: Final = TelemetryRuntime()
+    runtime.destination = destination
+    runtime.settings = TelemetrySettings(chat_posthog_enabled=posthog_opt_in)
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
     app.dependency_overrides[telemetry_consent] = lambda: TelemetryConsent(groups)
+    app.dependency_overrides[telemetry_runtime_dependency] = lambda: runtime
     response: Final = TestClient(app).get("/telemetry/ui_events/enabled")
     assert response.status_code == 200, response.text
-    assert response.json() == {"enabled": enabled}
+    assert response.json() == {"enabled": enabled, "chat_posthog_enabled": chat_posthog_enabled}
+
+
+def test_the_proxy_app_disables_chat_posthog_when_telemetry_is_uninitialized() -> None:
+    from litellm.proxy.proxy_server import app, telemetry_runtime
+
+    assert telemetry_runtime.sink is None
+    assert telemetry_runtime.destination is None
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+    try:
+        response: Final = TestClient(app).get("/telemetry/ui_events/enabled")
+    finally:
+        _ = app.dependency_overrides.pop(user_api_key_auth)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"enabled": False, "chat_posthog_enabled": False}
 
 
 @pytest.mark.asyncio

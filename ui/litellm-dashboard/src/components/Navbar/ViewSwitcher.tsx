@@ -116,7 +116,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
           <WorkspaceIcon workspace={CHAT} />
           <span className="flex max-w-[220px] flex-col">
             <span className="font-medium">Chat</span>{" "}
-            <span className="text-xs leading-snug text-muted-foreground">Chat UI for using LLMs</span>{" "}
+            <span className="text-xs leading-snug text-muted-foreground">Chat UI for using LLMs, MCPs, Agents</span>{" "}
             {!chatEnabled && (
               <span className="whitespace-normal text-xs leading-snug text-muted-foreground">
                 Admins can enable in Settings
@@ -144,6 +144,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       ),
       onClick: () => selectMode(e.key),
     })),
+    chatItem,
     {
       key: MOYAI,
       label: (
@@ -160,7 +161,6 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       ),
       onClick: () => window.location.assign(moyaiUrl ?? uiHref(MOYAI)),
     },
-    chatItem,
   ];
 
   return (

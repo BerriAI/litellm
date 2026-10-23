@@ -64,7 +64,7 @@ describe("ViewSwitcher", () => {
 
     await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
     const chat = await screen.findByRole("menuitem", {
-      name: "Chat Chat UI for using LLMs Admins can enable in Settings",
+      name: "Chat Chat UI for using LLMs, MCPs, Agents Admins can enable in Settings",
     });
     expect(chat).toHaveAttribute("aria-disabled", "true");
     expect(within(chat).queryByRole("img")).not.toBeInTheDocument();
@@ -92,7 +92,7 @@ describe("ViewSwitcher", () => {
     renderSwitcher();
 
     await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
-    const chat = await screen.findByRole("menuitem", { name: "Chat Chat UI for using LLMs" });
+    const chat = await screen.findByRole("menuitem", { name: "Chat Chat UI for using LLMs, MCPs, Agents" });
     await user.click(chat);
     expect(assignSpy).toHaveBeenCalledWith("/ui/chat");
     expect(localStorage.getItem("litellm_plugin_mode")).toBeNull();
@@ -141,7 +141,7 @@ describe("ViewSwitcher", () => {
       const trigger = screen.getByRole("button", { name: "Switch workspace, current: Moyai" });
       expect(within(trigger).getByAltText("")).toHaveAttribute("src", expect.stringContaining("moyai-head.svg"));
       await user.click(trigger);
-      await user.click(await screen.findByRole("menuitem", { name: "Chat Chat UI for using LLMs" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Chat Chat UI for using LLMs, MCPs, Agents" }));
       expect(assignSpy).toHaveBeenCalledWith("/ui/chat");
     },
   );
