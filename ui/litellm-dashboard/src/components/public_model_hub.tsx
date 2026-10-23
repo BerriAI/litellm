@@ -58,6 +58,7 @@ import { ModelCustomMetadata } from "@/components/AIHub/ModelCustomMetadata";
 interface PublicModelHubProps {
   accessToken?: string | null;
   isEmbedded?: boolean; // When true, hides navbar and adjusts layout for embedding in dashboard
+  variant?: "dashboard" | "chat";
 }
 
 const usageExample = (model: ModelGroupInfo): string =>
@@ -91,7 +92,11 @@ function PublicHubEmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
-const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
+const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false, variant = "dashboard" }) => {
+  const isChat = variant === "chat";
+  const portalClassName = isChat ? "chat-theme" : undefined;
+  const dashboardRootClassName = isEmbedded ? "w-full" : "min-h-screen bg-card";
+  const dashboardContentClassName = isEmbedded ? "w-full p-6" : "w-full px-8 py-12";
   const anchor = useComboboxAnchor();
   const [proxyConfigured, setProxyConfigured] = useState<boolean>(false);
   const [agentHubData, setAgentHubData] = useState<AgentCard[] | null>(null);
@@ -126,6 +131,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         // Continue anyway - might work with default proxyBaseUrl
       }
       setProxyConfigured(true);
+      if (isChat) return;
 
       const fetchAgentData = async () => {
         try {
@@ -179,7 +185,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     };
 
     initializeAndFetch();
-  }, []);
+  }, [isChat]);
 
   const getUniqueAgentSkills = (data: AgentCard[]) => {
     const skills = new Set<string>();
@@ -310,6 +316,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const agentColumns = useMemo(() => getPublicAgentHubColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
   const mcpColumns = useMemo(() => getPublicMCPHubColumns({ onServerClick: showMcpModal }), [showMcpModal]);
 
+  const showUsefulLinks = !isChat && Object.keys(usefulLinks).length > 0;
   const hasAgents = Array.isArray(agentHubData) && agentHubData.length > 0;
   const hasMcpServers = Array.isArray(mcpHubData) && mcpHubData.length > 0;
 
@@ -331,13 +338,13 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   return (
     <ThemeProvider accessToken={accessToken}>
       <TooltipProvider>
-        <div className={isEmbedded ? "w-full" : "min-h-screen bg-card"}>
+        <div className={isChat ? "chat-model-hub-catalog w-full" : dashboardRootClassName}>
           {/* Navigation - only show when not embedded */}
-          {!isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
+          {!isChat && !isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
 
-          <div className={isEmbedded ? "w-full p-6" : "w-full px-8 py-12"}>
+          <div className={isChat ? "chat-model-hub-content w-full" : dashboardContentClassName}>
             {/* Embedded Explainer - only shown when embedded in dashboard */}
-            {isEmbedded && (
+            {!isChat && isEmbedded && (
               <div className="mb-6 p-4 bg-info/10 border border-info/20 rounded-lg">
                 <p className="text-sm text-foreground">
                   These are models, agents, and MCP servers your proxy admin has indicated are available in your
@@ -347,7 +354,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             )}
 
             {/* About Section - only shown when not embedded */}
-            {!isEmbedded && (
+            {!isChat && !isEmbedded && (
               <Card className="mb-10 p-8 bg-card border border-border rounded-lg shadow-xs">
                 <h2 className="text-2xl font-semibold mb-6 text-foreground">About</h2>
                 <p className="text-foreground mb-6 text-base leading-relaxed">
@@ -365,7 +372,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             )}
 
             {/* Useful Links - only shown when not embedded */}
-            {usefulLinks && Object.keys(usefulLinks).length > 0 && (
+            {showUsefulLinks && (
               <Card className="mb-10 p-8 bg-card border border-border rounded-lg shadow-xs">
                 <h2 className="text-2xl font-semibold mb-6 text-foreground">Useful Links</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -392,7 +399,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             )}
 
             {/* Health and Endpoint Status - only shown when not embedded */}
-            {!isEmbedded && (
+            {!isChat && !isEmbedded && (
               <Card className="mb-10 p-8 bg-card border border-border rounded-lg shadow-xs">
                 <h2 className="text-2xl font-semibold mb-6 text-foreground">Health and Endpoint Status</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -402,29 +409,39 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             )}
 
             {/* Tabs for Models and Agents */}
-            <Card className="p-8 bg-card border border-border rounded-lg shadow-xs">
-              <Tabs value={activeTab} onValueChange={setActiveTab} className="public-hub-tabs">
-                <TabsList>
-                  <TabsTrigger value="models">Model Hub</TabsTrigger>
-                  {hasAgents && <TabsTrigger value="agents">Agent Hub</TabsTrigger>}
-                  {hasMcpServers && <TabsTrigger value="mcp">MCP Hub</TabsTrigger>}
-                  <TabsTrigger value="skills">Skill Hub</TabsTrigger>
-                </TabsList>
+            <Card
+              className={
+                isChat
+                  ? "chat-model-hub-card border-0 bg-transparent p-0 shadow-none"
+                  : "p-8 bg-card border border-border rounded-lg shadow-xs"
+              }
+            >
+              <Tabs value={isChat ? "models" : activeTab} onValueChange={setActiveTab} className="public-hub-tabs">
+                {!isChat && (
+                  <TabsList>
+                    <TabsTrigger value="models">Model Hub</TabsTrigger>
+                    {hasAgents && <TabsTrigger value="agents">Agent Hub</TabsTrigger>}
+                    {hasMcpServers && <TabsTrigger value="mcp">MCP Hub</TabsTrigger>}
+                    <TabsTrigger value="skills">Skill Hub</TabsTrigger>
+                  </TabsList>
+                )}
 
                 {/* Models Tab */}
-                <TabsContent value="models">
-                  <div className="flex justify-between items-center mb-8">
-                    <h2 className="text-2xl font-semibold text-foreground">Available Models</h2>
-                  </div>
+                <TabsContent value="models" className="model-hub-models">
+                  {!isChat && (
+                    <div className="model-hub-heading flex justify-between items-center mb-8">
+                      <h2 className="text-2xl font-semibold text-foreground">Available Models</h2>
+                    </div>
+                  )}
 
                   {/* Filters */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border">
+                  <div className="chat-model-hub-filters grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border">
                     <div>
                       <div className="flex items-center space-x-2 mb-3">
                         <p className="text-sm font-medium text-foreground">Search Models:</p>
                         <Tooltip>
                           <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
-                          <TooltipContent side="top">
+                          <TooltipContent side="top" className={portalClassName}>
                             Finds every published model whose name contains what you type, across all pages. Try
                             &apos;grok&apos;, &apos;claude&apos;, &apos;gpt-4&apos;, or &apos;sonnet&apos;
                           </TooltipContent>
@@ -466,7 +483,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                             className="min-w-24"
                           />
                         </ComboboxChips>
-                        <ComboboxContent anchor={anchor}>
+                        <ComboboxContent anchor={anchor} className={portalClassName}>
                           <ComboboxEmpty>No providers found</ComboboxEmpty>
                           <ComboboxList>
                             {(provider: string) => {
@@ -497,6 +514,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       <p className="text-sm font-medium mb-3 text-foreground">Mode:</p>
                       <MultiSelect
                         options={modeOptions}
+                        contentClassName={portalClassName}
                         value={models.modeValues}
                         onValueChange={models.onModesChange}
                         placeholder="Select modes"
@@ -507,6 +525,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       <p className="text-sm font-medium mb-3 text-foreground">Features:</p>
                       <MultiSelect
                         options={featureOptions}
+                        contentClassName={portalClassName}
                         value={models.featureValues}
                         onValueChange={models.onFeaturesChange}
                         placeholder="Select features"
@@ -515,35 +534,37 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     </div>
                   </div>
 
-                  <DataTable
-                    data={models.rows}
-                    columns={modelColumns}
-                    getRowId={(model, index) => model.model_group || String(index)}
-                    sortingMode="server"
-                    sorting={models.sorting}
-                    onSortingChange={models.onSortingChange}
-                    paginationMode="server"
-                    pagination={models.pagination}
-                    onPaginationChange={models.onPaginationChange}
-                    rowCount={models.rowCount}
-                    isLoading={models.isLoading}
-                    loadingMessage="Loading models…"
-                    noDataMessage={
-                      <PublicHubEmptyState
-                        title={models.hasActiveQuery ? "No matching models" : "No models available"}
-                        body={
-                          models.hasActiveQuery
-                            ? "Adjust the search or filters to see more models."
-                            : "Models made public by the proxy admin will appear here."
-                        }
-                      />
-                    }
-                    size="compact"
-                  />
+                  <div className="model-hub-table">
+                    <DataTable
+                      data={models.rows}
+                      columns={modelColumns}
+                      getRowId={(model, index) => model.model_group || String(index)}
+                      sortingMode="server"
+                      sorting={models.sorting}
+                      onSortingChange={models.onSortingChange}
+                      paginationMode="server"
+                      pagination={models.pagination}
+                      onPaginationChange={models.onPaginationChange}
+                      rowCount={models.rowCount}
+                      isLoading={models.isLoading}
+                      loadingMessage="Loading models…"
+                      noDataMessage={
+                        <PublicHubEmptyState
+                          title={models.hasActiveQuery ? "No matching models" : "No models available"}
+                          body={
+                            models.hasActiveQuery
+                              ? "Adjust the search or filters to see more models."
+                              : "Models made public by the proxy admin will appear here."
+                          }
+                        />
+                      }
+                      size="compact"
+                    />
+                  </div>
                 </TabsContent>
 
                 {/* Agents Tab */}
-                {hasAgents && (
+                {!isChat && hasAgents && (
                   <TabsContent value="agents">
                     <div className="flex justify-between items-center mb-8">
                       <h2 className="text-2xl font-semibold text-foreground">Available Agents</h2>
@@ -556,7 +577,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           <p className="text-sm font-medium text-foreground">Search Agents:</p>
                           <Tooltip>
                             <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
-                            <TooltipContent side="top">Search agents by name or description</TooltipContent>
+                            <TooltipContent side="top" className={portalClassName}>
+                              Search agents by name or description
+                            </TooltipContent>
                           </Tooltip>
                         </div>
                         <div className="relative">
@@ -610,7 +633,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                 )}
 
                 {/* MCP Servers Tab */}
-                {hasMcpServers && (
+                {!isChat && hasMcpServers && (
                   <TabsContent value="mcp">
                     <div className="flex justify-between items-center mb-8">
                       <h2 className="text-2xl font-semibold text-foreground">Available MCP Servers</h2>
@@ -623,7 +646,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           <p className="text-sm font-medium text-foreground">Search MCP Servers:</p>
                           <Tooltip>
                             <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
-                            <TooltipContent side="top">Search MCP servers by name or description</TooltipContent>
+                            <TooltipContent side="top" className={portalClassName}>
+                              Search MCP servers by name or description
+                            </TooltipContent>
                           </Tooltip>
                         </div>
                         <div className="relative">
@@ -677,16 +702,20 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                 )}
 
                 {/* Skill Hub Tab */}
-                <TabsContent value="skills">
-                  <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
-                </TabsContent>
+                {!isChat && (
+                  <TabsContent value="skills">
+                    <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
+                  </TabsContent>
+                )}
               </Tabs>
             </Card>
           </div>
 
           {/* Model Details Modal */}
           <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleModalCancel()}>
-            <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
+            <DialogContent
+              className={`${isChat ? "chat-theme chat-model-hub-dialog " : ""}max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]`}
+            >
               <DialogHeader>
                 <DialogTitle className="flex min-w-0 items-center space-x-2">
                   <span className="break-words">{selectedModel?.model_group || "Model Details"}</span>
@@ -700,7 +729,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           />
                         }
                       />
-                      <TooltipContent>Copy model name</TooltipContent>
+                      <TooltipContent className={portalClassName}>Copy model name</TooltipContent>
                     </Tooltip>
                   )}
                 </DialogTitle>
@@ -892,7 +921,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
           {/* Agent Details Modal */}
           <Dialog open={isAgentModalVisible} onOpenChange={(open) => !open && handleAgentModalCancel()}>
-            <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
+            <DialogContent
+              className={`${isChat ? "chat-theme chat-model-hub-dialog " : ""}max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]`}
+            >
               <DialogHeader>
                 <DialogTitle className="flex min-w-0 items-center space-x-2">
                   <span className="break-words">{selectedAgent?.name || "Agent Details"}</span>
@@ -906,7 +937,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           />
                         }
                       />
-                      <TooltipContent>Copy agent name</TooltipContent>
+                      <TooltipContent className={portalClassName}>Copy agent name</TooltipContent>
                     </Tooltip>
                   )}
                 </DialogTitle>
@@ -1195,7 +1226,9 @@ print(response.model_dump(mode='json', exclude_none=True))`;
 
           {/* MCP Server Details Modal */}
           <Dialog open={isMcpModalVisible} onOpenChange={(open) => !open && handleMcpModalCancel()}>
-            <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
+            <DialogContent
+              className={`${isChat ? "chat-theme chat-model-hub-dialog " : ""}max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]`}
+            >
               <DialogHeader>
                 <DialogTitle className="flex min-w-0 items-center space-x-2">
                   <span className="break-words">{selectedMcpServer?.server_name || "MCP Server Details"}</span>
@@ -1209,7 +1242,7 @@ print(response.model_dump(mode='json', exclude_none=True))`;
                           />
                         }
                       />
-                      <TooltipContent>Copy server name</TooltipContent>
+                      <TooltipContent className={portalClassName}>Copy server name</TooltipContent>
                     </Tooltip>
                   )}
                 </DialogTitle>

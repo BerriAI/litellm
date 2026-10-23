@@ -229,6 +229,42 @@ describe("ModelHubTable", () => {
     expect(networking.modelHubCall).not.toHaveBeenCalled();
   });
 
+  it("should limit the chat catalog to browsing models even for an admin", async () => {
+    vi.mocked(networking.modelHubCall).mockResolvedValue({
+      data: [{ model_group: "chat-model", providers: ["openai"], mode: "chat" }],
+    });
+    mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+
+    renderWithProviders(
+      <ModelHubTable
+        accessToken="test-token"
+        publicPage={false}
+        premiumUser
+        userRole="Admin"
+        canOpenPlayground
+        canAddModels
+        variant="chat"
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "chat-model" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search model names...")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "AI Hub" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Model Hub URL:")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Select Models to Make Public" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "decisions" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("decision-model-garden")).not.toBeInTheDocument();
+    expect(networking.modelHubCall).toHaveBeenCalledWith("test-token");
+    expect(networking.getConfigFieldSetting).not.toHaveBeenCalled();
+    expect(networking.getAgentsList).not.toHaveBeenCalled();
+    expect(networking.fetchMCPServers).not.toHaveBeenCalled();
+    expect(networking.getClaudeCodePluginsList).not.toHaveBeenCalled();
+    expect(networking.getPublicModelHubInfo).not.toHaveBeenCalled();
+    expect(networking.modelCostMap).not.toHaveBeenCalled();
+  });
+
   it("should call getUiConfig before modelHubPublicModelsCall when publicPage is true", async () => {
     const getUiConfigMock = vi.mocked(networking.getUiConfig);
     const modelHubPublicModelsCallMock = vi.mocked(networking.modelHubPublicModelsCall);

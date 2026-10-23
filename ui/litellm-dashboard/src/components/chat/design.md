@@ -36,6 +36,8 @@ Glass progressively enhances solid fills inside `@supports`. Reduced transparenc
 
 The standalone `ChatModelPicker` exposes the account's chat and image-generation models from the composer action row. Its portalled popover carries `.chat-theme`; keep model names, capabilities and selection states readable in both themes. Attachment and MCP tools stay beside the composer.
 
+The **Models** sidebar destination opens `/ui/chat/models` inside the same shell. It reuses the existing Model Hub catalog, filters, pricing and details in a read-only `chat` variant. Admins see the authenticated catalog and other users see the published catalog, matching the dashboard's existing access rules. The page uses `.moyai-models-page` for scrolling and `.chat-model-hub-card` for the bordered Moyai surface. Portalled model details carry `.chat-theme`; catalog management and other hub tabs stay in the dashboard.
+
 ### Colors
 
 | Token                         | Tailwind class                        | Use                                                        |

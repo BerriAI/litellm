@@ -99,11 +99,11 @@ const facetPaths = (): string[] =>
 const modelQueries = (): QueryRecord[] => modelCalls().map((call) => (call[1] as { query: QueryRecord }).query);
 const lastModelQuery = (): QueryRecord => modelQueries()[modelQueries().length - 1];
 
-const renderHub = () => {
+const renderHub = (props: React.ComponentProps<typeof PublicModelHub> = {}) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
     <QueryClientProvider client={client}>
-      <PublicModelHub />
+      <PublicModelHub {...props} />
     </QueryClientProvider>,
   );
 };
@@ -439,6 +439,55 @@ describe("PublicModelHub", () => {
       expect(screen.getByText("Model Hub")).toBeInTheDocument();
       expect(screen.getByText("No models available")).toBeInTheDocument();
     });
+  });
+});
+
+describe("PublicModelHub chat variant", () => {
+  it("should render published models without dashboard chrome or unrelated hub requests", async () => {
+    const networkingModule = await import("./networking");
+    renderHub({ isEmbedded: true, variant: "chat" });
+
+    expect(await screen.findByRole("button", { name: "gpt-4", exact: true })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search model names" })).toBeInTheDocument();
+    expect(screen.queryByTestId("navbar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Available Models" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "About" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Useful Links" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/These are models, agents, and MCP servers/)).not.toBeInTheDocument();
+    expect(networkingModule.getPublicModelHubInfo).not.toHaveBeenCalled();
+    expect(networkingModule.agentHubPublicModelsCall).not.toHaveBeenCalled();
+    expect(networkingModule.mcpHubPublicServersCall).not.toHaveBeenCalled();
+    expect(networkingModule.skillHubPublicCall).not.toHaveBeenCalled();
+  });
+
+  it("should preserve published model search and pagination in chat", async () => {
+    const user = userEvent.setup();
+    respondWith(DEFAULT_MODELS, 300);
+    renderHub({ isEmbedded: true, variant: "chat" });
+    await screen.findByRole("button", { name: "gpt-4", exact: true });
+
+    await user.type(screen.getByRole("textbox", { name: "Search model names" }), "gpt");
+    await waitFor(() => expect(lastModelQuery().q).toBe("gpt"));
+    await user.click(screen.getByTestId("pagination-next"));
+    await waitFor(() => expect(lastModelQuery().page).toBe(2));
+    expect(lastModelQuery().q).toBe("gpt");
+  });
+
+  it("should retain costs and usage examples in a chat-themed model dialog", async () => {
+    const user = userEvent.setup();
+    respondWith([model({ model_group: "gpt-4", input_cost_per_token: 0.000001, output_cost_per_token: 0.000003 })]);
+    renderHub({ isEmbedded: true, variant: "chat" });
+    await user.click(await screen.findByRole("button", { name: "gpt-4", exact: true }));
+
+    const dialog = await screen.findByRole("dialog", { name: "gpt-4" });
+    expect(dialog).toHaveClass("chat-theme", "chat-model-hub-dialog");
+    expect(within(dialog).getByText("$1.0000")).toBeInTheDocument();
+    expect(within(dialog).getByText("$3.0000")).toBeInTheDocument();
+    expect(within(dialog).getByText("Usage Example")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Copy to clipboard" })).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: /close/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });
 

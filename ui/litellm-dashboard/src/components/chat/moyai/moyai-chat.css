@@ -10,6 +10,60 @@
   --font-moyai-chat: "General Sans", "Moyai Geist", ui-sans-serif, system-ui, sans-serif;
   font-family: var(--font-moyai-chat);
 }
+.moyai-models-page {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 52px 48px;
+}
+.moyai-models-content {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+.moyai-models-header {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 32px;
+}
+.moyai-models-header h1 {
+  font: 500 clamp(28px, 3vw, 38px) / 1.15 var(--font-moyai-chat, sans-serif);
+  letter-spacing: -0.04em;
+}
+.chat-model-hub-catalog {
+  min-width: 0;
+}
+.chat-model-hub-card {
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid var(--chat-home-editor-border);
+  border-radius: 10px;
+  background: var(--chat-glass-surface);
+  background-image: var(--chat-glass-sheen);
+  box-shadow: var(--chat-glass-shadow);
+}
+.chat-model-hub-catalog .chat-model-hub-filters {
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.chat-model-hub-dialog {
+  border-color: var(--chat-home-editor-border);
+  border-radius: 12px;
+}
+@media (max-width: 767px) {
+  .moyai-models-page {
+    padding: 64px 16px 28px;
+  }
+  .moyai-models-header {
+    margin-bottom: 24px;
+  }
+  .chat-model-hub-card {
+    padding: 16px;
+  }
+}
 .moyai-chat-home {
   height: 100%;
   overflow: auto;

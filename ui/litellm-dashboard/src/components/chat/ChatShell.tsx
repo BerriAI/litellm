@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   Plus,
   MessageSquare,
+  Network,
   LayoutGrid,
   KeyRound,
   Lock,
@@ -43,6 +44,7 @@ export function getChatRoutes() {
   const base = uiHref("chat");
   return {
     chats: base,
+    models: `${base}/models`,
     integrations: `${base}/integrations`,
     credentials: `${base}/credentials`,
     apiKeys: `${base}/api-keys`,
@@ -163,6 +165,12 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           label="Chats"
           onClick={() => navigate(routes.chats)}
           active={isChatsRoute}
+        />
+        <NavItem
+          icon={<Network className="size-4" />}
+          label="Models"
+          onClick={() => navigate(routes.models)}
+          active={pathname === routes.models}
         />
         <NavItem
           icon={<LayoutGrid className="size-4" />}
