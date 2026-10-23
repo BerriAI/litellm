@@ -1,5 +1,7 @@
+import OpenAI from "openai";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
-import { generateChatImages, toResponsesMessages } from "./imageHelpers";
+import { generateChatImages } from "./imageHelpers";
+import { toResponsesMessages } from "./attachmentHelpers";
 import type { AssistantMessageUpdate, ChatMessage, MCPEvent } from "./types";
 
 interface ChatRequestOptions {
@@ -13,6 +15,21 @@ interface ChatRequestOptions {
   mcpServers?: string[];
   onResponseId: (id: string | null) => void;
   onUpdate: (update: AssistantMessageUpdate) => void;
+}
+
+function requestErrorMessage(
+  error: unknown,
+  messages: ChatRequestOptions["messages"],
+  mode: ChatRequestOptions["mode"],
+): string {
+  const message = error instanceof Error ? error.message : "Something went wrong. Please try again.";
+  const hasFile =
+    mode === "chat" && messages.some((item) => item.attachments?.some((attachment) => attachment.kind === "file"));
+  const fileRejectionStatus = error instanceof OpenAI.APIError && (error.status === 400 || error.status === 422);
+  if (hasFile && fileRejectionStatus) {
+    return message + " Try a model that supports file inputs, or paste the relevant text.";
+  }
+  return message;
 }
 
 export async function runChatRequest({
@@ -80,7 +97,7 @@ export async function runChatRequest({
   } catch (error: unknown) {
     onResponseId(null);
     const stopped = signal.aborted || (error instanceof Error && error.name === "AbortError");
-    const errorMessage = error instanceof Error ? error.message : "Something went wrong. Please try again.";
+    const errorMessage = requestErrorMessage(error, messages, mode);
     onUpdate({ content: stopped ? content + " [stopped]" : content || errorMessage });
   }
 }

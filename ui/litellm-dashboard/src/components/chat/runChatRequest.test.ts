@@ -1,12 +1,16 @@
+import OpenAI from "openai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
-import { generateChatImages, toResponsesMessages } from "./imageHelpers";
+import { generateChatImages } from "./imageHelpers";
+import { toResponsesMessages } from "./attachmentHelpers";
 import { runChatRequest } from "./runChatRequest";
 import type { MCPEvent } from "./types";
 
 vi.mock("@/components/llm_calls/responses_api", () => ({ makeOpenAIResponsesRequest: vi.fn() }));
 vi.mock("./imageHelpers", () => ({
   generateChatImages: vi.fn(),
+}));
+vi.mock("./attachmentHelpers", () => ({
   toResponsesMessages: vi.fn((messages) => messages),
 }));
 
@@ -102,6 +106,35 @@ describe("runChatRequest", () => {
     expect(options.onResponseId).toHaveBeenCalledWith(null);
   });
 
+  it.each([400, 422, 401, 429, 500])(
+    "should suggest a supported model only when a file request is rejected with %i",
+    async (status) => {
+      const options = requestOptions({
+        messages: [
+          {
+            role: "user",
+            content: "Read the report",
+            attachments: [
+              {
+                id: "report",
+                kind: "file",
+                name: "report.pdf",
+                mimeType: "application/pdf",
+                url: "data:application/pdf;base64,JVBERg==",
+              },
+            ],
+          },
+        ],
+      });
+      const error = new OpenAI.APIError(status, { message: "Provider detail" }, "Provider detail", new Headers());
+      vi.mocked(makeOpenAIResponsesRequest).mockRejectedValue(error);
+      await runChatRequest(options);
+      const hint =
+        status === 400 || status === 422 ? " Try a model that supports file inputs, or paste the relevant text." : "";
+      expect(options.onUpdate).toHaveBeenLastCalledWith({ content: error.message + hint });
+    },
+  );
+
   it("should return generated images through the same message update callback", async () => {
     const options = requestOptions({ mode: "image", model: "image-model" });
     const images = [{ id: "image-1", name: "Generated image 1", url: "https://images.example/image.png" }];
@@ -116,6 +149,33 @@ describe("runChatRequest", () => {
       signal: options.signal,
     };
     expect(generateChatImages).toHaveBeenCalledWith(expectedRequest);
+  });
+
+  it("should not suggest file inputs for an image-generation rejection after a file message", async () => {
+    const options = requestOptions({
+      mode: "image",
+      messages: [
+        {
+          role: "user",
+          content: "Read the report",
+          attachments: [
+            {
+              id: "report",
+              kind: "file",
+              name: "report.pdf",
+              mimeType: "application/pdf",
+              url: "data:application/pdf;base64,JVBERg==",
+            },
+          ],
+        },
+      ],
+    });
+    const error = new OpenAI.APIError(400, { message: "Invalid image size" }, "Invalid image size", new Headers());
+    vi.mocked(generateChatImages).mockRejectedValue(error);
+
+    await runChatRequest(options);
+
+    expect(options.onUpdate).toHaveBeenLastCalledWith({ content: error.message });
   });
 
   it("should discard image results that arrive after the request was stopped", async () => {
