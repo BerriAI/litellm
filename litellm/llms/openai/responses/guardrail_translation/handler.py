@@ -276,7 +276,7 @@ _EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
 def _serialize_block_sse_event(event: ResponsesAPIStreamingResponse) -> bytes:
     event_type: Final = _STREAM_EVENT_TYPE_ADAPTER.validate_python(stream_item_field(event, "type"))
     payload: Final = event.model_dump_json(exclude_none=True, exclude_unset=True, serialize_as_any=True)
-    return f"event: {event_type}\ndata: {payload}\n\n".encode("utf-8")
+    return f"event: {event_type}\ndata: {payload}\n\n".encode()
 
 
 def _item_rewrite_field(item: Mapping[str, object]) -> str | None:

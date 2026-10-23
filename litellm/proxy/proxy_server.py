@@ -10151,12 +10151,10 @@ def _format_streaming_sse_chunk(chunk: object) -> str | bytes:
     return f"data: {chunk}\n\n"
 
 
-def _should_emit_openai_done(request_data: Mapping[str, object], *, responses_stream_errors: bool) -> bool:
+def _should_emit_openai_done(*, responses_stream_errors: bool, skip_done_frame: bool) -> bool:
     if responses_stream_errors:
         return False
-    if request_data.get("_litellm_skip_openai_stream_done"):
-        return False
-    return True
+    return not skip_done_frame
 
 
 _SSE_FRAME_DELIMITERS: Final = ("\r\n\r\n", "\n\n", "\r\r")
@@ -10388,7 +10386,7 @@ def _make_keepalive_resolver(request_data: Mapping[str, object]) -> Callable[[ob
 async def async_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: dict[str, object],
     request: Request | None = None,
     *,
     responses_stream_errors: bool = False,
@@ -10399,7 +10397,8 @@ async def async_data_generator(
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
     ends_with_openai_done: Final = _should_emit_openai_done(
-        request_data, responses_stream_errors=responses_stream_errors
+        responses_stream_errors=responses_stream_errors,
+        skip_done_frame=bool(request_data.get("_litellm_skip_openai_stream_done")),
     )
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
     stream_iterator: Final = _object_stream(
