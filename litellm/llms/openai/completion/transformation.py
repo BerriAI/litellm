@@ -183,18 +183,19 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         prompt: Final = transform_prompt(messages)
-        user_extra: Final = optional_params.get("extra_body")
-        passthrough_params: Final = {
-            k: v for k, v in optional_params.items() if k != "extra_body" and k not in OPENAI_TEXT_COMPLETION_PARAMS
-        }
-        extra_body: Final = {
-            **(dict(user_extra) if isinstance(user_extra, (dict, Mapping)) else {}),
-            **passthrough_params,
-        }
-        standard_params: Final = {k: v for k, v in optional_params.items() if k in OPENAI_TEXT_COMPLETION_PARAMS}
-        return {
+        result: Final[dict[str, object]] = {  # mutable-ok: completion request payload
             "model": model,
             "prompt": prompt,
-            **standard_params,
-            **({"extra_body": extra_body} if extra_body else {}),
         }
+        result.update(optional_params)  # pyright: ignore[reportUnknownMemberType]  # optional_params is an untyped dict
+        extra_body: Final[dict[str, object]] = {}  # mutable-ok: completion extra body
+        user_extra: Final = result.pop("extra_body", None)
+        if isinstance(user_extra, (dict, Mapping)):
+            extra_body.update(user_extra)  # pyright: ignore[reportUnknownMemberType]  # extra_body is untyped
+        for param in list(result.keys()):
+            if param not in OPENAI_TEXT_COMPLETION_PARAMS:
+                extra_body[param] = result.pop(param)
+        if extra_body:
+            result["extra_body"] = extra_body
+        return result
+
