@@ -15,6 +15,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import aggregate_tool_discoveries
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.db.tool_table_bulk_upsert import build_tool_bulk_upsert
@@ -115,7 +116,8 @@ async def batch_upsert_tools(
     if not rows:
         return
     sql, params = build_tool_bulk_upsert(rows)
-    await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
+    async with db_span("commit_tool_discoveries", "LiteLLM_ToolTable"):
+        await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
     verbose_proxy_logger.debug("tool_registry_writer: upserted %d tool(s)", len(rows))
 
 
