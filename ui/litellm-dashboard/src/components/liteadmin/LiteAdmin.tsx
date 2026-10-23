@@ -26,6 +26,7 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -46,6 +47,7 @@ type LiteAdminState = {
   toggle: () => void;
   show: () => void;
   access: LiteAdminSession["access"];
+  launcherRef: RefObject<HTMLButtonElement | null>;
   homeContainer: HTMLDivElement | null;
   setHomeContainer: (container: HTMLDivElement | null) => void;
   usageContainer: HTMLDivElement | null;
@@ -73,11 +75,12 @@ function useLiteAdminSession() {
   };
 }
 
-/** Wraps the dashboard content column and docks the LiteAdmin panel beside it, so opening it narrows the page instead of covering it. */
+/** Keeps one Aria conversation available from the dashboard and its floating launcher. */
 export function LiteAdminFrame({ children }: { children: ReactNode }) {
   const configured = useLiteAdminSession();
   const sessionKey = configured?.key ?? null;
   const [open, setOpen] = useState(false);
+  const launcherRef = useRef<HTMLButtonElement>(null);
   const [started, setStarted] = useState(false);
   const [homeContainer, setHomeContainer] = useState<HTMLDivElement | null>(null);
   const [usageContainer, updateUsageContainer] = useState<HTMLDivElement | null>(null);
@@ -122,6 +125,7 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
               toggle,
               show,
               access: configured.session.access,
+              launcherRef,
               homeContainer,
               setHomeContainer,
               usageContainer,
@@ -131,17 +135,18 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
       }
     >
       {children}
-      {configured && !open && <AriaLauncher show={show} />}
+      {configured && !open && <AriaLauncher show={show} buttonRef={launcherRef} />}
       {configured && showPanel && (
-        <DockedPanel key={configured.key} session={configured.session} open={open} close={() => setOpen(false)} />
+        <AriaPopup key={configured.key} session={configured.session} open={open} close={() => setOpen(false)} />
       )}
     </LiteAdminContext.Provider>
   );
 }
 
-function AriaLauncher({ show }: { show: () => void }) {
+function AriaLauncher({ show, buttonRef }: { show: () => void; buttonRef: RefObject<HTMLButtonElement | null> }) {
   return (
     <Button
+      ref={buttonRef}
       variant="outline"
       aria-label={`Launch ${ARIA_AGENT_LABEL}`}
       aria-keyshortcuts="Meta+J Control+J"
@@ -233,7 +238,7 @@ export function AriaUsageComposer() {
   );
 }
 
-function DockedPanel({ session, open, close }: { session: ManagementSession; open: boolean; close: () => void }) {
+function AriaPopup({ session, open, close }: { session: ManagementSession; open: boolean; close: () => void }) {
   const settings = useProxySettingsQuery(session.accessToken);
   const candidate =
     settings.data?.LITELLM_UI_API_DOC_BASE_URL?.trim() ||
@@ -277,6 +282,7 @@ function Destination({
   return (
     <Panel
       open={open}
+      close={close}
       composer={
         <div className="p-4">
           {loading && <Skeleton className="h-24" aria-label="Loading gateway settings" />}
@@ -308,7 +314,7 @@ function Destination({
         </div>
       }
     >
-      <PanelHeader close={close} />
+      <PanelHeader />
     </Panel>
   );
 }
@@ -316,39 +322,46 @@ function Destination({
 /** On open, focus `initialFocus` when given, else the composer when it is usable, else the panel itself. */
 function Panel({
   open,
+  close,
   initialFocus,
   composer,
   children,
 }: {
   open: boolean;
+  close: () => void;
   initialFocus?: RefObject<HTMLElement | null>;
   composer: ReactNode;
   children: ReactNode;
 }) {
   const state = useContext(LiteAdminContext);
   const homeContainer = !open ? state?.usageContainer ?? state?.homeContainer : null;
-  const ref = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const panel = ref.current;
-    if (!open || !panel) return;
-    (initialFocus?.current ?? panel.querySelector<HTMLElement>("textarea:enabled") ?? panel).focus({
-      preventScroll: true,
-    });
-  }, [open, initialFocus]);
+  const ref = useRef<HTMLDivElement>(null);
   return (
-    <aside
-      ref={ref}
-      aria-label={ARIA_AGENT_LABEL}
-      tabIndex={-1}
-      hidden={!open}
-      className={cn(
-        "w-[min(26rem,40vw)] min-w-80 flex-none flex-col overflow-hidden border-l bg-background outline-none",
-        open && "flex",
-      )}
+    <Dialog
+      open={open}
+      modal={false}
+      disablePointerDismissal
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) close();
+      }}
     >
-      {children}
-      {homeContainer ? createPortal(composer, homeContainer) : composer}
-    </aside>
+      <DialogContent
+        ref={ref}
+        keepMounted
+        showCloseButton={false}
+        overlayClassName="hidden"
+        hidden={!open}
+        aria-label={ARIA_AGENT_LABEL}
+        initialFocus={() =>
+          initialFocus?.current ?? ref.current?.querySelector<HTMLElement>("textarea:enabled") ?? ref.current
+        }
+        finalFocus={state?.launcherRef}
+        className="bottom-4 right-4 left-auto top-auto flex h-[min(42rem,calc(100dvh-2rem))] translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden p-0 shadow-xl sm:max-w-md"
+      >
+        {children}
+        {homeContainer ? createPortal(composer, homeContainer) : composer}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -405,8 +418,8 @@ function LiteAdminChats({ session, open, close }: { session: LiteAdminSession; o
       }}
       className="contents"
     >
-      <Panel open={open} initialFocus={reviewRef} composer={null}>
-        <PanelHeader close={close}>
+      <Panel open={open} close={close} initialFocus={reviewRef} composer={null}>
+        <PanelHeader>
           <Button variant="ghost" size="icon-sm" aria-label="New chat" title="New chat" onClick={addChat}>
             <Plus className="size-4" />
           </Button>
@@ -505,10 +518,10 @@ function LiteAdminChat({
   const tooLong = input.trim().length > MAX_INPUT_LENGTH;
   const hasValidInput = selectedModel && input.trim() && !tooLong;
   const submitDisabled = busy || models.isError || !hasValidInput;
-  const send = () => {
-    if (submitDisabled || !selectedModel) return;
+  const send = (message: string) => {
+    if (busy || models.isError || !selectedModel || !message.trim() || message.trim().length > MAX_INPUT_LENGTH) return;
     state?.show();
-    void chat.send(input, selectedModel);
+    void chat.send(message, selectedModel);
     setInput("");
   };
   if (!active) return null;
@@ -516,7 +529,7 @@ function LiteAdminChat({
   const composerProps = {
     value: input,
     onChange: setInput,
-    onSubmit: send,
+    onSubmit: () => send(input),
     onCancel: chat.phase === "applying" ? undefined : chat.stop,
     disabled: busy || !selectedModel,
     isLoading: busy,
@@ -542,6 +555,8 @@ function LiteAdminChat({
         open={open}
         reviewRef={reviewRef}
         onAnswer={chat.answer}
+        onQuestion={send}
+        questionsDisabled={busy || models.isError || !selectedModel}
       />
       {homeContainer ? createPortal(composer, homeContainer) : composer}
     </TabsContent>
@@ -637,26 +652,26 @@ function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
   );
 }
 
-function PanelHeader({ close, children }: { close: () => void; children?: ReactNode }) {
+function PanelHeader({ children }: { children?: ReactNode }) {
   const state = useContext(LiteAdminContext);
   return (
     <div className="flex items-start justify-between gap-3 border-b p-4">
       <div className="flex flex-col gap-1 text-sm">
-        <h2 className="flex items-center gap-2 font-semibold">
+        <DialogTitle className="flex items-center gap-2 font-semibold">
           <AriaAvatar size={32} />
           {ARIA_AGENT_LABEL}
-        </h2>
-        <p className="text-muted-foreground">
+        </DialogTitle>
+        <DialogDescription>
           {state?.access.mode === "usage"
             ? "Your AI assistant for usage and spend."
             : "Ask about your gateway. Review changes in chat."}
-        </p>
+        </DialogDescription>
       </div>
       <div className="flex shrink-0">
         {children}
-        <Button variant="ghost" size="icon-sm" aria-label={`Close ${ARIA_AGENT_LABEL}`} onClick={close}>
+        <DialogClose render={<Button variant="ghost" size="icon-sm" aria-label={`Close ${ARIA_AGENT_LABEL}`} />}>
           <X className="size-4" />
-        </Button>
+        </DialogClose>
       </div>
     </div>
   );

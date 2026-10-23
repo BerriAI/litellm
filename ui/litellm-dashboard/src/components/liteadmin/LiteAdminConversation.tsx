@@ -22,6 +22,12 @@ const ACTION_STATUS: Record<ActionEntry["status"], string> = {
   unknown: "Check result",
 };
 
+const SUGGESTED_QUESTIONS = [
+  "How much have I spent this week?",
+  "Which models are costing the most?",
+  "How can I reduce my spend?",
+];
+
 interface ConversationProps {
   entries: ConversationEntry[];
   thinking: boolean;
@@ -29,6 +35,8 @@ interface ConversationProps {
   open: boolean;
   reviewRef: RefObject<HTMLDivElement | null>;
   onAnswer: (id: string, approved: boolean) => void;
+  onQuestion: (question: string) => void;
+  questionsDisabled: boolean;
 }
 
 export function LiteAdminConversation({
@@ -38,6 +46,8 @@ export function LiteAdminConversation({
   readOnly = false,
   reviewRef,
   onAnswer,
+  onQuestion,
+  questionsDisabled,
 }: ConversationProps) {
   return (
     <MessageScroller.Provider autoScroll>
@@ -79,17 +89,23 @@ export function LiteAdminConversation({
           </MessageScroller.Content>
         </MessageScroller.Viewport>
         {entries.length === 0 && (
-          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-4 p-8 text-center">
-            <div className="flex size-24 items-center justify-center rounded-3xl bg-blue-50 dark:bg-blue-400/10">
-              <AriaAvatar size={64} />
+          <div className="absolute inset-0 flex flex-col items-center gap-4 overflow-y-auto p-5 text-center">
+            <div className="flex items-center gap-2 pt-2">
+              <AriaAvatar size={40} />
+              <p className="text-base font-semibold">Hi, I’m Aria.</p>
             </div>
-            <div className="space-y-2">
-              <p className="text-lg font-semibold tracking-tight">Hi, I’m Aria.</p>
-              <p className="max-w-72 text-sm leading-relaxed text-muted-foreground">
-                {readOnly
-                  ? "Understand your spend and explore usage. Just ask."
-                  : "Understand your spend, explore usage, and manage your gateway. Just ask."}
-              </p>
+            <div className="flex w-full flex-col gap-2" aria-label="Suggested questions">
+              {SUGGESTED_QUESTIONS.map((question) => (
+                <Button
+                  key={question}
+                  variant="outline"
+                  className="h-auto min-h-10 justify-start whitespace-normal px-3 py-2 text-left font-normal"
+                  disabled={questionsDisabled}
+                  onClick={() => onQuestion(question)}
+                >
+                  {question}
+                </Button>
+              ))}
             </div>
             <p className="max-w-64 text-xs leading-relaxed text-muted-foreground">
               {readOnly ? "Answers use usage data your account can access." : "You review every change before it runs."}
