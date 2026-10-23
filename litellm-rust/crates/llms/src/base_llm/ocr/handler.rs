@@ -139,7 +139,7 @@ pub async fn ocr<C: BaseOcrConfig>(
             })
             .collect();
         return match read_response_bytes(response, request.connection.max_response_bytes).await {
-            Err(Error::Transport(transport::Error::Http { status, body })) => {
+            Err(Error::Transport(transport::Error::Http { status, body, .. })) => {
                 Err(config.get_error_class(body, status, headers))
             }
             Err(error) => Err(error),
@@ -173,6 +173,7 @@ pub async fn read_response_bytes(
     limit: usize,
 ) -> Result<Bytes, Error> {
     let status = response.status();
+    let response_headers = litellm_http::transport::safe_headers(response.headers());
     if status.is_success()
         && response
             .content_length()
@@ -195,6 +196,7 @@ pub async fn read_response_bytes(
         return Err(transport::Error::Http {
             status: status.as_u16(),
             body: String::from_utf8_lossy(&bytes).into_owned(),
+            headers: response_headers,
         }
         .into());
     }
@@ -206,6 +208,7 @@ pub fn transport_error(error: reqwest::Error) -> Error {
         return Error::Transport(transport::Error::Http {
             status: 408,
             body: "OCR request timed out".into(),
+            headers: Default::default(),
         });
     }
     transport::Error::from(error).into()
@@ -402,7 +405,8 @@ mod tests {
         .await
         .unwrap_err();
 
-        let Error::Transport(litellm_http::transport::Error::Http { status, body }) = error else {
+        let Error::Transport(litellm_http::transport::Error::Http { status, body, .. }) = error
+        else {
             panic!("unexpected error: {error}");
         };
         assert_eq!(status, 429);

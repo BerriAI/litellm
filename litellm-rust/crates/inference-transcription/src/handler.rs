@@ -61,6 +61,7 @@ pub(super) async fn execute(
             Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
         })?;
     let status = response.status();
+    let response_headers = response.headers().clone();
     let text = response.text().await.map_err(|error| {
         Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
     })?;
@@ -68,6 +69,7 @@ pub(super) async fn execute(
         return Err(Error::Transport(litellm_http::transport::Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
+            headers: litellm_http::transport::safe_headers(&response_headers),
         }));
     }
     let response_json = serde_json::from_str(&text).map_err(|error| {

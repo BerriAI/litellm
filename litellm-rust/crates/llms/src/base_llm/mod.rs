@@ -6,3 +6,4 @@ pub mod messages;
 pub mod ocr;
 pub mod responses;
 pub mod sse;
+pub mod tokenize;

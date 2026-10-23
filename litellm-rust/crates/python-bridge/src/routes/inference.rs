@@ -126,7 +126,7 @@ impl InferenceHost {
             return Ok(original);
         }
         let native = match error {
-            Error::Transport(TransportError::Http { status, body }) => {
+            Error::Transport(TransportError::Http { status, body, .. }) => {
                 let error = RustUpstreamError::new_err((status, body));
                 error
                     .value(py)

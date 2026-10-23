@@ -302,12 +302,14 @@ async fn send(
 
 async fn provider_error(response: reqwest::Response) -> Error {
     let status = response.status().as_u16();
+    let response_headers = response.headers().clone();
     match response.text().await {
         Ok(text) => {
             log_error_body(status, &text);
             Error::Transport(TransportError::Http {
                 status,
                 body: truncate_error_body(&text),
+                headers: litellm_http::transport::safe_headers(&response_headers),
             })
         }
         Err(error) => network(error),
