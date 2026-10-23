@@ -4508,10 +4508,14 @@ class MCPServerManager:
                 has_extra_authorization: Final = bool(extra_headers) and any(
                     isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
                 )
+                # The server's own authentication_token (bearer_token / token / authorization / basic)
+                # is written to Authorization too; the signer must not replace it either.
+                has_server_credential_authorization: Final = _server_credential_occupies_authorization(server)
 
                 if (
                     get_mcp_jwt_signer() is not None
                     and not has_static_authorization
+                    and not has_server_credential_authorization
                     and not mcp_auth_header
                     and not has_extra_authorization
                 ):
@@ -6601,9 +6605,14 @@ class MCPServerManager:
             hook_has_authorization: Final = any(k.lower() == "authorization" for k in hook_extra_headers)
             existing_has_authorization: Final = any(k.lower() == "authorization" for k in extra_headers)
             server_auth_occupies_authorization: Final = (
-                any(k.lower() == "authorization" for k in server_auth_header)
-                if isinstance(server_auth_header, dict)
-                else server_auth_header is not None and mcp_server.auth_type != MCPAuth.api_key
+                (
+                    any(k.lower() == "authorization" for k in server_auth_header)
+                    if isinstance(server_auth_header, dict)
+                    else server_auth_header is not None and mcp_server.auth_type != MCPAuth.api_key
+                )
+                # server_auth_header carries only the client's x-mcp-<alias>-authorization, never the
+                # server's own authentication_token, so check that credential directly.
+                or _server_credential_occupies_authorization(mcp_server)
             )
             if hook_has_authorization and (existing_has_authorization or server_auth_occupies_authorization):
                 # Mirror the tools/list signer guard: an upstream credential (user OAuth,
