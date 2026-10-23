@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.10, <3.15"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -1830,12 +1830,12 @@ wheels = [
 ]
 
 [[package]]
-name = "diskcache"
-version = "5.6.3"
+name = "diskcache-community"
+version = "5.8.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3f/21/1c1ffc1a039ddcc459db43cc108658f32c57d271d7289a2794e401d0fdb6/diskcache-5.6.3.tar.gz", hash = "sha256:2c3a3fa2743d8535d832ec61c2054a1641f41775aa7c556758a109941e33e4fc", size = 67916, upload-time = "2023-08-31T06:12:00.316Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9a/b1/ef17a29956f0208c5acbc30247c742739d37135531a0facf26a5752f9382/diskcache_community-5.8.1.tar.gz", hash = "sha256:b780ed4b8381487c53cc778599f745784391c4c7af23c528ece049e008be6197", size = 110767, upload-time = "2026-10-19T02:55:55.94Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/27/4570e78fc0bf5ea0ca45eb1de3818a23787af9b390c0b0a0033a1b8236f9/diskcache-5.6.3-py3-none-any.whl", hash = "sha256:5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19", size = 45550, upload-time = "2023-08-31T06:11:58.822Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/54/82c3738aceba6f4687ba6c808970dbf1036581616e43ef69da6fbfdcd4ae/diskcache_community-5.8.1-py3-none-any.whl", hash = "sha256:4c18c3fec2451154f768764f0f3e97fdddfb2bb4fcff8754fc28fcc88ca1b2ea", size = 71990, upload-time = "2026-10-19T02:55:54.354Z" },
 ]
 
 [[package]]
@@ -4639,7 +4639,7 @@ bedrock-realtime = [
     { name = "aws-sdk-bedrock-runtime", extra = ["awscrt"], marker = "python_full_version >= '3.12'" },
 ]
 caching = [
-    { name = "diskcache" },
+    { name = "diskcache-community" },
 ]
 cli = [
     { name = "inquirerpy" },
@@ -4890,7 +4890,7 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'proxy'", specifier = ">=49.0.0,<51.0" },
     { name = "ddtrace", marker = "extra == 'proxy-runtime'", specifier = ">=4.8.2,<5.0" },
     { name = "detect-secrets", marker = "extra == 'proxy-runtime'", specifier = ">=1.5.0,<2.0" },
-    { name = "diskcache", marker = "extra == 'caching'", specifier = ">=5.6.3,<6.0" },
+    { name = "diskcache-community", marker = "extra == 'caching'", specifier = ">=5.8.0,<6.0" },
     { name = "expression", marker = "extra == 'proxy'", specifier = ">=5.6.0,<6.0" },
     { name = "fastapi", marker = "extra == 'proxy'", specifier = ">=0.136.3,<1.0" },
     { name = "fastapi-sso", marker = "extra == 'proxy'", specifier = ">=0.19.0,<1.0" },

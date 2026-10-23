@@ -1,3 +1,6 @@
+import os
+import pickle
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -69,6 +72,20 @@ async def test_async_increment_adds_to_existing_int(cache):
 async def test_async_increment_treats_non_int_cached_value_as_zero(cache):
     await cache.async_set_cache("counter", "corrupt")
     assert await cache.async_increment("counter", 9) == 9
+
+
+class _GetPid:
+    def __reduce__(self):
+        return os.getpid, ()
+
+
+def test_get_cache_refuses_a_tampered_pickle_entry(cache, tmp_path):
+    cache.set_cache("key", {"response": "ok"})
+    with sqlite3.connect(tmp_path / "cache.db") as con:
+        con.execute("UPDATE Cache SET value = ?", (sqlite3.Binary(pickle.dumps(_GetPid())),))
+
+    with pytest.raises(pickle.UnpicklingError):
+        cache.get_cache("key")
 
 
 @pytest.fixture
