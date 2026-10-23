@@ -81,7 +81,7 @@ const markdownComponents: Components = {
   thead: ({ node, ...props }) => <TableHeader {...props} />,
   tbody: ({ node, ...props }) => <TableBody {...props} />,
   tr: ({ node, ...props }) => <TableRow {...props} />,
-  th: ({ node, ...props }) => <TableHead {...props} />,
+  th: ({ node, ...props }) => <TableHead className="whitespace-normal py-2" {...props} />,
   td: ({ node, ...props }) => <TableCell {...props} />,
 };
 
