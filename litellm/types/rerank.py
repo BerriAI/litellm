@@ -4,11 +4,13 @@ https://docs.cohere.com/reference/rerank
 
 """
 
+from collections.abc import Sequence
 from typing import Literal
 
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import ConfigDict, Field, PrivateAttr
 from typing_extensions import ReadOnly, Required, TypedDict
 
+from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -67,6 +69,7 @@ class RerankResponseMeta(TypedDict, total=False):
     api_version: dict | None
     billed_units: RerankBilledUnits | None
     tokens: RerankTokens | None
+    refused_document_indices: ReadOnly[Sequence[int]]
 
 
 class RerankResponseDocument(TypedDict):
@@ -103,3 +106,9 @@ class RerankResponse(LiteLLMBaseModel):
 
     def __contains__(self, key) -> bool:
         return key in self.__dict__
+
+
+class DecisionRerankResponse(RerankResponse):
+    model_config = ConfigDict(frozen=True)
+
+    decision_responses: tuple[OpenAIDecisionResponse, ...] = Field(exclude=True)

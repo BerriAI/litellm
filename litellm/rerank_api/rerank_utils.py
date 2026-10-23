@@ -1,6 +1,30 @@
-from typing import Any, Final
+from typing import Any, Final, Literal
 
+import litellm
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+
+
+def get_decision_rerank_strategy(
+    model: str, custom_llm_provider: str | None = None
+) -> Literal["pointwise", "multiple_choice"] | None:
+    """Read the catalog method for the model, including a gateway's provider-prefixed model."""
+    try:
+        resolved_model, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    except litellm.BadRequestError:
+        return None
+    candidates: Final = (f"{provider}/{resolved_model}", resolved_model, model)
+    catalog_model: Final = next(
+        (
+            name
+            for name in candidates
+            if litellm.model_cost.get(name, {}).get("rerank_strategy") is not None  # pyright: ignore[reportUnknownMemberType]  # check capability presence without invoking native provider metadata
+        ),
+        None,
+    )
+    if catalog_model is None:
+        return None
+    strategy: Final = litellm.get_model_info(model=catalog_model).get("rerank_strategy")
+    return strategy if strategy in ("pointwise", "multiple_choice") else None
 
 
 def get_optional_rerank_params(
