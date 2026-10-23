@@ -13,7 +13,7 @@ Each surface mirrors what the Python proxy returns there, so the shapes differ o
 
 Every surface takes its status from one `status()` on its crate's `Error` and renders the message of anything that is not a provider answer with `litellm_error::Report`. In `gateway-inference` the error `type` string is derived from the status by `error_type()`, so a new failure never names its own type. The Anthropic envelope passes a provider body already in its shape through untouched and extracts the message from anything else, and the OpenAI envelope always wraps, as the Python proxy does. A provider body is bounded by `litellm_http::Error::upstream` when the error is built
 
-Two surfaces show less than the chain on purpose, and a test in each pins it. An auth rejection goes to a caller who has not authenticated, so it never shows what a secret manager or key store said. An MCP upstream failure shows only its own layer, because rmcp renders the transport error, URL included, into its own `Display`
+Two surfaces show less than the chain on purpose, and a test in each pins it. An auth rejection goes to a caller who has not authenticated, so it never shows what a secret manager or key store said. An MCP upstream or authorization failure shows only its own layer, because rmcp renders the transport error, URL included, into its own `Display`, and an authorizer's cause is the same backend detail auth rejections hide. The inference surfaces show only the top layer of an auth rejection for the same reason
 
 `/v1/messages` adds the request id to the envelope when the provider did not set one, which is why its handler takes the body as `Result<JsonObject, Error>` and renders the rejection itself, see [requests](requests.md)
 

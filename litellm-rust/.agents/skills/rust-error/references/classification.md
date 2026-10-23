@@ -11,6 +11,7 @@ Downstream crates ask a lower error questions instead of matching its nested var
 | `is_response()` | the provider answered with something we cannot use |
 | `upstream_response()` | the provider's own status and body to pass through |
 | `status()` | an HTTP status to report |
+| `is_connect()` | the connection was never made, for a host's own connect-error mapping |
 | `tls_source()` | which TLS setting to blame in a config error |
 | `is_computed_header()` | the caller forwarded a header the signer owns, which `litellm_inference::Error` turns into `Unsupported` |
 
@@ -31,6 +32,7 @@ pub fn is_request(&self) -> bool {
     match &*self.0 {
         Repr::Request(_) | Repr::BlockedUrl | Repr::DownloadTooLarge => true,
         Repr::Connect(_) | Repr::Network(_) | Repr::Timeout(_) | Repr::Status { .. } => false,
+        // ... every other variant, listed by name
     }
 }
 ```
@@ -50,6 +52,7 @@ pub fn dispatched(&self) -> bool {
     match &*self.0 {
         Repr::Network(_) | Repr::Timeout(_) | Repr::Status { .. } => true,
         Repr::Connect(_) | Repr::RequestBody(_) | Repr::Download(_) | Repr::BlockedUrl => false,
+        // ... every other variant, listed by name
     }
 }
 ```

@@ -55,8 +55,8 @@
 
 - The [rust-error skill](../../.agents/skills/rust-error/SKILL.md) shapes each crate's error. This section decides which crate and module a failure belongs to
 - A failure is declared once, by the lowest crate that raises it
-  - every crate above nests it in one variant and delegates its predicates, as `Error::Llm`, `Error::Auth` and `Error::Http` do, or translates it once in the shared `From` when its meaning changes, as `From<litellm_llms::Error>` does for `Unsupported` and a header the signer computes
-  - `Error` collects route failures for every format crate and never re-declares a variant a lower crate raises. Routes build transformation failures with `Error::invalid_request` and `Error::invalid_response`, and callers ask `is_request()`, `is_response()`, `is_missing_credential()`, `dispatched()` and `upstream_response()` instead of matching nested variants
+  - every crate above nests it in one variant and delegates its predicates, as `Error::Llm`, `Error::Auth` and `Error::Http` do, or translates it once in the shared `From` when its meaning changes, as `From<litellm_llms::Error>` does for `Unsupported` and `From<litellm_http::Error>` does for a header the signer computes
+  - `Error` collects route failures for every format crate and never re-declares a variant a lower crate raises. Routes build transformation failures with `Error::invalid_request` and `Error::invalid_response`, and callers ask `is_unsupported()`, `is_request()`, `is_response()`, `is_missing_credential()`, `dispatched()`, `upstream_response()` and `rejected_request()` instead of matching nested variants
 - Scope follows the concept, not the first caller
   - an error type under `litellm-llms`'s `<provider>/` is private to that provider: no other provider and nothing in `base_llm` may import it
   - a failure two providers or two routes can hit (wire framing, stream event decoding, a malformed provider response) belongs to the crate that owns the concept: `litellm-framer` for framing, `litellm_llms::Error` for the transformation layer

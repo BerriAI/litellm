@@ -100,4 +100,6 @@ Name a split type after what went wrong, not after the function that returns it.
 
 A split type still converts into the crate's `Error` when a caller further up needs one `Result` type
 
+`litellm-llms` has one recorded exception, the OCR error in `src/base_llm/ocr/error.rs`, kept apart until OCR folds into `litellm_llms::Error`, see `crates/inference-ocr/AGENTS.md`. Do not add another
+
 A utility crate whose modules are unrelated, such as `core-utils`, has no crate-wide failure, so each module that can fail owns one error next to its code instead of a `src/error.rs`. The rest of this skill applies to each of them

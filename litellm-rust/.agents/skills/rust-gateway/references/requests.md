@@ -13,10 +13,10 @@ impl<S: Send + Sync> FromRequest<S> for JsonObject {
             if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
                 Error::BodyTooLarge
             } else {
-                Error::InvalidBody(error)
+                BodyError::Read(error).into()
             }
         })?;
-        object(&body).map(Self)
+        Ok(Self(object(&body)?))
     }
 }
 ```

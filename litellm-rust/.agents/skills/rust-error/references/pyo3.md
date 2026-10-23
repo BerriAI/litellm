@@ -4,9 +4,9 @@
 
 | Error | Mapping |
 |---|---|
-| `litellm_inference::Error` from a route | `errors::route_error_to_pyerr` |
-| the OCR error | `routes/ocr/errors.rs::to_pyerr` |
-| token counter, cache, spend, secrets, argument projection | one `From<Error> for PyErr` or `*_to_pyerr` next to the code that registers the functions |
+| `litellm_inference::Error` from a route | `errors::route_failure`, with `route_error_to_pyerr` as its shorthand for routes that set no marker |
+| the OCR error | `route_failure` and `to_pyerr` in `routes/ocr/errors.rs` |
+| token counter, cache, spend, secrets, argument checks | one `From<Error> for PyErr` or mapping function next to the code that registers the functions |
 
 A route host never builds a `PyErr` from a route error itself. It calls the mapping, and the mapping is the only place that knows the exception classes and their attributes
 
@@ -16,7 +16,7 @@ A route host never builds a `PyErr` from a route error itself. It calls the mapp
 |---|---|---|
 | `RustUpstreamError` | the provider call was issued and the provider answered with a failure | `args == (status, body)` and a `headers` attribute of `(name, value)` pairs, always set |
 | `RustBridgeDeclined` | the route stopped before calling the provider, so the host may run its own path | `args == (message,)` |
-| a standard class from `pyo3::exceptions` | the caller's input (`ValueError`, `TypeError`), a missing file (`FileNotFoundError`), anything else (`RuntimeError`) | the rendered chain |
+| a standard class from `pyo3::exceptions` | whichever Python class means the same thing, such as `ValueError` or `TypeError` for the caller's input, `FileNotFoundError` or `OSError` for a file, `KeyError` or `OverflowError` where Python raises them, and `RuntimeError` for anything else | the rendered chain, or a parity text where Python pins one |
 
 The two native classes come from `create_exception!` in `crates/python-bridge/src/errors.rs` and are exported with `#[pymodule_export]`, which is how the [pyo3 guide](https://github.com/PyO3/pyo3/blob/main/guide/src/exception.md) makes an exception importable. Their docstrings are the contract Python reads. `errors::upstream_error(py, status, body, headers)` is the one constructor of `RustUpstreamError`, so the payload cannot differ between routes
 
@@ -30,7 +30,7 @@ The bridge builds with pyo3's `abi3-py310` feature. Under abi3, `#[pyclass(exten
 
 ## Mapping order
 
-The provider's answer passes through first as `RustUpstreamError`. Everything else is split by `is_request()` into `ValueError` or `RuntimeError`, with the message rendered by `litellm_error::Report`. A missing API key is a `RuntimeError` because `is_request()` answers false for it, and `missing_api_key_stays_a_runtime_error_while_other_auth_failures_are_value_errors` pins that
+A Python exception raised inside the call, such as a secret manager callback's, is returned first as it is. Then the provider's answer passes through as `RustUpstreamError`. On `/v1/messages` a request the route rejected becomes a `ValueError` flagged with `messages_request_error`. Everything else is split by `is_request()` into `ValueError` or `RuntimeError`, with the message rendered by `litellm_error::Report`. A missing API key is a `RuntimeError` because `is_request()` answers false for it, and `missing_api_key_stays_a_runtime_error_while_other_auth_failures_are_value_errors` pins that
 
 OCR puts Python parity arms in front of that order, each matching a top-level variant of its own public enum
 
@@ -53,7 +53,7 @@ Use the standard class whose Python meaning matches. `PyFileNotFoundError` for a
 
 - Never format `Debug` of an error into a `PyErr`
 - Never build a `PyErr` from a string at a call site. A failed argument check is a variant of a typed error, as `ProjectionError` in `coercion.rs` is, mapped once
-- A Python exception raised inside the call stays that exception. Return it as is, never wrap it in a Rust message or stringify it into a new `ValueError`
+- A Python exception raised inside the call stays that exception. Return it as is, never wrap it in a Rust message or stringify it into a new `ValueError`. The one policy exception is a caller-supplied callable, whose failure `callable::wrap_failure` reports as a `RuntimeError` with the original as `__cause__`
 - A `panic!`, `unwrap` or `expect` inside a `#[pyfunction]` or `#[getter]` reaches Python as `pyo3_runtime.PanicException`, which is not an `Exception` subclass. Model the failure as a value instead
 - When the mapping itself calls Python, as `setattr` does, propagate its failure with `?` rather than discarding it with `.ok()`
 
@@ -64,7 +64,7 @@ Build the Rust error the way production builds it, map it, and assert the contra
 ```rust
 Python::initialize();
 Python::attach(|py| {
-    let failure = route_error_to_pyerr(py, litellm_http::Error::upstream(429, "slow down".into()).into());
+    let failure = route_error_to_pyerr(litellm_http::Error::upstream(429, "slow down".into()).into());
     assert!(failure.is_instance_of::<RustUpstreamError>(py));
     let args: (u16, String) = failure.value(py).getattr("args").unwrap().extract().unwrap();
     assert_eq!(args, (429, "slow down".into()));

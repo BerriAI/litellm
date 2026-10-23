@@ -54,7 +54,7 @@ Json(#[from] serde_json::Error),
 
 `#[error(transparent)]` is an invisible layer, not an extra chain node, so a transparent wrapper's `source()` is the inner value's `source()`
 
-A field that holds an error but is neither rendered nor a source hides that error from every reader. Every error-typed field is a source
+A field that holds an error but is neither rendered nor a source hides that error from every reader. Every error-typed field is a source. A fieldless reason enum, such as `HandshakeFault` or `PagesFault`, is data and not a cause, so the variant renders it in its message
 
 ## Keep causes typed
 
@@ -66,7 +66,7 @@ Store the lower-level error itself, never its string, and never drop it with `ma
 | downcasting | the type is gone |
 | redaction | `reqwest::Error`'s `Display` includes the request URL, which can carry credentials in the path or query |
 
-If the cause is not `Clone` and the error must be, hold it as `#[source] litellm_error::Source`, a cloneable `Arc<dyn Error + Send + Sync>` that is transparent to `Display` and `source()`, or make the crate's error opaque. `litellm_error::find::<T>(&error)` walks the chain and looks through `Source`, so it is how anyone reaches a typed cause. A third-party `Box<dyn Error + Send + Sync>`, or an `anyhow::Error` a dependency returns, converts with `Source::from`, and a dependency's own boxed alias such as `tokenizers::Error` is held as it is. A source boxed to keep the variant small is a `Box<E>` node of the chain, so it is reached as `find::<Box<E>>`. Never put `#[error(transparent)]` on a `Source`, the erased error would then be no node of the chain and `find` could not reach it. Do not stringify or drop a cause to get `Clone` or `PartialEq`
+If the cause is not `Clone` and the error must be, hold it as `#[source] litellm_error::Source`, a cloneable `Arc<dyn Error + Send + Sync>` that is transparent to `Display` and `source()`, or make the crate's error opaque. `litellm_error::find::<T>(&error)` walks the chain and looks through `Source`, so it is how anyone reaches a typed cause. A third-party `Box<dyn Error + Send + Sync>` converts with `Source::from`, and an `anyhow::Error` a dependency returns goes through `Box` first, `Source::from(Box::<dyn Error + Send + Sync>::from(error))`, and a dependency's own boxed alias such as `tokenizers::Error` is held as it is. A source boxed to keep the variant small is a `Box<E>` node of the chain, so it is reached as `find::<Box<E>>`. Never put `#[error(transparent)]` on a `Source`, the erased error would then be no node of the chain and `find` could not reach it. Do not stringify or drop a cause to get `Clone` or `PartialEq`
 
 ```rust
 // loses the type and leaks the URL
