@@ -11,6 +11,7 @@ pub(super) struct Settings {
     pub port: u16,
     pub litellm_config: String,
     pub litellm_python_upstream: Option<String>,
+    pub litellm_rust_gateway: bool,
     rust_log: Option<String>,
 }
 
@@ -21,12 +22,35 @@ impl Default for Settings {
             port: 4000,
             litellm_config: "config.yaml".into(),
             litellm_python_upstream: None,
+            litellm_rust_gateway: false,
             rust_log: None,
         }
     }
 }
 
 impl Settings {
+    pub fn forwarder(&self) -> Result<litellm_gateway::Forward, litellm_gateway::Error> {
+        let invalid = || litellm_gateway::Error::PythonUpstreamConfig;
+        let upstream = self
+            .litellm_python_upstream
+            .as_deref()
+            .ok_or_else(invalid)?;
+        let uri: axum::http::Uri = upstream.parse().map_err(|_| invalid())?;
+        let authority = uri.authority().ok_or_else(invalid)?;
+        let port = authority.as_str().strip_prefix(authority.host());
+        if authority.host().is_empty()
+            || !port.is_some_and(|suffix| {
+                suffix.is_empty()
+                    || suffix
+                        .strip_prefix(':')
+                        .is_some_and(|port| port.parse::<u16>().is_ok_and(|port| port != 0))
+            })
+        {
+            return Err(invalid());
+        }
+        litellm_gateway::Forward::new(upstream).map_err(|_| invalid())
+    }
+
     pub fn log_level(&self) -> Level {
         self.rust_log
             .as_deref()
@@ -55,11 +79,22 @@ fn default_secure_cookies() -> bool {
 pub(super) fn from_iter<T: DeserializeOwned>(
     variables: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> envy::Result<T> {
-    envy::from_iter(
-        variables
-            .into_iter()
-            .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?))),
-    )
+    let variables = variables
+        .into_iter()
+        .map(|(key, value)| {
+            if key
+                .to_str()
+                .is_some_and(|key| key.eq_ignore_ascii_case("LITELLM_RUST_GATEWAY"))
+                && !matches!(value.to_str(), Some("true" | "false"))
+            {
+                return Err(envy::Error::Custom(
+                    "LITELLM_RUST_GATEWAY must be true or false".into(),
+                ));
+            }
+            Ok(key.into_string().ok().zip(value.into_string().ok()))
+        })
+        .collect::<envy::Result<Vec<_>>>()?;
+    envy::from_iter(variables.into_iter().flatten())
 }
 
 #[cfg(test)]
@@ -84,7 +119,73 @@ mod tests {
         assert_eq!(settings.port, 4000);
         assert_eq!(settings.litellm_config, "config.yaml");
         assert_eq!(settings.litellm_python_upstream, None);
+        assert!(!settings.litellm_rust_gateway);
         assert_eq!(settings.log_level(), Level::INFO);
+    }
+
+    #[rstest]
+    #[case::enabled("true", true)]
+    #[case::disabled("false", false)]
+    fn forward_only_flag(#[case] value: &str, #[case] expected: bool) {
+        let settings: Settings = parse(&[("LITELLM_RUST_GATEWAY", value)]).unwrap();
+        assert_eq!(settings.litellm_rust_gateway, expected);
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::uppercase("TRUE")]
+    #[case::numeric("1")]
+    #[case::padded(" true ")]
+    fn invalid_forward_only_flag(#[case] value: &str) {
+        assert!(parse::<Settings>(&[("LITELLM_RUST_GATEWAY", value)]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    fn non_unicode_forward_only_flag_fails() {
+        use std::os::unix::ffi::OsStringExt;
+
+        assert!(
+            from_iter::<Settings>([(
+                OsString::from("LITELLM_RUST_GATEWAY"),
+                OsString::from_vec(vec![0xff]),
+            )])
+            .is_err()
+        );
+    }
+
+    #[rstest]
+    #[case::hostname("http://localhost")]
+    #[case::explicit_port("http://127.0.0.1:4002")]
+    #[case::ipv6("http://[::1]:4002")]
+    fn valid_python_upstream_origins_build_forwarder(#[case] upstream: &str) {
+        let settings: Settings = parse(&[("LITELLM_PYTHON_UPSTREAM", upstream)]).unwrap();
+
+        assert!(settings.forwarder().is_ok());
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::https("https://localhost:4002")]
+    #[case::path("http://localhost:4002/python")]
+    #[case::query("http://localhost:4002?token=secret")]
+    #[case::userinfo("http://user:secret@localhost:4002")]
+    #[case::malformed("http://[::1")]
+    #[case::named_port("http://localhost:http")]
+    #[case::zero_port("http://localhost:0")]
+    #[case::overflow_port("http://localhost:65536")]
+    fn invalid_python_upstream_origins_reject_forwarder(#[case] upstream: &str) {
+        let settings: Settings = parse(&[("LITELLM_PYTHON_UPSTREAM", upstream)]).unwrap();
+
+        let error = settings
+            .forwarder()
+            .err()
+            .expect("invalid origin should fail");
+
+        assert_eq!(
+            error.to_string(),
+            "LITELLM_RUST_GATEWAY=true requires LITELLM_PYTHON_UPSTREAM to be a valid http:// origin"
+        );
     }
 
     #[rstest]

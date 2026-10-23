@@ -116,6 +116,11 @@ pub async fn build_mcp(
     ))
 }
 
+pub fn forward_only(forward: Forward) -> Router {
+    dispatch::forward_unmatched(Router::new(), Fallback::Forward(forward))
+        .layer(axum::middleware::from_fn(log_transport_request))
+}
+
 pub fn router(
     inference: Arc<Gateway>,
     config: &Config,
@@ -164,8 +169,16 @@ pub async fn serve(
 }
 
 async fn log_request(request: Request, next: Next) -> Response {
-    let request_id = Uuid::new_v4().to_string();
     let log_body_chunks = tracing::enabled!(tracing::Level::DEBUG);
+    log_request_with_body(request, next, log_body_chunks).await
+}
+
+async fn log_transport_request(request: Request, next: Next) -> Response {
+    log_request_with_body(request, next, false).await
+}
+
+async fn log_request_with_body(request: Request, next: Next, log_body_chunks: bool) -> Response {
+    let request_id = Uuid::new_v4().to_string();
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let started = Instant::now();
