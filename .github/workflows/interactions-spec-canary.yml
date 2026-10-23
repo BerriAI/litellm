@@ -3,6 +3,11 @@ name: Interactions spec canary
 on:
   schedule:
     - cron: "17 7 * * *"
+  pull_request:
+    paths:
+      - .github/workflows/interactions-spec-canary.yml
+      - tests/unit/interactions/**
+      - litellm/types/interactions/**
   workflow_dispatch:
 
 permissions: {}
@@ -15,6 +20,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      issues: write
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -40,3 +46,22 @@ jobs:
           uv run --no-sync pytest tests/unit/interactions/test_openapi_compliance.py \
             --tb=short -vv -p no:rerunfailures -p no:pytest-retry \
             --allow-hosts=127.0.0.1,::1,localhost,ai.google.dev
+
+      - name: Open or update the tracking issue when a scheduled run is red
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const title = "Interactions spec canary is red";
+            const runUrl = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            const query = `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:title "${title}"`;
+            const { data: found } = await github.rest.search.issuesAndPullRequests({ q: query, per_page: 1 });
+            if (found.total_count > 0) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: found.items[0].number, body: `Still red: ${runUrl}` });
+              return;
+            }
+            await github.rest.issues.create({
+              ...context.repo,
+              title,
+              body: `The scheduled run of tests/unit/interactions/test_openapi_compliance.py against Google's live Interactions spec failed: ${runUrl}\n\nlitellm/types/interactions/README.md says how to refresh the snapshot and regenerate the types.`,
+            });

@@ -1,6 +1,8 @@
 # tests/unit
 
-In-process. No network or subprocess
+In-process. No network or subprocess. `interactions/test_openapi_compliance.py` reads the spec snapshot beside it,
+and only the `interactions-spec-canary` workflow sets `LITELLM_INTERACTIONS_SPEC_SOURCE=live` with `ai.google.dev`
+allowed, to run the same tests against Google's live spec
 
 Unit tests must not depend on the current time or execution speed. Use fixed timestamps for fixtures
 and controlled clocks for time-dependent behavior. Incidental clock reads inside production code are allowed

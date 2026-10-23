@@ -19,13 +19,21 @@ When that happens, refresh the snapshot and regenerate the types from it:
 ```bash
 curl -fsSL https://ai.google.dev/static/api/interactions.openapi.json \
     -o tests/unit/interactions/interactions.openapi.json
-uv tool run --from datamodel-code-generator datamodel-codegen \
+uv tool run --from datamodel-code-generator==0.66.0 datamodel-codegen \
     --input tests/unit/interactions/interactions.openapi.json \
     --input-file-type openapi \
     --output litellm/types/interactions/generated.py \
     --output-model-type pydantic_v2.BaseModel \
-    --target-python-version 3.9
+    --target-python-version 3.10 \
+    --base-class litellm.types.llms.base.LiteLLMBaseModel
 ```
+
+The generator names inline enums by order of appearance (`Status`, `Status1`, `Status2`, ...), so a regeneration
+can rename them. The compliance tests resolve each status enum through its model's `status` field, but
+`tests/unit/interactions/test_background_cost_polling.py` and
+`tests/unit/proxy/hooks/test_proxy_track_cost_callback.py` import `Status1` by name and need the new name. The
+spec has grown a lot since the 2025-12-16 generation (agents, triggers, credentials, environments), so a
+regeneration today is a review-sized change rather than a refresh
 
 Then add the LiteLLM-specific types at the bottom of the generated file:
 - `InteractionsAPIResponse`

@@ -13,16 +13,24 @@ Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 import json
 import os
 import re
+from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Final
+from typing import Any, Dict, Final, get_args
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 from openapi_core import OpenAPI
+from pydantic import BaseModel
 
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 OPENAPI_SPEC_SNAPSHOT: Final = Path(__file__).with_name("interactions.openapi.json")
+
+
+def _status_enum_of(model: type[BaseModel]) -> type[Enum]:
+    annotation: Final = model.model_fields["status"].annotation
+    candidates: Final = (annotation, *get_args(annotation))
+    return next(candidate for candidate in candidates if isinstance(candidate, type) and issubclass(candidate, Enum))
 
 
 def _load_openapi_spec_dict() -> Dict[str, Any]:
@@ -244,14 +252,20 @@ class TestResponseCompliance:
             assert field in schema["properties"], f"Output field '{field}' not in spec"
             print(f"✓ Output field '{field}' exists in spec")
 
-    def test_status_enum_values(self, spec_dict):
-        """Every status the spec can return is in litellm's generated Interaction status enum,
-        the enum the cost-polling status sets are checked against."""
-        from litellm.types.interactions.generated import Status1
+    @pytest.mark.parametrize(
+        "schema_name",
+        ["Interaction", "InteractionStatusUpdate", "CreateModelInteractionParams", "CreateAgentInteractionParams"],
+    )
+    def test_status_enum_values(self, spec_dict, schema_name):
+        """Every status the spec can return on a schema litellm models is a member of the enum its
+        generated model carries, the enum the cost-polling status sets are checked against. The enum
+        is resolved through the model's status field because the generator numbers inline enums by
+        order of appearance, so a regeneration can rename them."""
+        from litellm.types.interactions import generated
 
-        schema = spec_dict["components"]["schemas"]["Interaction"]
+        schema = spec_dict["components"]["schemas"][schema_name]
         spec_statuses: Final = frozenset(schema["properties"]["status"]["enum"])
-        parsed_statuses: Final = frozenset(member.value for member in Status1)
+        parsed_statuses: Final = frozenset(member.value for member in _status_enum_of(getattr(generated, schema_name)))
         assert spec_statuses
         assert spec_statuses <= parsed_statuses, sorted(spec_statuses - parsed_statuses)
 
