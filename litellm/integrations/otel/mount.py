@@ -106,9 +106,8 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
     """Attach OTel server-span instrumentation to the proxy FastAPI app.
 
     Safe no-op when the V2 gate is off or ``opentelemetry-instrumentation-fastapi``
-    is unavailable. This MUST be called at app-creation time — once the lifespan
-    runs, the middleware stack is frozen and ``instrument_app`` raises "Cannot add
-    middleware after an application has started".
+    is unavailable. Call this at app-creation time. Once the middleware stack is
+    built, this is a no-op because the active stack cannot be instrumented.
 
     No ``TracerProvider`` is passed, so the instrumentation binds to the OTel global
     ``ProxyTracerProvider``; the proxy publishes the real provider as the global
@@ -123,8 +122,9 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
     server span. The server span also gets ``litellm.call_id`` from the response's
     ``x-litellm-call-id`` header. ``tracer_provider`` defaults to the global provider.
     """
+
     try:
-        if not is_otel_v2_enabled():
+        if not is_otel_v2_enabled() or app.middleware_stack is not None:
             return
 
         # Lazy: only the V2-enabled path needs the optional
