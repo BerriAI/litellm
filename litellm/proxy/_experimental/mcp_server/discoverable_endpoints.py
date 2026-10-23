@@ -1435,6 +1435,11 @@ async def exchange_token_with_server(
         }
         if code_verifier:
             token_data["code_verifier"] = code_verifier
+        authorization_code_scope: Final = scope or (
+            " ".join(resolved_server.scopes) if resolved_server.scopes else None
+        )
+        if authorization_code_scope:
+            token_data["scope"] = authorization_code_scope
         # Phase 1 for a bridge authorization_code mint: resolve identity (the SSO user recovered above, or
         # the presented litellm key) and the envelope keys BEFORE the exchange consumes the single-use code.
         if is_bridge:

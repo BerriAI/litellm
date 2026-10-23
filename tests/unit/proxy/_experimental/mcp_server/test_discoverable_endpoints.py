@@ -814,6 +814,69 @@ async def test_token_endpoint_forwards_code_verifier():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_scope", "expected_upstream_scope"),
+    [
+        ("https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/drive.readonly"),
+        (None, "https://www.googleapis.com/auth/drive openid email"),
+    ],
+)
+async def test_token_endpoint_authorization_code_sends_scope_upstream(
+    requested_scope: str | None, expected_upstream_scope: str
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import token_endpoint
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="google_mcp",
+        name="google_mcp",
+        server_name="google_mcp",
+        alias="google_mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="669428968603-test.apps.googleusercontent.com",
+        client_secret="GOCSPX-test_secret",
+        authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
+        token_url="https://oauth2.googleapis.com/token",
+        scopes=["https://www.googleapis.com/auth/drive", "openid", "email"],
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm-proxy.example.com/"
+    mock_request.headers = {}
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"access_token": "ya29.test_access_token", "token_type": "Bearer"}
+    mock_response.raise_for_status = MagicMock()
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client:
+        mock_async_client = MagicMock()
+        mock_async_client.post = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_async_client
+        await token_endpoint(
+            request=mock_request,
+            grant_type="authorization_code",
+            code="4/test_authorization_code",
+            redirect_uri="http://localhost:60108/callback",
+            client_id="669428968603-test.apps.googleusercontent.com",
+            mcp_server_name="google_mcp",
+            client_secret="GOCSPX-test_secret",
+            code_verifier="test_code_verifier_from_client",
+            scope=requested_scope,
+        )
+
+    sent_form = mock_async_client.post.call_args.kwargs["data"]
+    assert sent_form.get("scope") == expected_upstream_scope, sent_form
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("server_name", [None, "missing"])
 async def test_register_client_without_mcp_server_name_returns_dummy(server_name):
     try:
