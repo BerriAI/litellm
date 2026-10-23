@@ -465,7 +465,7 @@ describe("PublicModelHub chat variant", () => {
     expect(networkingModule.skillHubPublicCall).not.toHaveBeenCalled();
   });
 
-  it("should filter all published pages from the provider bar and clear the selection", async () => {
+  it("should filter all published pages from the provider dropdown and clear the selection", async () => {
     const user = userEvent.setup();
     respondWith(DEFAULT_MODELS, 300);
     renderHub({ isEmbedded: true, variant: "chat" });
@@ -479,14 +479,17 @@ describe("PublicModelHub chat variant", () => {
     await user.click(screen.getByTestId("pagination-next"));
     await waitFor(() => expect(lastModelQuery().page).toBe(2));
 
-    await user.click(await screen.findByRole("button", { name: "Anthropic", exact: true }));
+    await user.click(screen.getByRole("combobox", { name: "Provider", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "Anthropic", exact: true }));
     await waitFor(() => expect(lastModelQuery()["filter[providers][in]"]).toBe("anthropic"));
     expect(lastModelQuery().page).toBe(1);
-    expect(screen.getByRole("button", { name: "Anthropic", exact: true })).toHaveAttribute("aria-pressed", "true");
-    await user.click(screen.getByRole("button", { name: "OpenAI", exact: true }));
+    expect(screen.getByRole("combobox", { name: "Provider", exact: true })).toHaveTextContent("Anthropic");
+    await user.click(screen.getByRole("combobox", { name: "Provider", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "OpenAI", exact: true }));
     await waitFor(() => expect(lastModelQuery()["filter[providers][in]"]).toBe("openai"));
-    expect(screen.getByRole("button", { name: "Anthropic", exact: true })).toHaveAttribute("aria-pressed", "false");
-    await user.click(screen.getByRole("button", { name: "All models", exact: true }));
+    expect(screen.getByRole("combobox", { name: "Provider", exact: true })).toHaveTextContent("OpenAI");
+    await user.click(screen.getByRole("combobox", { name: "Provider", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "All providers", exact: true }));
     await waitFor(() => expect(lastModelQuery()).not.toHaveProperty("filter[providers][in]"));
   });
 

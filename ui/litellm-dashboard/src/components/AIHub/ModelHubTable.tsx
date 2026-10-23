@@ -4,7 +4,6 @@ import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
 import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { getMCPHubTableColumns, MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
 import { getModelHubTableColumns, ModelHubData } from "@/components/AIHub/ModelHubTableColumns";
-import ModelHubProviders from "@/components/AIHub/ModelHubProviders";
 import { modelUsageExample } from "@/components/AIHub/modelUsageExample";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
 import { getClaudeCodePluginsList } from "@/components/networking";
@@ -122,10 +121,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [filteredData, setFilteredData] = useState<ModelHubData[]>([]);
   const [selectedMode, setSelectedMode] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState("");
-  const providers = useMemo(
-    () => Array.from(new Set(modelHubData?.flatMap((model) => model.providers) ?? [])).sort(),
-    [modelHubData],
-  );
   const isDashboardCatalog = !isChat && !publicPage;
   const showDecisionGarden = isDashboardCatalog && (selectedMode === "" || selectedMode === DECISIONS_MODE);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
@@ -518,14 +513,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
             <div>
               {/* Model Hub Tab */}
               <TabsContent value="models" keepMounted>
-                {isChat && (
-                  <ModelHubProviders
-                    providers={providers}
-                    selectedProviders={selectedProvider ? [selectedProvider] : []}
-                    onSelect={(provider) => setSelectedProvider(provider ?? "")}
-                    loading={loading}
-                  />
-                )}
                 {/* Model Filters and Table */}
                 <Card className={isChat ? "chat-model-hub-card" : "px-6"}>
                   {isChat && (
@@ -554,7 +541,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                     onModeChange={setSelectedMode}
                     selectedProvider={isChat ? selectedProvider : undefined}
                     onProviderChange={isChat ? setSelectedProvider : undefined}
-                    showProviderFilter={!isChat}
                   />
 
                   {/* Model Table */}

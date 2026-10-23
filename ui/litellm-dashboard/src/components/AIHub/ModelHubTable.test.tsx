@@ -289,7 +289,7 @@ describe("ModelHubTable", () => {
 
     await screen.findByRole("button", { name: /^openai-shared/ });
     expect(screen.queryByDisplayValue("All Providers")).not.toBeInTheDocument();
-    const providers = within(screen.getByRole("group", { name: "Available providers" }));
+    const provider = screen.getByRole("combobox", { name: "Provider" });
     const search = screen.getByRole("textbox", { name: "Search models" });
     const mode = screen.getByRole("combobox", { name: "Model type" });
     const feature = screen.getByRole("combobox", { name: "Model capability" });
@@ -300,23 +300,29 @@ describe("ModelHubTable", () => {
     await user.click(feature);
     await user.click(await screen.findByRole("option", { name: "Vision", exact: true }));
     await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
-    await user.click(providers.getByRole("button", { name: "OpenAI" }));
+    await user.click(provider);
+    await user.click(await screen.findByRole("option", { name: "OpenAI", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
 
     expect(screen.getByRole("button", { name: /^openai-shared/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^anthropic-shared/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^openai-image/ })).not.toBeInTheDocument();
-    expect(providers.getByRole("button", { name: "OpenAI" })).toHaveAttribute("aria-pressed", "true");
+    expect(provider).toHaveTextContent("OpenAI");
 
-    await user.click(providers.getByRole("button", { name: "All models" }));
+    await user.click(provider);
+    await user.click(await screen.findByRole("option", { name: "All providers", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: /^anthropic-shared/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^openai-image/ })).not.toBeInTheDocument();
     expect(search).toHaveValue("shared");
     expect(mode).toHaveTextContent("chat");
     expect(feature).toHaveTextContent("Vision");
 
-    await user.click(providers.getByRole("button", { name: "Anthropic" }));
+    await user.click(provider);
+    await user.click(await screen.findByRole("option", { name: "Anthropic", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Clear Filters" }));
-    expect(providers.getByRole("button", { name: "All models" })).toHaveAttribute("aria-pressed", "true");
+    expect(provider).toHaveTextContent("All providers");
     expect(search).toHaveValue("");
     expect(mode).toHaveTextContent("All types");
     expect(feature).toHaveTextContent("All capabilities");

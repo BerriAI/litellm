@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Search } from "lucide-react";
+import ModelHubProviders from "@/components/AIHub/ModelHubProviders";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
@@ -193,12 +194,10 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
           />
         </InputGroup>
         {showProviderFilter && (
-          <ChatFilterSelect
-            label="Model provider"
-            emptyLabel="All providers"
-            options={getUniqueProviders(modelHubData)}
-            value={selectedProvider}
-            onValueChange={changeProvider}
+          <ModelHubProviders
+            providers={getUniqueProviders(modelHubData)}
+            selectedProviders={selectedProvider ? [selectedProvider] : []}
+            onSelect={(provider) => changeProvider(provider ?? "")}
           />
         )}
         <ChatFilterSelect

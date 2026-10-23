@@ -413,15 +413,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
               </Card>
             )}
 
-            {isChat && (
-              <ModelHubProviders
-                providers={modelFacets.providers}
-                selectedProviders={models.providerValues}
-                onSelect={(provider) => models.onProvidersChange(provider ? [provider] : [])}
-                loading={models.isLoading && modelFacets.providers.length === 0}
-              />
-            )}
-
             {/* Tabs for Models and Agents */}
             <Card
               className={
@@ -501,6 +492,14 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         )}
                       </div>
                     </div>
+                    {isChat && (
+                      <ModelHubProviders
+                        providers={modelFacets.providers}
+                        selectedProviders={models.providerValues}
+                        onSelect={(provider) => models.onProvidersChange(provider ? [provider] : [])}
+                        loading={models.isLoading && modelFacets.providers.length === 0}
+                      />
+                    )}
                     {!isChat && (
                       <div className="min-w-0">
                         <p className="text-sm font-medium mb-3 text-foreground">Provider:</p>

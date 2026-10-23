@@ -1,12 +1,10 @@
 "use client";
 
-import { LayoutGrid } from "lucide-react";
 import Image from "next/image";
 import { useState } from "react";
 
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/cva.config";
 import { displayMode } from "@/lib/decisionModels";
 
@@ -58,47 +56,48 @@ export default function ModelHubProviders({
   loading = false,
 }: ModelHubProvidersProps) {
   const availableProviders = Array.from(new Set(providers)).filter(Boolean);
+  const selectedProvider = selectedProviders[0] ?? "";
+  const initialLoading = loading && availableProviders.length === 0;
+  const emptyLabel = initialLoading ? "Loading providers" : "All providers";
+  const items = [
+    { value: "", label: "All providers" },
+    ...availableProviders.map((provider) => ({
+      value: provider,
+      label: getProviderLogoAndName(provider).displayName,
+    })),
+  ];
 
   return (
-    <section className="space-y-3">
-      <h2 className="text-sm font-medium text-foreground">Available providers</h2>
-      <div className="chat-model-providers" role="group" aria-label="Available providers" aria-busy={loading}>
-        <Button
-          type="button"
-          variant="ghost"
-          className="chat-model-provider-button"
-          aria-pressed={selectedProviders.length === 0}
-          onClick={() => onSelect(null)}
-        >
-          <span className="chat-model-provider-logo" aria-hidden="true">
-            <LayoutGrid className="size-4" />
-          </span>
-          <span>All models</span>
-        </Button>
-        {availableProviders.map((provider) => (
-          <Button
-            key={provider}
-            type="button"
-            variant="ghost"
-            className="chat-model-provider-button"
-            aria-pressed={selectedProviders.includes(provider)}
-            onClick={() => onSelect(provider)}
-          >
-            <ProviderLogo provider={provider} />
-            <span>{getProviderLogoAndName(provider).displayName}</span>
-          </Button>
-        ))}
-        {loading && availableProviders.length === 0 && (
-          <>
-            <span role="status" className="sr-only">
-              Loading providers
+    <Select
+      value={selectedProvider}
+      items={items}
+      onValueChange={(provider) => onSelect(provider || null)}
+      disabled={initialLoading}
+    >
+      <SelectTrigger
+        aria-label="Provider"
+        aria-busy={loading}
+        className="chat-model-filter-select chat-model-provider-select"
+      >
+        <SelectValue>
+          {selectedProvider ? (
+            <span className="flex min-w-0 items-center gap-2">
+              <ProviderLogo provider={selectedProvider} className="chat-model-provider-logo-option" />
+              <span className="truncate">{getProviderLogoAndName(selectedProvider).displayName}</span>
             </span>
-            {[0, 1, 2].map((index) => (
-              <Skeleton key={index} className="h-16 w-36 rounded-xl" aria-hidden="true" />
-            ))}
-          </>
-        )}
-      </div>
-    </section>
+          ) : (
+            emptyLabel
+          )}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent className="chat-theme" align="start">
+        {items.map((item) => (
+          <SelectItem key={item.value} value={item.value}>
+            {item.value && <ProviderLogo provider={item.value} className="chat-model-provider-logo-option" />}
+            <span>{item.label}</span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
