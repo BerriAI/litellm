@@ -1,5 +1,4 @@
-import { ConfigProvider, Select, theme } from "antd";
-import { useTheme } from "next-themes";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { OpenAIUpstreamFormat } from "./openai_upstream_format";
 
 const options = [
@@ -22,23 +21,32 @@ interface UpstreamFormatSelectProps {
 }
 
 export default function UpstreamFormatSelect({ id, value, onChange, onBlur }: UpstreamFormatSelectProps) {
-  const { resolvedTheme } = useTheme();
   return (
     <div className="space-y-2">
-      <ConfigProvider theme={{ algorithm: resolvedTheme === "dark" ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
-        <Select<OpenAIUpstreamFormat>
+      <Select
+        items={options}
+        value={value}
+        onValueChange={(selected) => {
+          if (selected !== null) onChange(selected);
+        }}
+      >
+        <SelectTrigger
           id={id}
           aria-label="Upstream format"
           aria-describedby={`${id}-help`}
-          value={value}
-          onChange={onChange}
           onBlur={onBlur}
-          options={options}
-          virtual={false}
-          size="large"
           className="w-full"
-        />
-      </ConfigProvider>
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       <p id={`${id}-help`} className="text-xs text-muted-foreground">
         {descriptions[value]}
       </p>
