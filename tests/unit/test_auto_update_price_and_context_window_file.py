@@ -220,3 +220,137 @@ def test_transform_inherits_allowlisted_keys_from_base_model_entry(sync_module):
     assert entry["supports_pdf_input"] is True
     assert entry["supports_assistant_prefill"] is True
     assert entry["input_cost_per_token"] == 1.5e-07
+
+
+# --- DotHoosh -----------------------------------------------------------------------------
+# Trimmed from GET https://gateway.dothoosh.com/v1/models (fixture values, real shape).
+
+
+def _dothoosh_row(**overrides: object) -> dict:
+    row = {
+        "id": "gpt-5",
+        "context_length": 400000,
+        "top_provider": {"context_length": 400000, "max_completion_tokens": 128000},
+        "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+        "pricing": {
+            "prompt": "0.00000125",
+            "completion": "0.00001",
+            "input_cache_read": "0.000000125",
+            "input_cache_write": "0.0000015625",
+            "input_cache_write_1h": "0.0000025",
+            "request": "0",
+        },
+        "pricing_tiers": [
+            {"above_input_tokens": 272000, "prompt": "0.0000025", "completion": "0.000015"},
+            {"above_input_tokens": 128000, "prompt": "0.000002"},
+        ],
+        "supported_parameters": ["max_tokens", "reasoning", "tool_choice", "tools"],
+        "protocols": [
+            {"protocol": "openai-chat-completions"},
+            {"protocol": "openai-responses"},
+            {"protocol": "anthropic-messages"},
+        ],
+    }
+    row.update(overrides)
+    return row
+
+
+def test_dothoosh_transform_maps_prices_limits_and_flags(sync_module):
+    entry = sync_module.transform_dothoosh_data([_dothoosh_row()])["dothoosh/gpt-5"]
+    assert entry["litellm_provider"] == "dothoosh"
+    assert entry["mode"] == "chat"
+    assert entry["input_cost_per_token"] == 1.25e-06
+    assert entry["output_cost_per_token"] == 1e-05
+    assert entry["cache_read_input_token_cost"] == 1.25e-07
+    assert entry["cache_creation_input_token_cost"] == 1.5625e-06
+    assert entry["cache_creation_input_token_cost_above_1hr"] == 2.5e-06
+    assert entry["supports_prompt_caching"] is True
+    assert entry["max_input_tokens"] == 400000
+    assert entry["max_output_tokens"] == entry["max_tokens"] == 128000
+    assert entry["supports_function_calling"] is True
+    assert entry["supports_tool_choice"] is True
+    assert entry["supports_reasoning"] is True
+    assert entry["supports_vision"] is True
+    assert entry["supported_endpoints"] == ["/v1/chat/completions", "/v1/responses"]
+    assert entry["source"] == "https://www.dothoosh.com/gateway/v1/models"
+
+
+def test_dothoosh_tiers_use_litellm_keys_and_carry_unchanged_prices_forward(sync_module):
+    entry = sync_module.transform_dothoosh_data([_dothoosh_row()])["dothoosh/gpt-5"]
+    # given out of order; 128k omits completion/cache, 272k omits cache
+    assert entry["input_cost_per_token_above_128k_tokens"] == 2e-06
+    assert entry["output_cost_per_token_above_128k_tokens"] == 1e-05
+    assert entry["cache_read_input_token_cost_above_128k_tokens"] == 1.25e-07
+    assert entry["input_cost_per_token_above_272k_tokens"] == 2.5e-06
+    assert entry["output_cost_per_token_above_272k_tokens"] == 1.5e-05
+    assert entry["cache_read_input_token_cost_above_272k_tokens"] == 1.25e-07
+
+
+def test_dothoosh_tier_threshold_not_a_multiple_of_1000_uses_plain_token_key(sync_module):
+    row = _dothoosh_row(pricing_tiers=[{"above_input_tokens": 100500, "prompt": "0.000003"}])
+    entry = sync_module.transform_dothoosh_data([row])["dothoosh/gpt-5"]
+    assert entry["input_cost_per_token_above_100500_tokens"] == 3e-06
+
+
+def test_dothoosh_responses_only_model_and_no_cache_or_tools(sync_module):
+    row = _dothoosh_row(
+        id="resp-only",
+        pricing={"prompt": "0.000001", "completion": "0.000002"},
+        pricing_tiers=None,
+        supported_parameters=["max_tokens"],
+        architecture={"input_modalities": ["text"], "output_modalities": ["text"]},
+        protocols=[{"protocol": "openai-responses"}],
+    )
+    entry = sync_module.transform_dothoosh_data([row])["dothoosh/resp-only"]
+    assert entry["mode"] == "responses"
+    assert entry["supported_endpoints"] == ["/v1/responses"]
+    assert entry["supports_prompt_caching"] is False
+    assert "cache_read_input_token_cost" not in entry
+    assert entry["supports_function_calling"] is False
+    assert entry["supports_reasoning"] is False
+    assert entry["supports_vision"] is False
+    assert not any("_above_" in key for key in entry)
+
+
+def test_dothoosh_row_without_protocols_is_a_chat_model(sync_module):
+    row = _dothoosh_row(protocols=None)
+    entry = sync_module.transform_dothoosh_data([row])["dothoosh/gpt-5"]
+    assert entry["mode"] == "chat"
+    assert entry["supported_endpoints"] == ["/v1/chat/completions"]
+
+
+def test_dothoosh_transform_skips_unpriced_or_unsized_rows(sync_module):
+    rows = [
+        _dothoosh_row(pricing=None),
+        _dothoosh_row(pricing={"prompt": "0.000001"}),
+        _dothoosh_row(pricing={"prompt": "free", "completion": "0.000001"}),
+        _dothoosh_row(pricing={"prompt": "-1", "completion": "0.000001"}),
+        _dothoosh_row(context_length=None, top_provider={}),
+        _dothoosh_row(id=""),
+    ]
+    assert sync_module.transform_dothoosh_data(rows) == {}
+    assert sync_module.transform_dothoosh_data(None) == {}
+    assert sync_module.transform_dothoosh_data([]) == {}
+
+
+def test_dothoosh_sync_replaces_entries_so_stale_fields_do_not_survive(sync_module):
+    stale = {"dothoosh/gpt-5": {"cache_read_input_token_cost": 9.9e-05, "supports_vision": False, "legacy": 1}}
+    remote = sync_module.transform_dothoosh_data(
+        [_dothoosh_row(pricing={"prompt": "0.000001", "completion": "0.000002"}, pricing_tiers=None)]
+    )
+    sync_module.sync_local_data_with_remote(stale, remote, replace_keys=frozenset(remote))
+    assert "cache_read_input_token_cost" not in stale["dothoosh/gpt-5"]
+    assert "legacy" not in stale["dothoosh/gpt-5"]
+
+
+def test_dothoosh_retired_models_are_dropped_only_for_a_full_list(sync_module):
+    remote = sync_module.transform_dothoosh_data([_dothoosh_row(id=f"m{i}") for i in range(5)])
+    local = {"dothoosh/m0": {}, "dothoosh/gone": {}, "openrouter/x": {}, "dothoosh-other/y": {}}
+    assert sync_module.drop_retired_dothoosh_entries(local, remote) == ["dothoosh/gone"]
+    assert set(local) == {"dothoosh/m0", "openrouter/x", "dothoosh-other/y"}
+
+    short = sync_module.transform_dothoosh_data([_dothoosh_row(id="m0")])
+    local = {"dothoosh/m0": {}, "dothoosh/gone": {}}
+    assert sync_module.drop_retired_dothoosh_entries(local, short) == []
+    assert set(local) == {"dothoosh/m0", "dothoosh/gone"}
+    assert sync_module.drop_retired_dothoosh_entries(local, {}) == []
