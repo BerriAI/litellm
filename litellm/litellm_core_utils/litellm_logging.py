@@ -7098,20 +7098,20 @@ class StandardLoggingPayloadSetup:
         litellm_metadata: Final = cast(  # cast-ok: request metadata is caller-provided
             Mapping[str, object], litellm_params.get("litellm_metadata") or {}
         )
-        metadata_tags = metadata.get("tags", [])
-        litellm_metadata_tags = litellm_metadata.get("tags", [])
+        metadata_tags: Final = metadata.get("tags", [])
+        litellm_metadata_tags: Final = litellm_metadata.get("tags", [])
 
-        if isinstance(metadata_tags, str) and metadata_tags:
-            request_tags = [metadata_tags]
-        elif metadata_tags:
-            request_tags = cast(list[str], metadata_tags).copy()
-        elif isinstance(litellm_metadata_tags, str) and litellm_metadata_tags:
-            request_tags = [litellm_metadata_tags]
-        elif litellm_metadata_tags:
-            request_tags = cast(list[str], litellm_metadata_tags).copy()
-        else:
-            request_tags = []
-
+        request_tags: Final = (
+            [metadata_tags]
+            if isinstance(metadata_tags, str) and metadata_tags
+            else metadata_tags.copy()
+            if isinstance(metadata_tags, list) and metadata_tags
+            else [litellm_metadata_tags]
+            if isinstance(litellm_metadata_tags, str) and litellm_metadata_tags
+            else litellm_metadata_tags.copy()
+            if isinstance(litellm_metadata_tags, list)
+            else []
+        )
         user_agent_tags: Final = StandardLoggingPayloadSetup._get_user_agent_tags(proxy_server_request)
         additional_header_tags: Final = StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request)
         if user_agent_tags is not None:
