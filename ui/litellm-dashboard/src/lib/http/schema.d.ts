@@ -36502,6 +36502,11 @@ export interface components {
              */
             base_url?: string | null;
             /**
+             * Block Entities
+             * @description PII types to reject outright instead of masking: a list, or a comma-separated string, e.g. ['US_SSN', 'CREDIT_CARD']. A request containing any listed type is refused with a 400 and nothing is forwarded. Omitted (the default) masks everything and forwards it.
+             */
+            block_entities?: string | string[] | null;
+            /**
              * Block Failures
              * @description If True, blocks requests on API failures. Defaults to True if not provided
              */
@@ -36617,6 +36622,12 @@ export interface components {
              * @description Python-like code containing the apply_guardrail function for custom guardrail logic
              */
             custom_code?: string | null;
+            /**
+             * Deanonymize
+             * @description Restore the original PII values in the response.
+             * @default true
+             */
+            deanonymize: boolean | null;
             /**
              * Decision Model
              * @description For guardrail='decision_model': the Decisions-API model that scores each check
@@ -36792,6 +36803,12 @@ export interface components {
              * @description Tag to use for keyword redaction
              */
             keyword_redaction_tag?: string | null;
+            /**
+             * Languages
+             * @description Comma-separated spaCy languages used for detection.
+             * @default en,fr
+             */
+            languages: string | null;
             /**
              * Lasso Conversation Id
              * @description Conversation ID for the Lasso guardrail
@@ -36993,6 +37010,12 @@ export interface components {
              * @description Pre-checkpoint ID for the Ovalix Tracker service.
              */
             pre_checkpoint_id?: string | null;
+            /**
+             * Preset
+             * @description Detection preset: 'onnx' (full suite, also detects secrets) or 'light' (faster, Presidio only).
+             * @default onnx
+             */
+            preset: string | null;
             /**
              * Presidio Ad Hoc Recognizers
              * @description Path to a JSON file containing ad-hoc recognizers for Presidio
