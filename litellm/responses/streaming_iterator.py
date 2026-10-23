@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -58,10 +59,12 @@ from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
     ResponseAPIUsage,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
+from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
 
@@ -361,6 +364,7 @@ class BaseResponsesAPIStreamingIterator:
     """
 
     _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
+    _earlier_rounds_spend: BilledRoundsSpend | None = None
 
     def __init__(
         self,
@@ -385,6 +389,7 @@ class BaseResponsesAPIStreamingIterator:
         self._output_started = False
         self._generated_content = ""
         self._generated_tool_arguments = ""
+        self._created_response: ResponsesAPIResponse | None = None
         self._completed_response_cached = False
         self._completed_response_logged = False
         self._completed_response_cache_hit: bool | None = None
@@ -544,6 +549,10 @@ class BaseResponsesAPIStreamingIterator:
                 # Store the completed response (also for incomplete/failed so logging still fires)
                 _chunk_type: Final = getattr(openai_responses_api_chunk, "type", None)
                 openai_types = get_openai_response_types()
+                if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED:
+                    _created: Final[object] = getattr(openai_responses_api_chunk, "response", None)
+                    if isinstance(_created, ResponsesAPIResponse):
+                        self._created_response = _created
                 if openai_responses_api_chunk and _chunk_type in (
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
@@ -575,7 +584,7 @@ class BaseResponsesAPIStreamingIterator:
                         else openai_responses_api_chunk.model_copy(update={"response": _billed_response})
                     )
                     self.completed_response = _terminal_chunk
-                    _stamp_responses_usage_cost(_billed_response, self.logging_obj)
+                    stamp_responses_usage_cost(_billed_response, self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
@@ -698,18 +707,22 @@ class BaseResponsesAPIStreamingIterator:
         if usage_obj is None:
             return
         try:
-            self.logging_obj.model_call_details["combined_usage_object"] = (
-                ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)
-            )
+            failed_usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)
         except (TypeError, ValueError) as usage_error:
             verbose_logger.debug(
                 "could not record usage for failed responses stream: %s",
                 usage_error,
             )
             return
-        self.logging_obj.model_call_details["response_cost"] = (
-            self.logging_obj.response_cost_calculator(result=response_obj) or 0.0
-        )
+        failed_cost: Final = self.logging_obj.response_cost_calculator(result=response_obj) or 0.0
+        if self._earlier_rounds_spend is None:
+            self.logging_obj.model_call_details["combined_usage_object"] = failed_usage
+            self.logging_obj.model_call_details["response_cost"] = failed_cost
+            return
+        self.logging_obj.record_failure_after_earlier_rounds(self._earlier_rounds_spend, failed_usage, failed_cost)
+
+    def bill_failure_after_earlier_rounds(self, earlier: BilledRoundsSpend) -> None:
+        self._earlier_rounds_spend = earlier
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
         return _map_stream_error_to_exception(
@@ -1029,6 +1042,34 @@ class BaseResponsesAPIStreamingIterator:
         self._pending_logging_tasks = ()
         if pending:
             await asyncio.wait(pending)
+
+    def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
+        """
+        The response.incomplete event to bill when the client went away mid-stream,
+        the same shape the success handler assembles for a natural end of stream.
+        Its response is the response.created payload (it carries the served
+        service_tier) plus the text and tool arguments relayed so far, with counted
+        usage since the provider never sent any. None when nothing was relayed yet
+        or the stream already reached its terminal event and billed itself.
+        """
+        created: Final = self._created_response
+        generated: Final = self._generated_content + self._generated_tool_arguments
+        if self.completed_response is not None or created is None or not generated:
+            return None
+        usage: Final = _estimate_usage_safely(
+            self.model or "", self.request_data.get("input"), self.request_data, generated
+        )
+        if usage is None:
+            return None
+        partial: Final = created.model_copy(
+            update={
+                "status": "incomplete",
+                "usage": usage,
+                "output": _partial_output_items(self._generated_content),
+            }
+        )
+        stamp_responses_usage_cost(partial, self.logging_obj)
+        return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
@@ -1561,6 +1602,37 @@ def _add_text_like_part_events(
         )
 
 
+@runtime_checkable
+class _BillsPartialStreamOnDisconnect(Protocol):
+    def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None: ...
+
+
+def partial_responses_incomplete_event_on_disconnect(stream: object) -> ResponseIncompleteEvent | None:
+    """Ask the stream behind a proxy or router wrapper for the partial response to bill, if it can build one."""
+    if not isinstance(stream, _BillsPartialStreamOnDisconnect):
+        return None
+    try:
+        partial: Final = stream.partial_response_on_disconnect()
+    except Exception as e:  # noqa: BLE001  # disconnect billing is best-effort; never break stream teardown
+        verbose_logger.debug("Failed to build partial Responses API response for disconnect billing: %s", e)
+        return None
+    return partial if isinstance(partial, ResponseIncompleteEvent) else None
+
+
+def _partial_output_items(generated_text: str) -> Sequence[GenericResponseOutputItem]:
+    if not generated_text:
+        return []
+    return [
+        GenericResponseOutputItem(
+            type="message",
+            id=f"msg_{uuid.uuid4()}",
+            status="incomplete",
+            role="assistant",
+            content=[OutputText(type="output_text", text=generated_text, annotations=[])],
+        )
+    ]
+
+
 def _billed_terminal_response(
     response_obj: object, estimate: Callable[[], ResponseAPIUsage | None] | None
 ) -> ResponsesAPIResponse | None:
@@ -1635,6 +1707,7 @@ def _estimate_usage_from_text(
     messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
         input=request_input,  # pyright: ignore[reportArgumentType]  # the raw Responses API input is a str or ResponseInputParam list, matching the helper's declared union
         responses_api_request=dict(responses_api_request),
+        only_since_compaction=True,
     )
     input_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
         model=model, messages=messages
@@ -1667,7 +1740,7 @@ def _estimate_usage_safely(
         return None
 
 
-def _stamp_responses_usage_cost(
+def stamp_responses_usage_cost(
     response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
 ) -> None:
     if response_obj is None or logging_obj is None:
@@ -1717,7 +1790,7 @@ def build_synthetic_response_events(
     chunk_size: int,
 ) -> list[ResponsesAPIStreamingResponse]:
     openai_types: Final = get_openai_response_types()
-    _stamp_responses_usage_cost(transformed, logging_obj)
+    stamp_responses_usage_cost(transformed, logging_obj)
 
     events: Final[list[ResponsesAPIStreamingResponse]] = [
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
