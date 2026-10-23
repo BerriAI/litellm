@@ -5410,31 +5410,30 @@ async def can_key_call_model(
             access_group_ids=key_access_group_ids,
             prisma_client=prisma_client,
         )
-        if models_from_groups is not None:
-            allowed_models: Final = (
-                list(dict.fromkeys([*key_models, *models_from_groups])) if key_models else models_from_groups
+        allowed_models: Final = (
+            list(dict.fromkeys([*key_models, *models_from_groups])) if key_models else models_from_groups
+        )
+        if not allowed_models:
+            raise ModelAccessDeniedProxyException(
+                message=model_access_denied_client_message(model=model),
+                internal_message=(
+                    f"key not allowed to access model. Key has access_group_ids={key_access_group_ids} "
+                    f"which resolved to no models. Tried to access {model}"
+                ),
+                type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="key"),
+                param="model",
+                code=status.HTTP_403_FORBIDDEN,
             )
-            if not allowed_models:
-                raise ModelAccessDeniedProxyException(
-                    message=model_access_denied_client_message(model=model),
-                    internal_message=(
-                        f"key not allowed to access model. Key has access_group_ids={key_access_group_ids} "
-                        f"which resolved to no models. Tried to access {model}"
-                    ),
-                    type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="key"),
-                    param="model",
-                    code=status.HTTP_403_FORBIDDEN,
-                )
 
-            return can_object_call_model(
-                model=model,
-                llm_router=llm_router,
-                models=allowed_models,
-                team_model_aliases=valid_token.team_model_aliases,
-                team_id=valid_token.team_id,
-                key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-                object_type="key",
-            )
+        return can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=allowed_models,
+            team_model_aliases=valid_token.team_model_aliases,
+            team_id=valid_token.team_id,
+            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+            object_type="key",
+        )
     return can_object_call_model(
         model=model,
         llm_router=llm_router,
@@ -5641,30 +5640,29 @@ async def can_team_access_model(
             access_group_ids=team_access_group_ids,
             prisma_client=prisma_client,
         )
-        if models_from_groups is not None:
-            allowed_models: Final = (
-                list(dict.fromkeys([*team_models, *models_from_groups])) if team_models else models_from_groups
+        allowed_models: Final = (
+            list(dict.fromkeys([*team_models, *models_from_groups])) if team_models else models_from_groups
+        )
+        if not allowed_models:
+            raise ModelAccessDeniedProxyException(
+                message=model_access_denied_client_message(model=model),
+                internal_message=(
+                    f"team not allowed to access model. Team has access_group_ids={team_access_group_ids} "
+                    f"which resolved to no models. Tried to access {model}"
+                ),
+                type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="team"),
+                param="model",
+                code=status.HTTP_403_FORBIDDEN,
             )
-            if not allowed_models:
-                raise ModelAccessDeniedProxyException(
-                    message=model_access_denied_client_message(model=model),
-                    internal_message=(
-                        f"team not allowed to access model. Team has access_group_ids={team_access_group_ids} "
-                        f"which resolved to no models. Tried to access {model}"
-                    ),
-                    type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="team"),
-                    param="model",
-                    code=status.HTTP_403_FORBIDDEN,
-                )
-            return can_object_call_model(
-                model=model,
-                llm_router=llm_router,
-                models=allowed_models,
-                team_model_aliases=team_model_aliases,
-                team_id=team_object.team_id if team_object else None,
-                key_model_aliases=key_model_aliases,
-                object_type="team",
-            )
+        return can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=allowed_models,
+            team_model_aliases=team_model_aliases,
+            team_id=team_object.team_id if team_object else None,
+            key_model_aliases=key_model_aliases,
+            object_type="team",
+        )
     return can_object_call_model(
         model=model,
         llm_router=llm_router,
