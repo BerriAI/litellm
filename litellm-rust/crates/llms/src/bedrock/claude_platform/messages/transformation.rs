@@ -2,9 +2,8 @@ use std::sync::LazyLock;
 
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{AwsCredentialSource, resolve_aws_region};
-use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{header_value, with_header, without_headers};
-use litellm_layered::{Layered, read};
+use litellm_layered::{Layered, non_blank, read};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
@@ -26,14 +25,14 @@ use crate::{
 };
 
 const SERVICE: &str = "aws-external-anthropic";
-const BASE_ENVS: &[&str] = &["ANTHROPIC_AWS_BASE_URL", "ANTHROPIC_AWS_API_BASE"];
-const WORKSPACE_ENVS: &[&str] = WorkspaceKeys::ENV_NAMES;
-const WORKSPACE_FIELDS: &[&str] = WorkspaceKeys::LITELLM_PARAMS;
+const BASE_ENVS: &[&str] = ClaudePlatformKeys::API_BASE.env;
+const WORKSPACE_ENVS: &[&str] = ClaudePlatformKeys::WORKSPACE_ID.env;
+const WORKSPACE_FIELDS: &[&str] = ClaudePlatformKeys::WORKSPACE_ID.litellm_params;
 const WORKSPACE_HEADER: &str = "anthropic-workspace-id";
 
 #[derive(Layered)]
-#[expect(dead_code, reason = "only WorkspaceKeysPartial is built")]
-struct WorkspaceKeys {
+#[expect(dead_code, reason = "only the derived partial is read")]
+struct ClaudePlatformKeys {
     #[layer(
         litellm_param = [
             "workspace_id",
@@ -46,6 +45,22 @@ struct WorkspaceKeys {
         setting = "workspace_id"
     )]
     workspace_id: String,
+    #[layer(litellm_param = "api_key", env = "ANTHROPIC_AWS_API_KEY", read = read::text, secret)]
+    api_key: String,
+    #[layer(
+        litellm_param = "api_base",
+        env = ["ANTHROPIC_AWS_BASE_URL", "ANTHROPIC_AWS_API_BASE"],
+        read = read::text
+    )]
+    api_base: String,
+    #[layer(env = "AWS_DEFAULT_REGION", read = read::text)]
+    default_region: String,
+}
+
+impl ClaudePlatformKeysPartial {
+    fn env(env: &dyn Fn(&str) -> Option<String>) -> Self {
+        Self::from_env(&env).unwrap_or_default()
+    }
 }
 const UNSUPPORTED_OVERRIDE: &str = "claude_platform_unsupported_params";
 
@@ -79,14 +94,15 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
                         .or_else(|| workspace_value(params.extra.get(*field)))
                 })
             });
-        let workspace = resolve_non_empty(workspace, env, WORKSPACE_ENVS).ok_or_else(|| {
+        let keys = ClaudePlatformKeysPartial::env(env);
+        let workspace = non_blank(workspace).or(keys.workspace_id).ok_or_else(|| {
             Error::Auth(litellm_auth::Error::missing(
                 "Claude Platform on AWS",
-                WorkspaceKeys::WORKSPACE_ID,
+                ClaudePlatformKeys::WORKSPACE_ID,
             ))
         })?;
         let headers = with_header(headers, WORKSPACE_HEADER, workspace);
-        let key = resolve_non_empty(api_key, env, &["ANTHROPIC_AWS_API_KEY"]);
+        let key = non_blank(api_key).or(keys.api_key);
         let headers = without_headers(headers, &["authorization"]);
         if header_value(&headers, "x-api-key").is_some_and(|value| !value.trim().is_empty()) {
             return Ok(ValidatedEnvironment {
@@ -103,7 +119,7 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
                 },
             });
         }
-        let base = resolve_non_empty(params.api_base.as_deref(), env, BASE_ENVS);
+        let base = non_blank(params.api_base.as_deref()).or(keys.api_base);
         Ok(ValidatedEnvironment {
             headers: without_headers(headers, &["x-api-key"]),
             auth: AuthScheme::AwsSigV4 {
@@ -122,13 +138,12 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         _stream: bool,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        let base = resolve_non_empty(
+        let base = non_blank(
             api_base
                 .filter(|base| !base.trim().is_empty())
                 .or(params.api_base.as_deref()),
-            env,
-            BASE_ENVS,
-        );
+        )
+        .or(ClaudePlatformKeysPartial::env(env).api_base);
         let base = match base {
             Some(base) => base,
             None => format!(
@@ -209,7 +224,7 @@ fn platform_region(
     });
     let region = host_region
         .or_else(|| resolve_aws_region(None, &params.aws, env))
-        .or_else(|| resolve_non_empty(None, env, &["AWS_DEFAULT_REGION"]))
+        .or_else(|| ClaudePlatformKeysPartial::env(env).default_region)
         .ok_or_else(|| {
             Error::Auth(litellm_auth::Error::missing(
                 "Claude Platform on AWS",
@@ -286,7 +301,7 @@ mod tests {
                 .unwrap_err(),
             Error::Auth(litellm_auth::Error::missing(
                 "Claude Platform on AWS",
-                WorkspaceKeys::WORKSPACE_ID,
+                ClaudePlatformKeys::WORKSPACE_ID,
             ))
         );
     }

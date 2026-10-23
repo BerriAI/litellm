@@ -1,6 +1,6 @@
 use litellm_auth::{CredentialPlacement, SecretValue};
-use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{has_bearer_auth, without_headers};
+use litellm_layered::{Layered, non_blank, read};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::DEFAULT_HEADERS,
@@ -22,6 +22,21 @@ use crate::{
 const API_KEY_ENV: &str = "OPENROUTER_API_KEY";
 const API_BASE_ENV: &str = "OPENROUTER_API_BASE";
 const DEFAULT_BASE: &str = "https://openrouter.ai/api/v1";
+
+#[derive(Layered)]
+#[expect(dead_code, reason = "only the derived partial is read")]
+struct OpenRouterKeys {
+    #[layer(litellm_param = "api_key", env = "OPENROUTER_API_KEY", read = read::text, secret, setting = "API Key")]
+    api_key: String,
+    #[layer(litellm_param = "api_base", env = "OPENROUTER_API_BASE", read = read::text, setting = "API Base")]
+    api_base: String,
+}
+
+impl OpenRouterKeysPartial {
+    fn env(env: &dyn Fn(&str) -> Option<String>) -> Self {
+        Self::from_env(&env).unwrap_or_default()
+    }
+}
 const MESSAGES_PATH: &str = "/v1/messages";
 
 pub struct OpenRouterAnthropicMessagesConfig;
@@ -45,12 +60,12 @@ impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
                 auth: AuthScheme::Forwarded,
             });
         }
-        let key = resolve_non_empty(api_key, env, &[API_KEY_ENV]).ok_or(Error::Auth(
-            litellm_auth::Error::MissingApiKey {
+        let key = non_blank(api_key)
+            .or(OpenRouterKeysPartial::env(env).api_key)
+            .ok_or(Error::Auth(litellm_auth::Error::MissingApiKey {
                 provider: "OpenRouter",
-                environment_variable: API_KEY_ENV,
-            },
-        ))?;
+                environment_variable: OpenRouterKeys::API_KEY.env[0],
+            }))?;
         Ok(ValidatedEnvironment {
             headers: without_headers(headers, &["authorization"]),
             auth: AuthScheme::Credential {
@@ -71,7 +86,8 @@ impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
         let explicit = api_base
             .filter(|base| !base.trim().is_empty())
             .or(params.api_base.as_deref());
-        let base = resolve_non_empty(explicit, env, &[API_BASE_ENV])
+        let base = non_blank(explicit)
+            .or(OpenRouterKeysPartial::env(env).api_base)
             .unwrap_or_else(|| DEFAULT_BASE.into());
         let trimmed = base.trim_end_matches('/');
         if trimmed.ends_with(MESSAGES_PATH) {

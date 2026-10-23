@@ -3,8 +3,8 @@ use std::sync::LazyLock;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::AwsCredentialSource;
 use litellm_auth_aws::bedrock_model_id_and_region;
-use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{with_header, without_headers};
+use litellm_layered::{Layered, non_blank, read};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, DEFAULT_HEADERS},
@@ -31,14 +31,34 @@ use crate::{
     bedrock::common_utils::validated_region,
 };
 
-const API_BASE_ENV: &str = "BEDROCK_MANTLE_API_BASE";
-const REGION_ENVS: &[&str] = &[
-    "BEDROCK_MANTLE_REGION",
-    "AWS_REGION_NAME",
-    "AWS_REGION",
-    "AWS_DEFAULT_REGION",
-];
-const KEY_ENVS: &[&str] = &["BEDROCK_MANTLE_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"];
+const API_BASE_ENV: &str = MantleKeys::API_BASE.env[0];
+const REGION_ENVS: &[&str] = MantleKeys::REGION.env;
+
+#[derive(Layered)]
+#[expect(dead_code, reason = "only the derived partial is read")]
+struct MantleKeys {
+    #[layer(
+        litellm_param = "api_key",
+        env = ["BEDROCK_MANTLE_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"],
+        read = read::text,
+        secret,
+        setting = "API Key"
+    )]
+    api_key: String,
+    #[layer(litellm_param = "api_base", env = "BEDROCK_MANTLE_API_BASE", read = read::text, setting = "API Base")]
+    api_base: String,
+    #[layer(
+        env = ["BEDROCK_MANTLE_REGION", "AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION"],
+        read = read::text
+    )]
+    region: String,
+}
+
+impl MantleKeysPartial {
+    fn env(env: &dyn Fn(&str) -> Option<String>) -> Self {
+        Self::from_env(&env).unwrap_or_default()
+    }
+}
 const MESSAGES_PATH: &str = "/anthropic/v1/messages";
 const BASE_SUFFIXES: &[&str] = &[
     MESSAGES_PATH,
@@ -78,7 +98,7 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
             Some(project) => with_header(headers, "anthropic-workspace-id", project.to_string()),
             None => headers,
         };
-        let auth = match resolve_non_empty(api_key, env, KEY_ENVS) {
+        let auth = match non_blank(api_key).or(MantleKeysPartial::env(env).api_key) {
             Some(token) => AuthScheme::Credential {
                 placement: CredentialPlacement::Bearer,
                 secret: SecretValue::new(token),
@@ -242,7 +262,7 @@ fn mantle_base(
     .into_iter()
     .flatten()
     .find(|base| !base.trim().is_empty());
-    resolve_non_empty(explicit, env, &[API_BASE_ENV])
+    non_blank(explicit).or(MantleKeysPartial::env(env).api_base)
 }
 
 fn mantle_region(
@@ -253,9 +273,9 @@ fn mantle_region(
 ) -> Result<String, Error> {
     let region = mantle_base(base, params, env)
         .and_then(|base| mantle_host_region(&base))
-        .or_else(|| resolve_non_empty(params.aws.aws_region_name.as_deref(), &|_| None, &[]))
+        .or_else(|| non_blank(params.aws.aws_region_name.as_deref()))
         .or_else(|| mantle_model(model).1)
-        .or_else(|| resolve_non_empty(None, env, REGION_ENVS))
+        .or_else(|| MantleKeysPartial::env(env).region)
         .unwrap_or_else(|| "us-east-1".into());
     validated_region(region)
 }
