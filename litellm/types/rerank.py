@@ -4,7 +4,6 @@ https://docs.cohere.com/reference/rerank
 
 """
 
-from collections.abc import Sequence
 from typing import Literal
 
 from pydantic import ConfigDict, Field, PrivateAttr
@@ -69,7 +68,6 @@ class RerankResponseMeta(TypedDict, total=False):
     api_version: dict | None
     billed_units: RerankBilledUnits | None
     tokens: RerankTokens | None
-    refused_document_indices: ReadOnly[Sequence[int]]
 
 
 class RerankResponseDocument(TypedDict):

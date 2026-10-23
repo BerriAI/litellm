@@ -141,16 +141,16 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
                     tool_choice=request_body.get("tool_choice"),
                 )
             except ValueError:
-                return _count_text_tokens(model=model, text=request_body.get("messages"))
+                return count_text_tokens(model=model, text=request_body.get("messages"))
         if "prompt" in request_body:
-            return _count_text_tokens(model=model, text=request_body.get("prompt"))
+            return count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
-            return _count_text_tokens(
+            return count_text_tokens(
                 model=model, text=billable_input_since_newest_compaction(request_body.get("input"))
             )
         if "query" in request_body or "documents" in request_body:
-            query_tokens: Final = _count_text_tokens(model=model, text=request_body.get("query"))
-            document_tokens: Final = _count_text_tokens(
+            query_tokens: Final = count_text_tokens(model=model, text=request_body.get("query"))
+            document_tokens: Final = count_text_tokens(
                 model=model,
                 text=request_body.get("documents"),
             )
@@ -160,7 +160,7 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
     return None
 
 
-def _count_text_tokens(model: str, text: object) -> int:
+def count_text_tokens(model: str, text: object) -> int:
     if text is None:
         return 0
 

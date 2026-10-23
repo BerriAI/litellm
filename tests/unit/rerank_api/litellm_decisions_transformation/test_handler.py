@@ -1,10 +1,12 @@
 import asyncio
 import json
+from threading import Event
 from typing import Final
 from unittest.mock import patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.caching.caching import Cache
@@ -321,6 +323,70 @@ async def test_success_is_billed_once_and_failed_request_retains_completed_usage
         (20, 6, 26),
         (10, 3, 13),
     ]
+
+
+@pytest.mark.parametrize("sync", [True, False])
+@pytest.mark.parametrize(
+    "failure,exception,billed_calls",
+    [
+        ("unavailable", litellm.ServiceUnavailableError, 1),
+        ("refused", litellm.ContentPolicyViolationError, 2),
+        ("invalid", litellm.InternalServerError, 2),
+    ],
+)
+async def test_failure_stops_queued_calls_and_preserves_completed_billing(
+    sync, failure, exception, billed_calls, respx_mock, monkeypatch
+):
+    logged = Event()
+
+    class FailureLogger(RecordingLogger):
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            self.events.append(kwargs["standard_logging_object"])
+            logged.set()
+
+    logger = FailureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    sent = []
+
+    def score(request):
+        passage = json.loads(json.loads(request.content)["state"])["passage"]
+        sent.append(passage)
+        if passage != "failed":
+            return response(output_tokens=3)
+        if failure == "unavailable":
+            return httpx.Response(503, json={"error": "unavailable"})
+        if failure == "invalid":
+            return response(1.1, output_tokens=3)
+        return httpx.Response(
+            200,
+            json={
+                "model": "jevrank-unit-test",
+                "answers": {},
+                "usage": {"input_tokens": 10, "output_tokens": 3},
+            },
+        )
+
+    respx_mock.post(URL).mock(side_effect=score)
+    with pytest.raises(exception):
+        await rerank(sync, documents=["completed", "failed", "queued", "also queued"], concurrency=1)
+    if sync:
+        assert await asyncio.to_thread(logged.wait, 5)
+    else:
+        await flush_logging()
+    assert sent == ["completed", "failed"]
+    assert len(logger.events) == 1
+    assert logger.events[0]["status"] == "failure"
+    assert logger.events[0]["prompt_tokens"] == 10 * billed_calls
+    assert logger.events[0]["completion_tokens"] == 3 * billed_calls
+    assert logger.events[0]["total_tokens"] == 13 * billed_calls
+    assert logger.events[0]["response_cost"] == pytest.approx(10 * billed_calls * RATE)
+
+
+async def test_failure_stops_other_async_workers_before_they_send(respx_mock):
+    route = respx_mock.post(URL).mock(return_value=httpx.Response(503, json={"error": "unavailable"}))
+    with pytest.raises(litellm.ServiceUnavailableError):
+        await rerank(False, documents=["failed", "queued", "also queued", "last"], concurrency=2)
+    assert route.call_count == 1
 
 
 async def test_custom_token_prices_apply_to_decision_usage(respx_mock):
@@ -1069,14 +1135,94 @@ def test_catalog_selects_methods_and_leaves_native_rerank_unchanged(monkeypatch)
     for name, info in selected.items():
         monkeypatch.setitem(litellm.model_cost, name, info)
         expected = "pointwise" if info["litellm_provider"] == "typesafe" else "multiple_choice"
-        assert get_decision_rerank_strategy(name) == expected
-        assert get_decision_rerank_strategy(f"openai/{name}") == expected
-    assert get_decision_rerank_strategy("cohere/rerank-v3.5") is None
-    assert get_decision_rerank_strategy("not-a-catalog-model") is None
+        model, provider, _, _ = litellm.get_llm_provider(model=name)
+        assert get_decision_rerank_strategy(model, litellm.LlmProviders(provider)) == expected
+        assert get_decision_rerank_strategy(name, litellm.LlmProviders.OPENAI) == expected
+    assert get_decision_rerank_strategy("rerank-v3.5", litellm.LlmProviders.COHERE) is None
+    assert get_decision_rerank_strategy("not-a-catalog-model", litellm.LlmProviders.OPENAI) is None
 
 
 def test_native_rerank_does_not_invoke_model_metadata_lookup(monkeypatch):
     from litellm.rerank_api.rerank_utils import get_decision_rerank_strategy
 
     with patch.object(litellm, "get_model_info", side_effect=AssertionError("native metadata lookup")):
-        assert get_decision_rerank_strategy("cohere/rerank-v3.5") is None
+        assert get_decision_rerank_strategy("rerank-v3.5", litellm.LlmProviders.COHERE) is None
+
+
+@pytest.mark.parametrize("sync", [True, False])
+async def test_proxy_catalog_model_keeps_native_rerank_transport(sync: bool, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://gateway.example/v1/rerank").respond(
+        json={"results": [{"index": 1, "relevance_score": 0.9}, {"index": 0, "relevance_score": 0.2}]}
+    )
+    params: Final = {
+        "model": f"litellm_proxy/{MODEL}",
+        "api_base": "https://gateway.example",
+        "api_key": "test-key",
+        "query": "warranty",
+        "documents": ["one", "two"],
+        "return_documents": False,
+    }
+    result: Final = litellm.rerank(**params) if sync else await litellm.arerank(**params)
+    assert result.results == [{"index": 1, "relevance_score": 0.9}, {"index": 0, "relevance_score": 0.2}]
+    assert len(respx_mock.calls) == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": MODEL,
+        "query": "warranty",
+        "documents": ["one", "two"],
+        "return_documents": False,
+    }
+
+
+@pytest.mark.parametrize("sync", [True, False])
+@pytest.mark.parametrize(
+    "timeout",
+    [httpx.Timeout(12.0), httpx.Timeout(12.0, connect=2.0), httpx.Timeout(12.0, read=None)],
+)
+async def test_decision_rerank_accepts_httpx_timeout(
+    sync: bool, timeout: httpx.Timeout, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(URL).mock(return_value=response())
+    params: Final = {
+        "model": MODEL,
+        "query": "warranty",
+        "documents": ["one"],
+        "return_documents": False,
+        "api_key": "test-key",
+        "timeout": timeout,
+    }
+    result: Final = litellm.rerank(**params) if sync else await litellm.arerank(**params)
+    assert result.results == [{"index": 0, "relevance_score": 0.8}]
+    assert route.call_count == 1
+
+
+@pytest.mark.parametrize("sync", [True, False])
+@pytest.mark.parametrize("global_drop_params", [True, False])
+async def test_decision_rerank_drops_unsupported_params_when_enabled(
+    sync: bool, global_drop_params: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    route: Final = respx_mock.post(URL).mock(return_value=response())
+    result: Final = await rerank(
+        sync,
+        documents=["one"],
+        return_documents=False,
+        rank_fields=["text"],
+        max_tokens_per_doc=100,
+        max_chunks_per_doc=1,
+        instruction="Prioritize the warranty",
+        drop_params=not global_drop_params,
+    )
+    assert result.results == [{"index": 0, "relevance_score": 0.8}]
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "jevrank-unit-test",
+        "state": json.dumps({"query": "warranty", "passage": "one"}),
+        "questions": {
+            "relevance": {
+                "type": "noul",
+                "instructions": (
+                    "Is the passage relevant to the query, meaning it contains information that answers, "
+                    "supports or contradicts it?"
+                ),
+            }
+        },
+    }

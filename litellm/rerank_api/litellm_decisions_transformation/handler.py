@@ -9,6 +9,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import partial
 from queue import Empty, SimpleQueue
+from threading import Event
 from typing import Final, Literal
 
 import litellm
@@ -24,6 +25,8 @@ from litellm.rerank_api.litellm_decisions_transformation.transformation import (
     DecisionRerankRequest,
     DecisionRerankResult,
     LiteLLMDecisionsRerankConfig,
+    invalid_response,
+    result_error,
 )
 from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.rerank import DecisionRerankResponse
@@ -92,7 +95,9 @@ def _send(
         return DecisionRerankResult(
             document.index,
             document.text,
-            error=_invalid_response(document, "expected a Decisions response"),
+            error=invalid_response(
+                document.index, "expected a Decisions response", call.requested_model, call.custom_llm_provider
+            ),
         )
     except Exception as error:  # noqa: BLE001  # preserve mapped provider failures alongside completed billable calls
         return DecisionRerankResult(document.index, document.text, error=error)
@@ -113,7 +118,9 @@ async def _asend(
         return DecisionRerankResult(
             document.index,
             document.text,
-            error=_invalid_response(document, "expected a Decisions response"),
+            error=invalid_response(
+                document.index, "expected a Decisions response", call.requested_model, call.custom_llm_provider
+            ),
         )
     except asyncio.CancelledError:
         if cancellation_requested.is_set():
@@ -129,14 +136,6 @@ async def _asend(
         )
     except Exception as error:  # noqa: BLE001  # preserve mapped provider failures alongside completed billable calls
         return DecisionRerankResult(document.index, document.text, error=error)
-
-
-def _invalid_response(document: _DocumentCall, reason: str) -> litellm.InternalServerError:
-    return litellm.InternalServerError(
-        message=f"Invalid decision rerank response for document {document.index}: {reason}",
-        model=document.call.requested_model,
-        llm_provider=document.call.custom_llm_provider,
-    )
 
 
 def _aggregate_usage(response: DecisionRerankResponse) -> Usage:
@@ -178,10 +177,6 @@ def _finish(
     return response
 
 
-def _call_count(request: DecisionRerankRequest) -> int:
-    return 1 if request.strategy == "multiple_choice" else len(request.documents)
-
-
 def _rerank(
     prepare: Callable[[int], _DocumentCall],
     request: DecisionRerankRequest,
@@ -190,18 +185,30 @@ def _rerank(
     provider: str,
     deadline: float,
 ) -> DecisionRerankResponse:
-    count: Final = _call_count(request)
+    count: Final = request.request_count
     workers: Final = min(count, _MAX_CONCURRENCY)
     completed: Final[SimpleQueue[DecisionRerankResult]] = SimpleQueue()
+    stopped: Final = Event()
+
+    def record(outcome: DecisionRerankResult) -> None:
+        if result_error(outcome, request, model, provider) is not None:
+            stopped.set()
+        completed.put(outcome)
+
+    def run_one(index: int) -> None:
+        try:
+            document: Final = prepare(index)
+            if stopped.is_set():
+                return
+            record(_send(document, deadline))
+        except Exception as error:  # noqa: BLE001  # preparation failures retain completed billable calls
+            record(DecisionRerankResult(index, request.document_text(index), error=error))
 
     def run(indices: range) -> None:
         for index in indices:
-            if time.monotonic() >= deadline:
+            if stopped.is_set() or time.monotonic() >= deadline:
                 return
-            try:
-                completed.put(_send(prepare(index), deadline))
-            except Exception as error:  # noqa: BLE001  # preparation failures retain completed billable calls
-                completed.put(DecisionRerankResult(index, request.document_text(index), error=error))
+            run_one(index)
 
     executor: Final = ThreadPoolExecutor(max_workers=workers)
     futures: Final = tuple(executor.submit(run, range(worker, count, workers)) for worker in range(workers))
@@ -215,6 +222,7 @@ def _rerank(
                 break
         return _finish(outcomes, request, logging_obj, len(outcomes) < count, model, provider)
     finally:
+        stopped.set()
         executor.shutdown(wait=False, cancel_futures=True)
 
 
@@ -226,17 +234,23 @@ async def _arerank(
     provider: str,
     deadline: float,
 ) -> DecisionRerankResponse:
-    count: Final = _call_count(request)
+    count: Final = request.request_count
     workers: Final = min(count, _MAX_CONCURRENCY)
     outcomes: Final[list[DecisionRerankResult]] = []  # mutable-ok: retain completed results for partial billing
     cancellation_requested: Final = asyncio.Event()
+    stopped: Final = asyncio.Event()
+
+    def record(outcome: DecisionRerankResult) -> None:
+        if result_error(outcome, request, model, provider) is not None:
+            stopped.set()
+        outcomes.append(outcome)
 
     async def run(indices: range) -> None:
         for index in indices:
-            if time.monotonic() >= deadline:
+            if stopped.is_set() or time.monotonic() >= deadline:
                 return
             try:
-                outcomes.append(
+                record(
                     await _asend(
                         prepare(index),
                         deadline,
@@ -244,7 +258,7 @@ async def _arerank(
                     )
                 )
             except Exception as error:  # noqa: BLE001  # preparation failures retain completed billable calls
-                outcomes.append(DecisionRerankResult(index, request.document_text(index), error=error))
+                record(DecisionRerankResult(index, request.document_text(index), error=error))
 
     tasks: Final = tuple(asyncio.create_task(run(range(worker, count, workers))) for worker in range(workers))
     try:
@@ -257,6 +271,7 @@ async def _arerank(
         _record_partial(response_on_cancel, logging_obj)
         raise
     finally:
+        stopped.set()
         cancellation_requested.set()
         for task in tasks:
             if not task.done():

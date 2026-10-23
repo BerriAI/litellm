@@ -338,7 +338,7 @@ async def test_decision_rerank_writes_one_log_with_gateway_endpoint_and_aggregat
     GLOBAL_LOGGING_WORKER.start()
     await GLOBAL_LOGGING_WORKER.flush()
 
-    assert upstream.call_count == 3
+    assert upstream.call_count == (2 if partial_failure else 3)
     writer.update_database.assert_awaited_once()
     write: Final = writer.update_database.call_args.kwargs
     recorded_at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -348,7 +348,7 @@ async def test_decision_rerank_writes_one_log_with_gateway_endpoint_and_aggregat
         start_time=recorded_at,
         end_time=recorded_at,
     )
-    tokens: Final = 180 if partial_failure else 260
+    tokens: Final = 100 if partial_failure else 260
     assert row["request_id"] == "rerank-spend"
     assert row["call_type"] == "arerank"
     assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == (tokens, 0, tokens)
