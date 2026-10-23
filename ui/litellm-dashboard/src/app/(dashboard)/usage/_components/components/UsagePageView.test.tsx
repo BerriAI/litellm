@@ -240,8 +240,8 @@ vi.mock("@/components/EntityUsageExport", () => ({
 }));
 
 vi.mock("@/components/liteadmin/LiteAdmin", () => ({
-  AriaUsageTrigger: () => <button aria-label="Open Aria (agent) ✨">Aria</button>,
-  AriaUsageComposer: () => <section aria-label="Ask Aria (agent) ✨">Shared Aria composer</section>,
+  AriaUsageTrigger: () => <button aria-label="Open Aria Agent">Aria</button>,
+  AriaUsageComposer: () => <section aria-label="Ask Aria Agent">Shared Aria composer</section>,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
@@ -1389,7 +1389,7 @@ describe("UsagePage", () => {
     });
   });
 
-  describe("Aria (agent) ✨", () => {
+  describe("Aria Agent", () => {
     it("should render the shared Aria prompt and entry point in global view", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
@@ -1397,8 +1397,8 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByRole("button", { name: "Open Aria (agent) ✨" })).toBeInTheDocument();
-      expect(screen.getByRole("region", { name: "Ask Aria (agent) ✨" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Open Aria Agent" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Ask Aria Agent" })).toBeVisible();
       expect(screen.queryByText("Ask AI")).not.toBeInTheDocument();
     });
 
@@ -1414,8 +1414,8 @@ describe("UsagePage", () => {
       });
 
       expect(await screen.findByText("Entity Usage")).toBeInTheDocument();
-      expect(screen.getAllByRole("region", { name: "Ask Aria (agent) ✨" })).toHaveLength(1);
-      expect(screen.getByRole("region", { name: "Ask Aria (agent) ✨" })).toBeVisible();
+      expect(screen.getAllByRole("region", { name: "Ask Aria Agent" })).toHaveLength(1);
+      expect(screen.getByRole("region", { name: "Ask Aria Agent" })).toBeVisible();
     });
   });
 
