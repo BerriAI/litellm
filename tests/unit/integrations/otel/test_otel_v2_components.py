@@ -3,11 +3,15 @@ baggage helpers, metrics, the typed coercion helpers, mapper branches, span-name
 builders, and the registry validator's failure paths. Needs the OTel SDK."""
 
 from typing import Final
+import base64
 import contextlib
+import gzip
+import hashlib
 import json
 import threading
 import time
-from collections.abc import Iterator
+import zlib
+from collections.abc import Callable, Iterator
 from contextvars import Context as ContextVarContext
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
@@ -22,16 +26,19 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: 
 )
 from opentelemetry import baggage  # noqa: E402
 from opentelemetry.context import attach, detach  # noqa: E402
+from opentelemetry._logs import LogRecord  # noqa: E402
 from opentelemetry._logs.severity import SeverityNumber  # noqa: E402
-from opentelemetry.sdk._logs import LogData, LogRecord  # noqa: E402
-from opentelemetry.sdk._logs.export import LogExportResult  # noqa: E402
+from opentelemetry.sdk._logs import ReadableLogRecord  # noqa: E402
+from opentelemetry.sdk._logs.export import LogRecordExportResult  # noqa: E402
 from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
+from opentelemetry.sdk.resources import Resource  # noqa: E402
 from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
 from opentelemetry.sdk.trace.export import (  # noqa: E402
     BatchSpanProcessor,
     ConsoleSpanExporter,
     SimpleSpanProcessor,
+    SpanExporter,
 )
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
@@ -724,7 +731,10 @@ def test_build_span_exporter_variants():
     assert "OTLPSpanExporter" in type(http_exporter).__name__
 
 
-def _export_one_trace_to_local_collector(exporter_kind: str) -> tuple[list[dict], tuple[int, int, int]]:
+def _export_one_trace_to_local_collector(
+    exporter_kind: str,
+    exporter_factory: Callable[[OpenTelemetryV2Config], SpanExporter] = providers.build_span_exporter,
+) -> tuple[list[dict], tuple[int, int, int]]:
     """Run a parent/child trace through the configured exporter against a
     throwaway HTTP collector. Returns the requests as the collector saw them
     (child first, since it ends first) and (trace_id, parent span_id, child span_id)."""
@@ -733,7 +743,13 @@ def _export_one_trace_to_local_collector(exporter_kind: str) -> tuple[list[dict]
     class Collector(BaseHTTPRequestHandler):
         def do_POST(self):
             body = self.rfile.read(int(self.headers["Content-Length"]))
-            received.append({"path": self.path, "headers": dict(self.headers), "body": body})
+            received.append(
+                {
+                    "path": self.path,
+                    "headers": {key.lower(): value for key, value in self.headers.items()},
+                    "body": body,
+                }
+            )
             self.send_response(200)
             self.end_headers()
 
@@ -749,7 +765,7 @@ def _export_one_trace_to_local_collector(exporter_kind: str) -> tuple[list[dict]
             headers="x-collector-token=secret",
         )
         provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(providers.build_span_exporter(config)))
+        provider.add_span_processor(SimpleSpanProcessor(exporter_factory(config)))
         tracer = provider.get_tracer("test")
         with tracer.start_as_current_span("parent", kind=SpanKind.SERVER) as parent:
             with tracer.start_as_current_span("child") as child:
@@ -766,31 +782,81 @@ def _export_one_trace_to_local_collector(exporter_kind: str) -> tuple[list[dict]
     return received, ids
 
 
-def _only_span(request: dict) -> dict:
-    scope_spans = json.loads(request["body"])["resourceSpans"][0]["scopeSpans"][0]["spans"]
+def _only_span(request: dict, decompress: Callable[[bytes], bytes] = bytes) -> dict:
+    scope_spans = json.loads(decompress(request["body"]))["resourceSpans"][0]["scopeSpans"][0]["spans"]
     assert len(scope_spans) == 1
     return scope_spans[0]
 
 
-def test_http_json_exporter_posts_otlp_json_to_traces_endpoint():
+@pytest.mark.parametrize(
+    "compression, decompress", [("none", bytes), ("gzip", gzip.decompress), ("deflate", zlib.decompress)]
+)
+def test_http_json_exporter_posts_otlp_json_to_traces_endpoint(
+    monkeypatch: pytest.MonkeyPatch, compression: str, decompress: Callable[[bytes], bytes]
+) -> None:
     """``http/json`` must put the OTLP/JSON mapping on the wire (camelCase
     fields, integer enums, hex ids) with a JSON content type, so collectors that
     cannot decode protobuf can ingest the trace. Headers still travel."""
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION", compression)
     (child_request, parent_request), (trace_id, parent_id, child_id) = _export_one_trace_to_local_collector("http/json")
 
     assert parent_request["path"] == "/v1/traces"
-    assert parent_request["headers"]["Content-Type"] == "application/json"
+    assert parent_request["headers"]["content-type"] == "application/json"
+    assert parent_request["headers"].get("content-encoding", "none") == compression
+    assert int(parent_request["headers"]["content-length"]) == len(parent_request["body"])
     assert parent_request["headers"]["x-collector-token"] == "secret"
-    parent = _only_span(parent_request)
+    parent = _only_span(parent_request, decompress)
     assert parent["name"] == "parent"
     assert parent["kind"] == 2
     assert parent["traceId"] == format(trace_id, "032x")
     assert parent["spanId"] == format(parent_id, "016x")
     assert "parentSpanId" not in parent
-    child = _only_span(child_request)
+    child = _only_span(child_request, decompress)
     assert child["traceId"] == format(trace_id, "032x")
     assert child["spanId"] == format(child_id, "016x")
     assert child["parentSpanId"] == format(parent_id, "016x")
+
+
+def test_http_json_exporter_preserves_custom_session_preparation_and_shutdown() -> None:
+    from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter
+
+    class SigningSession(requests.Session):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+
+        def prepare_request(self, request: requests.Request) -> requests.PreparedRequest:
+            prepared: Final = super().prepare_request(request)
+            assert isinstance(prepared.body, bytes)
+            prepared.headers["x-body-signature"] = hashlib.sha256(prepared.body).hexdigest()
+            prepared.headers["x-signed-content-type"] = prepared.headers["Content-Type"]
+            return prepared
+
+        def close(self) -> None:
+            self.closed = True
+            super().close()
+
+    session: Final = SigningSession()
+    session.headers["x-session-header"] = "retained"
+    session.auth = ("otel-user", "otel-password")
+
+    def exporter(config: OpenTelemetryV2Config) -> SpanExporter:
+        return OTLPJsonSpanExporter(
+            endpoint=f"{config.endpoint}/v1/traces",
+            headers=providers.parse_headers(config.headers),
+            session=session,
+        )
+
+    (_child_request, parent_request), _ids = _export_one_trace_to_local_collector("http/json", exporter)
+
+    assert parent_request["headers"]["x-session-header"] == "retained"
+    assert (
+        parent_request["headers"]["authorization"] == f"Basic {base64.b64encode(b'otel-user:otel-password').decode()}"
+    )
+    assert parent_request["headers"]["x-signed-content-type"] == "application/json"
+    assert parent_request["headers"]["x-body-signature"] == hashlib.sha256(parent_request["body"]).hexdigest()
+    assert _only_span(parent_request)["name"] == "parent"
+    assert session.closed
 
 
 def test_http_protobuf_exporter_still_posts_protobuf():
@@ -799,7 +865,7 @@ def test_http_protobuf_exporter_still_posts_protobuf():
     )
 
     assert parent_request["path"] == "/v1/traces"
-    assert parent_request["headers"]["Content-Type"] == "application/x-protobuf"
+    assert parent_request["headers"]["content-type"] == "application/x-protobuf"
     assert format(trace_id, "032x").encode() not in parent_request["body"]
     decoded = ExportTraceServiceRequest.FromString(parent_request["body"])
     span = decoded.resource_spans[0].scope_spans[0].spans[0]
@@ -1569,8 +1635,6 @@ def test_operation_exception_log_event_encodes_for_otlp():
     assert resource_attrs["service.name"] == logger_provider.resource.attributes["service.name"]
 
 
-
-
 def _isolate_v2_otlp_tls_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in (
         "SSL_VERIFY",
@@ -1621,7 +1685,7 @@ def test_v2_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.Monkey
     cfg = OpenTelemetryV2Config(exporter="otlp_http", endpoint=tls_sink.url)
     exporter = providers.build_log_exporter(cfg)
     try:
-        record = LogRecord(
+        record: Final = LogRecord(
             timestamp=int(time.time() * 1e9),
             observed_timestamp=int(time.time() * 1e9),
             trace_id=0,
@@ -1630,20 +1694,25 @@ def test_v2_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.Monkey
             severity_number=SeverityNumber.INFO,
             body="v2-tls-test",
         )
-        log_data = LogData(log_record=record, instrumentation_scope=InstrumentationScope("v2-tls-test"))
-        result = exporter.export([log_data])
-        assert result is LogExportResult.SUCCESS, f"log export failed: {result}"
+        log_data: Final = ReadableLogRecord(
+            log_record=record,
+            resource=Resource.create({}),
+            instrumentation_scope=InstrumentationScope("v2-tls-test"),
+        )
+        result: Final = exporter.export([log_data])
+        assert result is LogRecordExportResult.SUCCESS, f"log export failed: {result}"
         assert tls_sink.received.get(timeout=5) == "/v1/logs"
     finally:
         exporter.shutdown()
 
 
+@pytest.mark.parametrize("exporter", ["otlp_http", "http/json"])
 def test_v2_otlp_http_export_skips_verification_when_ssl_verify_false(
-    monkeypatch: pytest.MonkeyPatch, tls_sink: TlsSink
+    monkeypatch: pytest.MonkeyPatch, tls_sink: TlsSink, exporter: str
 ) -> None:
     _isolate_v2_otlp_tls_env(monkeypatch)
     monkeypatch.setenv("SSL_VERIFY", "false")
-    cfg = OpenTelemetryV2Config(exporter="otlp_http", endpoint=tls_sink.url)
+    cfg: Final = OpenTelemetryV2Config(exporter=exporter, endpoint=tls_sink.url)
     _export_one_span(cfg)
     assert tls_sink.received.get(timeout=5) == "/v1/traces"
 
