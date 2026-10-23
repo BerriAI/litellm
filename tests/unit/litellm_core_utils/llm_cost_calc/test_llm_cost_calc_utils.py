@@ -65,8 +65,8 @@ def test_missing_cache_read_rate_resolves_to_input_rate(prompt_tokens, read_rate
     prompt_cost, _ = generic_cost_per_token(
         "policy-fixture", usage, "openai", service_tier=service_tier, model_info=info
     )
-    assert billed[4] == pytest.approx(read_rate if read_rate is not None else billed[0])
-    assert prompt_cost == pytest.approx((prompt_tokens - 100) * billed[0] + 100 * billed[4])
+    assert billed.cache_read_rate == pytest.approx(read_rate if read_rate is not None else billed.input_rate)
+    assert prompt_cost == pytest.approx((prompt_tokens - 100) * billed.input_rate + 100 * billed.cache_read_rate)
 
 
 def test_generic_cost_per_token_bills_cache_reads_at_input_rate_when_no_cache_read_rate() -> None:
@@ -248,7 +248,7 @@ def test_missing_cache_read_uses_off_peak_input_rate():
     }
     when = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
     billed = _get_token_base_cost(info, Usage(prompt_tokens=100), current_time=when)
-    assert billed[0] == billed[4] == 5e-6
+    assert billed.input_rate == billed.cache_read_rate == 5e-6
 
 
 def test_reasoning_tokens_no_price_set(_local_model_cost_map):
@@ -578,7 +578,7 @@ def test_get_token_base_cost_picks_highest_crossed_tier():
     }
     usage = Usage(prompt_tokens=150_000, completion_tokens=10, total_tokens=150_010)
 
-    prompt_base_cost = _get_token_base_cost(model_info, usage)[0]
+    prompt_base_cost = _get_token_base_cost(model_info, usage).input_rate
 
     assert prompt_base_cost == 9e-6
 
@@ -779,12 +779,12 @@ def test_get_token_base_cost_weekend_only_off_peak_rate():
     saturday_peak_hours = _get_token_base_cost(
         model_info, usage, current_time=datetime(2026, 8, 29, 2, 0, tzinfo=timezone.utc)
     )
-    assert saturday_peak_hours[:2] == (5e-7, 1e-6)
+    assert (saturday_peak_hours.input_rate, saturday_peak_hours.output_rate) == (5e-7, 1e-6)
 
     monday_same_hours = _get_token_base_cost(
         model_info, usage, current_time=datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc)
     )
-    assert monday_same_hours[:2] == (1e-6, 2e-6)
+    assert (monday_same_hours.input_rate, monday_same_hours.output_rate) == (1e-6, 2e-6)
 
 
 def test_get_token_base_cost_applies_off_peak_pricing():
@@ -810,14 +810,14 @@ def test_get_token_base_cost_applies_off_peak_pricing():
     usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
     off_peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
-    assert off_peak[0] == 5e-7
-    assert off_peak[1] == 1e-6
-    assert off_peak[4] == 5e-8
+    assert off_peak.input_rate == 5e-7
+    assert off_peak.output_rate == 1e-6
+    assert off_peak.cache_read_rate == 5e-8
 
     peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
-    assert peak[0] == 1e-6
-    assert peak[1] == 2e-6
-    assert peak[4] == 1e-7
+    assert peak.input_rate == 1e-6
+    assert peak.output_rate == 2e-6
+    assert peak.cache_read_rate == 1e-7
 
 
 def test_get_token_base_cost_non_mapping_off_peak_block_bills_standard_rates():
@@ -843,8 +843,8 @@ def test_get_token_base_cost_non_mapping_off_peak_block_bills_standard_rates():
             },
         )
         result = _get_token_base_cost(model_info, usage, current_time=when)
-        assert result[0] == 1e-6
-        assert result[1] == 2e-6
+        assert result.input_rate == 1e-6
+        assert result.output_rate == 2e-6
 
 
 def test_get_token_base_cost_off_peak_falls_back_to_standard_when_unset():
@@ -864,8 +864,8 @@ def test_get_token_base_cost_off_peak_falls_back_to_standard_when_unset():
     usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
     result = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
-    assert result[0] == 5e-7
-    assert result[1] == 2e-6
+    assert result.input_rate == 5e-7
+    assert result.output_rate == 2e-6
 
 
 def test_get_token_base_cost_off_peak_wins_over_threshold():
@@ -891,12 +891,12 @@ def test_get_token_base_cost_off_peak_wins_over_threshold():
     usage = Usage(prompt_tokens=250000, completion_tokens=250000, total_tokens=500000)
 
     off_peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
-    assert off_peak[0] == 5e-7
-    assert off_peak[1] == 1e-6
+    assert off_peak.input_rate == 5e-7
+    assert off_peak.output_rate == 1e-6
 
     peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
-    assert peak[0] == 3e-6
-    assert peak[1] == 4e-6
+    assert peak.input_rate == 3e-6
+    assert peak.output_rate == 4e-6
 
 
 def test_get_model_info_propagates_off_peak_fields():
@@ -948,10 +948,10 @@ def test_get_token_base_cost_off_peak_wins_over_tiered_pricing():
     usage = Usage(prompt_tokens=1_000, completion_tokens=100, total_tokens=1_100)
 
     inside = _get_token_base_cost(info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
-    assert inside[:2] == (5e-7, 1e-6)
+    assert (inside.input_rate, inside.output_rate) == (5e-7, 1e-6)
 
     outside = _get_token_base_cost(info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
-    assert outside[:2] == (3e-6, 6e-6)
+    assert (outside.input_rate, outside.output_rate) == (3e-6, 6e-6)
 
 
 def _register_off_peak_reasoning_model(
@@ -1153,17 +1153,17 @@ def test_get_token_base_cost_off_peak_cache_creation_rate():
     inside_window = datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)
 
     inside = _get_token_base_cost(model_info, usage, current_time=inside_window)
-    assert inside[2] == 5e-7
-    assert inside[3] == 2e-6
+    assert inside.cache_creation_rate == 5e-7
+    assert inside.cache_creation_rates_by_ttl["1h"] == 2e-6
 
     outside = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
-    assert outside[2] == 1.25e-6
+    assert outside.cache_creation_rate == 1.25e-6
 
     without_key = cast(
         ModelInfo,
         {**model_info, "off_peak_pricing": {"hours_utc": "16:30-00:30", "input_cost_per_token": 5e-7}},
     )
-    assert _get_token_base_cost(without_key, usage, current_time=inside_window)[2] == 1.25e-6
+    assert _get_token_base_cost(without_key, usage, current_time=inside_window).cache_creation_rate == 1.25e-6
 
 
 def test_get_token_type_cost_breakdown_reflects_off_peak_reasoning_and_cache_creation_rates():
@@ -1595,7 +1595,7 @@ def test_generic_cost_per_token_tier_1hr_cache_rate_preserves_zero_and_fallback(
         assert costs == pytest.approx((40 * 1.0 + 40 * 0.1 + expected_write_cost, 10 * 2.0))
         assert breakdown.cache_creation_cost == pytest.approx(expected_write_cost)
         assert breakdown.rates is not None
-        assert breakdown.rates.cache_creation_input_token_cost_above_1hr == expected_write_rate
+        assert breakdown.rates.cache_creation_input_token_cost_by_ttl["1h"] == expected_write_rate
     finally:
         litellm.model_cost.pop(model, None)
 
@@ -2020,8 +2020,8 @@ def test_calculate_cache_writing_cost():
     result = calculate_cache_writing_cost(
         cache_creation_tokens=cache_creation_tokens,
         cache_creation_token_details=cache_creation_token_details,
-        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
         cache_creation_cost=cache_creation_cost,
+        cache_creation_cost_by_ttl={"1h": cache_creation_cost_above_1hr},
     )
 
     # Expected calculation:
@@ -2041,8 +2041,8 @@ def test_calculate_cache_writing_cost():
     result_no_details = calculate_cache_writing_cost(
         cache_creation_tokens=cache_creation_tokens_no_details,
         cache_creation_token_details=cache_creation_token_details_none,
-        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
         cache_creation_cost=cache_creation_cost_fallback,
+        cache_creation_cost_by_ttl={"1h": cache_creation_cost_above_1hr},
     )
 
     # Expected calculation when no details: 1000 * 5e-06 = 0.005
@@ -2059,8 +2059,8 @@ def test_calculate_cache_writing_cost():
     result_partial = calculate_cache_writing_cost(
         cache_creation_tokens=500,
         cache_creation_token_details=cache_creation_token_details_partial,
-        cache_creation_cost_above_1hr=6e-06,
         cache_creation_cost=3e-06,
+        cache_creation_cost_by_ttl={"1h": 6e-06},
     )
 
     # Expected calculation: 0 (for None 5m tokens) + (100 * 6e-06) = 0.0006
@@ -2075,11 +2075,22 @@ def test_calculate_cache_writing_cost():
         cache_creation_token_details=CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=50, ephemeral_1h_input_tokens=950
         ),
-        cache_creation_cost_above_1hr=0.0,
         cache_creation_cost=0.0,
+        cache_creation_cost_by_ttl={"1h": 0.0},
     )
 
     assert result_zero == 0.0
+
+
+@pytest.mark.parametrize("field", CacheCreationTokenDetails.model_fields)
+def test_calculate_cache_writing_cost_bills_every_reported_lifetime(field: str) -> None:
+    cost = calculate_cache_writing_cost(
+        cache_creation_tokens=10,
+        cache_creation_token_details=CacheCreationTokenDetails(**{field: 10}),
+        cache_creation_cost=2.0,
+        cache_creation_cost_by_ttl={},
+    )
+    assert cost == 20.0
 
 
 @pytest.mark.parametrize(
@@ -2202,7 +2213,7 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
         prompt_base_cost=0.0,
         cache_read_cost=0.0,
         cache_creation_cost=cache_creation_cost,
-        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+        cache_creation_cost_by_ttl={"1h": cache_creation_cost_above_1hr},
     )
 
     # Expected: (100 * 3.75e-06) + (200 * 6e-06) = 0.000375 + 0.0012 = 0.001575
@@ -2652,10 +2663,10 @@ def test_flat_input_price_keeps_other_token_thresholds(field: str) -> None:
         model_info=info,
         usage=Usage(prompt_tokens=300_001, completion_tokens=3, total_tokens=300_004),
     )
-    assert rates[0] == 0.001
-    assert rates[1] == (0.005 if field == "output_cost_per_token" else 0.002)
-    assert rates[2] == (0.005 if field == "cache_creation_input_token_cost" else 0.004)
-    assert rates[4] == (0.005 if field == "cache_read_input_token_cost" else 0.003)
+    assert rates.input_rate == 0.001
+    assert rates.output_rate == (0.005 if field == "output_cost_per_token" else 0.002)
+    assert rates.cache_creation_rate == (0.005 if field == "cache_creation_input_token_cost" else 0.004)
+    assert rates.cache_read_rate == (0.005 if field == "cache_read_input_token_cost" else 0.003)
 
 
 @pytest.mark.parametrize("prompt_tokens", (200_000, 200_001, 512_000, 512_001))
@@ -2682,10 +2693,10 @@ def test_mixed_token_thresholds_preserve_each_crossed_rate(prompt_tokens: int, h
         model_info=info,
         usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=3, total_tokens=prompt_tokens + 3),
     )
-    assert rates[0] == (0.005 if prompt_tokens > 200_000 else 0.001)
-    assert rates[1] == (higher_rate if prompt_tokens > 512_000 else 0.006 if prompt_tokens > 200_000 else 0.002)
-    assert rates[2] == (0.007 if prompt_tokens > 200_000 else 0.004)
-    assert rates[4] == (higher_rate if prompt_tokens > 512_000 else 0.003)
+    assert rates.input_rate == (0.005 if prompt_tokens > 200_000 else 0.001)
+    assert rates.output_rate == (higher_rate if prompt_tokens > 512_000 else 0.006 if prompt_tokens > 200_000 else 0.002)
+    assert rates.cache_creation_rate == (0.007 if prompt_tokens > 200_000 else 0.004)
+    assert rates.cache_read_rate == (higher_rate if prompt_tokens > 512_000 else 0.003)
 
 
 def test_threshold_keys_exclude_service_tier_variants():
@@ -2709,8 +2720,7 @@ def test_threshold_keys_exclude_service_tier_variants():
         },
     )
     usage = Usage(prompt_tokens=350_000, completion_tokens=1_000, total_tokens=351_000)
-    prompt_base, *_ = _get_token_base_cost(model_info=model_info, usage=usage)
-    assert prompt_base == 3e-6
+    assert _get_token_base_cost(model_info=model_info, usage=usage).input_rate == 3e-6
 
 
 @pytest.mark.parametrize(
@@ -2980,8 +2990,7 @@ def test_billed_token_rates_follow_the_token_tier_the_breakdown_bills_at(monkeyp
         cache_read_input_token_cost=6e-7,
         cache_read_input_audio_token_cost=6e-7,
         cache_creation_input_token_cost=7.5e-6,
-        cache_creation_input_token_cost_above_1hr=7.5e-6,
-        cache_creation_input_token_cost_above_12hr=7.5e-6,
+        cache_creation_input_token_cost_by_ttl={"5m": 7.5e-6, "30m": 7.5e-6, "1h": 7.5e-6, "12h": 7.5e-6},
         output_cost_per_reasoning_token=3e-5,
     )
     assert breakdown.cache_read_cost == pytest.approx(200_000 * rates.cache_read_input_token_cost)
@@ -3808,10 +3817,12 @@ def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_
     model_info = {"input_cost_per_token": 2e-7, "output_cost_per_token": 1.25e-6, **cache_rates}
     usage = Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11)
 
-    _, _, creation, creation_1h, _, _ = _get_token_base_cost(model_info, usage, current_time=current_time)
+    rates = _get_token_base_cost(model_info, usage, current_time=current_time)
 
-    assert creation == pytest.approx(expected_creation)
-    assert creation_1h == pytest.approx(expected_creation_1h)
+    assert rates.cache_creation_rate == pytest.approx(expected_creation)
+    assert rates.cache_creation_rates_by_ttl == pytest.approx(
+        dict.fromkeys(("5m", "30m", "1h", "12h"), expected_creation_1h)
+    )
 
 
 def _image_response(num_images: int = 1, usage: ImageUsage | None = None) -> ImageResponse:
