@@ -41,3 +41,11 @@ Each MCP entry supports HTTP or stdio transport, an optional pinned `server_id`,
 The gateway initializes upstreams before opening its listener. Startup fails when credentials cannot be resolved or an upstream cannot initialize. Shutdown cancels upstream connections and terminates owned stdio children
 
 The config schema preserves Python sections, but parsing a section does not implement its service. MCP OAuth, database-backed server management, guardrails, spend accounting, local Python tools, and legacy SSE upstream connections remain unimplemented. Unsupported MCP settings and configured guardrail policies fail at startup. Incoming legacy SSE clients remain supported
+
+## Python fallback
+
+Set `LITELLM_PYTHON_UPSTREAM` to the Python proxy's `http://` origin, usually a loopback address, and the gateway forwards every request it does not serve natively. That covers paths and methods with no native route, which reach Python without gateway authentication, and native requests that Rust core declines before calling the provider. A forwarded request keeps its method, path, query, headers and body bytes, and carries `x-litellm-gateway-declined` with the reason. Errors after the provider call are never forwarded
+
+The gateway appends the client address to `X-Forwarded-For`, since Python otherwise sees every forwarded request coming from the gateway. Set `general_settings.use_x_forwarded_for: true` on the Python proxy so `allowed_ips`, spend log IPs and the other IP checks read it, and include the gateway's address in its trusted proxy ranges
+
+Without it the gateway runs standalone. An unserved path is a 404 and a decline is a 501 that names the reason

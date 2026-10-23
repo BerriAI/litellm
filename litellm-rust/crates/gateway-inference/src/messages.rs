@@ -37,7 +37,7 @@ pub async fn create(
         Ok(JsonObject(body)) => handle(&gateway, &identity, &headers, body).await,
         Err(error) => Err(error),
     };
-    result.map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
+    result.map_err(|error| error.anthropic_response(request_id.as_deref()))
 }
 
 async fn handle(

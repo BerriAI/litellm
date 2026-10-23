@@ -1,6 +1,8 @@
 mod auth;
+mod dispatch;
 mod error;
 mod secrets;
+pub use dispatch::{Fallback, Forward, InvalidUpstream};
 pub use error::Error;
 
 use std::{sync::Arc, time::Instant};
@@ -118,20 +120,33 @@ pub fn router(
     config: &Config,
     ui: Option<Router>,
     mcp: Option<Router>,
+    fallback: Fallback,
 ) -> Router {
     let auth = Auth::from_config(config, inference.secrets.clone());
-    let inference = litellm_gateway_inference::router(inference)
-        .merge(mcp.unwrap_or_default())
-        .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
-        .route_layer(axum::middleware::from_fn_with_state(
-            auth,
-            litellm_gateway_auth::authenticate,
-        ))
-        .layer(axum::middleware::from_fn(log_request));
-    match ui {
-        Some(ui) => inference.merge(ui),
-        None => inference,
-    }
+    let routes = litellm_gateway_inference::router(inference).merge(mcp.unwrap_or_default());
+    let served =
+        dispatch::replay_declines(routes, &fallback, litellm_gateway_inference::MAX_BODY_BYTES)
+            .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
+            .route_layer(axum::middleware::from_fn_with_state(
+                auth,
+                litellm_gateway_auth::authenticate,
+            ))
+            .layer(axum::middleware::from_fn(log_request))
+            .merge(ui.unwrap_or_default());
+    dispatch::forward_unmatched(served, fallback)
+}
+
+pub async fn serve(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
 }
 
 async fn log_request(request: Request, next: Next) -> Response {
