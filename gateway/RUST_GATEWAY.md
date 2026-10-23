@@ -10,6 +10,12 @@ The Rust binary defaults to `/usr/local/bin/litellm-gateway`; local deployments 
 Python port. The private listener must remain on loopback and must not be added to a container or Kubernetes
 Service port.
 
+When the Rust gateway is enabled with a writer `DATABASE_URL`, the supervisor starts one managed PgBouncer for
+both gateway children, even when `LITELLM_PGBOUNCER_ENABLED=false`. That flag continues to control optional
+pooling in Python-only mode. A database-free Rust gateway stays database-free, and Rust only forwards requests
+without initializing a database client. The managed writer pool uses `LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS`;
+read-replica connections keep their existing behavior and are outside that writer cap
+
 ```sh
 docker build -f gateway/Dockerfile -t litellm-gateway:local .
 docker run --stop-timeout 30 --mount type=bind,src="$(pwd)/config.yaml",dst=/app/config/config.yaml,readonly \

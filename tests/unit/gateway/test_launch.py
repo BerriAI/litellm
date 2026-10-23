@@ -3,6 +3,7 @@ import os
 import socket
 import sys
 import textwrap
+import time
 import urllib.parse
 from collections.abc import Iterator
 from pathlib import Path
@@ -13,7 +14,14 @@ import pytest
 from uvicorn.importer import import_from_string
 from uvicorn.main import main as uvicorn_main
 
-from gateway.launch import GATEWAY_APP, main, pool_database_url, uvicorn_argv
+from gateway.launch import (
+    GATEWAY_APP,
+    _pooled_child_environments,
+    main,
+    managed_pool_database_url,
+    pool_database_url,
+    uvicorn_argv,
+)
 from gateway.supervisor import (
     RUST_GATEWAY_BINARY,
     ConfigurationFailure,
@@ -21,7 +29,12 @@ from gateway.supervisor import (
     gateway_enabled,
 )
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
-from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR, PgBouncerError, PgBouncerSettings
+from litellm.proxy.db.pgbouncer import (
+    PGBOUNCER_POOLED_ENV_VAR,
+    ManagedPgBouncerRuntime,
+    PgBouncerError,
+    PgBouncerSettings,
+)
 from litellm.proxy.proxy_server import app as proxy_app
 
 DB_ENV: Final = {
@@ -133,6 +146,50 @@ class TestUvicornArgv:
 
 
 class TestPoolDatabaseUrl:
+    def test_rust_mode_without_a_writer_stays_database_free(self, password_env: dict[str, str]) -> None:
+        assert (
+            managed_pool_database_url(
+                DatabaseURLSettings.from_env(),
+                PgBouncerSettings(enabled=True),
+                {"DATABASE_URL": ""},
+            )
+            is None
+        )
+
+    def test_rust_managed_pooler_is_forced_for_a_writer_when_the_flag_is_off(
+        self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        port: Final = _free_port()
+        binary: Final = _fake_pooler(tmp_path)
+        monkeypatch.setenv("DATABASE_URL", "postgresql://litellm_pool:p%40ss@db.internal:5432/litellm")
+        outcome: Final = managed_pool_database_url(
+            DatabaseURLSettings.from_env(),
+            PgBouncerSettings(enabled=False, port=port, binary=str(binary)),
+            os.environ,
+        )
+        assert isinstance(outcome, ManagedPgBouncerRuntime), outcome
+        try:
+            assert urllib.parse.urlsplit(outcome.pooled_url).port == port
+            configuration: Final = build_configuration(
+                ("--host", "0.0.0.0", "--port", "4000"),
+                {RUST_GATEWAY_BINARY: "/bin/true"},
+                sys.executable,
+            )
+            assert not isinstance(configuration, ConfigurationFailure)
+            python_environment, rust_environment = _pooled_child_environments(
+                configuration.python_environment,
+                configuration.rust_environment,
+                outcome,
+            )
+            assert python_environment["DATABASE_URL"] == rust_environment["DATABASE_URL"] == outcome.pooled_url
+            assert python_environment[PGBOUNCER_POOLED_ENV_VAR] == rust_environment[PGBOUNCER_POOLED_ENV_VAR] == "true"
+            assert python_environment["LITELLM_PGBOUNCER_ENABLED"] == "false"
+            assert rust_environment.get("LITELLM_PGBOUNCER_ENABLED") == configuration.rust_environment.get(
+                "LITELLM_PGBOUNCER_ENABLED"
+            )
+        finally:
+            outcome.stop(time.monotonic() + 2)
+
     def test_a_disabled_pooler_yields_no_url_to_install(self, password_env: dict[str, str]):
         settings: Final = DatabaseURLSettings.from_env()
         settings.apply_to_env()
@@ -246,6 +303,23 @@ class TestRustGatewayConfiguration:
         assert configuration.rust_environment["LITELLM_PYTHON_UPSTREAM"] == "http://127.0.0.1:4002"
         assert configuration.rust_environment["HOST"] == "0.0.0.0"
         assert configuration.rust_environment["PORT"] == "4000"
+
+    def test_database_writer_reserves_pgbouncer_port_when_the_python_only_flag_is_false(
+        self, rust_binary: Path, clear_uvicorn_environment: None
+    ) -> None:
+        configuration: Final = build_configuration(
+            ("--host", "0.0.0.0", "--port", "4000"),
+            {
+                RUST_GATEWAY_BINARY: str(rust_binary),
+                "DATABASE_URL": "postgresql://app:pw@db/litellm",
+                "LITELLM_PGBOUNCER_ENABLED": "false",
+                "LITELLM_PGBOUNCER_PORT": "4000",
+            },
+            sys.executable,
+        )
+        assert isinstance(configuration, ConfigurationFailure)
+        assert "PgBouncer" in configuration.reason
+        assert "same TCP port" in configuration.reason
 
     @pytest.mark.parametrize(
         ("arguments", "extra_environment", "reason"),

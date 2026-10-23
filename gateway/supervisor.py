@@ -9,8 +9,8 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import ExitStack
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -23,6 +23,7 @@ from pydantic import TypeAdapter
 from uvicorn.main import main as uvicorn_main
 
 from gateway.launch import uvicorn_argv
+from litellm.proxy.db.pgbouncer import ManagedPgBouncerRuntime
 
 RUST_GATEWAY_FLAG: Final = "LITELLM_RUST_GATEWAY"
 RUST_GATEWAY_BINARY: Final = "LITELLM_RUST_GATEWAY_BINARY"
@@ -64,6 +65,7 @@ class SupervisorConfig:
     rust_drain_timeout: int
     python_grace_timeout: int
     termination_grace_timeout: int = DEFAULT_TERMINATION_GRACE_SECONDS
+    managed_pooler: ManagedPgBouncerRuntime | None = None
 
 
 class ChildProcess(Protocol):
@@ -261,10 +263,9 @@ def build_configuration(
     metrics_port: Final = _port_setting(METRICS_PORT_ENV, 0, environ) if METRICS_PORT_ENV in environ else None
     if isinstance(metrics_port, ConfigurationFailure):
         return metrics_port
-    pgbouncer_enabled: Final = _boolean_setting("LITELLM_PGBOUNCER_ENABLED", environ)
-    if isinstance(pgbouncer_enabled, ConfigurationFailure):
-        return pgbouncer_enabled
-    pgbouncer_port: Final = _port_setting("LITELLM_PGBOUNCER_PORT", 6432, environ) if pgbouncer_enabled else None
+    pgbouncer_port: Final = (
+        _port_setting("LITELLM_PGBOUNCER_PORT", 6432, environ) if bool(environ.get("DATABASE_URL")) else None
+    )
     if isinstance(pgbouncer_port, ConfigurationFailure):
         return pgbouncer_port
     collector_port: Final = _collector_port(environ)
@@ -394,6 +395,25 @@ def _restore_signal_handlers(
         signal.signal(handled, cast(signal.Handlers | Callable[[int, FrameType | None], object] | None, handler))
 
 
+@contextmanager
+def startup_scope() -> Generator[None, None, None]:
+    signals: Final = (signal.SIGTERM, signal.SIGINT)
+    previous: Final = tuple((handled, signal.getsignal(handled)) for handled in signals)
+
+    def abort_startup(signum: int, _frame: FrameType | None) -> None:
+        raise SystemExit(128 + signum)
+
+    try:
+        for handled in signals:
+            signal.signal(handled, abort_startup)
+        subreaper_failure: Final = _enable_subreaper()
+        if subreaper_failure is not None:
+            raise SystemExit(subreaper_failure.reason)
+        yield
+    finally:
+        _restore_signal_handlers(previous)
+
+
 def _tcp_ready(host: str, port: int) -> bool:
     try:
         with socket.create_connection((host, port), timeout=0.2):
@@ -461,40 +481,69 @@ def _signal_adopted_child(child: int, requested: signal.Signals) -> None:
         os.killpg(process_group, requested)
 
 
-def _terminate_adopted_children(excluded: frozenset[int]) -> None:
-    children: Final = _adopted_children(excluded)
-    for child in children:
+def _reap_supervised_children(
+    excluded: frozenset[int],
+    managed_pooler: ManagedPgBouncerRuntime | None,
+) -> None:
+    if managed_pooler is None:
+        _reap_adopted_children(excluded)
+        return
+    with managed_pooler.owned_pid_guard() as pooler_pid:
+        protected: Final = frozenset((*excluded, *((pooler_pid,) if pooler_pid is not None else ())))
+        _reap_adopted_children(protected)
+
+
+def _current_adopted_children(
+    excluded: frozenset[int],
+    managed_pooler: ManagedPgBouncerRuntime | None,
+) -> tuple[tuple[int, ...], frozenset[int]]:
+    if managed_pooler is None:
+        return _adopted_children(excluded), excluded
+    with managed_pooler.owned_pid_guard() as pooler_pid:
+        protected: Final = frozenset((*excluded, *((pooler_pid,) if pooler_pid is not None else ())))
+        return _adopted_children(protected), protected
+
+
+def _terminate_adopted_children(
+    excluded: frozenset[int],
+    deadline: float | None = None,
+    managed_pooler: ManagedPgBouncerRuntime | None = None,
+) -> None:
+    term_children: Final = _current_adopted_children(excluded, managed_pooler)[0]
+    for child in term_children:
         try:
             _signal_adopted_child(child, signal.SIGTERM)
         except ProcessLookupError:
             pass
-    deadline: Final = time.monotonic() + 1
-    while time.monotonic() < deadline and _adopted_children(excluded):
-        _reap_adopted_children(excluded)
+    term_deadline: Final = time.monotonic() + 1 if deadline is None else min(deadline, time.monotonic() + 1)
+    while time.monotonic() < term_deadline and _current_adopted_children(excluded, managed_pooler)[0]:
+        _reap_supervised_children(excluded, managed_pooler)
         time.sleep(0.05)
-    for child in _adopted_children(excluded):
+    kill_children: Final = _current_adopted_children(excluded, managed_pooler)[0]
+    for child in kill_children:
         try:
             _signal_adopted_child(child, signal.SIGKILL)
         except ProcessLookupError:
             pass
-    final_deadline: Final = time.monotonic() + 1
-    while time.monotonic() < final_deadline and _adopted_children(excluded):
-        _reap_adopted_children(excluded)
+    final_deadline: Final = time.monotonic() + 1 if deadline is None else min(deadline, time.monotonic() + 1)
+    while time.monotonic() < final_deadline and _current_adopted_children(excluded, managed_pooler)[0]:
+        _reap_supervised_children(excluded, managed_pooler)
         time.sleep(0.05)
-    _reap_adopted_children(excluded)
+    _reap_supervised_children(excluded, managed_pooler)
 
 
 def _wait_for_group(
     process: ChildProcess,
     deadline: float,
     protected_children: frozenset[int],
+    managed_pooler: ManagedPgBouncerRuntime | None,
 ) -> bool:
     while time.monotonic() < deadline and _group_exists(process.pid):
         process.poll()
-        _reap_adopted_children(protected_children)
+        _reap_supervised_children(protected_children, managed_pooler)
         time.sleep(0.05)
     process.poll()
-    _reap_adopted_children(protected_children)
+    _reap_supervised_children(protected_children, managed_pooler)
     return not _group_exists(process.pid)
 
 
@@ -502,20 +551,23 @@ def _stop_process_group(
     process: ChildProcess,
     timeout: int,
     protected_children: frozenset[int],
+    managed_pooler: ManagedPgBouncerRuntime | None,
+    deadline: float,
 ) -> None:
     _signal_group(process.pid, signal.SIGTERM)
-    if not _wait_for_group(process, time.monotonic() + timeout, protected_children):
+    stop_deadline: Final = min(deadline, time.monotonic() + timeout)
+    if not _wait_for_group(process, stop_deadline, protected_children, managed_pooler):
         _signal_group(process.pid, signal.SIGKILL)
-        _wait_for_group(process, time.monotonic() + 1, protected_children)
+        _wait_for_group(process, min(deadline, time.monotonic() + 1), protected_children, managed_pooler)
     try:
-        process.wait(timeout=1)
+        process.wait(timeout=max(0.0, min(1.0, deadline - time.monotonic())))
     except subprocess.TimeoutExpired:
         _signal_group(process.pid, signal.SIGKILL)
         try:
-            process.wait(timeout=1)
+            process.wait(timeout=max(0.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
             pass
-    _reap_adopted_children(protected_children)
+    _reap_supervised_children(protected_children, managed_pooler)
 
 
 def _wait_for_python(
@@ -523,16 +575,17 @@ def _wait_for_python(
     port: int,
     deadline: float,
     requested: Event,
+    managed_pooler: ManagedPgBouncerRuntime | None,
 ) -> bool | SupervisorFailure:
     protected_children: Final = frozenset((process.pid,))
     while not requested.is_set() and time.monotonic() < deadline:
-        _reap_adopted_children(protected_children)
+        _reap_supervised_children(protected_children, managed_pooler)
         if (status := process.poll()) is not None:
             return SupervisorFailure(f"Python gateway exited during startup with status {status}")
         if _tcp_ready("127.0.0.1", port):
             return True
         time.sleep(0.05)
-    _reap_adopted_children(protected_children)
+    _reap_supervised_children(protected_children, managed_pooler)
     return False
 
 
@@ -543,10 +596,11 @@ def _wait_for_rust(
     port: int,
     deadline: float,
     requested: Event,
+    managed_pooler: ManagedPgBouncerRuntime | None,
 ) -> bool | SupervisorFailure:
     protected_children: Final = frozenset((python.pid, rust.pid))
     while not requested.is_set() and time.monotonic() < deadline:
-        _reap_adopted_children(protected_children)
+        _reap_supervised_children(protected_children, managed_pooler)
         if (python_status := python.poll()) is not None:
             return SupervisorFailure(f"Python gateway exited during startup with status {python_status}")
         if (rust_status := rust.poll()) is not None:
@@ -554,74 +608,126 @@ def _wait_for_rust(
         if _http_ready(host, port):
             return True
         time.sleep(0.05)
-    _reap_adopted_children(protected_children)
+    _reap_supervised_children(protected_children, managed_pooler)
     return False
 
 
-def _monitor_children(python: ChildProcess, rust: ChildProcess, requested: Event) -> SupervisorFailure | None:
+def _monitor_children(
+    python: ChildProcess,
+    rust: ChildProcess,
+    requested: Event,
+    managed_pooler: ManagedPgBouncerRuntime | None,
+) -> SupervisorFailure | None:
     protected_children: Final = frozenset((python.pid, rust.pid))
     while not requested.wait(0.1):
-        _reap_adopted_children(protected_children)
+        _reap_supervised_children(protected_children, managed_pooler)
         if (python_status := python.poll()) is not None:
             return SupervisorFailure(f"Python gateway exited unexpectedly with status {python_status}")
         if (rust_status := rust.poll()) is not None:
             return SupervisorFailure(f"Rust gateway exited unexpectedly with status {rust_status}")
-    _reap_adopted_children(protected_children)
+    _reap_supervised_children(protected_children, managed_pooler)
     return None
 
 
-def supervise(config: SupervisorConfig, runner: ProcessRunner | None = None) -> SupervisorFailure | None:
-    subreaper_failure: Final = _enable_subreaper()
-    if subreaper_failure is not None:
-        return subreaper_failure
-    process_runner: Final = runner if runner is not None else SubprocessRunner()
-    requested: Final = Event()
-    previous_handlers: Final = _install_signal_handlers(requested)
-    try:
-        with ExitStack() as cleanup:
-            try:
-                python: Final = process_runner.start(config.python_command, config.python_environment)
-            except OSError as error:
-                return SupervisorFailure(f"could not start Python gateway: {error}")
-            cleanup.callback(
-                _stop_process_group,
-                python,
-                config.python_grace_timeout,
-                frozenset((python.pid,)),
-            )
-            deadline: Final = time.monotonic() + config.startup_timeout
-            python_ready: Final = _wait_for_python(python, config.private_port, deadline, requested)
-            if isinstance(python_ready, SupervisorFailure):
-                return python_ready
-            if not python_ready:
-                return None if requested.is_set() else SupervisorFailure("Python gateway startup timed out")
-            if requested.is_set():
-                return None
-            try:
-                rust: Final = process_runner.start(config.rust_command, config.rust_environment)
-            except OSError as error:
-                return SupervisorFailure(f"could not start Rust gateway: {error}")
-            cleanup.callback(
-                _stop_process_group,
-                rust,
-                config.rust_drain_timeout,
-                frozenset((python.pid, rust.pid)),
-            )
+def _shutdown(
+    python: ChildProcess | None,
+    rust: ChildProcess | None,
+    config: SupervisorConfig,
+) -> None:
+    deadline: Final = time.monotonic() + config.termination_grace_timeout
+    protected: Final = frozenset(process.pid for process in (python, rust) if process is not None)
+    if rust is not None:
+        _stop_process_group(
+            rust,
+            config.rust_drain_timeout,
+            protected,
+            config.managed_pooler,
+            deadline,
+        )
+    if python is not None:
+        _stop_process_group(
+            python,
+            config.python_grace_timeout,
+            protected,
+            config.managed_pooler,
+            deadline,
+        )
+    _terminate_adopted_children(protected, deadline, config.managed_pooler)
+    if config.managed_pooler is not None:
+        config.managed_pooler.stop(deadline)
+    _terminate_adopted_children(frozenset(), deadline)
+
+
+def _supervise_with_python(
+    config: SupervisorConfig,
+    process_runner: ProcessRunner,
+    requested: Event,
+    python: ChildProcess,
+) -> SupervisorFailure | None:
+    with ExitStack() as python_cleanup:
+        python_cleanup.callback(_shutdown, python, None, config)
+        startup_deadline: Final = time.monotonic() + config.startup_timeout
+        python_ready: Final = _wait_for_python(
+            python,
+            config.private_port,
+            startup_deadline,
+            requested,
+            config.managed_pooler,
+        )
+        if isinstance(python_ready, SupervisorFailure):
+            return python_ready
+        if not python_ready:
+            return None if requested.is_set() else SupervisorFailure("Python gateway startup timed out")
+        if requested.is_set():
+            return None
+        try:
+            rust: Final = process_runner.start(config.rust_command, config.rust_environment)
+        except OSError as error:
+            return SupervisorFailure(f"could not start Rust gateway: {error}")
+        with ExitStack() as gateway_cleanup:
+            gateway_cleanup.callback(_shutdown, python, rust, config)
+            python_cleanup.pop_all()
             rust_ready: Final = _wait_for_rust(
                 python,
                 rust,
                 config.public_probe_host,
                 config.public_port,
-                deadline,
+                startup_deadline,
                 requested,
+                config.managed_pooler,
             )
             if isinstance(rust_ready, SupervisorFailure):
                 return rust_ready
             if not rust_ready:
                 return None if requested.is_set() else SupervisorFailure("Rust gateway readiness timed out")
-            return _monitor_children(python, rust, requested)
+            return _monitor_children(python, rust, requested, config.managed_pooler)
+
+
+def _supervise(
+    config: SupervisorConfig,
+    process_runner: ProcessRunner,
+    requested: Event,
+) -> SupervisorFailure | None:
+    try:
+        python: Final = process_runner.start(config.python_command, config.python_environment)
+    except OSError as error:
+        _shutdown(None, None, config)
+        return SupervisorFailure(f"could not start Python gateway: {error}")
+    return _supervise_with_python(config, process_runner, requested, python)
+
+
+def supervise(config: SupervisorConfig, runner: ProcessRunner | None = None) -> SupervisorFailure | None:
+    subreaper_failure: Final = _enable_subreaper()
+    if subreaper_failure is not None:
+        if config.managed_pooler is not None:
+            config.managed_pooler.stop(time.monotonic() + config.termination_grace_timeout)
+        return subreaper_failure
+    process_runner: Final = runner if runner is not None else SubprocessRunner()
+    requested: Final = Event()
+    previous_handlers: Final = _install_signal_handlers(requested)
+    try:
+        return _supervise(config, process_runner, requested)
     finally:
-        _terminate_adopted_children(frozenset())
         _restore_signal_handlers(previous_handlers)
 
 
