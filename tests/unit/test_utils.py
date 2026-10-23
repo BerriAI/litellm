@@ -2561,6 +2561,73 @@ def test_reasoning_content_preserved_in_text_completion_wrapper():
     choice = transformed["choices"][0]
     assert choice["text"] == "Some answer text"
     assert choice["reasoning_content"] == "Here's my chain of thought..."
+    assert transformed.usage is None
+
+
+def test_text_completion_stream_wrapper_usage_handling():
+    """Ensure streamed text completion chunks do not carry a zero-usage payload unless include_usage is requested."""
+    chunk = ModelResponseStream(
+        id="cmpl-test",
+        created=1234567890,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Hello"),
+            )
+        ],
+    )
+
+    # 1. Without stream_options (default): chunks must not carry a usage payload
+    wrapper_no_usage = TextCompletionStreamWrapper(
+        completion_stream=None,
+        model="test-model",
+        stream_options=None,
+    )
+    res_no_usage = wrapper_no_usage.convert_to_text_completion_object(chunk)
+    assert res_no_usage.usage is None
+    dump_no_usage = res_no_usage.model_dump_json(exclude_none=True)
+    assert "usage" not in dump_no_usage
+
+    # 2. With stream_options={"include_usage": False}: chunks must not carry usage
+    wrapper_false_usage = TextCompletionStreamWrapper(
+        completion_stream=None,
+        model="test-model",
+        stream_options={"include_usage": False},
+    )
+    res_false_usage = wrapper_false_usage.convert_to_text_completion_object(chunk)
+    assert res_false_usage.usage is None
+
+    # 3. With stream_options={"include_usage": True}: content chunk has usage=None, final chunk has populated usage
+    wrapper_include_usage = TextCompletionStreamWrapper(
+        completion_stream=None,
+        model="test-model",
+        stream_options={"include_usage": True},
+    )
+    res_content = wrapper_include_usage.convert_to_text_completion_object(chunk)
+    assert res_content.usage is None
+
+    final_chunk = ModelResponseStream(
+        id="cmpl-test",
+        created=1234567890,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=""),
+            )
+        ],
+        usage=Usage(prompt_tokens=10, completion_tokens=25, total_tokens=35),
+    )
+    res_final = wrapper_include_usage.convert_to_text_completion_object(final_chunk)
+    assert res_final.usage is not None
+    assert res_final.usage.prompt_tokens == 10
+    assert res_final.usage.completion_tokens == 25
+    assert res_final.usage.total_tokens == 35
 
 
 def test_anthropic_claude_4_invoke_chat_provider_config():

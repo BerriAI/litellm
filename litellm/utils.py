@@ -7966,7 +7966,7 @@ class TextCompletionStreamWrapper:
 
     def convert_to_text_completion_object(self, chunk: ModelResponse):
         try:
-            response: Final = TextCompletionResponse()
+            response: Final = TextCompletionResponse(stream=True)
             response["id"] = chunk.get("id", None)
             response["object"] = "text_completion"
             response["created"] = chunk.get("created", None)
@@ -7988,6 +7988,8 @@ class TextCompletionStreamWrapper:
             # only pass usage when stream_options["include_usage"] is True
             if self.stream_options and self.stream_options.get("include_usage", False) is True:
                 response["usage"] = chunk.get("usage", None)
+            else:
+                response["usage"] = None
 
             return response
         except Exception as e:
