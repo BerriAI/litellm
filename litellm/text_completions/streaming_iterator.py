@@ -1,6 +1,7 @@
+from collections.abc import Mapping
 from typing import Final
 
-from litellm.types.utils import Choices, ModelResponse, TextChoices, TextCompletionResponse
+from litellm.types.utils import Choices, ModelResponse, ModelResponseStream, TextChoices, TextCompletionResponse
 
 
 class TextCompletionStreamWrapper:
@@ -22,7 +23,7 @@ class TextCompletionStreamWrapper:
     def __aiter__(self):
         return self
 
-    def convert_to_text_completion_object(self, chunk: ModelResponse):
+    def convert_to_text_completion_object(self, chunk: ModelResponse | ModelResponseStream):
         try:
             response: Final = TextCompletionResponse()
             response["id"] = chunk.get("id", None)
@@ -39,6 +40,11 @@ class TextCompletionStreamWrapper:
                 text_choices["reasoning_content"] = delta.get("reasoning_content")
                 text_choices["index"] = chunk["choices"][0]["index"]
                 text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
+                choice_fields: Final[Mapping[str, object]] = chunk.choices[0].model_dump(
+                    include={"stop_reason", "token_ids", "provider_specific_fields"}
+                )
+                for key, value in choice_fields.items():
+                    text_choices[key] = value
                 response["choices"] = [text_choices]
             else:
                 response["choices"] = []

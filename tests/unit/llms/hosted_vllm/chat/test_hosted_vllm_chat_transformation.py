@@ -1,14 +1,166 @@
 import json
-from unittest.mock import MagicMock, patch
+from collections.abc import Mapping
+from typing import Final, Literal
 
+import httpx
 import pytest
+import respx
+from pydantic import JsonValue, TypeAdapter
 
-
+import litellm
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "stream"),
+    (
+        ("/v1/chat/completions", False),
+        ("/v1/chat/completions", True),
+        ("/v1/completions", True),
+    ),
+)
+@pytest.mark.parametrize(
+    ("fields", "terminal_content"),
+    (
+        ({"stop_reason": "</s>", "token_ids": [42, 100]}, " tail"),
+        ({"stop_reason": 0, "token_ids": []}, ""),
+        ({"stop_reason": None, "token_ids": None}, " tail"),
+        ({}, ""),
+    ),
+)
+async def test_hosted_vllm_proxy_keeps_choice_fields_on_the_finishing_http_event(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    path: Literal["/v1/chat/completions", "/v1/completions"],
+    stream: bool,
+    fields: Mapping[str, JsonValue],
+    terminal_content: str,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    def authenticate() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key="test-key")
+
+    is_text: Final = path == "/v1/completions"
+    metadata: Final = {**fields, "vendor_marker": {"value": "keep", "nullable": None}}
+    envelope: Final = {
+        "id": "chatcmpl-test",
+        "object": "text_completion" if is_text else "chat.completion.chunk" if stream else "chat.completion",
+        "created": 1735689600,
+        "model": "test-model",
+    }
+    finishing_choice: Final = {
+        "index": 0,
+        "finish_reason": "stop",
+        **(
+            {"text": terminal_content}
+            if is_text
+            else (
+                {"delta": {"content": terminal_content}}
+                if stream
+                else {"message": {"role": "assistant", "content": "Answer"}}
+            )
+        ),
+        **({"provider_specific_fields": metadata} if stream else {"vendor_marker": metadata["vendor_marker"]}),
+        **fields,
+    }
+    upstream_events: Final = (
+        {
+            **envelope,
+            "choices": [
+                {
+                    "index": 0,
+                    **({"text": "Answer"} if is_text else {"delta": {"role": "assistant", "content": "Answer"}}),
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {**envelope, "choices": [finishing_choice]},
+    )
+    upstream_response: Final = (
+        httpx.Response(
+            200,
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in upstream_events) + "data: [DONE]\n\n",
+            headers={"Content-Type": "text/event-stream"},
+        )
+        if stream
+        else httpx.Response(200, json={**envelope, "choices": [finishing_choice]})
+    )
+    upstream: Final = respx_mock.post(f"https://vllm.example{path}").mock(return_value=upstream_response)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "hosted_vllm/test-model",
+                    "api_base": "https://vllm.example/v1",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth, authenticate)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(proxy_server.app), base_url="http://testserver"
+    ) as client:
+        response: Final = await client.post(
+            path,
+            json={
+                "model": "test-model",
+                "stream": stream,
+                "return_token_ids": True,
+                "stop": ["</s>", "never-generated"],
+                **({"prompt": "Hello"} if is_text else {"messages": [{"role": "user", "content": "Hello"}]}),
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    upstream_request: Final = TypeAdapter(dict[str, object]).validate_json(upstream.calls.last.request.content)
+    assert {key: upstream_request[key] for key in ("stop", "return_token_ids")} == {
+        "stop": ["</s>", "never-generated"],
+        "return_token_ids": True,
+    }
+    events: Final = (
+        tuple(
+            TypeAdapter(dict[str, object]).validate_json(line[6:])
+            for line in response.text.splitlines()
+            if line.startswith("data: {")
+        )
+        if stream
+        else (TypeAdapter(dict[str, object]).validate_json(response.content),)
+    )
+    choices: Final = tuple(
+        TypeAdapter(list[dict[str, object]]).validate_python(event["choices"])[0]
+        for event in events
+        if event["choices"]
+    )
+    assert not any(
+        {"stop_reason", "token_ids", "provider_specific_fields"}.intersection(choice)
+        for choice in choices
+        if choice.get("finish_reason") is None
+    ), response.text
+    finishing_choices: Final = tuple(choice for choice in choices if choice.get("finish_reason") is not None)
+    assert len(finishing_choices) == 1, response.text
+    preserved_fields: Final = {
+        key: value
+        for key, value in finishing_choices[0].items()
+        if key in ("finish_reason", "stop_reason", "token_ids", "provider_specific_fields")
+    }
+    assert preserved_fields == {
+        "finish_reason": "stop",
+        **fields,
+        "provider_specific_fields": metadata,
+    }, response.text
 
 
 def test_hosted_vllm_chat_transformation_file_url():
