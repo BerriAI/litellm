@@ -1,4 +1,4 @@
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
@@ -749,23 +749,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
     @staticmethod
     def _materialize_input_value(value: object) -> object:
-        if isinstance(value, BaseModel):
-            return value.model_dump(exclude_none=True)
-        if isinstance(value, dict):
-            materialized_dict: Final = {
-                key: OpenAIResponsesAPIConfig._materialize_input_value(val) for key, val in value.items()
-            }
-            return value if all(materialized_dict[key] is value[key] for key in value) else materialized_dict
-        if isinstance(value, list):
-            materialized_list: Final = [OpenAIResponsesAPIConfig._materialize_input_value(part) for part in value]
-            return (
-                value
-                if all(new is old for new, old in zip(materialized_list, value, strict=True))
-                else materialized_list
-            )
-        if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray, Mapping)):
-            return [OpenAIResponsesAPIConfig._materialize_input_value(part) for part in value]
-        return value
+        return _as_input_param(value)
 
     def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         """

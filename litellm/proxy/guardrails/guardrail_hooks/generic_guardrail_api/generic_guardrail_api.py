@@ -8,7 +8,7 @@
 import fnmatch
 import os
 from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -32,6 +32,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
+    structured_messages_from_response,
     GuardrailToolParam,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -591,12 +592,12 @@ class GenericGuardrailAPI(CustomGuardrail):
 
             headers: Final = self._build_request_headers()
             request_payload: Final = self._request_body(guardrail_request, structured_messages)
-            shown_messages_raw: Final = request_payload.get("structured_messages")
+            shown_from_payload: Final = structured_messages_from_response(
+                request_payload.get("structured_messages")
+            )
             shown_messages: Final = (
-                cast(  # cast-ok: JSON-serialized structured_messages from GenericGuardrailAPIRequest
-                    Sequence[AllMessageValues], shown_messages_raw
-                )
-                if isinstance(shown_messages_raw, list)
+                shown_from_payload
+                if shown_from_payload is not None
                 else guardrail_request.structured_messages
             )
 

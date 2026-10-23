@@ -473,25 +473,75 @@ def without_item_cache_control(input: str | ResponseInputParam) -> str | Respons
     )
 
 
+def _expand_param_node(
+    node: object,
+) -> tuple[str, object, object, tuple[object, ...]] | None:
+    if isinstance(node, BaseModel):
+        return ("forward", node, 1, (node.model_dump(exclude_none=True),))
+    if isinstance(node, dict):
+        keys: Final = tuple(node.keys())
+        return ("dict", node, keys, tuple(node[k] for k in keys))
+    if isinstance(node, (list, tuple)):
+        kind: Final = "list" if isinstance(node, list) else "tuple"
+        return (kind, node, len(node), tuple(node))
+    if isinstance(node, Iterable) and not isinstance(node, (str, bytes, bytearray, Mapping)):
+        items: Final = tuple(node)
+        return ("iter", items, len(items), items)
+    return None
+
+
+def _rebuild_param_container(
+    op: str,
+    node: object,
+    extra: object,
+    children: Sequence[object],
+) -> object:
+    if op == "forward":
+        return children[0]
+    if op == "dict" and isinstance(node, dict) and isinstance(extra, tuple):
+        rebuilt: Final = dict(zip(extra, children, strict=True))
+        return node if all(rebuilt[k] is node[k] for k in extra) else rebuilt
+    if op == "list" and isinstance(node, list):
+        return node if all(new is old for new, old in zip(children, node, strict=True)) else list(children)
+    if op == "tuple" and isinstance(node, tuple):
+        return node if all(new is old for new, old in zip(children, node, strict=True)) else tuple(children)
+    return list(children)
+
+
 def _as_input_param(item: object) -> object:
-    if isinstance(item, BaseModel):
-        return item.model_dump(exclude_none=True)
-    if isinstance(item, dict):
-        materialized_dict: Final = {key: _as_input_param(value) for key, value in item.items()}
-        return item if all(materialized_dict[key] is item[key] for key in item) else materialized_dict
-    if isinstance(item, list):
-        materialized_list: Final = [_as_input_param(part) for part in item]
-        return item if all(new is old for new, old in zip(materialized_list, item, strict=True)) else materialized_list
-    if isinstance(item, Iterable) and not isinstance(item, (str, bytes, bytearray, Mapping)):
-        return [_as_input_param(part) for part in item]
-    return item
+    work: Final[list[tuple[str, object, object]]] = [  # mutable-ok: iterative post-order stack, recursion is banned
+        ("visit", item, None)
+    ]
+    out: Final[list[object]] = []  # mutable-ok: post-order value stack
+    while work:
+        op, current, extra = work.pop()
+        if op == "visit":
+            expanded = _expand_param_node(current)
+            if expanded is None:
+                out.append(current)
+            else:
+                kind, target, meta, children = expanded
+                work.append((kind, target, meta))
+                for child in reversed(children):
+                    work.append(("visit", child, None))
+        else:
+            arity = len(extra) if isinstance(extra, tuple) else extra
+            assert isinstance(arity, int)
+            built_children = out[-arity:] if arity else []
+            if arity:
+                del out[-arity:]
+            out.append(_rebuild_param_container(op, current, extra, built_children))
+    return out[0]
 
 
 def with_compaction_items_as_params(input: str | ResponseInputParam) -> str | ResponseInputParam:
     if not isinstance(input, list):
         return input
-    return cast(  # cast-ok: the same input items, a compaction item replayed from SDK output dumped to its param dict
-        ResponseInputParam, [_as_input_param(item) for item in input]
+    materialized: Final = [_as_input_param(item) for item in input]
+    if all(new is old for new, old in zip(materialized, input, strict=True)):
+        return input
+    return cast(  # cast-ok: the same input items, SDK output models and single-pass iterables dumped to param dicts
+        ResponseInputParam, materialized
     )
 
 
