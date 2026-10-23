@@ -7726,3 +7726,152 @@ async def test_leaving_an_async_with_block_closes_the_provider_stream():
     async with _wrapper_over(stream):
         pass
     assert stream.close_calls == 1
+
+
+class TestCloseFlushesAbandonedStream:
+    """A stream abandoned before its final chunk must still emit its terminal
+    success log when closed (issue #45736): tracing, spend and custom
+    callbacks otherwise silently miss the call."""
+
+    class _RecordingLoggingObj:
+        """Logging object with one *real* attribute for the tests to assert on.
+
+        `check_test_quality.py` flags a test whose every assertion inspects a
+        patched mock (TQ002): it restates the call instead of checking the
+        outcome. The flush writes the assembled response into
+        `model_call_details` before submitting the log, so a genuine dict there
+        is something a caller observes. Everything else stays a mock because
+        the wrapper's own success-logging path reaches far into the object.
+        """
+
+        def __init__(self) -> None:
+            self.model_call_details: dict = {}
+            self._rest = MagicMock()
+            self._rest.async_success_handler = AsyncMock()
+
+        def __getattr__(self, name: str):
+            return getattr(self._rest, name)
+
+    def _wrapper_with_chunk(self):
+        """Return a wrapper plus the logging object it was constructed with."""
+        logging_obj = self._RecordingLoggingObj()
+        wrapper = CustomStreamWrapper(
+            completion_stream=None,
+            model="gpt-4o-mini",
+            logging_obj=logging_obj,
+            custom_llm_provider=None,
+        )
+        wrapper.sent_last_chunk = False
+        wrapper.chunks.append(ModelResponseStream(id="c1", choices=[]))
+        return wrapper, logging_obj
+
+    def test_close_flushes_terminal_log_for_abandoned_stream(self):
+        wrapper, logging_obj = self._wrapper_with_chunk()
+
+        wrapper.close_stream()
+
+        # the assembled response reached the logging object, and the wrapper
+        # recorded that it has now logged the stream
+        assembled = logging_obj.model_call_details["async_complete_streaming_response"]
+        assert assembled is not None
+        assert wrapper._abandonment_logged is True
+
+    def test_close_is_noop_after_natural_completion(self):
+        wrapper, logging_obj = self._wrapper_with_chunk()
+        wrapper.sent_last_chunk = True
+
+        wrapper.close_stream()
+
+        # the natural completion already handled this stream, so closing must
+        # neither assemble a response nor claim the stream was abandoned
+        assert "async_complete_streaming_response" not in logging_obj.model_call_details
+        assert wrapper._abandonment_logged is False
+
+    def test_double_close_flushes_only_once(self):
+        wrapper, logging_obj = self._wrapper_with_chunk()
+
+        wrapper.close_stream()
+        first = logging_obj.model_call_details["async_complete_streaming_response"]
+        wrapper.close_stream()
+
+        # the second close neither replaced nor re-assembled anything
+        assert logging_obj.model_call_details["async_complete_streaming_response"] is first
+
+    def test_context_manager_exit_flushes(self):
+        wrapper, logging_obj = self._wrapper_with_chunk()
+
+        with wrapper:
+            pass
+
+        assert "async_complete_streaming_response" in logging_obj.model_call_details
+
+    def test_router_close_duck_typing_contract(self):
+        """`Router.stream_with_fallbacks` calls close() on anything that has it.
+
+        It does so from a `finally`, on every response including shadow and
+        fallback streams, so `close()` has to stay a pure teardown: it must
+        not assemble a response nor submit the terminal success log. The
+        flushing entry point is `close_stream`, and this pins that split.
+        """
+        wrapper, logging_obj = self._wrapper_with_chunk()
+
+        wrapper.close()
+
+        # close() is the teardown Router performs; it must not bill the stream
+        assert "async_complete_streaming_response" not in logging_obj.model_call_details
+        assert wrapper._abandonment_logged is False
+        assert callable(wrapper.close_stream)
+
+    def test_close_releases_underlying_stream(self):
+        wrapper, _ = self._wrapper_with_chunk()
+        released = []
+
+        class _Stream:
+            def close(inner_self):
+                released.append(True)
+
+        wrapper.completion_stream = _Stream()
+
+        wrapper.close_stream()
+
+        # the provider stream was closed and the reference dropped
+        assert released == [True]
+        assert wrapper.completion_stream is None
+
+    def test_no_flush_when_nothing_was_streamed(self):
+        wrapper, logging_obj = self._wrapper_with_chunk()
+        wrapper.chunks = []
+
+        wrapper.close_stream()
+
+        # nothing was served, so there is nothing to bill or log
+        assert "async_complete_streaming_response" not in logging_obj.model_call_details
+        assert wrapper._abandonment_logged is False
+
+    def test_flush_survives_stream_chunk_builder_raising(self):
+        wrapper, logging_obj = self._wrapper_with_chunk()
+
+        def _boom(**_kwargs):
+            raise RuntimeError("builder exploded")
+
+        with patch("litellm.stream_chunk_builder", _boom):
+            wrapper.close_stream()
+
+        # the failure is logged, not raised, and nothing half-built is recorded
+        assert "async_complete_streaming_response" not in logging_obj.model_call_details
+        assert wrapper._abandonment_logged is True
+
+    def test_close_survives_provider_stream_raising(self):
+        wrapper, _ = self._wrapper_with_chunk()
+
+        class _Angry:
+            def close(inner_self):
+                raise OSError("already closed")
+
+        wrapper.completion_stream = _Angry()
+
+        wrapper.close_stream()
+
+        # a provider that fails to close must not mask the caller's own error,
+        # and the reference is still dropped
+        assert wrapper.completion_stream is None
