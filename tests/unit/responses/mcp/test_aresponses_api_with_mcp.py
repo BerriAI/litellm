@@ -29,6 +29,7 @@ from litellm.proxy._experimental.mcp_server import mcp_server_manager
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
 from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_fields_to_lift
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
 from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
@@ -2384,8 +2385,11 @@ def _first_index(events: Sequence[object], event_type: str) -> int:
 
 
 async def _scripted_mcp_stream(
-    model: str, upstream_url: str, rounds: Sequence[bytes]
-) -> tuple[tuple[object, ...], respx.Route, AsyncMock, AsyncMock]:
+    model: str,
+    upstream_url: str,
+    rounds: Sequence[bytes],
+    max_agentic_loops: int | None = None,
+) -> tuple[tuple[object, ...], respx.Route, AsyncMock, AsyncMock, MCPEnhancedStreamingIterator]:
     upstream: Final = respx.post(upstream_url).mock(
         side_effect=[httpx.Response(200, content=body, headers=SSE_HEADERS) for body in rounds]
     )
@@ -2402,9 +2406,11 @@ async def _scripted_mcp_stream(
             tool_choice="required",
             input=[{"role": "user", "type": "message", "content": "What's the weather in San Francisco?"}],
             stream=True,
+            **({"max_agentic_loops": max_agentic_loops} if max_agentic_loops is not None else {}),
         )
+        assert isinstance(response, MCPEnhancedStreamingIterator)
         events: Final = tuple([event async for event in response])
-    return events, upstream, fetch, execute
+    return events, upstream, fetch, execute, response
 
 
 @pytest.mark.asyncio
@@ -2417,7 +2423,7 @@ async def test_streaming_responses_api_with_mcp_tools(
     model, upstream_url, tool_round, answer_round = SCRIPTED_PROVIDERS[provider]
 
     with caplog.at_level(logging.ERROR):
-        events, upstream, fetch, execute = await _scripted_mcp_stream(
+        events, upstream, fetch, execute, _ = await _scripted_mcp_stream(
             model, upstream_url, (tool_round(), answer_round())
         )
 
@@ -2438,6 +2444,22 @@ async def test_streaming_responses_api_with_mcp_tools(
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_streaming_mcp_iterator_uses_max_agentic_loops_from_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model, upstream_url, tool_round, answer_round = SCRIPTED_PROVIDERS["openai"]
+
+    _, _, _, _, iterator = await _scripted_mcp_stream(
+        model,
+        upstream_url,
+        (tool_round(), answer_round()),
+        max_agentic_loops=7,
+    )
+
+    assert iterator.max_tool_call_rounds == 7
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_streaming_mcp_event_order_and_response_id_consistency(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -2445,7 +2467,7 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
     model, upstream_url, tool_round, answer_round = SCRIPTED_PROVIDERS["openai"]
 
     with caplog.at_level(logging.ERROR):
-        events, _, _, _ = await _scripted_mcp_stream(model, upstream_url, (tool_round(), answer_round()))
+        events, _, _, _, _ = await _scripted_mcp_stream(model, upstream_url, (tool_round(), answer_round()))
 
     created: Final = _first_index(events, "response.created")
     in_progress: Final = _first_index(events, "response.in_progress")
