@@ -581,12 +581,7 @@ class TestUnmappedModelBudgetEnforcement:
 
         assert is_model_cost_zero(model="free-model", llm_router=router) is False
 
-    def test_alias_chain_through_a_priced_group_enforces_budget(self):
-        """An alias to a group that is itself an alias key resolves one hop, like the router does.
-
-        The router serves ``chain-smart`` with the real ``chain-legacy`` deployment, which is priced,
-        so following the second hop to the free group would waive the budget for a paid call.
-        """
+    def test_alias_chain_through_a_priced_group_to_a_free_target_bypasses_budget(self):
         router = Router(
             model_list=[
                 {
@@ -613,18 +608,11 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"chain-smart": "chain-legacy", "chain-legacy": "free-model"},
         )
 
-        assert is_model_cost_zero(model="chain-smart", llm_router=router) is False
+        assert _served_model(router, "chain-smart") == "ollama/llama2"
+        assert is_model_cost_zero(model="chain-smart", llm_router=router) is True
 
     @pytest.mark.parametrize("hidden", [False, True], ids=["plain_alias", "hidden_alias"])
-    def test_alias_to_an_unpriced_group_that_is_also_an_alias_enforces_budget(self, hidden: bool):
-        """An alias is judged by the group it routes to, never by where that group's own alias points.
-
-        The router serves ``chain-entry`` from the real ``chain-middle`` deployment, whose zero price
-        comes from the cost map alone. ``chain-middle`` is also an alias key to an explicitly free
-        group, a second hop the router never takes for ``chain-entry``, so that group must not lend
-        it the bypass.
-        """
-
+    def test_alias_chain_through_an_unpriced_group_uses_the_explicitly_free_target(self, hidden: bool):
         def alias(target: str) -> str | dict[str, str | bool]:
             return {"model": target, "hidden": True} if hidden else target
 
@@ -633,19 +621,11 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"chain-entry": alias("chain-middle"), "chain-middle": alias("free-model")},
         )
 
-        assert _served_model(router, "chain-entry") == UNPRICED_ZERO_COST_MODEL
-        assert is_model_cost_zero(model="chain-entry", llm_router=router) is False
-        assert is_model_cost_zero(model="chain-middle", llm_router=router) is True, (
-            "asked by its own name, chain-middle routes to the explicitly free group"
-        )
+        assert _served_model(router, "chain-entry") == "gpt-3.5-turbo"
+        assert is_model_cost_zero(model="chain-entry", llm_router=router) is True
+        assert is_model_cost_zero(model="chain-middle", llm_router=router) is True
 
-    def test_alias_to_a_free_group_that_is_also_an_alias_to_a_ptu_group_bypasses_budget(self):
-        """A PTU group one alias hop past the group that serves the request does not enforce the budget.
-
-        The router serves ``chain-entry`` from the real, explicitly free ``chain-middle`` deployment.
-        ``chain-middle`` is also an alias key to a PTU-priced group, which only a request for
-        ``chain-middle`` itself routes to.
-        """
+    def test_alias_chain_through_a_free_group_to_a_ptu_target_enforces_budget(self):
         router = Router(
             model_list=[
                 _explicitly_free("chain-middle"),
@@ -654,19 +634,11 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"chain-entry": "chain-middle", "chain-middle": "ptu-model"},
         )
 
-        assert _served_model(router, "chain-entry") == "gpt-3.5-turbo"
-        assert is_model_cost_zero(model="chain-entry", llm_router=router) is True
-        assert is_model_cost_zero(model="chain-middle", llm_router=router) is False, (
-            "asked by its own name, chain-middle routes to the PTU group"
-        )
+        assert _served_model(router, "chain-entry") == "azure/ptu-deployment"
+        assert is_model_cost_zero(model="chain-entry", llm_router=router) is False
+        assert is_model_cost_zero(model="chain-middle", llm_router=router) is False
 
-    def test_alias_chain_served_by_a_paid_wildcard_route_enforces_budget(self):
-        """An alias whose target is only an alias key is never judged by that second alias's free group.
-
-        ``chain-entry`` resolves one hop to ``gpt-4o-mini``, which is no deployment's name, so the
-        router serves it from the paid wildcard route. The free group ``gpt-4o-mini`` is aliased
-        to is only reached by a request for ``gpt-4o-mini`` itself.
-        """
+    def test_alias_chain_to_a_free_target_takes_precedence_over_a_paid_wildcard(self):
         router = Router(
             model_list=[
                 _explicitly_free("free-model", model="ollama/llama2"),
@@ -675,17 +647,11 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"chain-entry": "gpt-4o-mini", "gpt-4o-mini": "free-model"},
         )
 
-        assert _served_model(router, "chain-entry") == "openai/gpt-4o-mini"
-        assert is_model_cost_zero(model="chain-entry", llm_router=router) is False
+        assert _served_model(router, "chain-entry") == "ollama/llama2"
+        assert is_model_cost_zero(model="chain-entry", llm_router=router) is True
 
     @pytest.mark.parametrize("alias_name", ["openai/smart", "smart"], ids=["alias_on_pattern", "alias_off_pattern"])
-    def test_alias_chain_served_by_an_explicitly_priced_wildcard_route_enforces_budget(self, alias_name: str):
-        """A chain the router serves from a priced wildcard route is budgeted at that route's price.
-
-        The group's price reads $0 through the second alias to the free group, and the wildcard
-        route's cost-map entry carries explicit prices, so only their sign tells that the served
-        deployment is not free.
-        """
+    def test_alias_chain_to_a_free_target_takes_precedence_over_an_explicitly_priced_wildcard(self, alias_name: str):
         router = Router(
             model_list=[
                 _explicitly_free("free-model", model="ollama/llama2"),
@@ -703,11 +669,10 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={alias_name: "openai/gpt-4o-mini", "openai/gpt-4o-mini": "free-model"},
         )
 
-        assert _served_model(router, alias_name) == "openai/gpt-4o-mini"
-        assert is_model_cost_zero(model=alias_name, llm_router=router) is False
+        assert _served_model(router, alias_name) == "ollama/llama2"
+        assert is_model_cost_zero(model=alias_name, llm_router=router) is True
 
-    def test_alias_shadowing_a_free_group_is_judged_by_its_unpriced_target_through_an_alias_chain(self):
-        """A shadowing alias stays enforced when its unpriced target is itself an alias key to a free group."""
+    def test_alias_shadowing_a_free_group_is_judged_by_the_final_target_through_an_unpriced_group(self):
         router = Router(
             model_list=[
                 _explicitly_free("shadowed-free"),
@@ -717,8 +682,8 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"shadowed-free": "chain-middle", "chain-middle": "free-model"},
         )
 
-        assert _served_model(router, "shadowed-free") == UNPRICED_ZERO_COST_MODEL
-        assert is_model_cost_zero(model="shadowed-free", llm_router=router) is False
+        assert _served_model(router, "shadowed-free") == "gpt-3.5-turbo"
+        assert is_model_cost_zero(model="shadowed-free", llm_router=router) is True
 
     @pytest.mark.parametrize("alias_name", ["ollama/fast", "fast"], ids=["alias_on_pattern", "alias_off_pattern"])
     def test_alias_to_a_name_served_by_an_explicitly_free_wildcard_route_bypasses_budget(self, alias_name: str):
@@ -732,23 +697,15 @@ class TestUnmappedModelBudgetEnforcement:
         assert is_model_cost_zero(model="ollama/llama3", llm_router=router) is True
         assert is_model_cost_zero(model=alias_name, llm_router=router) is True
 
-    def test_alias_chain_to_a_name_served_by_an_explicitly_free_wildcard_route_bypasses_budget(self):
-        """An alias to an alias key no deployment is named after reads the wildcard route serving it.
-
-        ``ollama/fast`` resolves one hop to ``ollama/llama3``, which is only an alias key, so the
-        router serves it from the explicitly free wildcard route. The group ``ollama/llama3`` is
-        aliased to is only reached by a request for ``ollama/llama3`` itself.
-        """
+    def test_alias_chain_to_an_unpriced_target_does_not_inherit_a_free_wildcards_budget_waiver(self):
         router = Router(
             model_list=[_explicitly_free_ollama_wildcard(), _free_by_cost_map_only("unpriced-model")],
             model_group_alias={"ollama/fast": "ollama/llama3", "ollama/llama3": "unpriced-model"},
         )
 
-        assert _served_model(router, "ollama/fast") == "ollama/llama3"
-        assert is_model_cost_zero(model="ollama/fast", llm_router=router) is True
-        assert is_model_cost_zero(model="ollama/llama3", llm_router=router) is False, (
-            "asked by its own name, ollama/llama3 routes to the unpriced group"
-        )
+        assert _served_model(router, "ollama/fast") == UNPRICED_ZERO_COST_MODEL
+        assert is_model_cost_zero(model="ollama/fast", llm_router=router) is False
+        assert is_model_cost_zero(model="ollama/llama3", llm_router=router) is False
 
     def test_handles_router_without_zero_cost_cache_attribute(self):
         """Tolerate router-like objects (e.g. ``MagicMock`` stand-ins) that

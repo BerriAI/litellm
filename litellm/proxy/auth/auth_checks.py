@@ -662,23 +662,10 @@ def _deployments_served_for(model: str, llm_router: "Router") -> Sequence[Deploy
     """
     The deployments a request to ``model`` routes to, for the gates that waive budget checks.
 
-    The router resolves a ``model_group_alias`` name to its target exactly once and serves that
-    group, never a real deployment that shares the alias's name. ``Router.get_model_list()`` on the
-    routed group reads those deployments unless the group is itself an alias key, where it would
-    follow the alias a second hop the router never takes; then the deployments named after the
-    group count, or the wildcard route serving the group when none carries its name, the same
-    fallback ``get_model_list()`` takes.
+    Resolve the complete alias chain before looking up the served deployments.
     """
     routed_group: Final = llm_router.routable_model_group(model)
-    if llm_router.routable_model_group(routed_group) == routed_group:
-        return llm_router.get_model_list(model_name=routed_group) or ()
-    named: Final = llm_router.get_model_list_from_model_alias(model_name=model)
-    if named:
-        return named
-    return tuple(
-        DeploymentTypedDict(**deployment)
-        for deployment in llm_router.pattern_router.get_deployments_by_pattern(model=routed_group)
-    )
+    return llm_router.get_model_list(model_name=routed_group) or ()
 
 
 def _has_ptu_flat_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:

@@ -103,15 +103,19 @@ def resolve_model_group_alias(model_group_alias: object, model: str) -> str | No
     entries: the map can come from a key or team row rather than from validated
     config, so a bad value must not raise mid-request.
 
-    Returns the target model group, or None when the map does not rewrite ``model``.
+    Returns the final target model group, or None when no alias applies or the chain cycles.
     """
-    if not isinstance(model_group_alias, Mapping):
+    if not isinstance(model_group_alias, Mapping) or model not in model_group_alias:
         return None
-    entry: Final = model_group_alias.get(model)
-    target: Final = entry.get("model") if isinstance(entry, Mapping) else entry
-    if not isinstance(target, str) or not target:
-        return None
-    return target
+    aliases: Final = _OBJECT_MAPPING_ADAPTER.validate_python(model_group_alias)
+    current: str = model  # rebind-ok: iterative traversal supports chains beyond Python's recursion limit
+    for _ in range(len(aliases) + 1):
+        entry = aliases.get(current)
+        target = _OBJECT_MAPPING_ADAPTER.validate_python(entry).get("model") if isinstance(entry, Mapping) else entry
+        if not isinstance(target, str) or not target:
+            return current if current != model else None
+        current = target
+    return None
 
 
 def resolve_served_model(

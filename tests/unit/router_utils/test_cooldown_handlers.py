@@ -3018,7 +3018,6 @@ THIRD_REFUSED: Final = CooldownDeploymentInfo(model_id="refused-3", api_base=Non
 OTHER_TEAMS_REFUSED: Final = CooldownDeploymentInfo(model_id="refused-team-b", api_base=None)
 FIRST_WILDCARD: Final = CooldownDeploymentInfo(model_id="wildcard-1", api_base="https://wildcard.example/v1")
 SECOND_WILDCARD: Final = CooldownDeploymentInfo(model_id="wildcard-2", api_base=None)
-ALIAS_TARGET: Final = CooldownDeploymentInfo(model_id="tier-1", api_base="https://tier.example/v1")
 PROVIDER_MODEL: Final = CooldownDeploymentInfo(model_id="friendly-1", api_base=None)
 EVERY_DEPLOYMENT: Final = (
     "refused-1",
@@ -3142,8 +3141,8 @@ WILDCARD_COOLED: Final = (FIRST_WILDCARD, SECOND_WILDCARD)
         ("cost-based-routing", STRATEGY_COOLED, "pass-through", "refused", "team-a", None),
         ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "openai/gpt-5.4-mini", "team-a", WILDCARD_COOLED),
         ("simple-shuffle", EVERY_DEPLOYMENT, "async", "openai/gpt-5.4-mini", "team-a", WILDCARD_COOLED),
-        ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "entry", "team-a", (ALIAS_TARGET,)),
-        ("simple-shuffle", EVERY_DEPLOYMENT, "async", "entry", "team-a", (ALIAS_TARGET,)),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "entry", "team-a", ALL_COOLED),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "async", "entry", "team-a", ALL_COOLED),
         ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "anthropic/claude-friendly", "team-a", (PROVIDER_MODEL,)),
         ("simple-shuffle", EVERY_DEPLOYMENT, "async", "anthropic/claude-friendly", "team-a", (PROVIDER_MODEL,)),
     ),
