@@ -7400,3 +7400,61 @@ def test_get_logging_payload_stores_end_user_only_while_end_user_cost_tracking_i
         end_time=datetime.datetime.now(timezone.utc),
     )
     assert payload["end_user"] == expected_end_user
+
+
+
+def test_base_model_different_custom_llm_provider_resolves_pricing() -> None:
+    """
+    Verify pricing_entry_for_cost_calc and get_model_cost_information resolve
+    when base_model names a priced model whose provider differs from the transport provider (#47908).
+    """
+    from litellm.cost_calculator import completion_cost, pricing_entry_for_cost_calc
+
+    model: Final = "glm-5.3-flash"
+    base_model: Final = "zai/glm-5.3-flash"
+    custom_llm_provider: Final = "openai"
+
+    response = {
+        "model": model,
+        "usage": {
+            "prompt_tokens": 1000,
+            "completion_tokens": 100,
+            "total_tokens": 1100,
+        },
+    }
+
+    # 1. pricing_entry_for_cost_calc resolves to the base_model key
+    entry: Final = pricing_entry_for_cost_calc(
+        model=model,
+        completion_response=response,
+        custom_llm_provider=custom_llm_provider,
+        custom_pricing=False,
+        base_model=base_model,
+        router_model_id=None,
+        region_name=None,
+        litellm_logging_obj=None,
+    )
+    assert entry is not None
+    assert entry[0] == base_model
+    assert entry[1]["input_cost_per_token"] == 1.5e-07
+
+    # 2. StandardLoggingPayloadSetup.get_model_cost_information populates model_map_value
+    info: Final = StandardLoggingPayloadSetup.get_model_cost_information(
+        base_model=base_model,
+        custom_pricing=False,
+        custom_llm_provider=custom_llm_provider,
+        init_response_obj=response,
+    )
+    assert info.get("model_map_key") == base_model
+    assert info.get("model_map_value") is not None
+    assert info["model_map_value"]["key"] == base_model
+
+    # 3. completion_cost computes correct USD cost using base_model pricing
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        base_model=base_model,
+    )
+    expected_cost: Final = 1000 * 1.5e-07 + 100 * 5e-07
+    assert cost == pytest.approx(expected_cost)
