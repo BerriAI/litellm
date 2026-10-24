@@ -19640,6 +19640,285 @@ async def _generate_key_and_get_persisted_row(data: GenerateKeyRequest, mock_ins
 
 
 @pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_fills_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    response: Final = await generate_key_fn(
+        data=GenerateKeyRequest(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-internal",
+            user_id="internal-user",
+        ),
+        litellm_changed_by=None,
+    )
+
+    assert response is not None
+    key_call: Final = next(c for c in mock_insert_data.call_args_list if c.kwargs["table_name"] == "key")
+    assert key_call.kwargs["data"]["allowed_routes"] == ["llm_api_routes", "/key/spend/report"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_keeps_explicit_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(allowed_routes=["info_routes"]),
+        mock_insert_data,
+    )
+
+    assert key_row["allowed_routes"] == ["info_routes"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_extends_key_type_preset_it_covers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import LiteLLMKeyType
+
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    await generate_key_fn(
+        data=GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-internal",
+            user_id="internal-user",
+        ),
+        litellm_changed_by=None,
+    )
+
+    key_call: Final = next(c for c in mock_insert_data.call_args_list if c.kwargs["table_name"] == "key")
+    assert key_call.kwargs["data"]["allowed_routes"] == ["llm_api_routes", "/key/spend/report"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_type", "preset_routes"),
+    [(LiteLLMKeyType.MANAGEMENT, ["management_routes"]), (LiteLLMKeyType.READ_ONLY, ["info_routes"])],
+)
+async def test_default_key_generate_params_allowed_routes_keeps_management_and_read_only_presets(
+    monkeypatch: pytest.MonkeyPatch, key_type: LiteLLMKeyType, preset_routes: list[str]
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "management_routes", "info_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(key_type=key_type),
+        mock_insert_data,
+    )
+
+    assert key_row["allowed_routes"] == preset_routes
+
+
+@pytest.mark.parametrize(
+    "data",
+    [GenerateKeyRequest(), GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API)],
+    ids=["unset", "llm_api"],
+)
+def test_effective_key_for_generate_shows_default_allowed_routes_to_the_policy(
+    monkeypatch: pytest.MonkeyPatch, data: GenerateKeyRequest
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+
+    effective_key: Final = _effective_key_for_generate(data=data, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    assert effective_key.allowed_routes == ["llm_api_routes", "/key/spend/report"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_skips_team_service_account_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(team_id="team-a", metadata={"service_account_id": "sa-1"}),
+        mock_insert_data,
+    )
+
+    assert not key_row.get("allowed_routes")
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_skips_full_access_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(key_type=LiteLLMKeyType.DEFAULT),
+        mock_insert_data,
+    )
+
+    assert not key_row.get("allowed_routes")
+
+
+def _owner_route_update_status(existing: list[str], incoming: list[str]) -> int | None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _enforce_allowed_routes_update_permission,
+    )
+
+    try:
+        _enforce_allowed_routes_update_permission(
+            data=UpdateKeyRequest(key="sk-owned", allowed_routes=incoming),
+            existing_key_row=LiteLLM_VerificationToken(
+                token="hashed-owned", user_id="internal-user", allowed_routes=existing
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="internal-user", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+    except HTTPException as exc:
+        return exc.status_code
+    return None
+
+
+@pytest.mark.parametrize(
+    ("existing", "incoming", "expected_status"),
+    [
+        (["llm_api_routes"], [], None),
+        (["llm_api_routes", "/key/spend/report"], [], 403),
+        (["llm_api_routes", "/key/spend/report"], ["llm_api_routes"], 403),
+        (["llm_api_routes", "/key/spend/report"], ["llm_api_routes", "/key/spend/report"], None),
+        (["llm_api_routes", "/key/spend/report"], ["/key/spend/report", "llm_api_routes"], 403),
+        (
+            ["llm_api_routes", "/key/spend/report"],
+            ["llm_api_routes", "/key/spend/report", "/key/spend/report"],
+            403,
+        ),
+        (["/global/spend/report"], ["/global/spend/report"], None),
+    ],
+    ids=[
+        "preset_to_full_access",
+        "default_list_to_full_access",
+        "default_list_to_ai_apis",
+        "default_list_sent_back_unchanged",
+        "default_list_sent_back_reordered",
+        "default_list_sent_back_with_a_duplicate",
+        "admin_set_list_sent_back_unchanged",
+    ],
+)
+def test_owner_cannot_change_the_routes_a_key_got_from_default_key_generate_params(
+    monkeypatch: pytest.MonkeyPatch, existing: list[str], incoming: list[str], expected_status: int | None
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+
+    assert _owner_route_update_status(existing, incoming) == expected_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("incoming", "written"),
+    [
+        (["llm_api_routes", "/key/spend/report"], None),
+        (["/key/spend/report", "llm_api_routes"], ["/key/spend/report", "llm_api_routes"]),
+        (["llm_api_routes"], ["llm_api_routes"]),
+    ],
+    ids=["unchanged_resend", "reordered", "changed"],
+)
+async def test_key_update_writes_allowed_routes_only_when_they_change(
+    incoming: list[str], written: list[str] | None
+) -> None:
+    existing_key: Final = LiteLLM_VerificationToken(
+        token="hashed", allowed_routes=["llm_api_routes", "/key/spend/report"]
+    )
+
+    update_values: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="sk-1", key_alias="renamed", allowed_routes=incoming), existing_key_row=existing_key
+    )
+
+    assert (update_values["key_alias"], update_values.get("allowed_routes")) == ("renamed", written)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_data", "expected_routes"),
+    [(GenerateKeyRequest(), []), (GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API), ["llm_api_routes"])],
+    ids=["no_key_type", "ai_apis"],
+)
+async def test_default_key_generate_params_allowed_routes_with_a_non_string_entry_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, request_data: GenerateKeyRequest, expected_routes: list[str]
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", 123]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(request_data, mock_insert_data)
+
+    assert (key_row.get("allowed_routes") or []) == expected_routes
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_empty_list_treated_as_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(allowed_routes=[]),
+        mock_insert_data,
+    )
+
+    assert key_row["allowed_routes"] == ["llm_api_routes", "/key/spend/report"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_ignores_a_string_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "default_key_generate_params", {"allowed_routes": "llm_api_routes"})
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(GenerateKeyRequest(), mock_insert_data)
+
+    assert not key_row.get("allowed_routes")
+
+
+@pytest.mark.asyncio
 async def test_key_generate_explicit_null_budget_duration_beats_default_key_generate_params(monkeypatch):
     """An explicit `"budget_duration": null` asks for a budget that never resets.
 
@@ -22645,6 +22924,29 @@ async def test_team_admin_creates_an_llm_api_key_owned_by_an_internal_user_teamm
     saved: Final = generate_key.await_args.kwargs
     assert (saved["user_id"], saved["team_id"]) == ("member-1", "team-1")
     assert (saved["key_type"], saved["allowed_routes"]) == ("llm_api", ["llm_api_routes"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "default_key_generate_params",
+    [None, {"allowed_routes": ["/chat/completions"]}],
+    ids=["default_off", "default_without_llm_api_routes"],
+)
+async def test_custom_key_policy_sees_the_routes_a_member_key_is_saved_with(
+    monkeypatch: pytest.MonkeyPatch, default_key_generate_params: dict[str, list[str]] | None
+) -> None:
+    monkeypatch.setattr(litellm, "default_key_generate_params", default_key_generate_params)
+    policy: Final = AsyncMock(return_value={"decision": True})
+    generate_key: Final = AsyncMock(return_value={"key": "sk-member", "user_id": "member-1", "team_id": "team-1"})
+
+    with patch("litellm.proxy.proxy_server.user_custom_key_policy", policy):  # test-quality-ok: inject policy hook
+        await _team_admin_generates_member_key(
+            AsyncMock(return_value=MagicMock(user_role=LitellmUserRoles.INTERNAL_USER.value)), generate_key
+        )
+
+    policy_request: Final = policy.await_args.args[0]
+    assert policy_request.effective_key.allowed_routes == ["llm_api_routes"]
+    assert policy_request.effective_key.allowed_routes == generate_key.await_args.kwargs["allowed_routes"]
 
 
 @pytest.mark.asyncio

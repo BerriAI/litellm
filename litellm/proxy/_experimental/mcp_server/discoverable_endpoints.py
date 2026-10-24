@@ -701,7 +701,7 @@ async def _store_per_user_token_server_side(
         expires_in = None
 
     refresh_token: Final[str | None] = token_response.get("refresh_token") or None
-    raw_scope: Final[object] = token_response.get("scope", requested_scope)
+    raw_scope: Final[object] = _DECODED_JSON.validate_python(token_response.get("scope", requested_scope))
     scopes: Final[list[str] | None] = raw_scope.split() if isinstance(raw_scope, str) else None
 
     try:

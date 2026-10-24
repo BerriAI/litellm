@@ -39,9 +39,11 @@ from litellm.constants import (
 from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
+_DECODED_JSON: Final = TypeAdapter(object)
 _BUNDLED_CATALOG_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 
@@ -313,7 +315,7 @@ def _classify_fetch_error(error: httpx.HTTPError | httpx.InvalidURL, url: str) -
 
 def _classify_fetch_content(content: bytes, url: str, etag: str | None) -> _FetchAttemptOutcome:
     try:
-        parsed: Final[object] = json.loads(content)
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(content))
     except ValueError as e:
         return ModelCostMapReloadUnavailable(reason=f"invalid JSON from {url}: {e}")
     if not isinstance(parsed, dict):
@@ -382,7 +384,8 @@ def _classify_fetch_response(response: httpx.Response, url: str) -> _FetchAttemp
         )
     if response.is_error:
         return ModelCostMapReloadUnavailable(reason=f"HTTP {response.status_code} from {url}")
-    return _classify_fetch_content(response.content, url, response.headers.get("etag"))
+    etag_values: Final = response.headers.get_list("etag")
+    return _classify_fetch_content(response.content, url, ", ".join(etag_values) if etag_values else None)
 
 
 def _next_retry_wait(
@@ -456,7 +459,7 @@ async def refetch_model_cost_map(
     on failure it returns ``ModelCostMapReloadUnavailable`` so callers keep the
     map they already have.
     """
-    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
+    if is_offline_mode() or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
         _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
         _cost_map_source_info.source = "local"
         _cost_map_source_info.url = None
@@ -558,11 +561,14 @@ def get_model_cost_map_loaded_at() -> "datetime | None":
 
 
 class AliasedCostEntry(dict[str, object]):
-    __slots__ = ("names",)
+    __slots__ = ("names", "registered_fields")
 
-    def __init__(self, entry: Mapping[str, object], names: tuple[str, ...]) -> None:
+    def __init__(
+        self, entry: Mapping[str, object], names: tuple[str, ...], registered_fields: frozenset[str] = frozenset()
+    ) -> None:
         super().__init__(entry)
         self.names: tuple[str, ...] = names
+        self.registered_fields: frozenset[str] = registered_fields
 
 
 def _alias_groups(alias_owners: Mapping[str, str]) -> Mapping[str, tuple[str, ...]]:
@@ -737,7 +743,7 @@ def get_model_cost_map(
     _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
-    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process():
+    if is_offline_mode() or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process():
         _cost_map_source_info.source = "local"
         _cost_map_source_info.url = None
         _cost_map_source_info.is_env_forced = True

@@ -287,7 +287,7 @@ For MCP OAuth, an upstream may advertise dynamic client registration but refuse 
 </details>
 
 <details>
-<summary><b>Agents</b> - Run Claude Code, Codex, OpenCode or Deep Agents on any model (Python SDK)</summary>
+<summary><b>Agents</b> - Run Claude Code, Codex, OpenCode, pi or Deep Agents on any model (Python SDK)</summary>
 
 ### Python SDK - Agents
 
@@ -296,7 +296,7 @@ import litellm
 from litellm import Harness, sandbox
 
 result = litellm.agent(
-    Harness.CLAUDE_CODE,  # or Harness.CODEX, Harness.OPENCODE, Harness.DEEPAGENTS
+    Harness.CLAUDE_CODE,  # or Harness.CODEX, Harness.OPENCODE, Harness.PI, Harness.DEEPAGENTS
     "Find why tests/test_router.py is flaky and fix it.",
     sandbox=sandbox.local("./repo"),
     model="litellm_proxy/claude-sonnet-4-5",  # a model group on your AI Gateway
@@ -305,7 +305,7 @@ result = litellm.agent(
 print(result.text, result.cost, [f.path for f in result.files])
 ```
 
-Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call the agent makes goes through your AI Gateway, tagged `harness,claude_code`. Drop the `litellm_proxy/` prefix to call a provider directly. Install `starlette uvicorn` plus the agent's CLI (`claude`, `codex` or `opencode`), or `deepagents langchain-litellm` for Deep Agents.
+Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call the agent makes goes through your AI Gateway, tagged `harness,claude_code`. Drop the `litellm_proxy/` prefix to call a provider directly. Install `starlette uvicorn` plus the agent's CLI (`claude`, `codex`, `opencode` or `pi`), or `deepagents langchain-litellm` for Deep Agents.
 
 [**Docs: Agent Harnesses**](https://docs.litellm.ai/docs/harness)
 
@@ -616,15 +616,15 @@ The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws
 
 ### Verify Docker Image Signatures
 
-All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Every release is signed with the same key introduced in [commit `0112e53`](https://github.com/BerriAI/litellm/commit/0112e53046018d726492c814b3644b7d376029d0).
+All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Releases are signed with the key introduced in [commit `e82a3c6`](https://github.com/BerriAI/litellm/commit/e82a3c646908ba0a6ee0beddc4310d7a6cac4065).
 
 **Verify using the pinned commit hash (recommended):**
 
-A commit hash is cryptographically immutable, so this is the strongest way to ensure you are using the original signing key:
+A commit hash is cryptographically immutable, so this is the strongest way to ensure you are using the published signing key:
 
 ```bash
 cosign verify \
-  --key https://raw.githubusercontent.com/BerriAI/litellm/0112e53046018d726492c814b3644b7d376029d0/cosign.pub \
+  --key https://raw.githubusercontent.com/BerriAI/litellm/e82a3c646908ba0a6ee0beddc4310d7a6cac4065/cosign.pub \
   ghcr.io/berriai/litellm:<release-tag>
 ```
 
