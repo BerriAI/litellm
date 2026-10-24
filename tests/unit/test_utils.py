@@ -132,6 +132,23 @@ def test_get_base_model_from_metadata_ignores_a_non_string_root_value(root_base_
     )
 
 
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    (
+        ((("retry-after", "inf"),), -1.0),
+        ((("retry-after", "nan"),), -1.0),
+        ((("retry-after-ms", "inf"),), -1.0),
+        ((("retry-after-ms", "nan"), ("retry-after", "2")), 2.0),
+        ((("retry-after-ms", "1e309"), ("retry-after", "2")), 2.0),
+        ((("retry-after-ms", "1500"),), 1.5),
+    ),
+)
+def test_retry_after_parser_rejects_nonfinite_values(headers: tuple[tuple[str, str], ...], expected: float) -> None:
+    from litellm.utils import _get_retry_after_from_exception_header
+
+    assert _get_retry_after_from_exception_header(httpx.Headers(dict(headers))) == expected
+
+
 def _reject_short_post_call_response(input: str, model: str | None = None) -> dict[str, object]:
     if len(input) < 200:
         return {
