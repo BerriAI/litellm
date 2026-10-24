@@ -1,8 +1,11 @@
 use std::error::Error as StdError;
 
 use litellm_db::{EndUser, RateLimits, find_end_user};
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use sqlx::{PgPool, Postgres, Transaction};
+
+mod common;
+use common::database_pool;
 
 #[derive(Clone, Copy)]
 struct BudgetFixture {
@@ -10,14 +13,6 @@ struct BudgetFixture {
     max_budget: f64,
     rpm_limit: i64,
     tpm_limit: i64,
-}
-
-#[fixture]
-async fn database_pool() -> Result<Option<PgPool>, sqlx::Error> {
-    let Ok(database_url) = std::env::var("DATABASE_URL") else {
-        return Ok(None);
-    };
-    PgPool::connect(&database_url).await.map(Some)
 }
 
 async fn insert_budget(
