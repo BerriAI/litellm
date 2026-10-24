@@ -5203,6 +5203,54 @@ async def test_centralized_common_checks_enforces_team_model_max_budget_from_the
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings, expected_grants",
+    [
+        ({"model_access_group_deny_by_default": True}, frozenset({"group-x"})),
+        ({"model_access_group_deny_by_default": "true"}, frozenset({"group-x"})),
+        ({"model_access_group_deny_by_default": "not-a-bool"}, frozenset({"group-x"})),
+        ({"model_access_group_deny_by_default": False}, None),
+        ({}, None),
+    ],
+    ids=["deny-by-default", "quoted-true", "invalid-value-fails-closed", "setting-false", "setting-absent"],
+)
+async def test_centralized_common_checks_stamps_the_team_model_access_group_grants_on_the_token(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: Mapping[str, object],
+    expected_grants: frozenset[str] | None,
+) -> None:
+    from starlette.datastructures import URL
+
+    from litellm.proxy import proxy_server
+
+    token: Final = UserAPIKeyAuth(token="k1", team_id="t1", models=["key-model"])
+    request: Final = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    user_api_key_cache: Final = UserApiKeyCache()
+    await user_api_key_cache.async_set_cache(
+        key="team_id:t1",
+        value=LiteLLM_TeamTableCachedObj(team_id="t1", models=["group-x", "*"]),
+        model_type=LiteLLM_TeamTableCachedObj,
+    )
+    for name, value in {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": user_api_key_cache,
+        "general_settings": general_settings,
+    }.items():
+        monkeypatch.setattr(proxy_server, name, value)
+
+    await run_centralized_common_checks(
+        user_api_key_auth_obj=token,
+        request=request,
+        request_data={"model": "group-x"},
+        route="/chat/completions",
+    )
+
+    assert token.model_access_group_grants == expected_grants
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_loads_member_budget_and_exempts_discovery_routes():
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter

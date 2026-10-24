@@ -159,6 +159,7 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
+from litellm.router_utils.model_access_group_grants import explicit_model_grants
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
@@ -5924,6 +5925,140 @@ def personal_key_team_model_access_applies(valid_token: UserAPIKeyAuth | None) -
         and valid_token.user_id is not None
         and valid_token.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS
         and valid_token.user_role != LitellmUserRoles.PROXY_ADMIN
+    )
+
+
+_MODEL_NAMES: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
+
+
+def model_access_group_deny_by_default(general_settings: Mapping[str, object]) -> bool:
+    """
+    Startup rejects a non-boolean value from the config file. A non-boolean value that reaches
+    general_settings another way enables the policy, so only access-group models are denied.
+    """
+    try:
+        return ConfigGeneralSettings.model_validate(
+            MappingProxyType(
+                {
+                    "model_access_group_deny_by_default": general_settings.get(
+                        "model_access_group_deny_by_default", False
+                    )
+                }
+            )
+        ).model_access_group_deny_by_default
+    except ValidationError:
+        return True
+
+
+async def model_access_group_grants(
+    deny_by_default: bool,
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    user_object: LiteLLM_UserTable | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> frozenset[str] | None:
+    """
+    The names that reach a model access group's deployments under general_settings.model_access_group_deny_by_default:
+    the team's grant for a team key, the owner teams' for a personal key that takes its models from them, the user's
+    for any other personal key, and the key's own otherwise, plus the key's unified access groups. None when the
+    setting is off or the caller is the master key, a dashboard session or a proxy admin
+    """
+    if (
+        not deny_by_default
+        or not _is_strict_grant_identity(valid_token)
+        or valid_token.user_role == LitellmUserRoles.PROXY_ADMIN
+    ):
+        return None
+    owner_models: Final = await _model_access_group_owner_models(
+        valid_token=valid_token,
+        team_object=team_object,
+        user_object=user_object,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    key_group_models: Final = await _access_group_model_names(
+        access_group_ids=valid_token.access_group_ids,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    return explicit_model_grants((*owner_models, *key_group_models))
+
+
+async def _model_access_group_owner_models(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    user_object: LiteLLM_UserTable | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[str, ...]:
+    if valid_token.team_id is not None:
+        if team_object is None:
+            return _MODEL_NAMES.validate_python(valid_token.team_models)
+        return await _team_model_grants(team_object, prisma_client, user_api_key_cache, proxy_logging_obj)
+    if personal_key_team_model_access_applies(valid_token):
+        teams: Final = (
+            await _load_personal_key_teams(
+                user_object=user_object,
+                valid_token=valid_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if user_object is not None
+            else ()
+        )
+        team_grants: Final = await asyncio.gather(
+            *(
+                _team_model_grants(team, prisma_client, user_api_key_cache, proxy_logging_obj)
+                for team in teams
+                if team is not None
+            )
+        )
+        return tuple(chain.from_iterable(team_grants))
+    if valid_token.user_id is not None and user_object is not None:
+        from litellm.proxy.auth.resolvers.grants import user_models
+
+        return user_models(user_object)
+    return tuple(_resolve_key_models_for_auth_check(valid_token=valid_token))
+
+
+async def _team_model_grants(
+    team_object: LiteLLM_TeamTable,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[str, ...]:
+    return (
+        *_MODEL_NAMES.validate_python(team_object.models),
+        *await _access_group_model_names(
+            access_group_ids=team_object.access_group_ids,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        ),
+    )
+
+
+async def _access_group_model_names(
+    access_group_ids: Sequence[str] | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[str, ...]:
+    if not access_group_ids:
+        return ()
+    return tuple(
+        await get_models_from_access_groups(
+            access_group_ids=access_group_ids,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
     )
 
 
