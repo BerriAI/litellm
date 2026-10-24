@@ -9496,11 +9496,12 @@ class ProviderConfigManager:
         api_base: str | None,
         present_version_params: list[str],
     ) -> BaseRerankConfig:
-        if litellm.LlmProviders.COHERE == provider or litellm.LlmProviders.COHERE_CHAT == provider:
-            if should_use_cohere_v1_client(api_base, present_version_params):
-                return litellm.CohereRerankConfig()
-            else:
-                return litellm.CohereRerankV2Config()
+        if provider in (litellm.LlmProviders.COHERE, litellm.LlmProviders.COHERE_CHAT):
+            return (
+                litellm.CohereRerankConfig()
+                if should_use_cohere_v1_client(api_base, present_version_params)
+                else litellm.CohereRerankV2Config()
+            )
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIRerankConfig()
         elif litellm.LlmProviders.INFINITY == provider:
@@ -9541,6 +9542,8 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_family_rerank_config(provider.value)
+        elif litellm.LlmProviders.OPENROUTER == provider:
+            return litellm.OpenRouterRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
