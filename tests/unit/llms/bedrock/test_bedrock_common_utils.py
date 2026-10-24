@@ -6,7 +6,9 @@ from typing import Final
 from litellm.llms.bedrock.common_utils import(
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
+    NativeOutputFallback,
     bedrock_native_output_is_opt_in,
+    bedrock_strict_tools_fallback,
     deployment_model_info,
     extract_model_name_from_bedrock_arn,
     get_bedrock_base_model,
@@ -2150,3 +2152,49 @@ def test_bedrock_response_stream_shape_is_unavailable_when_botocore_describes_th
     assert shape is None
     (logged,) = warning.call_args_list
     assert "only-in-the-description" not in logged.args[0] % logged.args[1:]
+
+
+def test_bedrock_strict_tools_fallback_drops_only_strict_and_keeps_everything_else():
+    strict_tool: Final = {
+        "type": "function",
+        "cache_control": {"type": "ephemeral"},
+        "function": {"name": "lookup", "description": "Look up", "strict": True, "parameters": {"type": "object"}},
+    }
+    plain_tool: Final = {"type": "function", "function": {"name": "plain", "parameters": {"type": "object"}}}
+    anthropic_tool: Final = {"name": "native", "input_schema": {"type": "object"}}
+    bedrock_tool: Final = {"toolSpec": {"name": "spec", "strict": True, "inputSchema": {"json": {"type": "object"}}}}
+    litellm_params: Final = {"drop_params": True}
+
+    fallback: Final = bedrock_strict_tools_fallback(
+        {"tools": [strict_tool, plain_tool, anthropic_tool, bedrock_tool], "maxTokens": 16, "stream": True},
+        litellm_params,
+    )
+
+    assert fallback == NativeOutputFallback(
+        optional_params={
+            "tools": [
+                {**strict_tool, "function": {"name": "lookup", "description": "Look up", "parameters": {"type": "object"}}},
+                plain_tool,
+                anthropic_tool,
+                {"toolSpec": {"name": "spec", "inputSchema": {"json": {"type": "object"}}}},
+            ],
+            "maxTokens": 16,
+            "stream": True,
+        },
+        litellm_params=litellm_params,
+    )
+    assert strict_tool["function"]["strict"] is True
+    assert bedrock_tool["toolSpec"]["strict"] is True
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [
+        {"maxTokens": 16},
+        {"tools": [{"type": "function", "function": {"name": "plain", "parameters": {}}}]},
+        {"tools": [{"toolSpec": {"name": "spec", "inputSchema": {"json": {}}}}]},
+    ],
+    ids=["no_tools", "no_strict_tool", "no_strict_tool_spec"],
+)
+def test_bedrock_strict_tools_fallback_is_none_without_a_strict_tool(optional_params):
+    assert bedrock_strict_tools_fallback(optional_params, {}) is None

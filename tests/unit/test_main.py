@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -9950,3 +9950,100 @@ async def test_converse_fallback_prices_the_current_attempt(
     else:
         client.close()
     configuration.reset_rust_configuration()
+
+
+_STRICT_LOOKUP_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "lookup_record",
+        "description": "Look up a record",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+}
+# Bedrock's 400 for a request past Claude's strict tool limits, seen live on us.anthropic.claude-sonnet-4-6 on 2026-10-20
+_TOO_MANY_STRICT_TOOLS: Final = (
+    "The model returned the following errors: Too many strict tools (21). The maximum number of strict tools "
+    "supported is 20. Try reducing the number of tools marked as strict."
+)
+
+
+async def _converse_with_a_strict_tools_limit_rejection_first(
+    asynchronous: bool,
+    stream: Literal["off", "fake", "real"],
+    drop_params: bool | None,
+) -> tuple[tuple[tuple[str, dict[str, object]], ...], litellm.BadRequestError | None]:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from tests.unit.llms.bedrock.slow_upstream import CONVERSE_ANSWER
+
+    sent: Final[list[tuple[str, dict[str, object]]]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append((request.url.path.rsplit("/", 1)[-1], json.loads(request.content)))
+        if len(sent) == 1:
+            return httpx.Response(400, json={"message": _TOO_MANY_STRICT_TOOLS})
+        return httpx.Response(200, content=b"" if stream == "real" else CONVERSE_ANSWER)
+
+    kwargs: Final = {
+        "model": "bedrock/us.anthropic.claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "Find invoice 42"}],
+        "tools": [_STRICT_LOOKUP_TOOL],
+        "aws_access_key_id": "AKIASTRICTTOOLS",
+        "aws_secret_access_key": "strict-tools-secret",
+        "aws_region_name": "us-east-1",
+        "num_retries": 0,
+        "drop_params": drop_params,
+        "stream": stream != "off",
+        "fake_stream": stream == "fake",
+    }
+    try:
+        if asynchronous:
+            response = await litellm.acompletion(
+                client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)), **kwargs
+            )
+            chunks = [chunk async for chunk in response] if stream == "fake" else [response]
+        else:
+            response = litellm.completion(
+                client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))), **kwargs
+            )
+            chunks = list(response) if stream == "fake" else [response]
+    except litellm.BadRequestError as error:
+        return tuple(sent), error
+    assert chunks
+    return tuple(sent), None
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("stream", ["off", "fake", "real"], ids=["completion", "fake_stream", "stream"])
+async def test_bedrock_strict_tools_limit_rejection_is_sent_again_without_strict_under_drop_params(
+    asynchronous: bool, stream: Literal["off", "fake", "real"], local_model_cost_map: None
+) -> None:
+    sent, error = await _converse_with_a_strict_tools_limit_rejection_first(asynchronous, stream, drop_params=True)
+
+    assert error is None
+    (first_path, first_body), (second_path, second_body) = sent
+    first_tool_spec: Final = first_body["toolConfig"]["tools"][0]["toolSpec"]
+    assert first_tool_spec["strict"] is True
+    assert first_path == second_path == ("converse-stream" if stream == "real" else "converse")
+    assert second_body == {
+        **first_body,
+        "toolConfig": {
+            **first_body["toolConfig"],
+            "tools": [{"toolSpec": {key: value for key, value in first_tool_spec.items() if key != "strict"}}],
+        },
+    }
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_bedrock_strict_tools_limit_rejection_reaches_the_caller_without_drop_params(
+    asynchronous: bool, local_model_cost_map: None
+) -> None:
+    sent, error = await _converse_with_a_strict_tools_limit_rejection_first(asynchronous, stream="off", drop_params=None)
+
+    assert error is not None and "Too many strict tools" in str(error)
+    assert len(sent) == 1

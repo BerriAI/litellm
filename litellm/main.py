@@ -123,6 +123,7 @@ from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
     bedrock_route_for_request,
+    bedrock_strict_tools_fallback,
     deployment_model_info,
     without_bedrock_native_output_opt_in,
     without_bedrock_route_prefix,
@@ -206,7 +207,12 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
-from .litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, safe_deep_copy
+from .litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    drops_unsupported_params,
+    normalize_drop_params,
+    safe_deep_copy,
+)
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
@@ -4347,6 +4353,11 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
                 else None
             ),
             converse_model,
+            strict_tools_fallback=(
+                partial(bedrock_strict_tools_fallback, converse_params, dict(litellm_params))
+                if drops_unsupported_params(litellm_params.get("drop_params"))
+                else None
+            ),
         )
     elif bedrock_route == "converse_like":
         model = model.replace("converse_like/", "")
