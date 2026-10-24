@@ -10,6 +10,7 @@ from litellm.caching.affinity_cache import claim_affinity_pin
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
+from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -771,3 +772,191 @@ def test_complexity_router_with_deployment_affinity_registers_affinity_callback(
         _cleanup_router_callbacks(enabled)
         _cleanup_router_callbacks(session_only)
         _cleanup_router_callbacks(disabled)
+
+
+def _saturate_deployment(cache: DualCache, model_id: str, model_group: str, max_parallel_requests: int) -> None:
+    limit: Final = MaxParallelRequestsLimit(
+        max_parallel_requests=max_parallel_requests,
+        model_id=model_id,
+        model_group=model_group,
+    )
+    for _ in range(max_parallel_requests):
+        limit.acquire()
+    cache.set_cache(key=f"{model_id}_max_parallel_requests_client", value=limit, local_only=True)
+
+
+@pytest.mark.asyncio
+async def test_session_affinity_yield_saturated_pin_routes_to_idle_deployment():
+    """A session pin yields when its deployment is at max_parallel_requests and a sibling has room.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/45868.
+    """
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+        enable_session_affinity_yield_on_saturated_deployment=True,
+    )
+    deployments: Final = [
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-a"},
+            "model_info": {"id": "dep-a"},
+        },
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-b"},
+            "model_info": {"id": "dep-b"},
+        },
+    ]
+    session_kwargs: Final = {"metadata": {"session_id": "s1"}}
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-b"})
+
+    _saturate_deployment(cache, model_id="dep-b", model_group="group", max_parallel_requests=3)
+
+    filtered: Final = await callback.async_filter_deployments(
+        model="group",
+        healthy_deployments=deployments,
+        messages=[],
+        request_kwargs=session_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered] == ["dep-a"], (
+        "with dep-b saturated the turn must yield to the idle sibling instead of queueing or 429ing behind the pin"
+    )
+    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-b"}, (
+        "the pin stays on dep-b, so the session returns to its warm deployment once it frees up"
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_affinity_yield_keeps_todays_behavior_when_all_saturated_or_disabled():
+    """Yielding only happens when another deployment actually has capacity.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/45868.
+    """
+    deployments: Final = [
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-a"},
+            "model_info": {"id": "dep-a"},
+        },
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-b"},
+            "model_info": {"id": "dep-b"},
+        },
+    ]
+    session_kwargs: Final = {"metadata": {"session_id": "s1"}}
+
+    cache_all_full: Final = DualCache()
+    callback_yield: Final = DeploymentAffinityCheck(
+        cache=cache_all_full,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+        enable_session_affinity_yield_on_saturated_deployment=True,
+    )
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+    await cache_all_full.async_set_cache(session_cache_key, {"model_id": "dep-b"})
+    _saturate_deployment(cache_all_full, model_id="dep-a", model_group="group", max_parallel_requests=3)
+    _saturate_deployment(cache_all_full, model_id="dep-b", model_group="group", max_parallel_requests=3)
+
+    filtered_all_full: Final = await callback_yield.async_filter_deployments(
+        model="group",
+        healthy_deployments=deployments,
+        messages=[],
+        request_kwargs=session_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered_all_full] == ["dep-b"], (
+        "with every deployment full the turn must stay behind the pin, exactly like today"
+    )
+
+    cache_yield_off: Final = DualCache()
+    callback_off: Final = DeploymentAffinityCheck(
+        cache=cache_yield_off,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    await cache_yield_off.async_set_cache(session_cache_key, {"model_id": "dep-b"})
+    _saturate_deployment(cache_yield_off, model_id="dep-b", model_group="group", max_parallel_requests=3)
+
+    filtered_off: Final = await callback_off.async_filter_deployments(
+        model="group",
+        healthy_deployments=deployments,
+        messages=[],
+        request_kwargs=session_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered_off] == ["dep-b"], (
+        "with the setting off a saturated pin must keep narrowing to it, exactly like today"
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_affinity_yield_keeps_pin_when_pinned_deployment_has_capacity():
+    """No yield when the pinned deployment still has max_parallel_requests room.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/45868.
+    """
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+        enable_session_affinity_yield_on_saturated_deployment=True,
+    )
+    deployments: Final = [
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-a"},
+            "model_info": {"id": "dep-a"},
+        },
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-b"},
+            "model_info": {"id": "dep-b"},
+        },
+    ]
+    session_kwargs: Final = {"metadata": {"session_id": "s1"}}
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-b"})
+
+    filtered: Final = await callback.async_filter_deployments(
+        model="group",
+        healthy_deployments=deployments,
+        messages=[],
+        request_kwargs=session_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered] == ["dep-b"], (
+        "with room on the pinned deployment the session must stay pinned, no yield"
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_affinity_yield_fails_open_when_capacity_probe_errors():
+    """A cache failure during the capacity probe must never break routing.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/45868.
+    """
+
+    class _FailingCache(DualCache):
+        async def async_get_cache(self, key: str, **kwargs: object) -> object:
+            raise RuntimeError("cache is down")
+
+    callback: Final = DeploymentAffinityCheck(
+        cache=_FailingCache(),
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+        enable_session_affinity_yield_on_saturated_deployment=True,
+    )
+    assert await callback._deployment_has_capacity("dep-a") is True
