@@ -9567,6 +9567,8 @@ class TestPerRequestModelGroupAlias:
             ({"group-a": {"hidden": True}}, None),
             ({}, None),
             (None, None),
+            ({"group-a": "middle-alias", "middle-alias": {"model": "group-b", "hidden": True}}, "group-b"),
+            ({"group-a": "middle-alias", "middle-alias": "group-a"}, None),
         ],
     )
     async def test_resolves_alias_for_the_requested_model_group(self, alias_map, expected):
@@ -9580,13 +9582,20 @@ class TestPerRequestModelGroupAlias:
         assert resolved == expected
 
     @pytest.mark.asyncio
-    async def test_alias_target_outside_the_key_allowlist_is_rejected(self):
+    @pytest.mark.parametrize(
+        "aliases",
+        (
+            {"group-a": "group-b"},
+            {"group-a": "middle-alias", "middle-alias": "group-b"},
+        ),
+    )
+    async def test_alias_target_outside_the_key_allowlist_is_rejected(self, aliases: Mapping[str, str]) -> None:
         """Access was authorized against the requested group, so a rewrite that
         the key could not have requested directly must not be served."""
         with pytest.raises(ProxyException) as exc_info:
             await _resolve_per_request_model_group_alias(
                 requested_model="group-a",
-                router_settings={"model_group_alias": {"group-a": "group-b"}},
+                router_settings={"model_group_alias": aliases},
                 user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=["group-a"]),
                 llm_router=self._router(),
             )

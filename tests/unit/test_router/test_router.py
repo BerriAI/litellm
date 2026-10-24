@@ -2598,9 +2598,6 @@ def _assert_free(info: ModelGroupInfo | None, provider: str) -> None:
 
 
 def test_get_model_group_info_prices_an_alias_chain_from_the_group_it_routes_to():
-    """chain-entry resolves one hop to local-free and is served by local-free's own
-    deployment, so its price is that deployment's; local-free's own alias to gpt-priced
-    is a hop the router takes only for a request to local-free by name."""
     router = Router(
         model_list=[
             _free_ollama_deployment("local-free"),
@@ -2609,14 +2606,11 @@ def test_get_model_group_info_prices_an_alias_chain_from_the_group_it_routes_to(
         model_group_alias={"chain-entry": "local-free", "local-free": "gpt-priced"},
     )
 
-    _assert_free(router.get_model_group_info(model_group="chain-entry"), "ollama")
+    _assert_priced(router.get_model_group_info(model_group="chain-entry"), "openai")
     _assert_priced(router.get_model_group_info(model_group="local-free"), "openai")
 
 
 def test_get_model_group_info_prices_an_alias_chain_from_the_wildcard_route_serving_it():
-    """When the routed group has no deployment of its own, the wildcard route matching it
-    serves the request, so the price is the wildcard's and never the routed group's own alias
-    target's."""
     router = Router(
         model_list=[
             _paid_openai_deployment("openai/*", "openai/*"),
@@ -2625,7 +2619,7 @@ def test_get_model_group_info_prices_an_alias_chain_from_the_wildcard_route_serv
         model_group_alias={"wildcard-entry": "openai/gpt-4o", "openai/gpt-4o": "local-free"},
     )
 
-    _assert_priced(router.get_model_group_info(model_group="wildcard-entry"), "openai")
+    _assert_free(router.get_model_group_info(model_group="wildcard-entry"), "ollama")
     _assert_free(router.get_model_group_info(model_group="openai/gpt-4o"), "ollama")
 
 
@@ -2634,9 +2628,6 @@ def _served_models(deployments: list[DeploymentTypedDict] | None) -> list[str]:
 
 
 def test_get_model_list_of_routed_group_reads_the_groups_own_deployments_only():
-    """The router resolves an alias once, so a group reached as an alias target is served by
-    its own deployments. get_model_list composes the group's own alias target too, the hop a
-    request to that group by name takes."""
     router = Router(
         model_list=[
             _free_ollama_deployment("local-free"),
@@ -27380,6 +27371,36 @@ def test_router_get_model_list_from_model_alias() -> None:
 
     model_alias_list = router.get_model_list_from_model_alias(model_name="gpt-3.5-turbo")
     assert len(model_alias_list) == 0
+
+
+@pytest.mark.parametrize("hidden", (False, True))
+@pytest.mark.parametrize("use_async", (False, True))
+async def test_chained_model_group_alias_selects_the_final_deployment(hidden: bool, use_async: bool) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "concrete-model",
+                "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": "sk-fake"},
+                "model_info": {"id": "concrete-deployment"},
+            }
+        ],
+        model_group_alias={
+            "public-alias": "middle-alias",
+            "middle-alias": {"model": "concrete-model", "hidden": hidden},
+        },
+    )
+
+    deployment: Final = (
+        await router.async_get_available_deployment(model="public-alias", messages=[], request_kwargs={})
+        if use_async
+        else router.get_available_deployment(model="public-alias", messages=[])
+    )
+
+    assert deployment["model_info"]["id"] == "concrete-deployment"
+    assert router.routable_model_group("public-alias") == "concrete-model"
+    assert _served_models(router.get_model_list(model_name="public-alias")) == ["openai/gpt-6.1-sol"]
+    assert "public-alias" in router.get_model_names()
+    assert ("middle-alias" in router.get_model_names()) is not hidden
 
 
 def test_router_dynamic_credentials() -> None:

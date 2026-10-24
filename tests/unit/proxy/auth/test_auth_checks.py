@@ -2020,10 +2020,6 @@ async def test_get_user_object_cache_miss_emits_exactly_one_postgres_get_user_ob
 def test_is_model_cost_zero_judges_an_alias_chain_by_the_deployment_its_entry_routes_to(
     monkeypatch: pytest.MonkeyPatch, entry_first: bool
 ) -> None:
-    """chain-entry resolves one hop to local-free and is served by local-free's own free
-    deployment, so an over-budget key is waived for it; local-free by name resolves to paid-gpt
-    and stays enforced. local-free's alias is a hop the router never takes for chain-entry, and
-    the per-name verdict cache must not let either name's verdict leak into the other's."""
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     router: Final = litellm.Router(
         model_list=[
@@ -2048,7 +2044,7 @@ def test_is_model_cost_zero_judges_an_alias_chain_by_the_deployment_its_entry_ro
         ],
         model_group_alias={"chain-entry": "local-free", "local-free": "paid-gpt"},
     )
-    expected: Final = {"chain-entry": True, "local-free": False, "paid-gpt": False}
+    expected: Final = {"chain-entry": False, "local-free": False, "paid-gpt": False}
     order: Final = ("chain-entry", "local-free", "paid-gpt") if entry_first else ("local-free", "paid-gpt", "chain-entry")
 
     verdicts: Final = {name: is_model_cost_zero(model=name, llm_router=router) for name in order}

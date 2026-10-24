@@ -565,10 +565,26 @@ class TestResolveModelGroupAlias:
             ({"group-a": 5}, None),
             ({"group-a": None}, None),
             ({"group-a": ""}, None),
+            ({"group-a": "group-b", "group-b": "group-c"}, "group-c"),
+            (
+                {"group-a": {"model": "group-b"}, "group-b": {"model": "group-c", "hidden": True}},
+                "group-c",
+            ),
+            ({"group-a": "group-b", "group-b": {"hidden": True}}, "group-b"),
+            ({"group-a": "group-a"}, None),
+            ({"group-a": "group-b", "group-b": "group-a"}, None),
+            ({"group-a": "group-b", "group-b": "group-c", "group-c": "group-b"}, None),
         ],
     )
-    def test_resolves_both_entry_shapes_and_tolerates_malformed_entries(self, alias_map, expected):
+    def test_resolves_both_entry_shapes_and_tolerates_malformed_entries(
+        self, alias_map: object, expected: str | None
+    ) -> None:
         assert resolve_model_group_alias(alias_map, "group-a") == expected
+
+    def test_resolves_alias_chains_longer_than_the_python_recursion_limit(self) -> None:
+        aliases: Final = {f"group-{index}": f"group-{index + 1}" for index in range(1100)}
+
+        assert resolve_model_group_alias(aliases, "group-0") == "group-1100"
 
     def test_router_alias_resolution_uses_the_shared_helper(self):
         router = Router(
@@ -593,6 +609,7 @@ class TestResolveModelGroupAlias:
         pytest.param("a", {}, ["a", "b"], {}, "a", id="non-mapping-key-aliases-ignored"),
         pytest.param("a", {}, {}, {"a": {"model": "x"}}, "x", id="router-item-entry"),
         pytest.param("a", {}, {}, {}, "a", id="no-alias"),
+        pytest.param("a", {"a": "b"}, {"b": "c"}, {"c": "d", "d": "e"}, "e", id="router-alias-chain"),
     ],
 )
 def test_resolves_served_model_aliases_in_order(

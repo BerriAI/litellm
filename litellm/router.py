@@ -12631,14 +12631,10 @@ class Router:
         ## Check if model group alias
         if model_group in self.model_group_alias:
             item: Final = self.model_group_alias[model_group]
-            if isinstance(item, str):
-                _router_model_group = item
-            elif isinstance(item, dict):
-                if item["hidden"] is True and not include_hidden:
-                    return None
-                else:
-                    _router_model_group = item["model"]
-            else:
+            if isinstance(item, dict) and item.get("hidden") is True and not include_hidden:
+                return None
+            _router_model_group: Final = self.get_model_from_alias(model_group)
+            if _router_model_group is None:
                 return None
 
             return self._set_model_group_info(
@@ -13454,14 +13450,10 @@ class Router:
             alias_items = list(self.model_group_alias.items())
 
         for model_alias, model_value in alias_items:
-            if isinstance(model_value, str):
-                _router_model_name: str = model_value
-            elif isinstance(model_value, dict):
-                _model_value = RouterModelGroupAliasItem(**model_value)
-                if _model_value["hidden"] is True and model_name is None:
-                    continue
-                _router_model_name = _model_value["model"]
-            else:
+            if isinstance(model_value, dict) and model_value.get("hidden") is True and model_name is None:
+                continue
+            _router_model_name = self.get_model_from_alias(model_alias)
+            if _router_model_name is None:
                 continue
 
             if (alias_group := self.get_routing_group(_router_model_name)) is not None:
@@ -13725,9 +13717,7 @@ class Router:
         the wildcard route matching it when neither exists.
 
         Unlike get_model_list, model_group's own model_group_alias entry is not
-        followed. The router resolves an alias exactly once, so a group reached as
-        an alias target is served by its own deployments, never by a second hop:
-        in the chain X -> T -> U a request to X is served from T's deployments.
+        followed. The caller has already resolved the complete alias chain.
         """
         named: Final = [
             *self._get_all_deployments(model_name=model_group),
