@@ -332,6 +332,28 @@ def _may_carry_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
     return message.get("role") != "assistant"
 
 
+def _role_of(message: object) -> object:
+    """The ``role`` of a message dict, or None for anything else."""
+    if not isinstance(message, dict):
+        return None
+    return cast(dict[str, object], message).get("role")  # cast-ok: a runtime dict whose value types are not known here
+
+
+def _message_accepts_cache_control(message: object) -> bool:
+    """Whether a marker written on this message reaches the provider."""
+    if not isinstance(message, dict):
+        return False
+    fields: Final = cast(dict[str, object], message)  # cast-ok: a runtime dict whose value types are not known here
+    on_a_tool_message: Final = fields.get("role") == "tool"
+    content: Final = fields.get("content")
+    if isinstance(content, str):
+        return content != "" or on_a_tool_message
+    if isinstance(content, list):
+        blocks: Final = cast(Sequence[object], content)  # cast-ok: a runtime list whose block types are not known here
+        return _last_index_accepting_cache_control(blocks, on_a_tool_message) is not None
+    return False
+
+
 # Set by a caller whose message list is not the one that goes upstream -- today the
 # Responses API layer, whose `instructions` only becomes a system message further down.
 # Tells this hook to hand role-targeted points to the pass holding the final messages
@@ -342,18 +364,28 @@ EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
 
 
-def _accepts_cache_control(part: object) -> bool:
+def _accepts_cache_control(part: object, on_a_tool_message: bool) -> bool:
+    # A tool_reference is rebuilt from its type and tool_name alone by the tool_result
+    # conversion, and an empty text block is replaced by a placeholder unless it sits on
+    # a tool message, where it goes out inside the tool_result: a marker on either is lost.
     match part:
-        case {"type": "thinking" | "redacted_thinking"}:
+        case {"type": "thinking" | "redacted_thinking" | "tool_reference"}:
             return False
+        case {"type": "text", "text": str(text)} if text:
+            return True
+        case {"type": "text"}:
+            return on_a_tool_message
         case dict():
             return True
         case _:
             return False
 
 
-def _last_index_accepting_cache_control(parts: Sequence[object]) -> int | None:
-    return next((index for index in reversed(range(len(parts))) if _accepts_cache_control(parts[index])), None)
+def _last_index_accepting_cache_control(parts: Sequence[object], on_a_tool_message: bool) -> int | None:
+    return next(
+        (index for index in reversed(range(len(parts))) if _accepts_cache_control(parts[index], on_a_tool_message)),
+        None,
+    )
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -644,7 +676,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 type="ephemeral"
             )
 
-            for target_index in AnthropicCacheControlHook._resolve_target_indices(point=point, messages=messages):
+            for target_index in AnthropicCacheControlHook._resolve_target_indices(
+                point=point, messages=messages, answered_tool_ids=client_answers
+            ):
                 if used_blocks >= max_blocks:
                     limit_reached = True
                     break
@@ -672,8 +706,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _resolve_target_indices(
-        point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues]
-    ) -> list[int]:
+        point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues], answered_tool_ids: Container[str]
+    ) -> tuple[int, ...]:
         """Resolve which message indices an injection point targets."""
         _targetted_index: Final[int | str | None] = point.get("index", None)
         targetted_index: int | None = None
@@ -685,29 +719,36 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         else:
             targetted_index = _targetted_index
 
-        # Case 1: Target by specific index
-        if targetted_index is not None:
-            original_index: Final = targetted_index
-            if targetted_index < 0:
-                targetted_index += len(messages)
+        targetted_role: Final = point.get("role", None)
+        candidates: Final = tuple(
+            index
+            for index, message in enumerate(messages)
+            if targetted_role is None or _role_of(message) == targetted_role
+        )
+        free: Final = frozenset(
+            index
+            for index in candidates
+            if not AnthropicCacheControlHook._message_has_cache_control(messages[index], answered_tool_ids)
+            and _message_accepts_cache_control(messages[index])
+        )
 
-            if 0 <= targetted_index < len(messages):
-                return [targetted_index]
+        # Case 1: Target by role alone
+        if targetted_index is None:
+            return () if targetted_role is None else tuple(index for index in candidates if index in free)
 
+        # Case 2: Target by index, counted within the role the point named
+        position: Final = targetted_index + len(candidates) if targetted_index < 0 else targetted_index
+        if not 0 <= position < len(candidates):
             verbose_logger.warning(
                 "AnthropicCacheControlHook: Provided index %s is out of bounds for message list of length %s. Targeted index was %s. Skipping cache control injection for this point.",
-                original_index,
-                len(messages),
                 targetted_index,
+                len(candidates),
+                position,
             )
-            return []
+            return ()
 
-        # Case 2: Target by role
-        targetted_role: Final = point.get("role", None)
-        if targetted_role is not None:
-            return [idx for idx, msg in enumerate(messages) if msg.get("role") == targetted_role]
-
-        return []
+        landing: Final = next((candidates[step] for step in range(position, -1, -1) if candidates[step] in free), None)
+        return () if landing is None else (landing,)
 
     @staticmethod
     def _count_cache_control_blocks(message: object, answered_tool_ids: Container[str] = frozenset()) -> int:
@@ -756,7 +797,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             message["cache_control"] = control
         # 2. list of objects - only apply to the last item Claude accepts a breakpoint on
         elif isinstance(message_content, list):
-            markable_index: Final = _last_index_accepting_cache_control(message_content)
+            markable_index: Final = _last_index_accepting_cache_control(
+                message_content, on_a_tool_message=_role_of(message) == "tool"
+            )
             if markable_index is not None:
                 message_content[markable_index]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
         return message
