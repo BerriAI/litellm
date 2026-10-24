@@ -41,7 +41,11 @@ from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
-from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
+from litellm.litellm_core_utils.internal_call_metadata import (
+    is_background_response,
+    requests_background,
+    without_budget_reservation,
+)
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
@@ -65,7 +69,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamingResponse,
 )
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, ModelResponse
 from litellm.utils import async_post_call_success_deployment_hook
 
 if TYPE_CHECKING:
@@ -287,7 +291,7 @@ def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
     return _status_code_for_error_fields(error_type, error_code), message
 
 
-def _map_stream_error_to_exception(
+def map_stream_error_to_exception(
     error_obj: object,
     model: str,
     custom_llm_provider: str,
@@ -572,6 +576,7 @@ class BaseResponsesAPIStreamingIterator:
                                     self.request_data.get("input"),
                                     self.request_data,
                                     self._generated_content + self._generated_tool_arguments,
+                                    use_default_image_token_count=False,
                                 )
                                 if _estimate_wanted
                                 else None
@@ -725,7 +730,7 @@ class BaseResponsesAPIStreamingIterator:
         self._earlier_rounds_spend = earlier
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
-        return _map_stream_error_to_exception(
+        return map_stream_error_to_exception(
             error_obj,
             self.model or "",
             self.custom_llm_provider or "",
@@ -975,6 +980,38 @@ class BaseResponsesAPIStreamingIterator:
         except Exception:
             pass
 
+    def _record_partial_usage_for_failure(self) -> None:
+        generated_text: Final = self._generated_content + self._generated_tool_arguments
+        if (
+            not generated_text
+            or requests_background(self.request_data)
+            or is_background_response(self._created_response)
+            or self.logging_obj.model_call_details.get("combined_usage_object") is not None
+        ):
+            return
+        estimate: Final = _estimate_usage_safely(
+            self.model or "",
+            self.request_data.get("input"),
+            self.request_data,
+            generated_text,
+            use_default_image_token_count=True,
+        )
+        if estimate is None:
+            return
+        usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the success path above uses
+            estimate
+        )
+        served_tier: Final[object] = getattr(self._created_response, "service_tier", None)
+        assembled: Final = ModelResponse(
+            model=self.model, usage=usage, service_tier=served_tier if isinstance(served_tier, str) else None
+        )
+        if self._earlier_rounds_spend is None:
+            self.logging_obj.record_assembled_response_for_failure(assembled)
+            return
+        self.logging_obj.record_failure_after_earlier_rounds(
+            self._earlier_rounds_spend, usage, self.logging_obj.response_cost_calculator(result=assembled) or 0.0
+        )
+
     def _handle_failure(self, exception: Exception):
         """
         Trigger failure handlers before bubbling the exception.
@@ -984,6 +1021,7 @@ class BaseResponsesAPIStreamingIterator:
         if self._failure_handled:
             return
         self._failure_handled = True
+        self._record_partial_usage_for_failure()
 
         traceback_exception: Final = traceback.format_exc()
         end_time: Final = datetime.now()
@@ -1049,15 +1087,20 @@ class BaseResponsesAPIStreamingIterator:
         the same shape the success handler assembles for a natural end of stream.
         Its response is the response.created payload (it carries the served
         service_tier) plus the text and tool arguments relayed so far, with counted
-        usage since the provider never sent any. None when nothing was relayed yet
-        or the stream already reached its terminal event and billed itself.
+        usage since the provider never sent any. None when nothing was relayed yet,
+        the stream already reached its terminal event and billed itself, or its failure
+        log already billed the relayed output.
         """
         created: Final = self._created_response
         generated: Final = self._generated_content + self._generated_tool_arguments
-        if self.completed_response is not None or created is None or not generated:
+        if created is None or not generated or self._billed_without_disconnect():
             return None
         usage: Final = _estimate_usage_safely(
-            self.model or "", self.request_data.get("input"), self.request_data, generated
+            self.model or "",
+            self.request_data.get("input"),
+            self.request_data,
+            generated,
+            use_default_image_token_count=False,
         )
         if usage is None:
             return None
@@ -1070,6 +1113,9 @@ class BaseResponsesAPIStreamingIterator:
         )
         stamp_responses_usage_cost(partial, self.logging_obj)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
+
+    def _billed_without_disconnect(self) -> bool:
+        return self.completed_response is not None or self._failure_handled
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
@@ -1703,6 +1749,8 @@ def _estimate_usage_from_text(
     request_input: object,
     responses_api_request: Mapping[str, object],
     generated_text: str,
+    *,
+    use_default_image_token_count: bool,
 ) -> ResponseAPIUsage:
     messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
         input=request_input,  # pyright: ignore[reportArgumentType]  # the raw Responses API input is a str or ResponseInputParam list, matching the helper's declared union
@@ -1710,7 +1758,7 @@ def _estimate_usage_from_text(
         only_since_compaction=True,
     )
     input_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
-        model=model, messages=messages
+        model=model, messages=messages, use_default_image_token_count=use_default_image_token_count
     )
     output_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
         model=model, text=generated_text, count_response_tokens=True
@@ -1727,6 +1775,8 @@ def _estimate_usage_safely(
     request_input: object,
     responses_api_request: Mapping[str, object],
     generated_text: str,
+    *,
+    use_default_image_token_count: bool,
 ) -> ResponseAPIUsage | None:
     try:
         return _estimate_usage_from_text(
@@ -1734,6 +1784,7 @@ def _estimate_usage_safely(
             request_input=request_input,
             responses_api_request=responses_api_request,
             generated_text=generated_text,
+            use_default_image_token_count=use_default_image_token_count,
         )
     except Exception as e:
         verbose_logger.debug("Could not estimate usage from stream text, billing $0: %s", e)
@@ -2252,7 +2303,7 @@ class _ResponsesWsTurn:
         )
         if failed_event is None:
             return None
-        return _map_stream_error_to_exception(
+        return map_stream_error_to_exception(
             _ws_event_error(failed_event), model, custom_llm_provider, logging_obj=connection_logging_obj
         )
 
