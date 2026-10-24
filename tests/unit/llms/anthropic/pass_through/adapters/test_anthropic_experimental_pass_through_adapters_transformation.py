@@ -165,6 +165,37 @@ def test_translate_chat_refusal_finish_reason_to_anthropic_response():
     assert result["stop_reason"] == "refusal"
 
 
+@pytest.mark.parametrize(
+    ("provider_specific_fields", "expected_stop_reason", "expected_stop_sequence"),
+    [
+        ({"stop_reason": ", 7"}, "stop_sequence", ", 7"),
+        ({"stop_reason": 151645}, "end_turn", None),
+        (None, "end_turn", None),
+    ],
+    ids=["matched_stop_string", "stop_token_id", "no_stop_reason"],
+)
+def test_translate_vllm_matched_stop_string_to_anthropic_stop_sequence(
+    provider_specific_fields: dict[str, object] | None,
+    expected_stop_reason: str,
+    expected_stop_sequence: str | None,
+) -> None:
+    response: Final = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                message=Message(content="1, 2, 3, 4, 5, 6", role="assistant"),
+                provider_specific_fields=provider_specific_fields,
+            )
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == expected_stop_reason
+    assert result["stop_sequence"] == expected_stop_sequence
+
+
 def test_translate_streaming_openai_chunk_to_anthropic_content_block():
     choices = [
         StreamingChoices(
