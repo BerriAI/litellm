@@ -11,6 +11,7 @@ export async function captureChatRequest(userId: string, requestId: string): Pro
       product: "LiteLLM Chat UI",
       $process_person_profile: false,
       $geoip_disable: true,
+      $ip: "0.0.0.0",
     },
   };
   const request: RequestInit = {

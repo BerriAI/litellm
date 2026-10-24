@@ -36,6 +36,7 @@ describe("Chat telemetry transport", () => {
         product: "LiteLLM Chat UI",
         $process_person_profile: false,
         $geoip_disable: true,
+        $ip: "0.0.0.0",
       },
     };
     expect(JSON.parse(request.body)).toEqual(expectedPayload);
