@@ -70,7 +70,7 @@ import {
   getMissingModelsInPreset,
   getReferencedModelsError,
   buildEmptyPrefill,
-  buildPresetPrefill,
+  applyPresetTiers,
   buildModelAvailability,
   deploymentRefsFromModelInfo,
   ModelAvailability,
@@ -96,6 +96,7 @@ interface AddAutoRouterTabProps {
 }
 
 type PresetAvailability =
+  | { kind: "custom_tiers" }
   | { kind: "available"; viaDeployments: boolean }
   | { kind: "loading" }
   | { kind: "unverifiable" }
@@ -105,6 +106,8 @@ type PresetAvailability =
 // (see presetAvailability below), so an option a caller can click is always one that can be applied.
 const presetDisabledHint = (availability: PresetAvailability): string | null => {
   switch (availability.kind) {
+    case "custom_tiers":
+      return "Restore built-in tiers to use a template";
     case "available":
       return null;
     case "loading":
@@ -310,6 +313,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // makes the load-race (pick during loading, then discover a missing model) unrepresentable.
   const presetAvailability = React.useCallback(
     (preset: AutoRouterPreset): PresetAvailability => {
+      if (complexityRouterConfig.custom_tier_set) return { kind: "custom_tiers" };
       if (modelsLoading) return { kind: "loading" };
       if (modelsUnverifiable) return { kind: "unverifiable" };
       const missing = getMissingModelsInPreset(preset, availability);
@@ -319,7 +323,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         viaDeployments: getMissingModelsInPreset(preset, groupsOnlyAvailability).length > 0,
       };
     },
-    [modelsLoading, modelsUnverifiable, availability, groupsOnlyAvailability],
+    [modelsLoading, modelsUnverifiable, availability, groupsOnlyAvailability, complexityRouterConfig.custom_tier_set],
   );
 
   const sortedPresetOptions = React.useMemo(
@@ -374,7 +378,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
     setPrefillAttempted(true);
     setSelectedPreset(presetKey);
-    applyPrefill(buildPresetPrefill(preset.complexity_router_config, availability));
+    setComplexityRouterConfig((current) => applyPresetTiers(current, preset.complexity_router_config, availability));
   };
 
   const referencedModelsParams = {
@@ -569,7 +573,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   <div>
                     <div className="font-medium">{preset.label}</div>
                     <div className="text-xs text-muted-foreground">{preset.description}</div>
-                    <div className="text-xs text-muted-foreground">Replaces classifier and model choices</div>
+                    <div className="text-xs text-muted-foreground">Replaces tier models and their parameters</div>
                     {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
                     {matchedHint && <div className="text-xs mt-1 text-success">{matchedHint}</div>}
                   </div>
@@ -587,7 +591,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             </SelectItem>
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">Replaces classifier and model choices</p>
+        <p className="text-xs text-muted-foreground">Replaces tier models and their parameters</p>
         {presetsPending && <div className="text-xs mt-1 text-muted-foreground">Loading templates...</div>}
         {presetsUnavailable && (
           <div className="text-xs mt-1 text-destructive">
