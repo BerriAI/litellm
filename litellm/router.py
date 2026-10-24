@@ -378,6 +378,7 @@ from litellm.utils import (
     EmbeddingResponse,
     ModelInfoLookupMiss,
     ModelResponse,
+    ProviderConfigManager,
     Rules,
     function_setup,
     get_llm_provider,
@@ -501,6 +502,13 @@ CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_b
 
 _PRE_CALL_CHECK_FILTERED_PARAMS: Final = frozenset({"response_format"})
 _video_call_deployment_id: Final[ContextVar[str | None]] = ContextVar("video_call_deployment_id", default=None)
+_routed_call_type: Final[ContextVar[str | None]] = ContextVar("routed_call_type", default=None)
+_ROUTE_CAPABILITY_RESOLVERS: Final[Mapping[str, Callable[[str, LlmProviders], object | None]]] = MappingProxyType(
+    {
+        "adecisions": ProviderConfigManager.get_provider_decisions_config,
+        "decisions": ProviderConfigManager.get_provider_decisions_config,
+    }
+)
 _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
     {
         "prompt_caching": PromptCachingDeploymentCheck,
@@ -744,6 +752,7 @@ def _mid_stream_retry_trigger(error: "MidStreamFallbackError") -> Exception:
 
 
 _RestT: Final = TypeVar("_RestT", Iterator[object], AsyncIterator[object])
+_RouteDeploymentsT: Final = TypeVar("_RouteDeploymentsT", bound=Sequence[Mapping[str, object]] | Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -5727,7 +5736,7 @@ class Router:
         try:
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             try:
-                with self._video_call_pin(handler_name, kwargs):
+                with self._video_call_pin(handler_name, kwargs), self._route_capability_pin(handler_name):
                     deployment = await self.async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                         model=model,
                         request_kwargs=kwargs,
@@ -6436,6 +6445,15 @@ class Router:
             _video_call_deployment_id.reset(token)
 
     @staticmethod
+    @contextlib.contextmanager
+    def _route_capability_pin(handler_name: str | None) -> Generator[None]:
+        token: Final = _routed_call_type.set(handler_name)
+        try:
+            yield
+        finally:
+            _routed_call_type.reset(token)
+
+    @staticmethod
     def _narrow_to_video_deployment(healthy_deployments: Sequence[_DeploymentT]) -> Sequence[_DeploymentT]:
         """
         A video lives on the provider account of the deployment that created it, so a call on an id naming a
@@ -6468,7 +6486,7 @@ class Router:
                 kwargs=kwargs,
                 metadata_variable_name=metadata_variable_name,
             )
-            with self._video_call_pin(handler_name, kwargs):
+            with self._video_call_pin(handler_name, kwargs), self._route_capability_pin(handler_name):
                 deployment: Final = self.get_available_deployment(
                     model=model,
                     messages=kwargs.get("messages", None),
@@ -13436,6 +13454,52 @@ class Router:
         )
 
     @staticmethod
+    def _deployment_serves_route(
+        deployment: DeploymentTypedDict,
+        group: str,
+        resolver: Callable[[str, LlmProviders], object | None],
+    ) -> bool:
+        if "litellm_params" not in deployment:
+            return True
+
+        try:
+            model, resolved_custom_llm_provider = Router._capability_model_and_provider(
+                deployment["litellm_params"], group
+            )
+            provider: Final = next(
+                (member for member in LlmProviders if member.value == resolved_custom_llm_provider),
+                None,
+            )
+            return provider is not None and resolver(model, provider) is not None
+        except Exception as e:  # noqa: BLE001  # best-effort capability filter
+            verbose_router_logger.debug(
+                "litellm.router.py::_deployment_serves_route: keeping deployment for model=%s. Got - %s", group, e
+            )
+            return True
+
+    @staticmethod
+    def _without_deployments_that_cannot_serve_route(
+        healthy_deployments: _RouteDeploymentsT, group: str
+    ) -> _RouteDeploymentsT:
+        handler_name: Final = _routed_call_type.get()
+        resolver: Final = _ROUTE_CAPABILITY_RESOLVERS.get(handler_name) if handler_name is not None else None
+        if resolver is None or isinstance(healthy_deployments, Mapping):
+            return healthy_deployments
+
+        filtered_deployments: Final = [
+            deployment
+            for deployment in healthy_deployments
+            if Router._deployment_serves_route(
+                cast(DeploymentTypedDict, deployment),  # cast-ok: router candidates use the deployment shape
+                group,
+                resolver,
+            )
+        ]
+        if not filtered_deployments:
+            return healthy_deployments
+        return cast(_RouteDeploymentsT, filtered_deployments)  # cast-ok: same list shape as the input candidates
+
+    @staticmethod
     def _pre_call_check_requested_chat_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:
         requested: Final = litellm.utils.get_non_default_params(passed_params=dict(request_kwargs))
         return frozenset(
@@ -14045,6 +14109,13 @@ class Router:
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug("healthy_deployments after web search filter: %s", healthy_deployments)
 
+        healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
+            self._without_deployments_that_cannot_serve_route(
+                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                model,
+            )
+        )
+
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
                 raise litellm.ServiceUnavailableError(
@@ -14059,10 +14130,12 @@ class Router:
         )
 
         # Health-check-based filtering (before cooldown)
-        healthy_deployments = await self._async_filter_health_check_unhealthy_deployments(
-            healthy_deployments=healthy_deployments,
-            parent_otel_span=parent_otel_span,
-            health_check_probe=health_check_probe,
+        healthy_deployments = (  # rebind-ok: filtered candidates enter health checks
+            await self._async_filter_health_check_unhealthy_deployments(
+                healthy_deployments=healthy_deployments,
+                parent_otel_span=parent_otel_span,
+                health_check_probe=health_check_probe,
+            )
         )
 
         routing_read_batch: Final = RoutingReadBatch.active()
@@ -15268,6 +15341,12 @@ class Router:
             input=input,
             specific_deployment=specific_deployment,
             request_kwargs=request_kwargs,
+        )
+        healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
+            self._without_deployments_that_cannot_serve_route(
+                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                model,
+            )
         )
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
         pick_attributes: Final = _deployment_pick_attributes(
