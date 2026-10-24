@@ -1,2 +1,6 @@
 *.ipynb linguist-vendored
 ui/litellm-dashboard/src/lib/http/schema.d.ts linguist-generated
+# tiktoken rejects these caches unless they are byte-exact, and Windows checkouts would convert them to CRLF
+litellm/litellm_core_utils/tokenizers/9b5ad71b2ce5302211f9c61530b329a4922fc6a4 binary
+litellm/litellm_core_utils/tokenizers/ec7223a39ce59f226a68acc30dc1af2788490e15 binary
+litellm/litellm_core_utils/tokenizers/fb374d419588a4632f3f557e76b4b70aebbca790 binary
