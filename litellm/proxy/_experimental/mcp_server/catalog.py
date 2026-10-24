@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing, ServerOutcome
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.mcp_server.tool_registry import MCPTool
 
@@ -1105,6 +1106,21 @@ async def list_gateway_tools(
     )
 
 
+async def _resolve_catalog_caller(context: OperationContext) -> UserAPIKeyAuth | None:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+
+    caller: Final = await MCPRequestHandler.refresh_catalog_authority(context.user_api_key_auth)
+    if caller is not None:
+        toolset_id: Final = getattr(caller, "mcp_toolset_id", None)
+        if isinstance(toolset_id, str):
+            from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
+
+            return await apply_toolset_scope(caller, toolset_id)
+    return caller
+
+
 async def list_gateway_catalog(
     context: OperationContext, request: CatalogListRequest, *, log_list_tools_to_spendlogs: bool = True
 ) -> CatalogListResult:
@@ -1115,7 +1131,6 @@ async def list_gateway_catalog(
         PaginatedRequestParams,
     )
 
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
     from litellm.proxy._experimental.mcp_server.operations import (
         _get_allowed_mcp_servers,
         global_mcp_server_manager,
@@ -1123,7 +1138,7 @@ async def list_gateway_catalog(
     )
     from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
-    context = replace(context, _caller=await MCPRequestHandler.refresh_catalog_authority(context.user_api_key_auth))
+    context = replace(context, _caller=await _resolve_catalog_caller(context))
     params: Final = request.params or PaginatedRequestParams()
     if isinstance(request, ListToolsRequest):
         return await list_gateway_tools(context, params, log_list_tools_to_spendlogs=log_list_tools_to_spendlogs)
