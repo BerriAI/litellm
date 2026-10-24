@@ -90,6 +90,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
+    CostPerToken,
     CustomPricingLiteLLMParams,
     all_litellm_params,
 )
@@ -554,6 +555,25 @@ async def aresponses_api_with_mcp(
 def _per_call_custom_pricing(litellm_params: GenericLiteLLMParams) -> Mapping[str, float]:
     return MappingProxyType(
         litellm_params.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True)
+    )
+
+
+_COST_PER_TOKEN: Final = TypeAdapter(CostPerToken)
+
+
+def _per_call_cost_per_token(litellm_params: GenericLiteLLMParams) -> CostPerToken | None:
+    if litellm_params.input_cost_per_token is None or litellm_params.output_cost_per_token is None:
+        return None
+    return _COST_PER_TOKEN.validate_python(
+        litellm_params.model_dump(
+            include={
+                "input_cost_per_token",
+                "output_cost_per_token",
+                "cache_read_input_token_cost",
+                "cache_creation_input_token_cost",
+            },
+            exclude_none=True,
+        )
     )
 
 
@@ -1695,6 +1715,8 @@ def responses(
             custom_llm_provider=custom_llm_provider,
         )
 
+        litellm_logging_obj.custom_cost_per_token = _per_call_cost_per_token(litellm_params)
+        litellm_logging_obj.custom_cost_per_second = litellm_params.cost_per_second
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
         input = with_compaction_items_as_summaries(
             with_compaction_items_as_params(ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input))
