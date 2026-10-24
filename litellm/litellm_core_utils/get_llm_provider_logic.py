@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.llms.opencode.common_utils import is_opencode_api_base
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import GenericLiteLLMParams, LiteLLM_Params
@@ -975,6 +976,4 @@ def _get_openai_compatible_provider_info(
 
 
 def get_provider_affinity_header(api_base: str | None) -> str | None:
-    from litellm.llms.opencode.transformation import OpenCodeProviderAdapter
-
-    return OpenCodeProviderAdapter().get_provider_affinity_header(api_base)
+    return "x-opencode-session" if is_opencode_api_base(api_base) else None
