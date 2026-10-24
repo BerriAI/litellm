@@ -26,11 +26,9 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import KW_ONLY, dataclass
 from enum import Enum
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeVar
 
-from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
-    OAuthToken,
-)
+RefreshValue: Final = TypeVar("RefreshValue")
 
 
 class LockAcquisition(Enum):
@@ -86,9 +84,9 @@ class RedisRefreshCoordinator:
         self,
         user_id: str,
         server_id: str,
-        refresh: Callable[[], Awaitable[OAuthToken | None]],
-        reread: Callable[[], Awaitable[OAuthToken | None]],
-    ) -> OAuthToken | None:
+        refresh: Callable[[], Awaitable[RefreshValue | None]],
+        reread: Callable[[], Awaitable[RefreshValue | None]],
+    ) -> RefreshValue | None:
         key: Final = self._key(user_id, server_id)
         token: Final = self.new_token()
         match await self.lock.acquire(key, token, self.lock_ttl_seconds):
@@ -111,8 +109,8 @@ class RedisRefreshCoordinator:
         self,
         key: str,
         token: str,
-        refresh: Callable[[], Awaitable[OAuthToken | None]],
-    ) -> OAuthToken | None:
+        refresh: Callable[[], Awaitable[RefreshValue | None]],
+    ) -> RefreshValue | None:
         refresh_task: Final = asyncio.ensure_future(refresh())
         renewal_task: Final = asyncio.create_task(self._renew_lease_until_done(key, token, refresh_task))
         try:
@@ -127,7 +125,7 @@ class RedisRefreshCoordinator:
         self,
         key: str,
         token: str,
-        refresh_task: asyncio.Future[OAuthToken | None],
+        refresh_task: asyncio.Future[RefreshValue | None],
     ) -> None:
         budget_deadline: Final = self.clock() + self.refresh_budget_seconds
         while not refresh_task.done() and self.clock() < budget_deadline:

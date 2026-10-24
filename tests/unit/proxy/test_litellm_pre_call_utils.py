@@ -10439,10 +10439,16 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
+
     load = AsyncMock(
-        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
+        return_value={
+            "copilot-cred": upc.GithubCopilotUserConnectionPayload(
+                access_token="gho_user_a_token",
+                github_login="octo",
+            )
+        }
     )
-    monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
+    monkeypatch.setattr(upc, "aget_user_provider_connections", load)
     router = Router(
         model_list=[
             {
@@ -10495,10 +10501,16 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
+
     load = AsyncMock(
-        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
+        return_value={
+            "copilot-cred": upc.GithubCopilotUserConnectionPayload(
+                access_token="gho_user_a_token",
+                github_login="octo",
+            )
+        }
     )
-    monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
+    monkeypatch.setattr(upc, "aget_user_provider_connections", load)
     router = Router(
         model_list=[
             {

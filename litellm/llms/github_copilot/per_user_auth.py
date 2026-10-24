@@ -6,6 +6,7 @@ touched on the per-user path.
 
 import asyncio
 import hmac
+import json
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -46,6 +47,10 @@ _LLM_PROVIDER: Final = "github_copilot"
 _DEVICE_FLOW_SCOPE: Final = "read:user"
 _SESSION_CACHE_MAX_SIZE: Final = 1000
 _SYNC_LOCK_COUNT: Final = 64
+
+
+class GithubCopilotTokenRejectedError(CallerCredentialAuthenticationError):
+    pass
 
 
 class _SessionCache(Protocol):
@@ -115,6 +120,9 @@ class _DeviceCodePayload(TypedDict):
 @with_config(ConfigDict(extra="allow", strict=True))
 class _AccessTokenPollPayload(TypedDict):
     access_token: ReadOnly[NotRequired[str]]
+    refresh_token: ReadOnly[NotRequired[str]]
+    expires_in: ReadOnly[NotRequired[object]]
+    refresh_token_expires_in: ReadOnly[NotRequired[object]]
     error: ReadOnly[NotRequired[object]]
     error_description: ReadOnly[NotRequired[object]]
     interval: ReadOnly[NotRequired[object]]
@@ -170,6 +178,30 @@ class GithubCopilotDeviceFlowPoll:
     status: DeviceFlowPollStatus
     interval: int | None = None
     access_token: str | None = field(default=None, repr=False)
+    refresh_token: str | None = field(default=None, repr=False)
+    expires_in: int | None = None
+    refresh_token_expires_in: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GithubTokenRefreshed:
+    access_token: str = field(repr=False)
+    refresh_token: str | None = field(repr=False)
+    expires_in: int | None
+    refresh_token_expires_in: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class GithubTokenRefreshRejected:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class GithubTokenRefreshUnavailable:
+    pass
+
+
+GithubTokenRefreshResult: TypeAlias = GithubTokenRefreshed | GithubTokenRefreshRejected | GithubTokenRefreshUnavailable
 
 
 def validated_copilot_api_base(endpoints_api: object, endpoints: GithubHostEndpoints) -> str:
@@ -240,8 +272,11 @@ def _cache_session(cache_key: str, github_token: str, session: GithubCopilotUser
     _SESSION_CACHE.set_cache(cache_key, (github_token, session.token, session.api_base, expires_at), ttl=ttl)
 
 
-def _reject_connection(credential_name: str) -> CallerCredentialAuthenticationError:
-    return CallerCredentialAuthenticationError(
+def _reject_connection(
+    credential_name: str,
+    exception_type: type[CallerCredentialAuthenticationError] = CallerCredentialAuthenticationError,
+) -> CallerCredentialAuthenticationError:
+    return exception_type(
         message=(
             f"GitHub rejected the GitHub Copilot connection for credential '{credential_name}'. "
             f"Reconnect GitHub Copilot for credential '{credential_name}' in the LiteLLM UI (LLM Credentials)"
@@ -260,7 +295,10 @@ def _session_from_response(
 ) -> GithubCopilotUserSession:
     if response.status_code in (401, 403, 404):
         _SESSION_CACHE.delete_cache(cache_key)
-        raise _reject_connection(credential_name)
+        raise _reject_connection(
+            credential_name,
+            GithubCopilotTokenRejectedError if response.status_code == 401 else CallerCredentialAuthenticationError,
+        )
     if response.status_code == 429:
         raise CallerCredentialRateLimitError(
             message="GitHub rate limited the GitHub Copilot token exchange",
@@ -309,6 +347,12 @@ def _to_int(raw: object) -> int:
         except ValueError:
             return 0
     return 0
+
+
+def _positive_int(raw: object) -> int | None:
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+        return raw
+    return None
 
 
 def _expires_at_seconds(raw: object) -> float:
@@ -512,7 +556,14 @@ def _poll_payload_from_response(response: httpx.Response) -> GithubCopilotDevice
 
     access_token: Final = payload.get("access_token")
     if isinstance(access_token, str) and access_token:
-        return GithubCopilotDeviceFlowPoll(status="connected", access_token=access_token)
+        raw_refresh_token: Final = payload.get("refresh_token")
+        return GithubCopilotDeviceFlowPoll(
+            status="connected",
+            access_token=access_token,
+            refresh_token=raw_refresh_token if isinstance(raw_refresh_token, str) and raw_refresh_token else None,
+            expires_in=_positive_int(payload.get("expires_in")),
+            refresh_token_expires_in=_positive_int(payload.get("refresh_token_expires_in")),
+        )
 
     error: Final = payload.get("error")
     raw_interval: Final = payload.get("interval")
@@ -532,6 +583,57 @@ def _poll_payload_from_response(response: httpx.Response) -> GithubCopilotDevice
                 llm_provider=_LLM_PROVIDER,
                 model="",
             )
+
+
+async def arefresh_github_token(
+    refresh_token: str,
+    endpoints: GithubHostEndpoints,
+) -> GithubTokenRefreshResult:
+    client: Final = _new_async_github_client()
+    try:
+        response: Final = await client.post(
+            endpoints.access_token_url,
+            headers=github_api_headers(),
+            json={
+                "client_id": endpoints.client_id,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            },
+        )
+    except httpx.HTTPStatusError as exc:
+        status: Final = exc.response.status_code
+        if status == 429 or status >= 500:
+            return GithubTokenRefreshUnavailable()
+        if 400 <= status < 500:
+            return GithubTokenRefreshRejected()
+        return GithubTokenRefreshUnavailable()
+    except (httpx.RequestError, APIConnectionError):
+        return GithubTokenRefreshUnavailable()
+
+    if response.status_code == 429 or response.status_code >= 500:
+        return GithubTokenRefreshUnavailable()
+    if 400 <= response.status_code < 500:
+        return GithubTokenRefreshRejected()
+    if not response.is_success:
+        return GithubTokenRefreshUnavailable()
+    try:
+        payload: Final = _ACCESS_TOKEN_POLL.validate_python(response.json())
+    except json.JSONDecodeError:
+        return GithubTokenRefreshUnavailable()
+    except ValidationError:
+        return GithubTokenRefreshUnavailable()
+    if payload.get("error") is not None:
+        return GithubTokenRefreshRejected()
+    access_token: Final = payload.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        return GithubTokenRefreshRejected()
+    raw_refresh_token: Final = payload.get("refresh_token")
+    return GithubTokenRefreshed(
+        access_token=access_token,
+        refresh_token=raw_refresh_token if isinstance(raw_refresh_token, str) and raw_refresh_token else None,
+        expires_in=_positive_int(payload.get("expires_in")),
+        refresh_token_expires_in=_positive_int(payload.get("refresh_token_expires_in")),
+    )
 
 
 async def afetch_github_login(github_token: str, endpoints: GithubHostEndpoints) -> str:
