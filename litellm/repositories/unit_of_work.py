@@ -19,7 +19,7 @@ from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
+from typing import Final, Protocol, runtime_checkable
 
 from litellm.repositories.prisma_protocols import BatchTable, PrismaBatch
 
@@ -62,6 +62,13 @@ class TeamSpendResetWrites:
         )
 
 
+@runtime_checkable
+class SpendResetWrites(Protocol):
+    def queue_spend_zero(self, where: Mapping[str, object]) -> None: ...
+
+    def queue_spend_decrement(self, where: Mapping[str, object], amount: float) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class LinkedSpendResetWrites:
     table: BatchTable
@@ -88,8 +95,15 @@ WHERE budget_id = ANY($1::text[]) AND spend > total_spend
 
 
 @dataclass(frozen=True, slots=True)
-class TeamMembershipSpendResetWrites(LinkedSpendResetWrites):
+class TeamMembershipSpendResetWrites:
+    resets: LinkedSpendResetWrites
     batch: PrismaBatch
+
+    def queue_spend_zero(self, where: Mapping[str, object]) -> None:
+        self.resets.queue_spend_zero(where)
+
+    def queue_spend_decrement(self, where: Mapping[str, object], amount: float) -> None:
+        self.resets.queue_spend_decrement(where, amount)
 
     def queue_total_spend_repair(self, budget_ids: Sequence[str]) -> None:
         self.batch.execute_raw(_TEAM_MEMBERSHIP_TOTAL_SPEND_REPAIR_SQL, list(budget_ids))
@@ -149,7 +163,9 @@ async def budget_cascade_unit_of_work(
 ) -> AsyncGenerator[BudgetCascadeUnitOfWork, None]:
     batch = new_batch()
     yield BudgetCascadeUnitOfWork(
-        team_memberships=TeamMembershipSpendResetWrites(table=batch.litellm_teammembership, batch=batch),
+        team_memberships=TeamMembershipSpendResetWrites(
+            resets=LinkedSpendResetWrites(table=batch.litellm_teammembership), batch=batch
+        ),
         keys=LinkedSpendResetWrites(table=batch.litellm_verificationtoken),
         organizations=LinkedSpendResetWrites(table=batch.litellm_organizationtable),
         tags=LinkedSpendResetWrites(table=batch.litellm_tagtable),
