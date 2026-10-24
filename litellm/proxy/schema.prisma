@@ -877,9 +877,9 @@ model LiteLLM_DailyUserSpend {
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
   compression_saved_tokens    BigInt      @default(0)
-  compression_savings_spend    Float       @default(0.0)
-  prompt_caching_savings_spend Float       @default(0.0)
-  gateway_injected_caching_savings_spend Float @default(0.0)
+  compression_savings_spend    Float?
+  prompt_caching_savings_spend Float?
+  gateway_injected_caching_savings_spend Float?
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
@@ -913,9 +913,9 @@ model LiteLLM_DailyGlobalSpend {
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
   compression_saved_tokens    BigInt      @default(0)
-  compression_savings_spend    Float       @default(0.0)
-  prompt_caching_savings_spend Float       @default(0.0)
-  gateway_injected_caching_savings_spend Float @default(0.0)
+  compression_savings_spend    Float?
+  prompt_caching_savings_spend Float?
+  gateway_injected_caching_savings_spend Float?
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
@@ -946,9 +946,9 @@ model LiteLLM_DailyOrganizationSpend {
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
   compression_saved_tokens    BigInt      @default(0)
-  compression_savings_spend    Float       @default(0.0)
-  prompt_caching_savings_spend Float       @default(0.0)
-  gateway_injected_caching_savings_spend Float @default(0.0)
+  compression_savings_spend    Float?
+  prompt_caching_savings_spend Float?
+  gateway_injected_caching_savings_spend Float?
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
@@ -984,9 +984,9 @@ model LiteLLM_DailyEndUserSpend {
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
   compression_saved_tokens    BigInt      @default(0)
-  compression_savings_spend    Float       @default(0.0)
-  prompt_caching_savings_spend Float       @default(0.0)
-  gateway_injected_caching_savings_spend Float @default(0.0)
+  compression_savings_spend    Float?
+  prompt_caching_savings_spend Float?
+  gateway_injected_caching_savings_spend Float?
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
@@ -1021,9 +1021,9 @@ model LiteLLM_DailyAgentSpend {
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
   compression_saved_tokens    BigInt      @default(0)
-  compression_savings_spend    Float       @default(0.0)
-  prompt_caching_savings_spend Float       @default(0.0)
-  gateway_injected_caching_savings_spend Float @default(0.0)
+  compression_savings_spend    Float?
+  prompt_caching_savings_spend Float?
+  gateway_injected_caching_savings_spend Float?
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
@@ -1058,9 +1058,9 @@ model LiteLLM_DailyTeamSpend {
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
   compression_saved_tokens    BigInt      @default(0)
-  compression_savings_spend    Float       @default(0.0)
-  prompt_caching_savings_spend Float       @default(0.0)
-  gateway_injected_caching_savings_spend Float @default(0.0)
+  compression_savings_spend    Float?
+  prompt_caching_savings_spend Float?
+  gateway_injected_caching_savings_spend Float?
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
@@ -1098,9 +1098,9 @@ model LiteLLM_DailyTagSpend {
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
   compression_saved_tokens    BigInt      @default(0)
-  compression_savings_spend    Float       @default(0.0)
-  prompt_caching_savings_spend Float       @default(0.0)
-  gateway_injected_caching_savings_spend Float @default(0.0)
+  compression_savings_spend    Float?
+  prompt_caching_savings_spend Float?
+  gateway_injected_caching_savings_spend Float?
   autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)

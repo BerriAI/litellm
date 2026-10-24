@@ -99,6 +99,17 @@ _SPEND_COLUMNS: Final = (
     "gateway_injected_caching_savings_spend",
     "autorouter_savings_spend",
 )
+# Savings columns may carry no price for what they saved (#46677): the request
+# recorded saved tokens but its model resolved to no rate, so the row reaches
+# the database as NULL. Readers already coalesce NULL to zero for their totals;
+# the merge treats NULL as "no dollars from this row", never as a measured zero.
+_UNPRICED_SPEND_COLUMNS: Final = frozenset(
+    (
+        "compression_savings_spend",
+        "prompt_caching_savings_spend",
+        "gateway_injected_caching_savings_spend",
+    )
+)
 
 _CASTS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -124,6 +135,24 @@ def _as_float(value: object) -> float:
     return float(value) if isinstance(value, (int, float)) else 0.0
 
 
+def _as_float_or_none(value: object) -> float | None:
+    """``value`` as a float, keeping ``None`` for a savings figure that was never priced."""
+    if value is None:
+        return None
+    return _as_float(value)
+
+
+def _sum_spend(column: str, group: Sequence[SpendRow]) -> float | None:
+    if column in _UNPRICED_SPEND_COLUMNS:
+        # A row that carries no such key at all (older release, synthetic caller)
+        # keeps its old zero, so only an explicit None marks an unpriced figure.
+        figures: Final = [row.get(column, 0.0) for row in group]
+        if all(figure is None for figure in figures):
+            return None
+        return sum(_as_float_or_none(figure) or 0.0 for figure in figures)
+    return sum(_as_float(row.get(column)) for row in group)
+
+
 def conflict_key(table: DailySpendTable, transaction: SpendRow) -> tuple[str, ...]:
     """The tuple the database arbitrates the upsert on, normalized free of NULLs."""
     return tuple(_as_text(transaction.get(column)) for column in (table.entity_id_column, *_KEY_COLUMNS))
@@ -135,7 +164,7 @@ def _merge(group: Sequence[SpendRow]) -> SpendRow:
     return {
         **group[0],
         **{column: sum(_as_int(row.get(column)) for row in group) for column in _COUNTER_COLUMNS},
-        **{column: sum(_as_float(row.get(column)) for row in group) for column in _SPEND_COLUMNS},
+        **{column: _sum_spend(column, group) for column in _SPEND_COLUMNS},
     }
 
 
@@ -166,7 +195,12 @@ def _row_params(
         *key,
         None if transaction.get("model_group") is None else _as_text(transaction.get("model_group")),
         *(_as_int(transaction.get(column)) for column in _COUNTER_COLUMNS),
-        *(_as_float(transaction.get(column)) for column in _SPEND_COLUMNS),
+        *(
+            _as_float_or_none(transaction.get(column, 0.0))
+            if column in _UNPRICED_SPEND_COLUMNS
+            else _as_float(transaction.get(column))
+            for column in _SPEND_COLUMNS
+        ),
         *((None if request_id is None else _as_text(request_id),) if table.carries_request_id else ()),
     )
 
@@ -199,10 +233,21 @@ def build_bulk_upsert(
         + ", (NOW() AT TIME ZONE 'UTC'))"
         for row_index in range(len(batch))
     )
-    increments: Final = ", ".join(
-        f'"{column}" = {quoted_table}."{column}" + EXCLUDED."{column}"'
-        for column in (*_COUNTER_COLUMNS, *_SPEND_COLUMNS)
-    )
+
+    def _increment_for(column: str) -> str:
+        if column in _UNPRICED_SPEND_COLUMNS:
+            # NULL-aware merge: NULL + x is NULL, so the coalesce falls back to
+            # whichever side carried dollars. An unpriced request landing on a
+            # priced row contributes nothing instead of wiping it, a priced one
+            # landing on an all-unpriced row prices it, and two unpriced rows
+            # stay unpriced.
+            return (
+                f'"{column}" = COALESCE({quoted_table}."{column}" + EXCLUDED."{column}", '
+                f'{quoted_table}."{column}", EXCLUDED."{column}")'
+            )
+        return f'"{column}" = {quoted_table}."{column}" + EXCLUDED."{column}"'
+
+    increments: Final = ", ".join(_increment_for(column) for column in (*_COUNTER_COLUMNS, *_SPEND_COLUMNS))
     # request_id names one arbitrary contributing request, so an entry carrying none must
     # not blank out the one already recorded.
     request_id_update: Final = (
