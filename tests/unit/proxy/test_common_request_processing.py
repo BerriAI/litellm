@@ -32,6 +32,7 @@ from litellm.constants import (
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
 )
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
@@ -5036,6 +5037,33 @@ class TestAsyncStreamingDataGeneratorFastPath:
 
         assert out == chunks  # bytes pass through return_sse_chunk untouched
         hook_spy.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fast_path_skips_per_chunk_hook_with_a_request_only_guardrail(self, monkeypatch):
+        monkeypatch.setattr(litellm, "callbacks", [CustomGuardrail(guardrail_name="g", event_hook="pre_call")])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        hook_spy = AsyncMock(side_effect=lambda **kw: kw["response"])
+        monkeypatch.setattr(proxy_logging_obj, "async_post_call_streaming_hook", hook_spy)
+
+        chunks = [b"event: a\ndata: {}\n\n", b"event: b\ndata: {}\n\n"]
+        out = [
+            c
+            async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=self._aiter(chunks),
+                user_api_key_dict=ProxyUserAPIKeyAuth(),
+                request_data={"model": "claude-x"},
+                proxy_logging_obj=proxy_logging_obj,
+                serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+                serialize_error=lambda e: "data: error\n\n",
+            )
+        ]
+
+        assert out == chunks
+        hook_spy.assert_not_awaited()
+
+        ProxyLogging._callback_capabilities_cache.clear()
 
     @pytest.mark.asyncio
     async def test_slow_path_runs_per_chunk_hook(self, monkeypatch):

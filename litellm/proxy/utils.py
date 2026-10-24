@@ -1530,11 +1530,20 @@ class _CallbackCapabilities:
     # every string entry in ``litellm.callbacks``.
     resolved_callbacks: tuple[object, ...] = field(default_factory=tuple)
     listed_models_filters: tuple[CustomLogger, ...] = field(default_factory=tuple)
+    streaming_chunk_overrides: tuple[CustomLogger, ...] = field(default_factory=tuple)
 
 
 def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
     leaf_to_base: Final = takewhile(lambda klass: klass is not CustomLogger, type(callback).__mro__)
     return any(hook_name in klass.__dict__ for klass in leaf_to_base)
+
+
+def _overrides_streaming_chunk_hook(callback: CustomLogger) -> bool:
+    base_streaming_hook: Final = CustomLogger.async_post_call_streaming_hook
+    cls_streaming_hook: Final = getattr(type(callback), "async_post_call_streaming_hook", base_streaming_hook)
+    return getattr(cls_streaming_hook, "__func__", cls_streaming_hook) is not getattr(
+        base_streaming_hook, "__func__", base_streaming_hook
+    )
 
 
 def _overrides_moderation_hook(callback: CustomLogger) -> bool:
@@ -3234,7 +3243,6 @@ class ProxyLogging:
 
         has_post_call_response_headers = False
         has_iterator_override = False
-        has_streaming_chunk_override = False
         has_guardrail = False
         has_pre_call_override = False
         has_content_enforcer = False
@@ -3273,33 +3281,19 @@ class ProxyLogging:
                 iterator_overrides.append((resolved, "override"))
             elif "apply_guardrail" in cls_attrs and not getattr(resolved, "use_native_lifecycle_hooks", False):
                 iterator_overrides.append((resolved, "apply_guardrail"))
-            # Walk the MRO for ``async_post_call_streaming_hook`` rather than
-            # using the leaf-class ``__dict__`` check used by the other flags:
-            # before this PR the hook was unconditionally invoked, so a
-            # callback that inherits an override from an intermediate parent
-            # (e.g. a vendor base class providing the override, with the
-            # registered class adding nothing else) MUST still be detected.
-            # A leaf-class miss here would silently drop the inherited hook.
-            base_streaming_hook = CustomLogger.async_post_call_streaming_hook
-            cls_streaming_hook = getattr(
-                cls,
-                "async_post_call_streaming_hook",
-                base_streaming_hook,
-            )
-            if getattr(cls_streaming_hook, "__func__", cls_streaming_hook) is not getattr(
-                base_streaming_hook, "__func__", base_streaming_hook
-            ):
-                has_streaming_chunk_override = True
             if "async_pre_call_hook" in cls_attrs:
                 has_pre_call_override = True
                 if resolved.enforces_request_content is True:
                     has_content_enforcer = True
 
+        streaming_chunk_overrides: Final = tuple(
+            callback for callback in resolved_callbacks if _overrides_streaming_chunk_hook(callback)
+        )
         caps: Final = _CallbackCapabilities(
             has_post_call_response_headers=has_post_call_response_headers,
             has_iterator_override=has_iterator_override
             or any(kind == "apply_guardrail" for _, kind in iterator_overrides),
-            has_streaming_chunk_override=has_streaming_chunk_override,
+            has_streaming_chunk_override=bool(streaming_chunk_overrides),
             has_guardrail=has_guardrail,
             has_pre_call_override=has_pre_call_override,
             has_content_enforcer=has_content_enforcer,
@@ -3309,6 +3303,7 @@ class ProxyLogging:
             listed_models_filters=tuple(
                 callback for callback in resolved_callbacks if _overrides_hook(callback, "async_filter_listed_models")
             ),
+            streaming_chunk_overrides=streaming_chunk_overrides,
         )
         # Limit cache to handle test churn without leaking; production
         # callback lists are stable so this rarely grows past 1 entry.
@@ -3342,8 +3337,7 @@ class ProxyLogging:
     def has_streaming_chunk_hook_overrides() -> bool:
         """True iff any callback overrides ``async_post_call_streaming_hook``
         (the per-chunk hook, distinct from the iterator wrapper)."""
-        caps: Final = ProxyLogging.callback_capabilities()
-        return caps.has_streaming_chunk_override or caps.has_guardrail
+        return ProxyLogging.callback_capabilities().has_streaming_chunk_override
 
     def needs_iterator_wrap(self) -> bool:
         """Whether ``async_data_generator`` needs to wrap the upstream stream
@@ -3357,8 +3351,7 @@ class ProxyLogging:
         ``_apply_streaming_chunk_hooks`` for every emitted chunk. Instance
         method for the same reason as :py:meth:`needs_iterator_wrap`.
         """
-        caps: Final = ProxyLogging.callback_capabilities()
-        return caps.has_streaming_chunk_override or caps.has_guardrail
+        return ProxyLogging.callback_capabilities().has_streaming_chunk_override
 
     @staticmethod
     def has_during_call_guardrails() -> bool:
@@ -4290,12 +4283,11 @@ class ProxyLogging:
         """
         # Per-chunk fast path: skip the response-string materialization and
         # callback scan when no configured callback overrides
-        # ``async_post_call_streaming_hook`` AND no CustomGuardrail is
-        # active. ``get_response_string`` walks every choice/delta on the
-        # chunk so paying it per chunk for no-op callbacks dominated stream
-        # CPU time even after the iterator-chain fix.
+        # ``async_post_call_streaming_hook``. ``get_response_string`` walks
+        # every choice/delta on the chunk so paying it per chunk for no-op
+        # callbacks dominated stream CPU time even after the iterator-chain fix.
         caps: Final = ProxyLogging.callback_capabilities()
-        if not caps.has_streaming_chunk_override and not caps.has_guardrail:
+        if not caps.has_streaming_chunk_override:
             return response
 
         from litellm.proxy.proxy_server import llm_router
@@ -4316,9 +4308,8 @@ class ProxyLogging:
                 stream_gated_guardrail_names(data, user_api_key_dict) if caps.has_guardrail else frozenset()
             )
 
-            for callback in litellm.callbacks:
+            for callback in caps.streaming_chunk_overrides:
                 try:
-                    _callback: CustomLogger | None = None
                     if isinstance(callback, CustomGuardrail):
                         if callback.guardrail_name in pipeline_gated:
                             continue
@@ -4340,26 +4331,17 @@ class ProxyLogging:
                             is not True
                         ):
                             continue
-                    if isinstance(callback, str):
-                        _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                            cast(_custom_logger_compatible_callbacks_literal, callback)
-                        )
+                    if str_so_far is not None:
+                        complete_response = str_so_far + response_str
                     else:
-                        _callback = callback
-                    if _callback is not None and isinstance(_callback, CustomLogger):
-                        if str_so_far is not None:
-                            complete_response = str_so_far + response_str
-                        else:
-                            complete_response = response_str
-                        callback_response: (
-                            ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
-                        )
-                        callback_response = await _callback.async_post_call_streaming_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            response=complete_response,
-                        )
-                        if callback_response is not None:
-                            response = callback_response
+                        complete_response = response_str
+                    callback_response: ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
+                    callback_response = await callback.async_post_call_streaming_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        response=complete_response,
+                    )
+                    if callback_response is not None:
+                        response = callback_response
                 except Exception as e:
                     raise e
         return response
