@@ -103,7 +103,8 @@ class SensitiveDataMasker:
     ) -> Sequence[object]:
         masked_items: Final[list[object]] = []
         if depth >= max_depth:
-            return values
+            # The cap bounds the walk, not who may see a secret: hide what it did not inspect.
+            return [REDACTED for _ in values]
 
         for item in values:
             if isinstance(item, Mapping):
@@ -124,7 +125,8 @@ class SensitiveDataMasker:
         excluded_keys: set[str] | None = None,
     ) -> dict[str, Any]:
         if depth >= max_depth:
-            return data
+            # The cap bounds the walk, not who may see a secret: hide what it did not inspect.
+            return {key: REDACTED for key in data}
 
         masked_data: Final[dict[str, object]] = {}
         for k, v in data.items():
