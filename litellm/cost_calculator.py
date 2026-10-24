@@ -1017,6 +1017,7 @@ def select_model_name_for_cost_calc(
         return_model is not None
         and custom_llm_provider is not None
         and not _model_contains_known_llm_provider(return_model)
+        and return_model != router_model_id
     ):  # add provider prefix if not already present, to match model_cost
         provider_prefix: Final = (
             custom_llm_provider if priced_region is None else f"{custom_llm_provider}/{priced_region}"
