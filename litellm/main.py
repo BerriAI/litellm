@@ -2192,6 +2192,27 @@ def _complete_groq(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     )
 
 
+def _complete_opencode_go(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
+    return base_llm_http_handler.completion(  # pyright: ignore[reportUnknownMemberType]  # shared legacy handler has untyped request mappings
+        model=ctx.model,
+        stream=ctx.stream,
+        messages=ctx.messages,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # existing dispatch context carries validated messages
+        acompletion=ctx.acompletion,
+        api_base=ctx.api_base,
+        model_response=ctx.model_response,
+        optional_params=ctx.optional_params,  # pyright: ignore[reportUnknownMemberType]  # existing dispatch context carries the mapped provider parameters
+        litellm_params=ctx.litellm_params,
+        shared_session=ctx.shared_session,
+        custom_llm_provider=ctx.custom_llm_provider,
+        timeout=ctx.timeout,  # pyright: ignore[reportArgumentType]  # completion normalizes timeout before constructing this context
+        headers=ctx.headers,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # legacy context retains caller headers
+        encoding=_get_encoding(),
+        api_key=ctx.api_key,
+        logging_obj=ctx.logging,
+        client=_dispatch_client_http(ctx),
+    )
+
+
 def _complete_bedrock_mantle(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -6192,6 +6213,10 @@ def completion(
             response = _complete_xai(_dispatch_ctx)
         elif custom_llm_provider == "groq":
             response = _complete_groq(_dispatch_ctx)
+        elif custom_llm_provider == "opencode_go":
+            response = _complete_opencode_go(  # rebind-ok: common dispatcher finalizes the selected provider result
+                _dispatch_ctx
+            )
         elif custom_llm_provider == "bedrock_mantle":
             response = _complete_bedrock_mantle(_dispatch_ctx)
         elif custom_llm_provider == "a2a":

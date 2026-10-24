@@ -682,6 +682,7 @@ darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
 v0_models: Set = set()
 morph_models: Set = set()
+opencode_go_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 lambda_ai_models: Set = set()
 inception_models: Set = set()
 hyperbolic_models: Set = set()
@@ -970,6 +971,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
             morph_models.add(key)
+        elif value.get("litellm_provider") == "opencode_go":
+            opencode_go_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":
             lambda_ai_models.add(key)
         elif value.get("litellm_provider") == "inception":
@@ -1137,6 +1140,7 @@ model_list = list(
     | openinfer_models
     | v0_models
     | morph_models
+    | opencode_go_models
     | lambda_ai_models
     | inception_models
     | black_forest_labs_models
@@ -1254,6 +1258,7 @@ def _build_models_by_provider() -> dict:
         "openinfer": openinfer_models,
         "v0": v0_models,
         "morph": morph_models,
+        "opencode_go": opencode_go_models,
         "lambda_ai": lambda_ai_models,
         "inception": inception_models,
         "hyperbolic": hyperbolic_models,
