@@ -15,6 +15,8 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_content_hash,
     get_audio_file_for_health_check,
     get_audio_file_name,
+    normalize_custom_vocabulary,
+    normalize_gemini_transcription_mode,
     process_audio_file,
 )
 
@@ -409,3 +411,41 @@ class TestSpeechMediaTypeFromAudioBytes:
         from litellm.litellm_core_utils.audio_utils.utils import speech_media_type_from_audio_bytes
 
         assert speech_media_type_from_audio_bytes(audio) == expected
+
+
+class TestNormalizeGeminiTranscriptionMode:
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [("smart", "smart"), ("SMART", "smart"), ("Verbatim", "verbatim"), ("verbatim", "verbatim")],
+    )
+    def test_case_insensitive_values_normalize(self, raw: str, expected: str) -> None:
+        assert normalize_gemini_transcription_mode(raw) == expected
+
+    def test_missing_mode_is_none(self) -> None:
+        assert normalize_gemini_transcription_mode(None) is None
+
+    @pytest.mark.parametrize("raw", ["loud", ""])
+    def test_unknown_mode_raises(self, raw: str) -> None:
+        with pytest.raises(ValueError, match="Unsupported transcription mode"):
+            normalize_gemini_transcription_mode(raw)
+
+    @pytest.mark.parametrize("raw", [1, ["smart"]])
+    def test_non_string_mode_raises(self, raw: object) -> None:
+        with pytest.raises(TypeError, match="Unsupported transcription mode"):
+            normalize_gemini_transcription_mode(raw)
+
+
+class TestNormalizeCustomVocabulary:
+    def test_list_is_stripped_and_blanks_dropped(self) -> None:
+        assert normalize_custom_vocabulary([" LiteLLM ", "", "Kubernetes", "  "]) == ("LiteLLM", "Kubernetes")
+
+    def test_comma_separated_string_is_split(self) -> None:
+        assert normalize_custom_vocabulary("LiteLLM, Kubernetes,,HV-12 ") == ("LiteLLM", "Kubernetes", "HV-12")
+
+    def test_missing_vocabulary_is_empty(self) -> None:
+        assert normalize_custom_vocabulary(None) == ()
+
+    @pytest.mark.parametrize("raw", [42, {"term": "x"}])
+    def test_unsupported_shape_raises(self, raw: object) -> None:
+        with pytest.raises(TypeError, match="custom_vocabulary"):
+            normalize_custom_vocabulary(raw)
