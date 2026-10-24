@@ -3,6 +3,7 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 (litellm/llms/anthropic/pass_through/responses_adapters/transformation.py)
 """
 
+import copy
 import json
 import os
 from typing import Any, Dict, Final, List
@@ -2424,3 +2425,63 @@ class TestPromptCacheBreakpointToResponses:
             extra_kwargs={"prompt_cache_options": {"mode": "explicit"}},
         )
         assert kwargs["prompt_cache_options"] == {"mode": "explicit"}
+
+
+@pytest.mark.parametrize("remove", [False, True])
+def test_midturn_tool_changes_reach_responses_api(remove: bool) -> None:
+    tool: Final = {
+        "name": "get_weather",
+        "description": "Get the weather for a city",
+        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+    }
+    request: Final = {
+        "model": "test-model",
+        "max_tokens": 128,
+        "messages": [
+            {"role": "user", "content": "What is the weather in Dallas?"},
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "A new tool is available."},
+                    {"type": "tool_addition", "tool": {"type": "tool_definition", "definition": tool}},
+                ],
+            },
+            *(
+                [
+                    {
+                        "role": "system",
+                        "content": [
+                            {"type": "tool_removal", "tool": {"type": "tool_reference", "name": "get_weather"}}
+                        ],
+                    }
+                ]
+                if remove
+                else []
+            ),
+        ],
+    }
+    original: Final = copy.deepcopy(request)
+    translated: Final = _ADAPTER.translate_request(request)
+
+    assert translated.get("tools", []) == (
+        []
+        if remove
+        else [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": tool["description"],
+                "parameters": tool["input_schema"],
+                "strict": False,
+            }
+        ]
+    )
+    assert translated["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "What is the weather in Dallas?"}]},
+        {
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": "A new tool is available."}],
+        },
+    ]
+    assert request == original

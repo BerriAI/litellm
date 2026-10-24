@@ -6,6 +6,7 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
+from copy import deepcopy
 from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
@@ -19,7 +20,56 @@ from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
 from litellm.llms.anthropic.pass_through.adapters.transformation import truncate_tool_name
+from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
+
+
+class DropToolDefinitionsGuardrail(CustomGuardrail):
+    def __init__(self, *, remove_in_place: bool) -> None:
+        super().__init__(guardrail_name="drop-tools")
+        self.remove_in_place = remove_in_place
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        if self.remove_in_place:
+            inputs["tools"].clear()
+            return inputs
+        return {**inputs, "tools": []}
+
+
+@pytest.mark.parametrize("remove_in_place", [False, True])
+@pytest.mark.parametrize("with_text", [False, True])
+@pytest.mark.asyncio
+async def test_guardrail_removed_midturn_tools_are_not_reintroduced(with_text: bool, remove_in_place: bool) -> None:
+    user: Final = {"role": "user", "content": "Check the weather"}
+    text: Final = [{"type": "text", "text": "A tool is available"}] if with_text else []
+    data: Final = {
+        "model": "test-model",
+        "max_tokens": 128,
+        "messages": [
+            user,
+            {"role": "system", "content": [*text, {
+                "type": "tool_addition",
+                "tool": {
+                    "type": "tool_definition",
+                    "definition": {"name": "get_weather", "input_schema": {"type": "object"}},
+                },
+            }]},
+        ],
+    }
+
+    await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=DropToolDefinitionsGuardrail(remove_in_place=remove_in_place)
+    )
+    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(data)
+
+    assert translated.get("tools", []) == []
+    assert data["messages"] == [user, *([{"role": "system", "content": text}] if with_text else [])]
 
 
 class MockPassThroughGuardrail(CustomGuardrail):
@@ -34,6 +84,32 @@ class MockPassThroughGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         """Simply return inputs unchanged"""
         return inputs
+
+
+@pytest.mark.asyncio
+async def test_unchanged_guardrail_keeps_midturn_tool_history() -> None:
+    data: Final = {
+        "model": "test-model",
+        "max_tokens": 128,
+        "messages": [
+            {"role": "user", "content": "Check the weather"},
+            {"role": "system", "content": [{
+                "type": "tool_addition",
+                "tool": {
+                    "type": "tool_definition",
+                    "definition": {"name": "get_weather", "input_schema": {"type": "object"}},
+                },
+            }]},
+        ],
+    }
+    original: Final = deepcopy(data)
+
+    await AnthropicMessagesHandler().process_input_messages(
+        data=data, guardrail_to_apply=MockPassThroughGuardrail(guardrail_name="pass-through")
+    )
+
+    assert data["messages"] == original["messages"]
+    assert data.get("tools") == original.get("tools")
 
 
 class MockDynamicGuardrail(CustomGuardrail):
@@ -1632,6 +1708,50 @@ class ToolAppendingGuardrail(CustomGuardrail):
 class TestAnthropicMessagesHandlerToolInjection:
     """A tool a guardrail injects in OpenAI format must survive the write-back
     to Anthropic format alongside the request's original tools."""
+
+    @pytest.mark.asyncio
+    async def test_injected_tool_keeps_inline_long_tool_name_and_schema(self) -> None:
+        name: Final = "mcp__workspace_resources__get_accessible_projects_with_detailed_permissions"
+        tool: Final = {
+            "name": name,
+            "description": "List accessible projects",
+            "input_schema": {
+                "type": "object",
+                "properties": {"workspace_id": {"type": "string"}},
+                "required": ["workspace_id"],
+            },
+        }
+        user: Final = {"role": "user", "content": "List my projects"}
+        data: Final = {
+            "model": "test-model",
+            "max_tokens": 128,
+            "tool_choice": {"type": "tool", "name": name},
+            "messages": [
+                user,
+                {"role": "system", "content": [
+                    {"type": "tool_addition", "tool": {"type": "tool_definition", "definition": tool}},
+                ]},
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=ToolAppendingGuardrail(guardrail_name="append-tool")
+        )
+        translated, mapping = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(data)
+
+        assert data["tools"] == [
+            {"type": "custom", **tool},
+            {
+                "type": "custom",
+                "name": "injected_tool",
+                "description": "injected by guardrail",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+        ]
+        assert data["messages"] == [user]
+        assert data["tool_choice"] == {"type": "tool", "name": name}
+        assert mapping == {truncate_tool_name(name): name}
+        assert translated["tool_choice"] == {"type": "function", "function": {"name": truncate_tool_name(name)}}
 
     @pytest.mark.asyncio
     async def test_injected_tool_survives_when_request_already_has_tools(self):
