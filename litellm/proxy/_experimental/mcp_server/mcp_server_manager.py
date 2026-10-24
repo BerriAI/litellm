@@ -4765,11 +4765,15 @@ class MCPServerManager:
         if generation is not None and generation != self._listed_tools_generations.get(server.server_id, 0):
             return
         identity: Final = self._listed_tools_identity(server, caller)
-        existing: Final = self._blocked_tools_by_server_id.get(server.server_id, MappingProxyType({}))
-        prior: Final = existing.get(identity, {}) if continuation else {}
-        blocked: Final = MappingProxyType({**prior, **{tool.name: tool for tool in tools}})
-        shared: Final = existing.get(None)
-        callers: Final = tuple((key, value) for key, value in existing.items() if key not in (None, identity))
+        existing: Final[Mapping[str | None, Mapping[str, MCPTool]]] = self._blocked_tools_by_server_id.get(
+            server.server_id, MappingProxyType({})
+        )
+        prior: Final[Mapping[str, MCPTool]] = existing.get(identity, {}) if continuation else {}
+        blocked: Final[Mapping[str, MCPTool]] = MappingProxyType({**prior, **{tool.name: tool for tool in tools}})
+        shared: Final[Mapping[str, MCPTool] | None] = existing.get(None)
+        callers: Final[tuple[tuple[str | None, Mapping[str, MCPTool]], ...]] = tuple(
+            (key, value) for key, value in existing.items() if key not in (None, identity)
+        )
         evicted: Final = 0 if identity is None else max(len(callers) + 1 - _LISTED_TOOLS_CALLERS_PER_SERVER, 0)
         entries: Final = (
             *(() if shared is None else ((None, shared),)),
@@ -5803,10 +5807,11 @@ class MCPServerManager:
             server, proxy_logging_obj, AlertType.mcp_pinned_tools_changed, drift.alert(server) if drift else None
         )
         scan: Final = await scan_tool_descriptions(described, server, proxy_logging_obj, user_api_key_auth, raw_headers)
-        served_names: Final = frozenset(tool.name for tool in scan.served)
+        served_names: Final[frozenset[str]] = frozenset(tool.name for tool in scan.served)
+        blocked_tools: Final[tuple[MCPTool, ...]] = tuple(tool for tool in described if tool.name not in served_names)
         self.record_blocked_tools(
             server,
-            tuple(tool for tool in described if tool.name not in served_names),
+            blocked_tools,
             listed_caller,
             generation,
             continuation=continuation,
@@ -5911,11 +5916,13 @@ class MCPServerManager:
         name: str,
         caller: ListedToolsCaller | None = None,
     ) -> MCPTool | None:
-        listed: Final = self.get_listed_tool(server, name, caller)
+        listed: Final[MCPTool | None] = self.get_listed_tool(server, name, caller)
         if listed is not None:
             return listed
         identity: Final = self._listed_tools_identity(server, caller)
-        blocked: Final = self._blocked_tools_by_server_id.get(server.server_id, MappingProxyType({})).get(identity)
+        blocked: Final[Mapping[str, MCPTool] | None] = self._blocked_tools_by_server_id.get(
+            server.server_id, MappingProxyType({})
+        ).get(identity)
         return blocked.get(name) if blocked is not None else None
 
     def _create_prefixed_prompts(
