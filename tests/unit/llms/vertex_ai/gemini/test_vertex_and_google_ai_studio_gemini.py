@@ -1,5 +1,6 @@
 import asyncio, importlib, os, uuid
 import json
+import math
 import logging
 import re
 import threading
@@ -6096,6 +6097,34 @@ def test_vertex_ai_usage_metadata_video_tokens_with_caching():
     )
     assert result.prompt_tokens_details.text_tokens == 9
     assert result.prompt_tokens_details.audio_tokens == 200
+
+
+def test_gemini_cached_audio_tokens_billed_at_audio_cache_read_rate():
+    usage: Final = VertexGeminiConfig().calculate_usage(
+        completion_response={
+            "usageMetadata": {
+                "promptTokenCount": 10000,
+                "candidatesTokenCount": 10,
+                "totalTokenCount": 10010,
+                "cachedContentTokenCount": 4000,
+                "promptTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 6000},
+                    {"modality": "AUDIO", "tokenCount": 4000},
+                ],
+                "cacheTokensDetails": [{"modality": "AUDIO", "tokenCount": 4000}],
+            }
+        }
+    )
+
+    model_info: Final = litellm.get_model_info(model="gemini-2.5-flash", custom_llm_provider="gemini")
+    input_rate: Final = model_info.get("input_cost_per_token")
+    audio_cache_read_rate: Final = model_info.get("cache_read_input_audio_token_cost")
+    assert input_rate is not None and audio_cache_read_rate is not None
+    assert audio_cache_read_rate != model_info.get("cache_read_input_token_cost")
+    prompt_cost, _ = litellm.cost_per_token(model="gemini-2.5-flash", custom_llm_provider="gemini", usage_object=usage)
+    assert math.isclose(prompt_cost, 6000 * input_rate + 4000 * audio_cache_read_rate)
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.audio_tokens == 4000
 
 
 def test_vertex_ai_usage_metadata_with_document_tokens_in_prompt():
