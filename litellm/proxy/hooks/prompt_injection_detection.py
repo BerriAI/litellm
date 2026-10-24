@@ -34,6 +34,22 @@ HEURISTICS_EXECUTOR: Final = ThreadPoolExecutor(
 )
 
 
+ACCEPTED_PRE_CALL_CALL_TYPES: Final = frozenset(
+    {
+        "acompletion",
+        "completion",
+        "text_completion",
+        "embedding",
+        "aembedding",
+        "image_generation",
+        "moderation",
+        "audio_transcription",
+        "atranscription",
+        "transcription",
+    }
+)
+
+
 class _OPTIONAL_PromptInjectionDetection(CustomLogger):
     enforces_request_content: bool = True
 
@@ -159,19 +175,9 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             - check if user id part of blocked list
             """
             self.print_verbose("Inside Prompt Injection Detection Pre-Call Hook")
-            try:
-                assert call_type in [
-                    "acompletion",
-                    "completion",
-                    "text_completion",
-                    "embeddings",
-                    "image_generation",
-                    "moderation",
-                    "audio_transcription",
-                ]
-            except Exception:
+            if call_type not in ACCEPTED_PRE_CALL_CALL_TYPES:
                 self.print_verbose(
-                    f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
+                    f"Call Type - {call_type}, not in accepted list - {sorted(ACCEPTED_PRE_CALL_CALL_TYPES)}"
                 )
                 return data
             formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)
@@ -223,10 +229,13 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         call_type: Literal[
             "acompletion",
             "completion",
-            "embeddings",
+            "embedding",
+            "aembedding",
             "image_generation",
             "moderation",
             "audio_transcription",
+            "atranscription",
+            "transcription",
         ],
     ) -> bool | None:
         self.print_verbose(f"IN ASYNC MODERATION HOOK - self.prompt_injection_params = {self.prompt_injection_params}")
