@@ -7999,11 +7999,14 @@ async def vector_store_access_check(
     `retrieval_config.vector_store_id`. Grants come from each identity's
     `object_permission.vector_stores`.
 
-    With `deny_by_default=False` (legacy), a key or team only restricts access when its list is
-    nonempty, and stores are only read from the request when a vector store registry is loaded.
+    Both modes read the same request fields, with or without a vector store registry, and answer 400
+    when a `vector_store_ids` field is not a list of strings.
 
-    With `deny_by_default=True` (`general_settings.vector_store_deny_by_default`), stores are read
-    even without a registry, and a missing record, `null` or `[]` grants nothing:
+    With `deny_by_default=False` (legacy), a key or team only restricts access when its list is
+    nonempty.
+
+    With `deny_by_default=True` (`general_settings.vector_store_deny_by_default`), a missing record,
+    `null` or `[]` grants nothing:
 
     - virtual key: the key must grant every store, and so must its team when it has one, even if
       the team failed to load
@@ -8015,8 +8018,8 @@ async def vector_store_access_check(
     rescue nor restrict a key or team request.
 
     Raises ProxyException (401, `{key,team,user}_vector_store_access_denied`) on the first identity
-    that does not grant a requested store, and with the flag on, ProxyException (400,
-    `invalid_request_error`) when a `vector_store_ids` field is not a list of strings.
+    that does not grant a requested store, and ProxyException (400, `invalid_request_error`) when a
+    `vector_store_ids` field is not a list of strings.
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -8027,21 +8030,11 @@ async def vector_store_access_check(
         verbose_proxy_logger.debug("Prisma client not found, skipping vector store access check")
         return True
 
-    registry_ids: Final = (
-        _strict_requested_vector_store_ids(_typed_request_body(request_body))
-        if deny_by_default
-        else (
-            litellm.vector_store_registry.get_vector_store_ids_to_run(
-                non_default_params=request_body, tools=request_body.get("tools", None)
-            )
-            if litellm.vector_store_registry is not None
-            else None
-        )
-        or ()
-    )
-    rag_vector_store_id: Final = _get_rag_query_vector_store_id(_typed_request_body(request_body))
+    typed_request_body: Final = _typed_request_body(request_body)
+    requested_ids: Final = _strict_requested_vector_store_ids(typed_request_body)
+    rag_vector_store_id: Final = _get_rag_query_vector_store_id(typed_request_body)
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
-    vector_store_ids_to_run: Final = tuple(dict.fromkeys((*registry_ids, *rag_ids)))
+    vector_store_ids_to_run: Final = tuple(dict.fromkeys((*requested_ids, *rag_ids)))
     if not vector_store_ids_to_run:
         verbose_proxy_logger.debug("Vector store to run not found, skipping vector store access check")
         return True
