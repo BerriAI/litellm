@@ -89,6 +89,7 @@ from litellm.proxy.spend_tracking.savings import (
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
+from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
@@ -678,18 +679,22 @@ class DBSpendUpdateWriter:
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
 
-            await self._batch_database_updates(
-                response_cost=response_cost,
-                user_id=user_id,
-                hashed_token=hashed_token,
-                team_id=team_id,
-                org_id=org_id,
-                project_id=project_id,
-                end_user_id=end_user_id,
-                prisma_client=prisma_client,
-                litellm_proxy_budget_name=litellm_proxy_budget_name,
-                payload=payload,
-                request_model_access_groups=get_request_model_access_groups(kwargs),
+            await spawn_logging_task(
+                asyncio.get_running_loop(),
+                self._batch_database_updates(
+                    response_cost=response_cost,
+                    user_id=user_id,
+                    hashed_token=hashed_token,
+                    team_id=team_id,
+                    org_id=org_id,
+                    project_id=project_id,
+                    end_user_id=end_user_id,
+                    prisma_client=prisma_client,
+                    litellm_proxy_budget_name=litellm_proxy_budget_name,
+                    payload=payload,
+                    request_model_access_groups=get_request_model_access_groups(kwargs),
+                ),
+                task_name="spend rollups",
             )
 
             self._enqueue_tool_registry_upsert(
