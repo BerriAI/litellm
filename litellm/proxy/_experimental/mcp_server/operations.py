@@ -47,7 +47,15 @@ from mcp.types import (
     ToolsCapability,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, ConfigDict, Field, JsonValue, SecretStr, TypeAdapter
+from pydantic import (
+    AnyUrl,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SecretStr,
+    TypeAdapter,
+    ValidationError,
+)
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_logger
@@ -184,6 +192,7 @@ __all__ = (
     "_check_byok_credential",
     "_client_has_passthrough_authorization",
     "_client_has_per_server_auth_header",
+    "_dispatch_mcp_tool_search",
     "_dispatch_virtual_mcp_tool",
     "_fire_mcp_tool_call_logging",
     "_get_allowed_mcp_servers",
@@ -407,6 +416,108 @@ async def _log_virtual_mcp_tool_failure(
         verbose_logger.exception("Error logging failed MCP proxy tool call")
 
 
+async def _dispatch_mcp_tool_search(
+    query: str,
+    top_k: int,
+    user_api_key_auth: UserAPIKeyAuth,
+    client_ip: str | None = None,
+    mcp_servers: list[str] | None = None,
+    mcp_auth_header: str | None = None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
+    oauth2_headers: dict[str, str] | None = None,
+    raw_headers: dict[str, str] | None = None,
+) -> CallToolResult:
+    from litellm.proxy._experimental.mcp_server.tool_search import (
+        MCP_TOOL_SEARCH_TOOL_NAME,
+        handle_mcp_tool_search,
+        mcp_tool_search_settings,
+    )
+    from litellm.proxy.common_request_processing import (
+        ProxyBaseLLMRequestProcessing,
+    )
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        proxy_config,
+        proxy_logging_obj,
+    )
+
+    settings: Final = mcp_tool_search_settings()
+    if not isinstance(settings, ValidationError) and settings.embedding_model is not None:
+        return await handle_mcp_tool_search(
+            query=query,
+            top_k=top_k,
+            user_api_key_dict=user_api_key_auth,
+            client_ip=client_ip,
+            mcp_servers=mcp_servers,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+        )
+
+    start_time: Final = datetime.now()  # noqa: DTZ005  # logging timestamps are naive
+    request_data: Final = {"query": query, "top_k": top_k}
+    request: Final = build_synthetic_mcp_request(
+        path="/mcp/tools/call",
+        raw_headers=raw_headers,
+        client_ip=client_ip,
+    )
+    processor: Final = ProxyBaseLLMRequestProcessing(
+        data={"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": request_data}
+    )
+    try:
+        pre_call_result: Final = await processor.common_processing_pre_call_logic(
+            request=request,
+            user_api_key_dict=user_api_key_auth,
+            proxy_config=proxy_config,
+            route_type=CallTypes.call_mcp_tool.value,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+        )
+        _, logging_candidate = TypeAdapter(tuple[dict[str, object], object]).validate_python(pre_call_result)
+    except Exception as exc:
+        await fire_mcp_tool_call_failure_logging(
+            None,
+            exc,
+            start_time,
+            user_api_key_auth,
+            request_data,
+        )
+        raise
+    logging_obj: Final = logging_candidate if isinstance(logging_candidate, LiteLLMLoggingObj) else None
+    try:
+        result: Final = await handle_mcp_tool_search(
+            query=query,
+            top_k=top_k,
+            user_api_key_dict=user_api_key_auth,
+            client_ip=client_ip,
+            mcp_servers=mcp_servers,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+        )
+    except Exception as exc:
+        await fire_mcp_tool_call_failure_logging(
+            logging_obj,
+            exc,
+            start_time,
+            user_api_key_auth,
+            request_data,
+        )
+        raise
+    if logging_obj is None:
+        return result
+    return await _fire_mcp_tool_call_logging(
+        logging_obj=logging_obj,
+        result=result,
+        start_time=start_time,
+        end_time=datetime.now(),  # noqa: DTZ005  # logging timestamps are naive
+        user_api_key_auth=user_api_key_auth,
+        request_data=request_data,
+    )
+
+
 async def _dispatch_virtual_mcp_tool(
     name: str,
     arguments: dict[str, object] | None,
@@ -438,7 +549,6 @@ async def _dispatch_virtual_mcp_tool(
         handle_agent_search,
         handle_mcp_proxy_tool,
         handle_mcp_tool_call,
-        handle_mcp_tool_search,
         handle_skill_search,
     )
 
@@ -562,10 +672,10 @@ async def _dispatch_virtual_mcp_tool(
 
     args: Final = arguments or {}
     if name == MCP_TOOL_SEARCH_TOOL_NAME:
-        return await handle_mcp_tool_search(
+        return await _dispatch_mcp_tool_search(
             query=TypeAdapter(str).validate_python(args.get("query", "")),
             top_k=coerce_top_k(args.get("top_k", 5)),
-            user_api_key_dict=user_api_key_auth,
+            user_api_key_auth=user_api_key_auth,
             client_ip=client_ip,
             mcp_servers=mcp_servers,
             mcp_auth_header=mcp_auth_header,

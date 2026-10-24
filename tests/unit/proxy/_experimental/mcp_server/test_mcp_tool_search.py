@@ -1057,11 +1057,9 @@ class TestDispatchVirtualMcpTool:
 
     @pytest.mark.asyncio
     async def test_routes_search_with_client_ip(self) -> None:
-        from litellm.proxy._experimental.mcp_server import server as srv
-
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with patch(
-            "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+            "litellm.proxy._experimental.mcp_server.operations._dispatch_mcp_tool_search",
             new_callable=AsyncMock,
             return_value="SEARCH_RESULT",
         ) as mock_search:
@@ -1177,11 +1175,9 @@ class TestDispatchVirtualMcpTool:
     async def test_search_coerces_non_int_top_k(self) -> None:
         """Regression: a non-integer top_k from an MCP client must not raise; it
         falls back to the default instead of ValueError propagating out."""
-        from litellm.proxy._experimental.mcp_server import server as srv
-
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with patch(
-            "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+            "litellm.proxy._experimental.mcp_server.operations._dispatch_mcp_tool_search",
             new_callable=AsyncMock,
             return_value="SEARCH_RESULT",
         ) as mock_search:
@@ -1193,6 +1189,92 @@ class TestDispatchVirtualMcpTool:
             )
 
         assert mock_search.await_args.kwargs["top_k"] == 5
+
+    @pytest.mark.asyncio
+    async def test_keyword_search_runs_admission_and_completed_logging(
+        self, monkeypatch
+    ) -> None:
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.proxy._experimental.mcp_server.tool_search import (
+            MCP_TOOL_SEARCH_TOOL_NAME,
+        )
+
+        monkeypatch.setattr(litellm, "mcp_tool_search", {})
+        uak = UserAPIKeyAuth(api_key="k")
+        sentinel_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+        processors = []
+
+        class FakeProcessor:
+            def __init__(self, data):
+                self.data = data
+                processors.append(self)
+
+            async def common_processing_pre_call_logic(self, **kwargs):
+                return self.data, sentinel_logging_obj
+
+        with (
+            patch(
+                "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+                FakeProcessor,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+                new_callable=AsyncMock,
+                return_value="SEARCH_RESULT",
+            ),
+            patch.object(
+                mcp_operations,
+                "_fire_mcp_tool_call_logging",
+                new_callable=AsyncMock,
+                return_value="LOGGED_SEARCH_RESULT",
+            ) as mock_fire,
+        ):
+            result = await mcp_operations._dispatch_mcp_tool_search(
+                query="ping",
+                top_k=3,
+                user_api_key_auth=uak,
+            )
+
+        assert processors[0].data["name"] == MCP_TOOL_SEARCH_TOOL_NAME
+        assert processors[0].data["arguments"] == {
+            "query": "ping",
+            "top_k": 3,
+        }
+        assert mock_fire.await_count == 1
+        assert result == "LOGGED_SEARCH_RESULT"
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_keeps_embedding_request_accounting(
+        self, monkeypatch
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(
+            litellm, "mcp_tool_search", {"embedding_model": "embedding-model"}
+        )
+        uak = UserAPIKeyAuth(api_key="k")
+        with (
+            patch(
+                "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+                side_effect=AssertionError("semantic path must not add another request"),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+                new_callable=AsyncMock,
+                return_value="SEARCH_RESULT",
+            ) as mock_search,
+        ):
+            result = await mcp_operations._dispatch_mcp_tool_search(
+                query="ping",
+                top_k=3,
+                user_api_key_auth=uak,
+            )
+
+        assert mock_search.await_count == 1
+        assert result == "SEARCH_RESULT"
 
     @pytest.mark.asyncio
     async def test_call_handler_forwards_auth_headers_to_execute(self) -> None:
