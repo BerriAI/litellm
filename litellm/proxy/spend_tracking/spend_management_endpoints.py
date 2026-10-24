@@ -2575,7 +2575,7 @@ async def ui_view_spend_logs(
         description="Filter logs by model ID (litellm model deployment id)",
     ),
     model_group: str | None = fastapi.Query(default=None, description="Filter logs by model group"),
-    key_alias: str | None = fastapi.Query(default=None, description="Filter logs by key alias"),
+    key_alias: str | None = fastapi.Query(default=None, description="Filter logs by exact key alias match"),
     end_user: str | None = fastapi.Query(default=None, description="Filter logs by end user"),
     error_code: str | None = fastapi.Query(default=None, description="Filter logs by error code (e.g., '404', '500')"),
     error_message: str | None = fastapi.Query(
@@ -2754,14 +2754,6 @@ async def ui_view_spend_logs(
 
         # Build metadata filters
         metadata_filters: Final = []
-        if key_alias is not None:
-            metadata_filters.append(
-                {
-                    "path": ["user_api_key_alias"],
-                    "string_contains": key_alias,
-                }
-            )
-
         if error_code is not None:
             metadata_filters.append(
                 {
@@ -2929,8 +2921,11 @@ async def ui_view_spend_logs(
 
         # Metadata JSON filters (PostgreSQL JSONB operators)
         if key_alias is not None:
-            sql_conditions.append(f"metadata->>'user_api_key_alias' LIKE ${p}")
-            sql_params.append(f"%{key_alias}%")
+            sql_conditions.append(
+                f'api_key IN (SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = ${p} '
+                f'UNION SELECT token FROM "LiteLLM_DeletedVerificationToken" WHERE key_alias = ${p})'
+            )
+            sql_params.append(key_alias)
             p += 1
         if error_code is not None:
             sql_conditions.append(f"metadata->'error_information'->>'error_code' = ${p}")
