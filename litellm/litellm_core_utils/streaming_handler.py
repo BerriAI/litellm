@@ -71,7 +71,8 @@ FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 
 _SYNC_ITER_EXHAUSTED: Final = object()
 
-_GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
+_GCHUNK_FIELDS: Final[frozenset[str]] = frozenset(GChunk.__annotations__)
+_GCHUNK_REQUIRED_FIELDS: Final[frozenset[str]] = frozenset(GChunk.__required_keys__)
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
@@ -1284,11 +1285,10 @@ class CustomStreamWrapper:
         completion_obj: dict[str, object],
     ) -> _ProviderChunkResult:
         response_obj: dict[str, Any] = {}
-        if (
-            isinstance(chunk, ModelResponseStream)
-            and self.custom_llm_provider is not None
-            and self.custom_llm_provider in litellm._custom_providers
-        ):
+        is_registered_custom_provider: Final = (
+            self.custom_llm_provider is not None and self.custom_llm_provider in litellm._custom_providers
+        )
+        if isinstance(chunk, ModelResponseStream) and is_registered_custom_provider:
             _has_content: Final = bool(
                 chunk.choices
                 and chunk.choices[0].delta is not None
@@ -1307,10 +1307,27 @@ class CustomStreamWrapper:
                 chunk.choices[0].finish_reason = None
             return _ProviderChunkEarlyReturn(chunk)
 
+        is_generic_chunk: Final = isinstance(chunk, dict) and (
+            generic_chunk_has_all_required_fields(chunk=chunk)
+            or (is_registered_custom_provider and _GCHUNK_REQUIRED_FIELDS <= chunk.keys())
+        )
         if (
             isinstance(chunk, dict)
-            and generic_chunk_has_all_required_fields(chunk=chunk)  # check if chunk is a generic streaming chunk
-        ) or (self.custom_llm_provider and self.custom_llm_provider in litellm._custom_providers):
+            and not is_generic_chunk
+            and (chunk.keys() <= _GCHUNK_FIELDS or is_registered_custom_provider)
+        ):
+            partial_chunk: Final = cast(  # cast-ok: chunk is narrowed to a generic dictionary above
+                dict[str, object], chunk
+            )
+            partial_chunk_usage: Final = partial_chunk.get("usage")
+            if isinstance(partial_chunk_usage, dict):
+                model_response.usage = (  # rebind-ok: retain usage from a partial provider chunk
+                    litellm.Usage.model_validate(partial_chunk_usage)
+                )
+                return _ProviderChunkParsed(partial_chunk)
+            return _ProviderChunkEarlyReturn(None)
+
+        if is_generic_chunk:
             if self.received_finish_reason is not None:
                 _chunk_has_content: Final = isinstance(chunk, dict) and (
                     bool(chunk.get("text", ""))
@@ -2737,7 +2754,7 @@ def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
     :param chunk: The dictionary to check.
     :return: True if all required fields are present, False otherwise.
     """
-    return all(key in _GCHUNK_FIELDS for key in chunk)
+    return _GCHUNK_REQUIRED_FIELDS <= chunk.keys() <= _GCHUNK_FIELDS
 
 
 def convert_generic_chunk_to_model_response_stream(
