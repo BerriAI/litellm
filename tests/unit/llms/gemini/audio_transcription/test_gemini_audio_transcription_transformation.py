@@ -1,5 +1,7 @@
 import base64
 import json
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
 import pytest
@@ -10,7 +12,7 @@ from litellm.llms.gemini.audio_transcription.transformation import (
 )
 from litellm.llms.gemini.common_utils import GeminiError
 from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, get_optional_params_transcription
 
 AUDIO_BYTES = b"RIFF....WAVEfmt fake-wav-bytes"
 
@@ -123,6 +125,76 @@ class TestGetCompleteUrl:
 
 
 class TestTransformRequest:
+    @pytest.mark.parametrize(
+        ("params", "expected_codes"),
+        [
+            ({"language_codes": ["en", "es-ES"]}, ["en-US", "es-ES"]),
+            ({"language_codes": '["en", "es-ES"]'}, ["en-US", "es-ES"]),
+            ({"language_codes": [" en ", " es-ES "]}, ["en-US", "es-ES"]),
+            ({"language_codes": ["zh-Hant-TW", "zh-Hans-CN"]}, ["zh-Hant-TW", "zh-Hans-CN"]),
+            ({"language": "fr", "language_codes": ["en", "es"]}, ["en-US", "es-ES"]),
+            ({"language": "fr", "language_codes": []}, []),
+            ({"language": "fr", "language_codes": "[]"}, []),
+            ({"language": "fr", "language_codes": None}, ["fr-FR"]),
+        ],
+    )
+    def test_language_codes_reach_gemini_through_provider_params(
+        self,
+        config: GeminiAudioTranscriptionConfig,
+        params: Mapping[str, object],
+        expected_codes: list[str],
+    ) -> None:
+        optional_params: Final = get_optional_params_transcription(
+            model="gemini-3.5-transcribe", custom_llm_provider="gemini", **params
+        )
+        request_data: Final = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params=optional_params,
+            litellm_params={},
+        )
+        assert json.loads(json.dumps(request_data.data)) == {
+            "model": "gemini-3.5-transcribe",
+            "input": [
+                {
+                    "type": "audio",
+                    "data": base64.b64encode(AUDIO_BYTES).decode("utf-8"),
+                    "mime_type": "audio/wav",
+                }
+            ],
+            "generation_config": {"transcription_config": {"language_codes": expected_codes}},
+        }
+
+    @pytest.mark.parametrize(
+        "language_codes",
+        ["en", '"en"', "[", "null", 1, {}, ["en", 1], ["en", ""], [" "], '["en", null]'],
+    )
+    def test_invalid_language_codes_raise_instead_of_silently_dropping_hints(
+        self, config: GeminiAudioTranscriptionConfig, language_codes: object
+    ) -> None:
+        with pytest.raises(GeminiError, match="language_codes must be a list of non-empty language strings") as excinfo:
+            config.transform_audio_transcription_request(
+                model="gemini-3.5-transcribe",
+                audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+                optional_params={"language_codes": language_codes},
+                litellm_params={},
+            )
+        assert excinfo.value.status_code == 400
+
+    def test_multiple_language_codes_preserve_word_timestamps(self, config: GeminiAudioTranscriptionConfig) -> None:
+        request_data: Final = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={"language_codes": ["en-US", "es-ES"], "timestamp_granularities": ["word"]},
+            litellm_params={},
+        )
+        assert json.loads(json.dumps(request_data.data["generation_config"])) == {
+            "transcription_config": {
+                "language_codes": ["en-US", "es-ES"],
+                "mode": {"type": "verbatim", "timestamp_granularities": ["word"], "diarization_mode": "speaker"},
+            }
+        }
+
     def test_builds_json_interaction_request(self, config):
         request_data = config.transform_audio_transcription_request(
             model="gemini/gemini-3.5-transcribe",

@@ -11,9 +11,10 @@ import contextlib
 import os
 import sys
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Final, Iterator, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 # Repo root, anchored to this file (not CWD) so the path is correct no
@@ -536,3 +537,41 @@ def reset_login_throttle(monkeypatch):
     _drop_throttle_keys()
     yield _drop_throttle_keys
     _drop_throttle_keys()
+
+
+@pytest.fixture
+async def gemini_transcription_requests(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[list[httpx.Request]]:
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy import proxy_server
+
+    requests: Final[list[httpx.Request]] = []  # mutable-ok: captures requests to the injected provider transport
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "test-interaction",
+                "status": "completed",
+                "steps": [{"type": "model_generation", "content": [{"type": "text", "text": "Hello world."}]}],
+            },
+        )
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-transcribe",
+                "litellm_params": {"model": "gemini/gemini-3.5-transcribe", "api_key": "test-key"},
+            }
+        ],
+        num_retries=0,
+        default_litellm_params={"client": handler},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    try:
+        yield requests
+    finally:
+        router.discard()
+        await handler.close()
