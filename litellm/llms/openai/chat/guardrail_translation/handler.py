@@ -19,7 +19,7 @@ import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -121,7 +121,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
         tool_calls_to_check: Final[list[ChatCompletionToolParam]] = []
-        text_task_mappings: Final[list[tuple[int, int | None]]] = []
+        text_task_mappings: Final[list[tuple[int, int | Literal["reasoning_content"] | None]]] = []
         tool_call_task_mappings: Final[list[tuple[int, int]]] = []
 
         # Step 1: Extract all text content, images, and tool calls
@@ -280,7 +280,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         texts_to_check: list[str],
         images_to_check: list[str],
         tool_calls_to_check: list[ChatCompletionToolParam],
-        text_task_mappings: list[tuple[int, int | None]],
+        text_task_mappings: list[tuple[int, int | Literal["reasoning_content"] | None]],
         tool_call_task_mappings: list[tuple[int, int]],
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
@@ -325,6 +325,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         elif isinstance(image_url, str):
                             images_to_check.append(image_url)
 
+        reasoning_content: Final = message.get("reasoning_content", None)
+        if isinstance(reasoning_content, str):
+            texts_to_check.append(reasoning_content)
+            text_task_mappings.append((msg_idx, "reasoning_content"))
+
         # Extract tool calls (typically in assistant messages)
         tool_calls: Final = message.get("tool_calls", None)
         if tool_calls is not None and isinstance(tool_calls, list):
@@ -338,7 +343,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         messages: list[dict[str, object]],
         responses: list[str],
-        task_mappings: list[tuple[int, int | None]],
+        task_mappings: list[tuple[int, int | Literal["reasoning_content"] | None]],
     ) -> None:
         """
         Apply guardrail responses back to input message text content.
@@ -348,6 +353,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         for task_idx, guardrail_response in enumerate(responses):
             mapping = task_mappings[task_idx]
             msg_idx = cast(int, mapping[0])
+            if mapping[1] == "reasoning_content":
+                message = messages[msg_idx]
+                message["reasoning_content"] = guardrail_response
+                continue
             content_idx_optional = cast(int | None, mapping[1])
 
             # Handle content
