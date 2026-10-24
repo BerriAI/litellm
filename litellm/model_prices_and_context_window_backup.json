@@ -46268,6 +46268,7 @@
         "litellm_provider": "perplexity",
         "max_input_tokens": 262144,
         "mode": "evaluation",
+        "rerank_strategy": "multiple_choice",
         "output_cost_per_token": 0.0,
         "source": "https://docs.perplexity.ai/api-reference/decisions-post"
     },
@@ -46276,6 +46277,7 @@
         "litellm_provider": "perplexity",
         "max_input_tokens": 262144,
         "mode": "evaluation",
+        "rerank_strategy": "multiple_choice",
         "output_cost_per_token": 0.0,
         "source": "https://docs.perplexity.ai/docs/getting-started/pricing"
     },
@@ -46284,6 +46286,7 @@
         "litellm_provider": "perplexity",
         "max_input_tokens": 262144,
         "mode": "evaluation",
+        "rerank_strategy": "multiple_choice",
         "output_cost_per_token": 0.0,
         "source": "https://docs.perplexity.ai/docs/decisions/quickstart"
     },
@@ -46292,6 +46295,7 @@
         "litellm_provider": "perplexity",
         "max_input_tokens": 262144,
         "mode": "evaluation",
+        "rerank_strategy": "multiple_choice",
         "output_cost_per_token": 0.0,
         "source": "https://docs.perplexity.ai/docs/decisions/quickstart"
     },
@@ -46300,6 +46304,7 @@
         "litellm_provider": "perplexity",
         "max_input_tokens": 262144,
         "mode": "evaluation",
+        "rerank_strategy": "multiple_choice",
         "output_cost_per_token": 0.0,
         "source": "https://docs.perplexity.ai/docs/decisions/quickstart"
     },
@@ -46308,6 +46313,7 @@
         "litellm_provider": "perplexity",
         "max_input_tokens": 262144,
         "mode": "evaluation",
+        "rerank_strategy": "multiple_choice",
         "output_cost_per_token": 0.0,
         "source": "https://docs.perplexity.ai/docs/decisions/quickstart"
     },
@@ -72478,6 +72484,7 @@
         "litellm_provider": "typesafe",
         "max_input_tokens": 65536,
         "mode": "evaluation",
+        "rerank_strategy": "pointwise",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
     },
@@ -72486,6 +72493,7 @@
         "litellm_provider": "typesafe",
         "max_input_tokens": 65536,
         "mode": "evaluation",
+        "rerank_strategy": "pointwise",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models",
         "supports_box_questions": true
@@ -72495,6 +72503,7 @@
         "litellm_provider": "typesafe",
         "max_input_tokens": 65536,
         "mode": "evaluation",
+        "rerank_strategy": "pointwise",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
     },
@@ -72503,6 +72512,7 @@
         "litellm_provider": "typesafe",
         "max_input_tokens": 65536,
         "mode": "evaluation",
+        "rerank_strategy": "pointwise",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models",
         "supports_box_questions": true
