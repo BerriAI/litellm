@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast  # noqa: TID251  #
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm._internal_context import is_internal_call
+from litellm._internal_context import emulated_file_search_phase, is_internal_call
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import ResponseOutputItem, ResponsesAPIResponse
 from litellm.types.vector_stores import VectorStoreSearchResult
@@ -537,15 +537,16 @@ async def aresponses_with_emulated_file_search(
     _prev_internal: Final = is_internal_call.get()
     is_internal_call.set(True)
     try:
-        first_response: Final[ResponsesAPIResponse] = cast(
-            ResponsesAPIResponse,
-            await _call_aresponses(
-                input=input,
-                model=model,
-                tools=transformed_tools or None,
-                **call_kwargs,
-            ),
-        )
+        with emulated_file_search_phase():
+            first_response: Final[ResponsesAPIResponse] = cast(
+                ResponsesAPIResponse,
+                await _call_aresponses(
+                    input=input,
+                    model=model,
+                    tools=transformed_tools or None,
+                    **call_kwargs,
+                ),
+            )
     finally:
         is_internal_call.set(_prev_internal)
 
@@ -601,15 +602,16 @@ async def aresponses_with_emulated_file_search(
     # Also an internal sub-call; billing is suppressed so the outer call fires once.
     is_internal_call.set(True)
     try:
-        final_response: Final[ResponsesAPIResponse] = cast(
-            ResponsesAPIResponse,
-            await _call_aresponses(
-                input=follow_up_input,
-                model=model,
-                tools=None,  # no tools needed for the answer step
-                **call_kwargs,
-            ),
-        )
+        with emulated_file_search_phase():
+            final_response: Final[ResponsesAPIResponse] = cast(
+                ResponsesAPIResponse,
+                await _call_aresponses(
+                    input=follow_up_input,
+                    model=model,
+                    tools=None,  # no tools needed for the answer step
+                    **call_kwargs,
+                ),
+            )
     finally:
         is_internal_call.set(_prev_internal)
 
