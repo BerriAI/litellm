@@ -1157,9 +1157,6 @@
     }
   },
   "src/app/(dashboard)/workflows/WorkflowRuns.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-syntax": {
       "count": 3
     },
