@@ -381,6 +381,7 @@ def rerank(
                 optional_params=optional_params.model_dump(exclude_unset=True),
                 timeout=optional_params.timeout,
                 api_base=api_base,
+                api_key=dynamic_api_key or optional_params.api_key,
                 extra_headers=merged_headers,
                 logging_obj=litellm_logging_obj,
                 client=client,
