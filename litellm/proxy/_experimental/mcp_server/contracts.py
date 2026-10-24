@@ -26,11 +26,13 @@ if TYPE_CHECKING:
         ListToolsResult,
     )
 
+    from litellm.proxy._experimental.mcp_server.skills import ListSkillsRequest, ListSkillsResult
+
     CatalogListRequest: TypeAlias = (
-        ListToolsRequest | ListPromptsRequest | ListResourcesRequest | ListResourceTemplatesRequest
+        ListToolsRequest | ListPromptsRequest | ListResourcesRequest | ListResourceTemplatesRequest | ListSkillsRequest
     )
     CatalogListResult: TypeAlias = (
-        ListToolsResult | ListPromptsResult | ListResourcesResult | ListResourceTemplatesResult
+        ListToolsResult | ListPromptsResult | ListResourcesResult | ListResourceTemplatesResult | ListSkillsResult
     )
 
     from litellm.proxy._experimental.mcp_server.server_resolution import ResolvedMCPServer
@@ -70,6 +72,7 @@ class OperationContext:
     mcp_proxy_mode: bool = False
     wire_compat: WireCompat = WireCompat.LEGACY
     protocol_version: str | None = None
+    client_extensions: frozenset[str] = frozenset()
     incoming_bearer_token: SecretStr | None | EllipsisType = field(default=..., repr=False)
 
     def __post_init__(self) -> None:

@@ -671,3 +671,50 @@ def test_partial_optional_catalog_never_advertises_freshness() -> None:
     assert result.ttl_ms == 0
     assert result.cache_scope == "private"
 
+
+@pytest.mark.asyncio
+async def test_skills_catalog_fans_out_to_allowed_servers_and_continues_each_cursor(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.skills import ListSkillsRequest, ListSkillsResult, Skill
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "skills-catalog-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    billing: Final = MCPServer(server_id="billing", name="billing", transport=MCPTransport.http)
+    support: Final = MCPServer(server_id="support", name="support", transport=MCPTransport.http)
+    hidden: Final = MCPServer(server_id="hidden", name="hidden", transport=MCPTransport.http)
+    monkeypatch.setattr(
+        operations.global_mcp_server_manager, "registry", {s.server_id: s for s in (billing, support, hidden)}
+    )
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[billing, support]))
+
+    def skill(uri: str) -> Skill:
+        return Skill.model_validate(
+            {"uri": uri, "frontmatter": {"name": uri}, "resources": [{"uri": uri, "digest": "sha256:0", "size": 1}]}
+        )
+
+    pages: Final = {
+        ("billing", None): ListSkillsResult(skills=(skill("skill://billing/a/SKILL.md"),), next_cursor="billing-2"),
+        ("billing", "billing-2"): ListSkillsResult(skills=(skill("skill://billing/b/SKILL.md"),)),
+        ("support", None): ListSkillsResult(skills=(skill("skill://support/a/SKILL.md"),)),
+    }
+
+    async def fetch(
+        context: object, request: object, server: MCPServer, allowed: object, cursor: str | None
+    ) -> ListSkillsResult:
+        assert isinstance(request, ListSkillsRequest)
+        return pages[(server.server_id, cursor)]
+
+    monkeypatch.setattr(catalog, "fetch_optional_catalog_page", AsyncMock(side_effect=fetch))
+    context: Final = operations.prepare_context()
+    first: Final = await catalog.list_gateway_catalog(context, ListSkillsRequest())
+    assert isinstance(first, ListSkillsResult)
+    assert sorted(entry.uri for entry in first.skills) == ["skill://billing/a/SKILL.md", "skill://support/a/SKILL.md"]
+    assert first.model_dump(mode="json", by_alias=True)["skills"][0]["resources"][0]["digest"] == "sha256:0"
+    assert first.next_cursor
+    second: Final = await catalog.list_gateway_catalog(
+        context, ListSkillsRequest(params=PaginatedRequestParams(cursor=first.next_cursor))
+    )
+    assert isinstance(second, ListSkillsResult)
+    assert [entry.uri for entry in second.skills] == ["skill://billing/b/SKILL.md"]
+    assert second.next_cursor is None

@@ -1164,6 +1164,7 @@ async def test_mcp_read_resource_success():
         oauth2_headers=None,
         raw_headers=None,
         user_api_key_auth=user_api_key_auth,
+        scope_servers=[server],
     )
     mock_manager.read_resource_from_server.assert_awaited_once_with(
         server=server,
@@ -11476,8 +11477,11 @@ def test_protocol_header_respects_configured_advertisement(revision, rejected):
 
 
 @pytest.mark.asyncio
-async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ctx):
-    from mcp.types import DiscoverResult, RequestParams, ServerCapabilities
+@pytest.mark.parametrize("declared", (frozenset(), frozenset({"io.modelcontextprotocol/skills"})))
+async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ctx, declared: frozenset[str]):
+    from types import SimpleNamespace
+
+    from mcp.types import ClientCapabilities, DiscoverResult, RequestParams, ServerCapabilities
     from litellm.proxy._experimental.mcp_server import server
 
     expected = DiscoverResult(supported_versions=["2025-11-25"], capabilities=ServerCapabilities())
@@ -11491,11 +11495,19 @@ async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ct
         ),
         patch.object(server.operations.GatewayOperations, "execute", dispatched),
     ):
-        result = await server.discover(_mcp_request_ctx(), RequestParams())
+        result = await server.discover(
+            _mcp_request_ctx(
+                session=SimpleNamespace(
+                    client_capabilities=ClientCapabilities(extensions={name: {} for name in declared})
+                )
+            ),
+            RequestParams(),
+        )
     assert result is expected
     context = dispatched.await_args.args[1]
     assert context.user_api_key_auth.user_id == "discover-caller"
     assert context.mcp_servers == ("allowed",)
+    assert context.client_extensions == declared
 
 
 @pytest.mark.asyncio

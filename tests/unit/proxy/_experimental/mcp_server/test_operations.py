@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from collections.abc import Callable, Sequence
 from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
@@ -1374,10 +1375,16 @@ async def test_discovery_skips_disabled_capability_listings(disabled: str, monke
         ResourceTemplate,
     )
 
+    from dataclasses import replace
+
     from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.skills import SKILLS_EXTENSION, ListSkillsResult, Skill
 
     monkeypatch.setitem(proxy_server.general_settings, "mcp_disabled_capabilities", [disabled])
-    context: Final = prepare_context(UserAPIKeyAuth(user_id="scoped"), mcp_servers=["authorized"])
+    context: Final = replace(
+        prepare_context(UserAPIKeyAuth(user_id="scoped"), mcp_servers=["authorized"]),
+        client_extensions=frozenset({SKILLS_EXTENSION}),
+    )
     tools: Final = AsyncMock(return_value=ListToolsResult(tools=[]))
     prompts: Final = AsyncMock(return_value=ListPromptsResult(prompts=[Prompt(name="allowed")]))
     resources: Final = AsyncMock(
@@ -1388,7 +1395,11 @@ async def test_discovery_skips_disabled_capability_listings(disabled: str, monke
             resource_templates=[ResourceTemplate(name="allowed", uri_template="test://{id}")]
         )
     )
+    skills: Final = AsyncMock(
+        return_value=ListSkillsResult(skills=(Skill(uri="skill://allowed/SKILL.md", frontmatter={"name": "allowed"}),))
+    )
     with (
+        patch.object(operations, "_execute_list_skills", skills),
         patch.object(operations, "_execute_handle_list_tools", tools),
         patch.object(operations, "_execute_list_prompts", prompts),
         patch.object(operations, "_execute_list_resources", resources),
@@ -1397,6 +1408,7 @@ async def test_discovery_skips_disabled_capability_listings(disabled: str, monke
         result = await GatewayOperations().execute(DiscoverRequest(), context)
     assert (result.capabilities.prompts is None) == (disabled == "prompts")
     assert (result.capabilities.resources is None) == (disabled == "resources")
+    assert skills.await_count == (0 if disabled == "resources" else 1)
     if disabled == "prompts":
         prompts.assert_not_awaited()
     else:
@@ -1989,8 +2001,13 @@ async def test_guardrail_context_never_recovers_a_previous_request_bearer(
 async def test_discovery_optional_probes_use_remaining_listing_budget(delay, monkeypatch):
     from types import SimpleNamespace
     from mcp.types import (
-        DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult,
-        ListResourceTemplatesResult, ToolsCapability, Tool,
+        DiscoverRequest,
+        ListToolsResult,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+        ToolsCapability,
+        Tool,
     )
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import subscriptions
@@ -2021,9 +2038,15 @@ async def test_discovery_optional_probes_use_remaining_listing_budget(delay, mon
         patch.object(operations, "_execute_handle_list_tools", side_effect=tools),
         patch.object(operations, "_execute_list_prompts", return_value=ListPromptsResult(prompts=[])),
         patch.object(operations, "_execute_list_resources", return_value=ListResourcesResult(resources=[])),
-        patch.object(operations, "_execute_list_resource_templates", return_value=ListResourceTemplatesResult(resource_templates=[])),
+        patch.object(
+            operations,
+            "_execute_list_resource_templates",
+            return_value=ListResourceTemplatesResult(resource_templates=[]),
+        ),
         patch.object(operations, "_mcp_server_rate_limit_rejection", return_value=None),
-        patch.object(subscriptions, "_targets", side_effect=blocked if delay == "target" else None, return_value=(target,)) as targets,
+        patch.object(
+            subscriptions, "_targets", side_effect=blocked if delay == "target" else None, return_value=(target,)
+        ) as targets,
     ):
         context = prepare_context(UserAPIKeyAuth(user_id="scoped"), protocol_version="2026-07-28")
         result = await asyncio.wait_for(GatewayOperations().execute(DiscoverRequest(), context), 0.5)
@@ -2035,3 +2058,364 @@ async def test_discovery_optional_probes_use_remaining_listing_budget(delay, mon
     else:
         assert entered.is_set()
         assert cleaned.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_declares", [True, False])
+@pytest.mark.parametrize("skills_listed", [True, False])
+async def test_discovery_advertises_skills_only_to_a_declaring_client_with_reachable_skills(
+    client_declares: bool, skills_listed: bool
+) -> None:
+    from dataclasses import replace
+
+    from mcp.types import (
+        DiscoverRequest,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+        ListToolsResult,
+    )
+
+    from litellm.proxy._experimental.mcp_server.skills import SKILLS_EXTENSION, ListSkillsResult, Skill
+
+    listed: Final = ListSkillsResult(
+        skills=(Skill(uri="skill://billing/refunds/SKILL.md", frontmatter={"name": "refunds"}),)
+        if skills_listed
+        else ()
+    )
+    context: Final = replace(
+        prepare_context(UserAPIKeyAuth(user_id="scoped"), protocol_version="2026-07-28"),
+        client_extensions=frozenset({SKILLS_EXTENSION}) if client_declares else frozenset(),
+    )
+    with (
+        patch.object(operations, "configured_versions", lambda: ("2025-11-25", "2026-07-28")),
+        patch.object(operations, "_execute_handle_list_tools", AsyncMock(return_value=ListToolsResult(tools=[]))),
+        patch.object(operations, "_execute_list_prompts", AsyncMock(return_value=ListPromptsResult(prompts=[]))),
+        patch.object(operations, "_execute_list_resources", AsyncMock(return_value=ListResourcesResult(resources=[]))),
+        patch.object(
+            operations,
+            "_execute_list_resource_templates",
+            AsyncMock(return_value=ListResourceTemplatesResult(resource_templates=[])),
+        ),
+        patch.object(operations, "_execute_list_skills", AsyncMock(return_value=listed)) as skills,
+    ):
+        result = await GatewayOperations().execute(DiscoverRequest(), context)
+    assert skills.await_count == (1 if client_declares else 0)
+    assert (result.capabilities.extensions or {}) == (
+        {SKILLS_EXTENSION: {}} if client_declares and skills_listed else {}
+    )
+    assert (result.capabilities.resources is not None) == (client_declares and skills_listed)
+
+
+@pytest.mark.asyncio
+async def test_discovery_ignores_skills_probe_pagination_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    import httpx2
+    from mcp.types import DiscoverRequest
+    from pydantic import JsonValue, TypeAdapter
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy._experimental.mcp_server.skills import SKILLS_EXTENSION
+    from litellm.proxy._types import LitellmUserRoles
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+
+    adapter: Final = TypeAdapter(dict[str, JsonValue])
+    skills_probe_requested: Final = asyncio.Event()
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        message: Final = adapter.validate_json(request.content)
+        method: Final = message.get("method")
+        request_id: Final = message.get("id")
+        if not isinstance(method, str) or request_id is None:
+            return httpx2.Response(202)
+        if method == "skills/list":
+            skills_probe_requested.set()
+        responses: Final[dict[str, dict[str, JsonValue]]] = {
+            "initialize": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {
+                    "tools": {},
+                    "prompts": {},
+                    "resources": {},
+                    "extensions": {SKILLS_EXTENSION: {}},
+                },
+                "serverInfo": {"name": "skills-upstream", "version": "1"},
+            },
+            "prompts/list": {"prompts": [{"name": "upstream-prompt"}]},
+            "resources/list": {"resources": [{"name": "upstream-resource", "uri": "test://upstream-resource"}]},
+            "resources/templates/list": {"resourceTemplates": []},
+            "skills/list": {
+                "skills": [{"uri": "skill://upstream/SKILL.md", "frontmatter": {"name": "upstream"}}],
+                "nextCursor": "upstream-next-page",
+            },
+            "tools/list": {"tools": []},
+        }
+        return httpx2.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": request_id, "result": responses.get(method, {})},
+        )
+
+    upstream: Final = MCPServer(
+        server_id="skills-upstream",
+        name="skills-upstream",
+        url="https://skills-upstream.example/mcp",
+        transport=MCPTransport.http,
+        protocol_version="2025-11-25",
+    )
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    manager.config_mcp_servers = {upstream.server_id: upstream}
+    context: Final = replace(
+        prepare_context(
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            mcp_servers=[upstream.server_id],
+        ),
+        client_extensions=frozenset({SKILLS_EXTENSION}),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+
+    result = await GatewayOperations().execute(DiscoverRequest(), context)
+
+    assert skills_probe_requested.is_set()
+    assert not result.capabilities.extensions
+    assert result.capabilities.prompts is not None
+    assert result.capabilities.resources is not None
+
+
+def _skills_rig(monkeypatch: pytest.MonkeyPatch, allowed: Sequence[MCPServer]) -> tuple[AsyncMock, AsyncMock]:
+    from mcp.types import PaginatedRequestParams
+
+    from litellm.proxy._experimental.mcp_server.skills import (
+        GetSkillRequestParams,
+        GetSkillResult,
+        ListSkillsRequest,
+        ListSkillsResult,
+        Skill,
+    )
+
+    owned: Final = {
+        "billing": Skill.model_validate(
+            {
+                "uri": "skill://billing/refunds/SKILL.md",
+                "frontmatter": {"name": "refunds"},
+                "resources": [{"uri": "skill://billing/refunds/policy.md", "digest": "sha256:1", "size": 4}],
+            }
+        ),
+        "support": Skill(uri="skill://support/refunds/SKILL.md", frontmatter={"name": "support"}),
+    }
+
+    async def page(
+        server: MCPServer, request: ListSkillsRequest, *_args: object, **_kwargs: object
+    ) -> ListSkillsResult:
+        assert request.params == PaginatedRequestParams(cursor=None)
+        return ListSkillsResult(skills=(owned[server.server_id],))
+
+    async def get(
+        server: MCPServer, params: GetSkillRequestParams, *_args: object, **_kwargs: object
+    ) -> GetSkillResult:
+        return GetSkillResult(skill=owned[server.server_id], cache_scope="public", ttl_ms=5000)
+
+    listing: Final = AsyncMock(side_effect=page)
+    fetch: Final = AsyncMock(side_effect=get)
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=list(allowed)))
+    monkeypatch.setattr(operations, "_enforce_mcp_server_rate_limit", AsyncMock())
+    monkeypatch.setattr(operations.global_mcp_server_manager, "get_optional_catalog_page", listing)
+    monkeypatch.setattr(operations.global_mcp_server_manager, "get_skill_from_server", fetch)
+    return listing, fetch
+
+
+def _skill_server(name: str) -> MCPServer:
+    return MCPServer(server_id=name, name=name, transport=MCPTransport.http, url=f"https://{name}.example/mcp")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "allowed_names, uri, owner",
+    [
+        (("billing", "support"), "skill://billing/refunds/SKILL.md", "billing"),
+        (("billing", "support"), "skill://support/refunds/SKILL.md", "support"),
+        (("billing", "support"), "skill://nowhere/SKILL.md", None),
+        (("support",), "skill://billing/refunds/SKILL.md", None),
+    ],
+)
+async def test_get_skill_routes_to_the_allowed_owner_or_reports_invalid_params(
+    monkeypatch: pytest.MonkeyPatch, allowed_names: tuple[str, ...], uri: str, owner: str | None
+) -> None:
+    from mcp import MCPError
+
+    from litellm.proxy._experimental.mcp_server.skills import GetSkillRequest, GetSkillRequestParams
+
+    allowed: Final = tuple(_skill_server(name) for name in allowed_names)
+    listing, fetch = _skills_rig(monkeypatch, allowed)
+    request: Final = GetSkillRequest(params=GetSkillRequestParams(uri=uri))
+    context: Final = prepare_context(UserAPIKeyAuth(user_id="scoped"))
+    if owner is None:
+        with pytest.raises(MCPError) as missing:
+            await GatewayOperations().execute(request, context)
+        assert missing.value.error.code == -32602
+        assert fetch.await_count == 0
+        assert {call.args[0].server_id for call in listing.await_args_list} == set(allowed_names)
+        return
+    result = await GatewayOperations().execute(request, context)
+    assert [call.args[0].server_id for call in fetch.await_args_list] == [owner]
+    assert result.skill.uri == uri
+    assert result.cache_scope == "private"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uri, owner", [("skill://billing/refunds/policy.md", "billing"), ("skill://none.md", None)])
+async def test_resource_read_across_servers_reaches_only_the_skill_owner_and_preserves_bytes(
+    monkeypatch: pytest.MonkeyPatch, uri: str, owner: str | None
+) -> None:
+    from fastapi import HTTPException
+    from mcp.types import BlobResourceContents, ReadResourceResult
+    from pydantic import AnyUrl
+
+    payload: Final = base64.b64encode(bytes(range(256))).decode()
+    upstream: Final = ReadResourceResult(contents=[BlobResourceContents(uri=uri, blob=payload)])
+    _skills_rig(monkeypatch, (_skill_server("billing"), _skill_server("support")))
+    read: Final = AsyncMock(return_value=upstream)
+    monkeypatch.setattr(operations.global_mcp_server_manager, "read_resource_from_server", read)
+    if owner is None:
+        with pytest.raises(HTTPException) as unowned:
+            await operations.mcp_read_resource(AnyUrl(uri), UserAPIKeyAuth(user_id="scoped"))
+        assert unowned.value.status_code == 400
+        assert read.await_count == 0
+        return
+    result: Final = await operations.mcp_read_resource(AnyUrl(uri), UserAPIKeyAuth(user_id="scoped"))
+    assert [call.kwargs["server"].server_id for call in read.await_args_list] == [owner]
+    assert isinstance(result, ReadResourceResult)
+    content: Final = result.contents[0]
+    assert isinstance(content, BlobResourceContents)
+    assert base64.b64decode(content.blob) == bytes(range(256))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "uri, owner", [("skill://billing/refunds/SKILL.md", "billing"), ("skill://support/refunds/SKILL.md", None)]
+)
+async def test_skill_owner_lookup_admits_each_server_through_its_rate_limit(
+    monkeypatch: pytest.MonkeyPatch, uri: str, owner: str | None
+) -> None:
+    from litellm.proxy._experimental.mcp_server.skills import GetSkillRequest, GetSkillRequestParams
+
+    listing, fetch = _skills_rig(monkeypatch, (_skill_server("billing"), _skill_server("support")))
+
+    async def limit(_auth: UserAPIKeyAuth | None, server: MCPServer) -> None:
+        if server.server_id == "support":
+            raise ProxyRateLimitError(detail="support RPM exceeded")
+
+    monkeypatch.setattr(operations, "_enforce_mcp_server_rate_limit", AsyncMock(side_effect=limit))
+    request: Final = GetSkillRequest(params=GetSkillRequestParams(uri=uri))
+    context: Final = prepare_context(UserAPIKeyAuth(user_id="scoped"))
+    if owner is None:
+        with pytest.raises(ProxyRateLimitError):
+            await GatewayOperations().execute(request, context)
+        assert fetch.await_count == 0
+    else:
+        result: Final = await GatewayOperations().execute(request, context)
+        assert result.skill.uri == uri
+        assert [call.args[0].server_id for call in fetch.await_args_list] == [owner]
+    assert [call.args[0].server_id for call in listing.await_args_list] == ["billing"]
+
+
+@pytest.mark.asyncio
+async def test_resource_read_across_servers_withholds_a_caller_bearer_another_server_would_consume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mcp.types import ReadResourceResult, TextResourceContents
+    from pydantic import AnyUrl
+
+    def forwarded(name: str) -> MCPServer:
+        return MCPServer(
+            server_id=name,
+            name=name,
+            transport=MCPTransport.http,
+            url=f"https://{name}.example/mcp",
+            auth_type=MCPAuth.true_passthrough,
+        )
+
+    uri: Final = "skill://billing/refunds/policy.md"
+    _skills_rig(monkeypatch, (forwarded("billing"), forwarded("support")))
+    read: Final = AsyncMock(return_value=ReadResourceResult(contents=[TextResourceContents(uri=uri, text="policy")]))
+    monkeypatch.setattr(operations.global_mcp_server_manager, "read_resource_from_server", read)
+    await operations.mcp_read_resource(
+        AnyUrl(uri),
+        UserAPIKeyAuth(user_id="scoped"),
+        oauth2_headers={"Authorization": "Bearer caller-token"},
+        raw_headers={"authorization": "Bearer caller-token"},
+    )
+    assert [call.kwargs["server"].server_id for call in read.await_args_list] == ["billing"]
+    sent: Final = read.await_args_list[0].kwargs
+    assert sent["mcp_auth_header"] is None
+    assert "authorization" not in {name.lower() for name in sent["extra_headers"] or {}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", [None, "continuation-state"])
+async def test_skill_listing_failure_is_empty_first_and_needs_a_fresh_listing_on_continuation(
+    monkeypatch: pytest.MonkeyPatch, cursor: str | None
+) -> None:
+    from mcp import MCPError
+    from mcp.types import INVALID_PARAMS, PaginatedRequestParams
+
+    from litellm.proxy._experimental.mcp_server.server_resolution import MCPServerTargetCatalog
+    from litellm.proxy._experimental.mcp_server.skills import ListSkillsRequest, ListSkillsResult
+
+    failure: Final = RuntimeError("catalog temporarily unavailable")
+    monkeypatch.setattr(MCPServerTargetCatalog, "list", AsyncMock(side_effect=failure))
+    request: Final = ListSkillsRequest(params=PaginatedRequestParams(cursor=cursor))
+    if cursor is None:
+        assert await GatewayOperations().execute(request, prepare_context()) == ListSkillsResult(skills=())
+        return
+    with pytest.raises(MCPError, match="start a fresh listing") as raised:
+        await GatewayOperations().execute(request, prepare_context())
+    assert raised.value.error.code == INVALID_PARAMS
+    assert raised.value.__cause__ is failure
+
+
+@pytest.mark.asyncio
+async def test_skill_listing_access_denial_surfaces_as_invalid_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+    from mcp import MCPError
+    from mcp.types import INVALID_REQUEST, PaginatedRequestParams
+
+    from litellm.proxy._experimental.mcp_server.server_resolution import MCPServerTargetCatalog
+    from litellm.proxy._experimental.mcp_server.skills import ListSkillsRequest
+
+    denial: Final = HTTPException(status_code=403, detail={"error": "server billing is not allowed"})
+    monkeypatch.setattr(MCPServerTargetCatalog, "list", AsyncMock(side_effect=denial))
+    with pytest.raises(MCPError, match="server billing is not allowed") as raised:
+        await GatewayOperations().execute(ListSkillsRequest(params=PaginatedRequestParams()), prepare_context())
+    assert raised.value.error.code == INVALID_REQUEST
+
+
+@pytest.mark.asyncio
+async def test_disabling_resources_turns_off_skills_without_asking_upstreams(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcp import MCPError
+    from mcp.types import METHOD_NOT_FOUND
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.skills import (
+        GetSkillRequest,
+        GetSkillRequestParams,
+        ListSkillsRequest,
+    )
+
+    monkeypatch.setitem(proxy_server.general_settings, "mcp_disabled_capabilities", ["resources"])
+    listing, fetch = _skills_rig(monkeypatch, (_skill_server("billing"),))
+    context: Final = prepare_context(UserAPIKeyAuth(user_id="scoped"))
+    listed: Final = await GatewayOperations().execute(ListSkillsRequest(), context)
+    with pytest.raises(MCPError) as rejected:
+        await GatewayOperations().execute(
+            GetSkillRequest(params=GetSkillRequestParams(uri="skill://billing/refunds/SKILL.md")), context
+        )
+    assert listed.skills == ()
+    assert rejected.value.error.code == METHOD_NOT_FOUND
+    assert listing.await_count == 0
+    assert fetch.await_count == 0

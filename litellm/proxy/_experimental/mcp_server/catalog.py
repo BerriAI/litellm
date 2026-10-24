@@ -1273,6 +1273,7 @@ def combine_optional_catalog(
     )
 
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
+    from litellm.proxy._experimental.mcp_server.skills import ListSkillsRequest, ListSkillsResult
 
     outcomes: Final = (meta or {}).get(SERVER_OUTCOMES_META_KEY)
     incomplete: Final = isinstance(outcomes, dict) and any(
@@ -1292,6 +1293,14 @@ def combine_optional_catalog(
             resources=list(
                 chain.from_iterable(page.resources for page in pages if isinstance(page, ListResourcesResult))
             ),
+            next_cursor=next_cursor,
+            ttl_ms=ttl_ms,
+            cache_scope="private",
+            _meta=dict(meta) if meta is not None else None,
+        )
+    if isinstance(request, ListSkillsRequest):
+        return ListSkillsResult(
+            skills=tuple(chain.from_iterable(page.skills for page in pages if isinstance(page, ListSkillsResult))),
             next_cursor=next_cursor,
             ttl_ms=ttl_ms,
             cache_scope="private",
