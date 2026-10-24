@@ -29023,6 +29023,7 @@
         "cache_read_input_audio_token_cost": 1e-07,
         "deprecation_date": "2026-10-20",
         "cache_read_input_token_cost": 3e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_flex": 3e-08,
         "cache_read_input_token_cost_priority": 5.4e-08,
         "input_cost_per_audio_token": 1e-06,
@@ -29381,6 +29382,7 @@
     },
     "gemini-3.1-flash-lite-preview": {
         "cache_read_input_token_cost": 2.5e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "input_cost_per_audio_token": 5e-07,
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "vertex_ai-language-models",
@@ -29433,6 +29435,7 @@
         "cache_read_input_audio_token_cost": 5e-08,
         "deprecation_date": "2027-05-07",
         "cache_read_input_token_cost": 2.5e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
@@ -29495,6 +29498,7 @@
     "gemini-3.5-flash-lite": {
         "deprecation_date": "2027-07-21",
         "cache_read_input_token_cost": 3e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 1.5e-08,
         "cache_read_input_token_cost_flex": 1.5e-08,
         "cache_read_input_token_cost_priority": 5.4e-08,
@@ -29592,6 +29596,7 @@
         "cache_read_input_audio_token_cost": 3e-08,
         "deprecation_date": "2026-10-20",
         "cache_read_input_token_cost": 1e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_flex": 1e-08,
         "cache_read_input_token_cost_priority": 1.8e-08,
         "input_cost_per_audio_token": 3e-07,
@@ -29649,6 +29654,7 @@
     },
     "gemini-2.5-flash-lite-preview-09-2025": {
         "cache_read_input_token_cost": 1e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "input_cost_per_audio_token": 3e-07,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "vertex_ai-language-models",
@@ -29696,6 +29702,7 @@
     },
     "gemini-2.5-flash-preview-09-2025": {
         "cache_read_input_token_cost": 3e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "vertex_ai-language-models",
@@ -29880,6 +29887,7 @@
     "gemini-2.5-pro": {
         "deprecation_date": "2026-10-20",
         "cache_read_input_token_cost": 1.25e-07,
+        "cache_storage_cost_per_token_per_hour": 4.5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "cache_creation_input_token_cost_above_200k_tokens": 2.5e-07,
         "cache_read_input_token_cost_above_200k_tokens_priority": 4.5e-07,
@@ -29992,11 +30000,13 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_storage_cost_per_token_per_hour": 4.5e-06
     },
     "gemini-3.1-pro-preview-customtools": {
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 2e-07,
+        "cache_storage_cost_per_token_per_hour": 4.5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "cache_creation_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_token": 2e-06,
@@ -30978,6 +30988,7 @@
     "gemini/gemini-3.1-flash-lite-preview": {
         "cache_read_input_audio_token_cost": 5e-08,
         "cache_read_input_token_cost": 2.5e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
@@ -31138,6 +31149,7 @@
     "gemini/gemini-2.5-flash": {
         "cache_read_input_audio_token_cost": 1e-07,
         "cache_read_input_token_cost": 3e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 3e-08,
         "cache_read_input_token_cost_flex": 3e-08,
         "cache_read_input_token_cost_priority": 5.4e-08,
@@ -31467,6 +31479,7 @@
     "gemini/gemini-2.5-flash-lite": {
         "cache_read_input_audio_token_cost": 3e-08,
         "cache_read_input_token_cost": 1e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 1e-08,
         "cache_read_input_token_cost_flex": 1e-08,
         "cache_read_input_token_cost_priority": 1.8e-08,
@@ -31668,6 +31681,7 @@
     },
     "gemini/gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
+        "cache_storage_cost_per_token_per_hour": 4.5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "cache_read_input_token_cost_above_200k_tokens_priority": 4.5e-07,
         "cache_read_input_token_cost_batches": 1.25e-07,
@@ -31761,6 +31775,7 @@
     "gemini/gemini-3.1-flash-lite": {
         "cache_read_input_audio_token_cost": 5e-08,
         "cache_read_input_token_cost": 2.5e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
@@ -31825,6 +31840,7 @@
     },
     "gemini/gemini-3.5-flash-lite": {
         "cache_read_input_token_cost": 3e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 2e-08,
         "cache_read_input_token_cost_flex": 2e-08,
         "cache_read_input_token_cost_priority": 5e-08,
@@ -31887,6 +31903,7 @@
     "gemini/gemini-3-flash-preview": {
         "cache_read_input_audio_token_cost": 1e-07,
         "cache_read_input_token_cost": 5e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 5e-08,
         "cache_read_input_token_cost_flex": 5e-08,
         "input_cost_per_audio_token": 1e-06,
@@ -31950,6 +31967,7 @@
     "gemini/gemini-3.5-flash": {
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 1.5e-07,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 7.5e-08,
         "input_cost_per_audio_token": 1.5e-06,
         "input_cost_per_token": 1.5e-06,
@@ -32013,6 +32031,7 @@
     "gemini/gemini-3.6-flash": {
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
         "input_cost_per_token": 7.5e-07,
@@ -32075,6 +32094,7 @@
     "gemini/gemini-3.7-flash": {
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
         "input_cost_per_token": 7.5e-07,
@@ -32138,6 +32158,7 @@
     "gemini/gemini-3.8-flash": {
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
         "input_cost_per_token": 7.5e-07,
@@ -32235,6 +32256,7 @@
     "gemini/gemini-3.1-pro-preview": {
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 2e-07,
+        "cache_storage_cost_per_token_per_hour": 4.5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
@@ -32299,6 +32321,7 @@
     "gemini/gemini-3.1-pro-preview-customtools": {
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 2e-07,
+        "cache_storage_cost_per_token_per_hour": 4.5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
@@ -32412,7 +32435,8 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_storage_cost_per_token_per_hour": 1e-06
     },
     "gemini-omni-flash-preview": {
         "input_cost_per_audio_token": 1.5e-06,
@@ -32449,6 +32473,7 @@
         "prompt_cache_min_tokens": 4096,
         "deprecation_date": "2027-05-19",
         "cache_read_input_token_cost": 1.5e-07,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 7.5e-08,
         "input_cost_per_audio_token": 1.5e-06,
         "input_cost_per_token": 1.5e-06,
@@ -32510,6 +32535,7 @@
     "gemini-3.6-flash": {
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
         "input_cost_per_token": 7.5e-07,
@@ -32571,6 +32597,7 @@
     "gemini-3.7-flash": {
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
         "input_cost_per_token": 7.5e-07,
@@ -32685,10 +32712,12 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_storage_cost_per_token_per_hour": 1e-06
     },
     "gemini-3.8-flash-cyber": {
         "cache_read_input_token_cost": 1.5e-07,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 7.5e-08,
         "cache_read_input_token_cost_flex": 7.5e-08,
         "cache_read_input_token_cost_priority": 2.7e-07,
@@ -52725,6 +52754,7 @@
     },
     "vertex_ai/gemini-3.1-flash-lite-preview": {
         "cache_read_input_token_cost": 2.5e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "input_cost_per_audio_token": 5e-07,
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "vertex_ai-language-models",
@@ -52777,6 +52807,7 @@
         "cache_read_input_audio_token_cost": 5e-08,
         "deprecation_date": "2027-05-07",
         "cache_read_input_token_cost": 2.5e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
@@ -52840,6 +52871,7 @@
     "vertex_ai/gemini-3.5-flash-lite": {
         "deprecation_date": "2027-07-21",
         "cache_read_input_token_cost": 3e-08,
+        "cache_storage_cost_per_token_per_hour": 1.0e-06,
         "cache_read_input_token_cost_batches": 1.5e-08,
         "cache_read_input_token_cost_flex": 1.5e-08,
         "cache_read_input_token_cost_priority": 5.4e-08,
