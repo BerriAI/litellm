@@ -69,6 +69,7 @@ AllowedModelRegion: TypeAlias = Literal["eu", "us"]
 class FallbackSkipReason(str, enum.Enum):
     NOT_AUTHORIZED = "not_authorized"
     OVER_BUDGET = "over_budget"
+    MODE_INCOMPATIBLE = "mode_incompatible"
 
 
 @dataclass(frozen=True, slots=True)
@@ -968,7 +969,9 @@ class ModelGroupInfo(LiteLLMBaseModel):
     input_cost_per_pixel: float | None = None
     mode: (
         str
-        | Literal["chat", "embedding", "completion", "image_generation", "audio_transcription", "rerank", "moderations"]
+        | Literal[
+            "chat", "embedding", "completion", "image_generation", "audio_transcription", "rerank", "moderations", "ocr"
+        ]
         | None
     ) = Field(default="chat")
     tpm: int | None = None

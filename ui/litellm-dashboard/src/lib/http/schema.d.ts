@@ -38389,7 +38389,7 @@ export interface components {
              * Mode
              * @default chat
              */
-            mode: string | ("chat" | "embedding" | "completion" | "image_generation" | "audio_transcription" | "rerank" | "moderations") | null;
+            mode: string | ("chat" | "embedding" | "completion" | "image_generation" | "audio_transcription" | "rerank" | "moderations" | "ocr") | null;
             /** Model Group */
             model_group: string;
             /** Otpm */
