@@ -3672,6 +3672,164 @@ class TestUpdateDBModelKeepsLegacyDropParams:
         assert decrypt_value_helper(value=stored["drop_params"], key="drop_params") == "true"
 
 
+def _clef_router(*, model: str, api_base: str, api_key: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "cloudflare/clef-flash",
+                "litellm_params": {"model": model, "api_base": api_base, "api_key": api_key},
+                "model_info": {"id": "clef-1", "db_model": True},
+            }
+        ],
+        ignore_invalid_deployments=True,
+    )
+
+
+class TestPatchModelServesWrittenParams:
+    """PATCH must not report success while the router keeps the previous model, api_base, or api_key."""
+
+    @staticmethod
+    def _deployment() -> Deployment:
+        return Deployment(
+            model_name="cloudflare/clef-flash",
+            litellm_params=LiteLLM_Params(
+                model="cloudflare/clef-flash",
+                api_base="https://api.cloudflare.com/client/v4/accounts/acct/ai/run",
+                api_key="old-key",
+            ),
+            model_info=ModelInfo(id="clef-1", db_model=True),
+        )
+
+    @staticmethod
+    def _patch() -> updateDeployment:
+        return updateDeployment(
+            litellm_params=updateLiteLLMParams(
+                model="@cf/cloudflare/clef-flash",
+                api_base="https://api.cloudflare.com/client/v4/accounts/acct/ai/v1",
+                api_key="new-key",
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_patch_model_refuses_success_when_reload_keeps_previous_params(self):
+        router: Final = _clef_router(
+            model="cloudflare/clef-flash",
+            api_base="https://api.cloudflare.com/client/v4/accounts/acct/ai/run",
+            api_key="old-key",
+        )
+        updated_row: Final = MagicMock()
+        updated_row.model_dump_json.return_value = "{}"
+        updated_row.model_info = {"id": "clef-1"}
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.get_db_model",
+                new=AsyncMock(return_value=self._deployment()),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints._update_team_model_in_db",
+                new=AsyncMock(return_value=updated_row),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(
+                    return_value=ReconcileOutcome(
+                        still_desired=frozenset({"clef-1"}),
+                        live_after=frozenset({"clef-1"}),
+                    )
+                ),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.create_object_audit_log",
+                new=AsyncMock(),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await patch_model(
+                    model_id="clef-1",
+                    patch_data=self._patch(),
+                    user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+                )
+
+        assert exc_info.value.code == "500"
+        assert exc_info.value.param == "model"
+        served: Final = router.get_deployment(model_id="clef-1")
+        assert served is not None
+        assert served.litellm_params.model == "cloudflare/clef-flash"
+        assert served.litellm_params.api_key == "old-key"
+
+    @pytest.mark.asyncio
+    async def test_patch_model_accepts_workers_ai_model_id_when_the_router_serves_it(self):
+        router: Final = _clef_router(
+            model="cloudflare/clef-flash",
+            api_base="https://api.cloudflare.com/client/v4/accounts/acct/ai/run",
+            api_key="old-key",
+        )
+        updated_row: Final = MagicMock()
+        updated_row.model_dump_json.return_value = "{}"
+        updated_row.model_info = {"id": "clef-1"}
+
+        async def serve_written_params() -> ReconcileOutcome:
+            router.upsert_deployment(
+                deployment=Deployment(
+                    model_name="cloudflare/clef-flash",
+                    litellm_params=LiteLLM_Params(
+                        model="@cf/cloudflare/clef-flash",
+                        api_base="https://api.cloudflare.com/client/v4/accounts/acct/ai/v1",
+                        api_key="new-key",
+                    ),
+                    model_info=ModelInfo(id="clef-1", db_model=True),
+                )
+            )
+            return ReconcileOutcome(still_desired=frozenset({"clef-1"}), live_after=frozenset(router.get_model_ids()))
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.get_db_model",
+                new=AsyncMock(return_value=self._deployment()),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints._update_team_model_in_db",
+                new=AsyncMock(return_value=updated_row),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(side_effect=serve_written_params),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.create_object_audit_log",
+                new=AsyncMock(),
+            ),
+        ):
+            await patch_model(
+                model_id="clef-1",
+                patch_data=self._patch(),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        served: Final = router.get_deployment(model_id="clef-1")
+        assert served is not None
+        assert served.litellm_params.model == "@cf/cloudflare/clef-flash"
+        assert served.litellm_params.api_base == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1"
+        assert served.litellm_params.api_key == "new-key"
+
+
 def _build_db_model_with_pricing():
     """Wildcard deployment with custom pricing in litellm_params; Deployment.__init__
     mirrors SPECIAL_MODEL_INFO_PARAMS into model_info, so both blobs hold the rate."""

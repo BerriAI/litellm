@@ -537,6 +537,10 @@ def get_llm_provider(
             custom_llm_provider = "amazon_nova"
         elif model.startswith("sap/"):
             custom_llm_provider = "sap"
+        elif model.startswith(("@cf/", "@hf/")):
+            # Workers AI ids are not `cloudflare/<id>`. Stripping or rejecting them makes a
+            # model update roll back to the previous deployment while PATCH still returns 200.
+            custom_llm_provider = "cloudflare"
 
         # Last resort for an otherwise-unknown model: a declarative
         # fallback-generalization routing rule (e.g. routes future claude-* to anthropic).
