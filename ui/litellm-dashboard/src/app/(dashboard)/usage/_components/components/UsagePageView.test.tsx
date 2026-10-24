@@ -1914,6 +1914,61 @@ describe("UsagePage", () => {
       );
     });
 
+    it("queries the configured month and preserves later manual selections", async () => {
+      const now = new Date(2026, 9, 24, 12);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(now);
+      try {
+        renderWithProviders(<UsagePage {...defaultProps} defaultTimeRange="month_to_date" />);
+        await waitFor(() =>
+          expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+            expect.objectContaining({
+              startTime: new Date(2026, 9, 1),
+              endTime: new Date(2026, 9, 24, 23, 59, 59, 999),
+            }),
+          ),
+        );
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+        fireEvent.click(screen.getByTestId("pick-a-different-range"));
+        await waitFor(() =>
+          expect(mockUserDailyActivityAggregatedCall).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+              startTime: new Date(2024, 0, 1),
+              endTime: new Date(2024, 0, 8, 23, 59, 59, 999),
+            }),
+          ),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each(["?range=today", "?from=2025-03-01&to=2025-03-05"])(
+      "preserves explicit dates over configured defaults for %s",
+      async (searchParams) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(2026, 9, 24, 12));
+        try {
+          const view = renderWithProviders(<UsagePage {...defaultProps} defaultTimeRange="month_to_date" />, {
+            searchParams,
+          });
+          const startTime = searchParams.includes("range=today") ? new Date(2026, 9, 24) : new Date(2025, 2, 1);
+          const endTime = searchParams.includes("range=today")
+            ? new Date(2026, 9, 24, 23, 59, 59, 999)
+            : new Date(2025, 2, 5, 23, 59, 59, 999);
+          await waitFor(() =>
+            expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+              expect.objectContaining({ startTime, endTime }),
+            ),
+          );
+          view.rerender(<UsagePage {...defaultProps} defaultTimeRange="year_to_date" />);
+          expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
+
     it("fetches the custom range in the URL and writes a newly picked one", async () => {
       const { lastQuery } = renderAt("?from=2025-03-01&to=2025-03-05");
 
