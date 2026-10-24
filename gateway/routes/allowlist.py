@@ -68,6 +68,8 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/extraction",
     "/v1/ocr",
     "/ocr",
+    "/v1/tokenize",
+    "/tokenize",
     "/v1/rag/",
     "/rag/",
     "/v1/video",

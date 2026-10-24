@@ -26,6 +26,7 @@ pub enum LoggingOperation {
     Responses,
     Messages,
     Ocr,
+    Tokenize,
 }
 
 #[cfg(test)]

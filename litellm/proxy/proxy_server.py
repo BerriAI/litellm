@@ -905,6 +905,7 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.tokenize_endpoints.endpoints import router as tokenize_router
 from litellm.proxy.tracing_runtime import manage_tracing
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
@@ -21474,6 +21475,7 @@ app.include_router(public_endpoints_router)
 app.include_router(public_v1_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
+app.include_router(tokenize_router)
 app.include_router(rag_router)
 app.include_router(video_router)
 app.include_router(container_router)
