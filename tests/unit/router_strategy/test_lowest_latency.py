@@ -428,7 +428,8 @@ async def test_unusable_ttft_samples_do_not_leave_the_buffer_window_empty(
         key=f"{MODEL_GROUP}_map",
         value={FAST_TTFT_ID: {"time_to_first_token_seconds": ttft_samples}},
     )
-    request_kwargs: Final[dict] = {"stream": True, "metadata": {}}
+    metadata: Final[dict[str, object]] = {}
+    request_kwargs: Final[dict[str, object]] = {"stream": True, "metadata": metadata}
 
     picked = await handler.async_get_available_deployments(
         model_group=MODEL_GROUP,
@@ -438,7 +439,7 @@ async def test_unusable_ttft_samples_do_not_leave_the_buffer_window_empty(
 
     assert picked is not None
     assert picked["model_info"]["id"] == FAST_TTFT_ID
-    assert request_kwargs["metadata"]["_latency_per_deployment"] == {FAST_API_BASE: expected_latency}
+    assert metadata["_latency_per_deployment"] == {FAST_API_BASE: expected_latency}
 
 
 @pytest.mark.asyncio
@@ -454,7 +455,8 @@ async def test_unusable_ttft_samples_fall_back_to_recorded_latency():
             SLOW_TTFT_ID: {"latency_normalized": [5.0], "time_to_first_token_seconds": [-300.0]},
         },
     )
-    request_kwargs: Final[dict] = {"stream": True, "metadata": {}}
+    metadata: Final[dict[str, object]] = {}
+    request_kwargs: Final[dict[str, object]] = {"stream": True, "metadata": metadata}
 
     picked = await handler.async_get_available_deployments(
         model_group=MODEL_GROUP,
@@ -467,7 +469,7 @@ async def test_unusable_ttft_samples_fall_back_to_recorded_latency():
 
     assert picked is not None
     assert picked["model_info"]["id"] == FAST_TTFT_ID
-    assert request_kwargs["metadata"]["_latency_per_deployment"] == {FAST_API_BASE: 0.1, SLOW_API_BASE: 5.0}
+    assert metadata["_latency_per_deployment"] == {FAST_API_BASE: 0.1, SLOW_API_BASE: 5.0}
 
 
 def _latency_router(routing_strategy_args: dict) -> Router:
