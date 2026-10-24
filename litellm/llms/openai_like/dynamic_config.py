@@ -121,13 +121,11 @@ def create_config_class(provider: SimpleProviderConfig):
                 except (ModelNotMappedError, KeyError, ValueError):
                     pass
 
-                # State 4: Provider-wide explicit False applies when model has no explicit declaration
-                if provider.provider_info and provider.provider_info.get("supports_function_calling") is False:
-                    return False
-
-                # State 1 (unmapped model) & State 2 (mapped model with missing/None declaration):
-                # default to preserving tool parameters for OpenAI-compatible providers
-                return True
+                # State 4 (provider explicitly disabled) vs State 1 & 2 (unmapped / missing metadata):
+                # Preserves tool parameters unless provider_info explicitly sets supports_function_calling to False
+                return not (
+                    provider.provider_info and provider.provider_info.get("supports_function_calling") is False
+                )
 
             _supports_fc: Final = _check_supports_fc()
 
