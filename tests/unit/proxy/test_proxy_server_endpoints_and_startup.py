@@ -5223,7 +5223,7 @@ class TestPriceDataReloadIntegration:
         mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
 
         original_model_cost = litellm.model_cost
-        original_registry = dict(litellm_utils._runtime_registered_model_cost)
+        original_layers = litellm_utils._MODEL_COST_LAYERS.snapshot()
         try:
             litellm.register_model(
                 model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
@@ -5249,8 +5249,7 @@ class TestPriceDataReloadIntegration:
             assert proxy_config.model_cost_map_applied_revision == 7
         finally:
             litellm.model_cost = original_model_cost
-            litellm_utils._runtime_registered_model_cost.clear()
-            litellm_utils._runtime_registered_model_cost.update(original_registry)
+            litellm_utils._MODEL_COST_LAYERS.restore(original_layers)
             _invalidate_model_cost_lowercase_map()
 
     def test_swap_in_model_cost_map_counts_the_fetched_catalog_only(self):
@@ -5262,7 +5261,7 @@ class TestPriceDataReloadIntegration:
         from litellm.proxy.proxy_server import _swap_in_model_cost_map
 
         original_model_cost = litellm.model_cost
-        original_registry = dict(litellm_utils._runtime_registered_model_cost)
+        original_layers = litellm_utils._MODEL_COST_LAYERS.snapshot()
         try:
             litellm.register_model(
                 model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
@@ -5274,8 +5273,7 @@ class TestPriceDataReloadIntegration:
             assert litellm.model_cost["custom/deployment-model"]["max_input_tokens"] == 4321
         finally:
             litellm.model_cost = original_model_cost
-            litellm_utils._runtime_registered_model_cost.clear()
-            litellm_utils._runtime_registered_model_cost.update(original_registry)
+            litellm_utils._MODEL_COST_LAYERS.restore(original_layers)
             _invalidate_model_cost_lowercase_map()
 
     def test_manual_reload_preserves_interval_hours(self, monkeypatch):
@@ -15584,4 +15582,3 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
         call(api_provider="openai", capture_rate=0.97),
         call(api_provider="openai", capture_rate=None),
     ]
-

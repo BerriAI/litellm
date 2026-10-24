@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import litellm
 from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -996,15 +997,9 @@ def test_first_party_claude_4_8_plus_cost_map_entries_carry_mid_conversation_sys
     lookup resolves were missed, so that lookup reports the capability as
     unset. Every mapped first-party entry the fallback rule matches must
     carry the flag."""
-    import json
-    import os
     import re
 
-    import litellm
-
-    cost_map_path = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
-    with open(cost_map_path) as f:
-        cost_map = json.load(f)
+    cost_map = GetModelCostMap.load_local_model_cost_map()
     rules = cost_map["fallback_generalizations"]["rules"]
     rule_pattern = next(
         (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),

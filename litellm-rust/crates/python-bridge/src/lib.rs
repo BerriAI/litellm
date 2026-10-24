@@ -8,6 +8,7 @@ mod execution;
 mod http;
 mod logger;
 mod marshal;
+mod model_registry;
 mod preflight;
 mod python_settings;
 mod routes;
@@ -29,6 +30,12 @@ mod _native {
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
+    #[pymodule_export]
+    use crate::model_registry::{
+        AdoptStep, DoneStep, FetchStep, FetchedRegistry, ModelCostLayers, ModelRegistry,
+        RegistryNotModified, RegistryUnavailable, RevalidationState, RowError, SleepStep,
+        fetch_model_registry, fetch_model_registry_async, model_row_errors, revalidation,
+    };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -107,6 +114,21 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "ModelCostLayers",
+                "ModelRegistry",
+                "RowError",
+                "model_row_errors",
+                "FetchedRegistry",
+                "RegistryNotModified",
+                "RegistryUnavailable",
+                "FetchStep",
+                "SleepStep",
+                "AdoptStep",
+                "DoneStep",
+                "RevalidationState",
+                "Revalidation",
+                "fetch_model_registry",
+                "fetch_model_registry_async",
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
                 "trace_encode_error",

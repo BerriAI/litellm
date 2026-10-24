@@ -48,6 +48,7 @@ litellm-secrets-types.workspace = true
 litellm-llms-types.workspace = true
 litellm-router-types.workspace = true
 litellm-host-python.workspace = true
+litellm-model-catalog.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 pyo3.workspace = true
 prost.workspace = true
@@ -63,6 +64,8 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 [dev-dependencies]
 tracing.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
+rcgen = "=0.14.10"
+rustls.workspace = true
 litellm-secrets-aws.workspace = true
 serde.workspace = true
 serde_with.workspace = true

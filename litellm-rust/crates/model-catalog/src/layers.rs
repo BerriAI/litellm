@@ -13,6 +13,32 @@ pub enum Precedence {
 }
 
 pub type SparseRow = IndexMap<String, Option<Value>>;
+pub type RegistrationHandle = u64;
+
+#[derive(Clone, Debug)]
+pub struct RegistrationOptions {
+    pub alias_keys: Vec<String>,
+    pub defaults: SparseRow,
+    pub reset_fields: BTreeSet<String>,
+    pub cleanup_overrides: Vec<String>,
+    pub fallback: bool,
+    pub names_the_row: bool,
+    pub ignore_none: bool,
+}
+
+impl Default for RegistrationOptions {
+    fn default() -> Self {
+        Self {
+            alias_keys: Vec::new(),
+            defaults: SparseRow::new(),
+            reset_fields: BTreeSet::new(),
+            cleanup_overrides: Vec::new(),
+            fallback: false,
+            names_the_row: false,
+            ignore_none: true,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum ApplicationWrite {
@@ -40,19 +66,81 @@ pub struct Owner {
 #[derive(Clone, Debug, Default)]
 pub struct Layers {
     writes: Vec<ApplicationWrite>,
+    handles: Vec<Option<RegistrationHandle>>,
+    options: Vec<Option<RegistrationOptions>>,
     owners: IndexMap<String, Owner>,
+    next_handle: RegistrationHandle,
 }
 
 #[derive(Clone, Debug)]
 pub struct ComposedRow<'a> {
     pub key: &'a str,
+    pub group: String,
     pub fields: Fields,
     pub registered: BTreeSet<String>,
 }
 
 impl Layers {
-    pub fn record(&mut self, write: ApplicationWrite) {
+    pub fn record(&mut self, write: ApplicationWrite) -> Option<RegistrationHandle> {
+        let registration = matches!(write, ApplicationWrite::Registration { .. });
+        let handle = registration.then(|| {
+            self.next_handle += 1;
+            self.next_handle
+        });
         self.writes.push(write);
+        self.handles.push(handle);
+        self.options
+            .push(registration.then(RegistrationOptions::default));
+        handle
+    }
+
+    pub fn record_registration(
+        &mut self,
+        key: String,
+        inherits_from: Option<String>,
+        fields: SparseRow,
+        options: RegistrationOptions,
+    ) -> RegistrationHandle {
+        self.next_handle += 1;
+        let handle = self.next_handle;
+        self.writes.push(ApplicationWrite::Registration {
+            key,
+            inherits_from,
+            fields,
+        });
+        self.handles.push(Some(handle));
+        self.options.push(Some(options));
+        handle
+    }
+
+    pub fn rebind_registration(
+        &mut self,
+        handle: RegistrationHandle,
+        key: String,
+        inherits_from: Option<String>,
+        fields: SparseRow,
+        options: RegistrationOptions,
+    ) -> bool {
+        let Some(index) = self
+            .handles
+            .iter()
+            .position(|candidate| *candidate == Some(handle))
+        else {
+            return false;
+        };
+        let Some(ApplicationWrite::Registration {
+            key: current_key,
+            inherits_from: current_inherits,
+            fields: current_fields,
+        }) = self.writes.get_mut(index)
+        else {
+            return false;
+        };
+        *current_key = key;
+        *current_inherits = inherits_from;
+        *current_fields = fields;
+        self.options[index] = Some(options);
+        true
     }
 
     pub fn set_owner(&mut self, owner: Owner) {
@@ -66,12 +154,14 @@ impl Layers {
 
     pub fn forget_writes(&mut self) {
         self.writes.clear();
+        self.handles.clear();
+        self.options.clear();
     }
 
     pub fn compose<'a>(&'a self, base: &'a Catalog) -> impl Iterator<Item = ComposedRow<'a>> + 'a {
-        let keys = self.all_keys(base);
+        let keys = self.all_keys(base, self.writes.len());
         keys.into_iter()
-            .filter_map(move |key| self.composed_row(base, &key))
+            .filter_map(move |key| self.composed_row(base, &key, self.writes.len()))
     }
 
     pub fn compose_keys<'a>(
@@ -80,13 +170,43 @@ impl Layers {
         keys: &'a BTreeSet<String>,
     ) -> impl Iterator<Item = Option<ComposedRow<'a>>> + 'a {
         keys.iter()
-            .map(move |key| self.composed_row(base, key.as_str()))
+            .map(move |key| self.composed_row(base, key.as_str(), self.writes.len()))
     }
 
-    fn all_keys(&self, base: &Catalog) -> IndexSet<String> {
+    pub fn compose_prefix<'a>(
+        &'a self,
+        base: &'a Catalog,
+        handle: RegistrationHandle,
+    ) -> Option<Vec<ComposedRow<'a>>> {
+        let index = self
+            .handles
+            .iter()
+            .position(|candidate| *candidate == Some(handle))?;
+        Some(
+            self.all_keys(base, index)
+                .into_iter()
+                .filter_map(|key| self.composed_row(base, &key, index))
+                .collect(),
+        )
+    }
+
+    fn all_keys(&self, base: &Catalog, write_limit: usize) -> IndexSet<String> {
         base.served()
             .map(|(key, _)| key.to_owned())
-            .chain(self.writes.iter().map(|write| write.key().to_owned()))
+            .chain(
+                self.writes
+                    .iter()
+                    .zip(self.options.iter())
+                    .take(write_limit)
+                    .flat_map(|(write, options)| {
+                        std::iter::once(write.key().to_owned()).chain(
+                            options
+                                .as_ref()
+                                .into_iter()
+                                .flat_map(|options| options.alias_keys.iter().cloned()),
+                        )
+                    }),
+            )
             .chain(
                 self.owners
                     .values()
@@ -95,23 +215,65 @@ impl Layers {
             .collect()
     }
 
-    fn composed_row<'a>(&'a self, base: &'a Catalog, key: &str) -> Option<ComposedRow<'a>> {
-        let (fields, registered) = self.compose_fields(base, key)?;
+    fn composed_row<'a>(
+        &'a self,
+        base: &'a Catalog,
+        key: &str,
+        write_limit: usize,
+    ) -> Option<ComposedRow<'a>> {
+        let (fields, registered) = self.compose_fields(base, key, write_limit)?;
         Some(ComposedRow {
-            key: self.key_ref(base, key)?,
+            key: self.key_ref(base, key, write_limit)?,
+            group: self.group_key(base, key, write_limit),
             fields,
             registered,
         })
     }
 
-    fn key_ref<'a>(&'a self, base: &'a Catalog, key: &str) -> Option<&'a str> {
+    fn group_key(&self, base: &Catalog, key: &str, write_limit: usize) -> String {
+        if let Some(group) = self
+            .writes
+            .iter()
+            .zip(self.options.iter())
+            .take(write_limit)
+            .rev()
+            .find_map(|(write, options)| {
+                write_keys(write, options.as_ref())
+                    .contains(&key.to_owned())
+                    .then(|| write.key().to_owned())
+            })
+        {
+            return group;
+        }
+        base.lookup(key).map_or_else(
+            || key.to_owned(),
+            |matched| matched.canonical_key.to_owned(),
+        )
+    }
+
+    fn key_ref<'a>(&'a self, base: &'a Catalog, key: &str, write_limit: usize) -> Option<&'a str> {
         base.lookup(key)
             .filter(|matched| matched.matched_key == key)
             .map(|matched| matched.matched_key)
             .or_else(|| {
                 self.writes
                     .iter()
-                    .find_map(|write| (write.key() == key).then_some(write.key_ref()))
+                    .zip(self.options.iter())
+                    .take(write_limit)
+                    .find_map(|(write, options)| {
+                        if write.key() == key {
+                            return Some(write.key_ref());
+                        }
+                        options
+                            .as_ref()
+                            .and_then(|options| {
+                                options
+                                    .alias_keys
+                                    .iter()
+                                    .find(|alias| alias.as_str() == key)
+                            })
+                            .map(String::as_str)
+                    })
             })
             .or_else(|| {
                 self.owners.values().find_map(|owner| {
@@ -123,12 +285,19 @@ impl Layers {
             })
     }
 
-    fn compose_fields(&self, base: &Catalog, key: &str) -> Option<(Fields, BTreeSet<String>)> {
-        let base_fields = base
-            .lookup(key)
-            .filter(|matched| matched.matched_key == key)
-            .map(|entry| entry.entry.fields().clone());
-        let has_application_write = self.writes.iter().any(|write| write.key() == key);
+    fn compose_fields(
+        &self,
+        base: &Catalog,
+        key: &str,
+        write_limit: usize,
+    ) -> Option<(Fields, BTreeSet<String>)> {
+        let base_fields = base.lookup(key).map(|entry| entry.entry.fields().clone());
+        let has_application_write = self
+            .writes
+            .iter()
+            .zip(self.options.iter())
+            .take(write_limit)
+            .any(|(write, options)| write_keys(write, options.as_ref()).contains(&key.to_owned()));
         let has_override_owner = self
             .owners
             .values()
@@ -140,7 +309,16 @@ impl Layers {
             base_fields.map(|fields| (fields, BTreeSet::new()))
         };
 
-        for write in self.writes.iter().filter(|write| write.key() == key) {
+        for (index, (write, options)) in self
+            .writes
+            .iter()
+            .zip(self.options.iter())
+            .take(write_limit)
+            .enumerate()
+            .filter(|(_, (write, options))| {
+                write_keys(write, options.as_ref()).contains(&key.to_owned())
+            })
+        {
             match write {
                 ApplicationWrite::Registration {
                     inherits_from,
@@ -149,14 +327,14 @@ impl Layers {
                 } => {
                     if row.is_none() {
                         let inherited = inherits_from.as_deref().and_then(|name| {
-                            base.lookup(name)
-                                .filter(|matched| matched.matched_key == name)
-                                .map(|entry| entry.entry.fields().clone())
+                            self.compose_fields(base, name, index)
+                                .map(|(fields, _)| fields)
                         });
                         row = Some((inherited.unwrap_or_default(), BTreeSet::new()));
                     }
                     let (current, registered) = row.get_or_insert_default();
-                    apply_sparse(current, registered, fields, true);
+                    let options = options.as_ref().cloned().unwrap_or_default();
+                    apply_registration(current, registered, fields, &options);
                 }
                 ApplicationWrite::Direct { row: direct, .. } => {
                     row = Some((direct.clone(), BTreeSet::new()));
@@ -222,6 +400,91 @@ fn apply_sparse(
             registered.insert(field.clone());
         }
     }
+}
+
+fn write_keys(write: &ApplicationWrite, options: Option<&RegistrationOptions>) -> Vec<String> {
+    let mut keys = vec![write.key().to_owned()];
+    if let Some(options) = options {
+        keys.extend(options.alias_keys.iter().cloned());
+    }
+    keys
+}
+
+fn apply_registration(
+    row: &mut Fields,
+    registered: &mut BTreeSet<String>,
+    fields: &SparseRow,
+    options: &RegistrationOptions,
+) {
+    if options.fallback || options.names_the_row {
+        row.remove("litellm_provider");
+    }
+    if options.fallback && !options.names_the_row && !options.cleanup_overrides.is_empty() {
+        let cleanup = options
+            .cleanup_overrides
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        cleanup_fallback_prices(row, &cleanup, fields);
+    }
+    for (field, value) in &options.defaults {
+        if let Some(value) = value {
+            row.entry(field.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    for (field, value) in fields {
+        match value {
+            Some(value) => {
+                let merged = match (row.get(field), value) {
+                    (Some(Value::Object(existing)), Value::Object(new)) => {
+                        let mut object = existing.clone();
+                        object.extend(new.clone());
+                        Value::Object(object)
+                    }
+                    _ => value.clone(),
+                };
+                row.insert(field.clone(), merged);
+                registered.insert(field.clone());
+            }
+            None if options.ignore_none && options.reset_fields.contains(field) => {
+                row.insert(field.clone(), Value::Null);
+                registered.insert(field.clone());
+            }
+            None if options.ignore_none => {}
+            None => {
+                row.remove(field);
+                registered.insert(field.clone());
+            }
+        }
+    }
+    for field in &options.reset_fields {
+        row.insert(field.clone(), Value::Null);
+    }
+}
+
+fn cleanup_fallback_prices(row: &mut Fields, overridden: &[&str], fields: &SparseRow) {
+    row.remove("litellm_provider");
+    let matches = |name: &str| crate::wire::matches_fallback_direction(name, overridden);
+    let flat: Fields = fields
+        .iter()
+        .filter_map(|(name, value)| value.clone().map(|value| (name.clone(), value)))
+        .filter(|(name, _)| overridden.iter().any(|direction| name == direction))
+        .collect();
+    let Some(Value::Array(tiers)) = row.get_mut("tiered_pricing") else {
+        if let Some(Value::Object(off_peak)) = row.get_mut("off_peak_pricing") {
+            off_peak.retain(|name, _| !matches(name));
+        }
+        row.retain(|name, _| !matches(name));
+        return;
+    };
+    for tier in tiers.iter_mut().filter_map(Value::as_object_mut) {
+        tier.retain(|name, _| !matches(name));
+        tier.extend(flat.clone());
+    }
+    if let Some(Value::Object(off_peak)) = row.get_mut("off_peak_pricing") {
+        off_peak.retain(|name, _| !matches(name));
+    }
+    row.retain(|name, _| !matches(name));
 }
 
 #[cfg(test)]
@@ -399,6 +662,290 @@ mod tests {
     }
 
     #[rstest]
+    fn registration_none_is_ignored_while_owner_none_deletes() {
+        let base = catalog(json!({"model": {"value": true}}));
+        let mut layers = Layers::default();
+        layers.record(ApplicationWrite::Registration {
+            key: "model".into(),
+            inherits_from: None,
+            fields: sparse(json!({"value": null})),
+        });
+        assert_eq!(
+            row(&layers, &base, "model").fields.get("value"),
+            Some(&json!(true))
+        );
+        layers.set_owner(owner(
+            "override",
+            Precedence::Override,
+            json!({"model": {"value": null}}),
+        ));
+        assert_eq!(row(&layers, &base, "model").fields.get("value"), None);
+        layers.drop_owner("override");
+        assert_eq!(
+            row(&layers, &base, "model").fields.get("value"),
+            Some(&json!(true))
+        );
+
+        let reset_base = catalog(json!({"model": {"explicit_cache_read_input_token_cost": 0.2}}));
+        let mut reset = Layers::default();
+        reset.record_registration(
+            "model".into(),
+            None,
+            sparse(json!({})),
+            RegistrationOptions {
+                reset_fields: BTreeSet::from(["explicit_cache_read_input_token_cost".into()]),
+                ignore_none: true,
+                ..RegistrationOptions::default()
+            },
+        );
+        assert_eq!(
+            row(&reset, &reset_base, "model")
+                .fields
+                .get("explicit_cache_read_input_token_cost"),
+            Some(&Value::Null)
+        );
+    }
+
+    #[rstest]
+    fn registration_mapping_fields_merge_shallowly() {
+        let base = catalog(json!({"model": {"metadata": {"base": true, "keep": true}}}));
+        let mut layers = Layers::default();
+        layers.record_registration(
+            "model".into(),
+            None,
+            sparse(json!({"metadata": {"new": true}})),
+            RegistrationOptions {
+                ignore_none: true,
+                ..RegistrationOptions::default()
+            },
+        );
+        assert_eq!(
+            row(&layers, &base, "model").fields.get("metadata"),
+            Some(&json!({"base": true, "keep": true, "new": true}))
+        );
+    }
+
+    #[rstest]
+    fn fallback_cleanup_is_conditional() {
+        let base = catalog(json!({
+            "source": {
+                "litellm_provider": "openai",
+                "input_cost_per_token": 1,
+                "input_cost_per_token_above_1": 2,
+                "input_cost_per_token_cache_read": 3,
+                "output_cost_per_token": 8,
+                "output_cost_per_reasoning_token": 9,
+                "tiered_pricing": [{
+                    "input_cost_per_token": 4,
+                    "input_cost_per_token_above_1": 5,
+                    "output_cost_per_token": 6,
+                    "output_cost_per_reasoning_token": 7
+                }],
+                "off_peak_pricing": {"input_cost_per_token": 7}
+            }
+        }));
+        let mut layers = Layers::default();
+        layers.record_registration(
+            "target".into(),
+            Some("source".into()),
+            sparse(json!({"input_cost_per_token": 10})),
+            RegistrationOptions {
+                cleanup_overrides: vec!["input_cost_per_token".into()],
+                fallback: true,
+                ignore_none: true,
+                ..RegistrationOptions::default()
+            },
+        );
+        let fields = &row(&layers, &base, "target").fields;
+        assert_eq!(fields.get("litellm_provider"), None);
+        assert_eq!(fields.get("input_cost_per_token"), Some(&json!(10)));
+        assert_eq!(fields.get("input_cost_per_token_above_1"), None);
+        assert_eq!(
+            fields.get("input_cost_per_token_cache_read"),
+            Some(&json!(3))
+        );
+        assert_eq!(
+            fields.get("output_cost_per_reasoning_token"),
+            Some(&json!(9))
+        );
+        assert_eq!(
+            fields.get("tiered_pricing"),
+            Some(&json!([{
+                "input_cost_per_token": 10,
+                "output_cost_per_token": 6,
+                "output_cost_per_reasoning_token": 7
+            }]))
+        );
+        assert_eq!(fields.get("off_peak_pricing"), Some(&json!({})));
+
+        let mut named = Layers::default();
+        named.record_registration(
+            "target".into(),
+            Some("source".into()),
+            sparse(json!({"input_cost_per_token": 10})),
+            RegistrationOptions {
+                names_the_row: true,
+                cleanup_overrides: vec!["input_cost_per_token".into()],
+                ignore_none: true,
+                ..RegistrationOptions::default()
+            },
+        );
+        let named_fields = &row(&named, &base, "target").fields;
+        assert_eq!(named_fields.get("litellm_provider"), None);
+        assert_eq!(
+            named_fields.get("input_cost_per_token_above_1"),
+            Some(&json!(2))
+        );
+
+        let mut output = Layers::default();
+        output.record_registration(
+            "target".into(),
+            Some("source".into()),
+            sparse(json!({"output_cost_per_token": 11})),
+            RegistrationOptions {
+                cleanup_overrides: vec![
+                    "output_cost_per_token".into(),
+                    "output_cost_per_reasoning_token".into(),
+                ],
+                fallback: true,
+                ignore_none: true,
+                ..RegistrationOptions::default()
+            },
+        );
+        let output_fields = &row(&output, &base, "target").fields;
+        assert_eq!(output_fields.get("output_cost_per_token"), Some(&json!(11)));
+        assert_eq!(output_fields.get("output_cost_per_reasoning_token"), None);
+        assert_eq!(
+            output_fields.get("tiered_pricing"),
+            Some(
+                &json!([{"input_cost_per_token": 4, "input_cost_per_token_above_1": 5, "output_cost_per_token": 11}])
+            )
+        );
+
+        let mut builtin = Layers::default();
+        builtin.record_registration(
+            "source".into(),
+            None,
+            sparse(json!({"input_cost_per_token": 12})),
+            RegistrationOptions {
+                ignore_none: true,
+                ..RegistrationOptions::default()
+            },
+        );
+        let builtin_fields = &row(&builtin, &base, "source").fields;
+        assert_eq!(
+            builtin_fields.get("litellm_provider"),
+            Some(&json!("openai"))
+        );
+        assert_eq!(
+            builtin_fields.get("input_cost_per_token_above_1"),
+            Some(&json!(2))
+        );
+    }
+
+    #[rstest]
+    fn fallback_without_flat_override_strips_source_provider() {
+        let base = catalog(json!({
+            "source": {
+                "litellm_provider": "openai",
+                "input_cost_per_token": 0.2,
+                "supports_function_calling": true
+            }
+        }));
+        let mut layers = Layers::default();
+        layers.record_registration(
+            "target".into(),
+            Some("source".into()),
+            sparse(json!({"litellm_provider": "custom", "max_input_tokens": 4096})),
+            RegistrationOptions {
+                fallback: true,
+                ignore_none: true,
+                ..RegistrationOptions::default()
+            },
+        );
+
+        let source = row(&layers, &base, "source");
+        let target = row(&layers, &base, "target");
+        assert_eq!(
+            source.fields.get("litellm_provider"),
+            Some(&json!("openai"))
+        );
+        assert_eq!(
+            target.fields.get("litellm_provider"),
+            Some(&json!("custom"))
+        );
+        assert_eq!(target.fields.get("input_cost_per_token"), Some(&json!(0.2)));
+        assert_eq!(
+            target.fields.get("supports_function_calling"),
+            Some(&json!(true))
+        );
+    }
+
+    #[rstest]
+    fn generalized_defaults_are_below_inherited_fields_and_caller_fields() {
+        let base = catalog(json!({
+            "source": {
+                "supports_function_calling": true,
+                "supports_vision": true,
+                "mode": "chat"
+            }
+        }));
+        let mut layers = Layers::default();
+        layers.record_registration(
+            "target".into(),
+            Some("source".into()),
+            sparse(json!({"supports_vision": false})),
+            RegistrationOptions {
+                defaults: sparse(json!({
+                    "supports_function_calling": false,
+                    "supports_vision": true,
+                    "max_input_tokens": 8192
+                })),
+                fallback: true,
+                ignore_none: true,
+                ..RegistrationOptions::default()
+            },
+        );
+
+        let fields = &row(&layers, &base, "target").fields;
+        assert_eq!(fields.get("supports_function_calling"), Some(&json!(true)));
+        assert_eq!(fields.get("supports_vision"), Some(&json!(false)));
+        assert_eq!(fields.get("max_input_tokens"), Some(&json!(8192)));
+        assert_eq!(fields.get("mode"), Some(&json!("chat")));
+    }
+
+    #[rstest]
+    fn rebind_preserves_order_and_removes_stale_destination() {
+        let base = catalog(json!({"other": {"base": true}}));
+        let mut layers = Layers::default();
+        layers.record(ApplicationWrite::Direct {
+            key: "before".into(),
+            row: Fields::new(),
+        });
+        let handle = layers.record_registration(
+            "old".into(),
+            None,
+            sparse(json!({"registered": true})),
+            RegistrationOptions::default(),
+        );
+        layers.record(ApplicationWrite::Tombstone {
+            key: "other".into(),
+        });
+        assert!(layers.rebind_registration(
+            handle,
+            "new".into(),
+            None,
+            sparse(json!({"registered": true})),
+            RegistrationOptions::default(),
+        ));
+        assert_eq!(
+            layers.compose(&base).map(|row| row.key).collect::<Vec<_>>(),
+            vec!["before", "new"]
+        );
+        assert!(layers.compose(&base).all(|row| row.key != "old"));
+    }
+
+    #[rstest]
     fn registrations_inherit_fresh_base_then_accumulate_sparse_changes() {
         let base = catalog(json!({
             "source": {"litellm_provider": "base", "aliases": ["source-alias"], "keep": true, "remove": true}
@@ -417,12 +964,12 @@ mod tests {
 
         let composed = row(&layers, &base, "new");
         assert_eq!(composed.fields.get("keep"), Some(&json!(true)));
-        assert_eq!(composed.fields.get("remove"), None);
+        assert_eq!(composed.fields.get("remove"), Some(&json!(true)));
         assert_eq!(composed.fields.get("first"), Some(&json!(1)));
         assert_eq!(composed.fields.get("second"), Some(&json!(2)));
         assert_eq!(
             composed.registered,
-            BTreeSet::from(["first".to_owned(), "remove".to_owned(), "second".to_owned()])
+            BTreeSet::from(["first".to_owned(), "second".to_owned()])
         );
         assert_eq!(
             base.lookup("source").unwrap().entry.fields().get("remove"),

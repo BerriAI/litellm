@@ -1,10 +1,8 @@
 """Guard the cost map on pull requests.
 
-Every pull request whose diff against its merge base touches one of the two cost map files gets the file
-checks: the files parse and the backup copy matches the root file. A pull request that leaves both untouched
-skips them, since merging it keeps the base branch's copies and its head tree only carries whatever state the
-branch was cut from. Pull requests from the cost map sync bot (branches named litellm_cost_map_sync_*) always
-get the file checks and additionally may only touch those two files and may only add or update models.
+Every pull request whose diff against its merge base touches the cost map gets the file checks. A pull request
+that leaves it untouched skips them, since merging it keeps the base branch's copy. Cost map sync bot pull
+requests may only touch the cost map and may only add or update models.
 """
 
 from __future__ import annotations
@@ -19,8 +17,7 @@ from types import MappingProxyType
 from typing import Final
 
 COST_MAP_PATH: Final = "model_prices_and_context_window.json"
-BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
-GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH)
+GUARDED_PATHS: Final = (COST_MAP_PATH,)
 BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
 SPECIAL_ROOT_KEYS: Final = frozenset({"sample_spec", "fallback_generalizations"})
 EVALUATION_OUTPUT_PRICE_SOURCES: Final[Mapping[str, str]] = MappingProxyType({})
@@ -31,7 +28,6 @@ CostMap = dict[str, object]
 @dataclass(frozen=True, slots=True)
 class Snapshot:
     cost_map: str
-    backup: str
 
 
 def _parse_object(text: str, path: str) -> CostMap | str:
@@ -67,13 +63,7 @@ def _file_failures(
     *,
     evaluation_output_price_sources: Mapping[str, str] = EVALUATION_OUTPUT_PRICE_SOURCES,
 ) -> tuple[str, ...]:
-    backup_failure: Final = (
-        ()
-        if head.backup == head.cost_map
-        else (f"{BACKUP_PATH} differs from {COST_MAP_PATH}; copy the root file over it",)
-    )
     return (
-        *backup_failure,
         *(
             failure
             for key, entry in head_map.items()
@@ -157,7 +147,7 @@ def _git(*args: str) -> str | None:
 
 
 def snapshot(revision: str) -> Snapshot:
-    return Snapshot(*(_git("show", f"{revision}:{path}") or "" for path in GUARDED_PATHS))
+    return Snapshot(_git("show", f"{revision}:{COST_MAP_PATH}") or "")
 
 
 def changed_files(base: str, head: str) -> tuple[str, ...] | None:
