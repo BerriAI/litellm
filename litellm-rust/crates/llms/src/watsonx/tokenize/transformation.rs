@@ -167,18 +167,16 @@ impl BaseTokenizeConfig for WatsonxTokenizeConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Value, Error> {
         let params: WatsonxTokenizeParams = decode_params(optional_params)?;
-        let project_id = resolve_non_empty(
-            params
-                .project_id
-                .as_deref()
-                .or(params.watsonx_project.as_deref()),
-            env_lookup,
-            PROJECT_ENV,
-        );
-        let space_id = if project_id.is_none() {
-            resolve_non_empty(params.space_id.as_deref(), env_lookup, SPACE_ENV)
-        } else {
-            None
+        let explicit_project_id = resolve_non_empty(params.project_id.as_deref(), env_lookup, &[])
+            .or_else(|| resolve_non_empty(params.watsonx_project.as_deref(), env_lookup, &[]));
+        let explicit_space_id = resolve_non_empty(params.space_id.as_deref(), env_lookup, &[]);
+        let (project_id, space_id) = match (explicit_project_id, explicit_space_id) {
+            (Some(project_id), _) => (Some(project_id), None),
+            (None, Some(space_id)) => (None, Some(space_id)),
+            (None, None) => match resolve_non_empty(None, env_lookup, PROJECT_ENV) {
+                Some(project_id) => (Some(project_id), None),
+                None => (None, resolve_non_empty(None, env_lookup, SPACE_ENV)),
+            },
         };
         if project_id.is_none() && space_id.is_none() {
             return Err(Error::MissingField("project_id or space_id"));
@@ -302,6 +300,62 @@ mod tests {
         body.remove("input");
         body.remove("parameters");
         assert_eq!(request, expected);
+    }
+
+    #[rstest]
+    #[case::explicit_space_precedes_environment_project(
+        json!({"space_id": "request-space"}),
+        Some("environment-project"),
+        Some("environment-space"),
+        None,
+        Some("request-space")
+    )]
+    #[case::explicit_project_precedes_space(
+        json!({"project_id": "request-project", "space_id": "request-space"}),
+        Some("environment-project"),
+        Some("environment-space"),
+        Some("request-project"),
+        None
+    )]
+    #[case::explicit_project_alias_precedes_space(
+        json!({"project_id": " ", "watsonx_project": "request-project", "space_id": "request-space"}),
+        Some("environment-project"),
+        Some("environment-space"),
+        Some("request-project"),
+        None
+    )]
+    #[case::environment_project_precedes_environment_space(
+        json!({}),
+        Some("environment-project"),
+        Some("environment-space"),
+        Some("environment-project"),
+        None
+    )]
+    #[case::environment_space_is_fallback(json!({}), None, Some("environment-space"), None, Some("environment-space"))]
+    fn scope_precedence_selects_explicit_values_before_environment(
+        #[case] options: Value,
+        #[case] environment_project: Option<&str>,
+        #[case] environment_space: Option<&str>,
+        #[case] expected_project_id: Option<&str>,
+        #[case] expected_space_id: Option<&str>,
+    ) {
+        let environment = |name: &str| match name {
+            "WATSONX_PROJECT_ID" => environment_project.map(str::to_string),
+            "WATSONX_DEPLOYMENT_SPACE_ID" => environment_space.map(str::to_string),
+            _ => None,
+        };
+        let body = WatsonxTokenizeConfig
+            .transform_tokenize_request("ibm/model", "Hello", &params(options), &environment)
+            .unwrap();
+
+        assert_eq!(
+            body.get("project_id").and_then(Value::as_str),
+            expected_project_id
+        );
+        assert_eq!(
+            body.get("space_id").and_then(Value::as_str),
+            expected_space_id
+        );
     }
 
     #[rstest]
