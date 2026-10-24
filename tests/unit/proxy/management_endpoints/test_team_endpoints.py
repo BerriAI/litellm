@@ -44,6 +44,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,  # Import UserAPIKeyAuth
 )
+from litellm.proxy.hooks.model_max_budget_limiter import RoutedModels
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     PROXY_CONTROLLED_TEAM_METADATA_KEYS,
@@ -17117,6 +17118,130 @@ def test_team_admin_can_tighten_or_keep_team_model_caps(requested) -> None:
         )
         is None
     )
+
+
+_TEAM_OPUS_FAMILY_CAP: Final = MappingProxyType({"claude-opus*": {"max_budget": 10.0, "budget_duration": "1d"}})
+_TEAM_OPUS_GROUP_CAP: Final = MappingProxyType({"z-opus-group": {"max_budget": 10.0, "budget_duration": "1d"}})
+_TEAM_ROUTED_MODELS: Final = RoutedModels(
+    served_names=frozenset(
+        {"claude-opus-4-8", "claude-opus-5-5", "gemini-3-pro", "gpt-4o", "my-team/gpt-4o", "team-route/*"}
+    ),
+    group_members=MappingProxyType(
+        {
+            "opus-group": frozenset({"claude-opus-4-8"}),
+            "z-opus-group": frozenset({"claude-opus-4-8"}),
+            "a-opus-group": frozenset({"claude-opus-4-8", "claude-opus-5-5"}),
+            "zz-opus-group": frozenset({"claude-opus-4-8"}),
+            "a-gemini-group": frozenset({"gemini-3-pro"}),
+            "z-anthropic-group": frozenset({"anthropic/*"}),
+        }
+    ),
+)
+
+
+def _check_team_admin_model_caps(existing: Mapping[str, object], requested: Mapping[str, object]) -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
+
+    _check_team_model_budget_update_authority(
+        data=UpdateTeamRequest(team_id="t1", model_max_budget=dict(requested)),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
+        existing_model_max_budget=existing,
+        routed_models_source=lambda: _TEAM_ROUTED_MODELS,
+    )
+
+
+@pytest.mark.parametrize(
+    ("existing", "added"),
+    [
+        (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 10.0, "budget_duration": "7d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"*laude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_GROUP_CAP, {"a-opus-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_GROUP_CAP, {"claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (
+            {"z-anthropic-group": {"max_budget": 10.0, "budget_duration": "1d"}},
+            {"claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (_TEAM_OPUS_FAMILY_CAP, {"claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (
+            {"anthropic/*": {"max_budget": 10.0, "budget_duration": "1d"}},
+            {"claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (
+            {"my-team/*": {"max_budget": 10.0, "budget_duration": "1d"}},
+            {"gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (
+            {"team-route/*": {"max_budget": 10.0, "budget_duration": "1d"}},
+            {"gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+    ],
+    ids=[
+        "group_over_pattern",
+        "group_rewindows_pattern",
+        "more_specific_pattern",
+        "earlier_group_sharing_a_model",
+        "model_inside_group",
+        "model_under_wildcard_group",
+        "model_matching_pattern",
+        "model_under_provider_pattern",
+        "model_under_served_prefix",
+        "model_under_wildcard_route",
+    ],
+)
+def test_team_admin_cannot_add_an_entry_looser_than_a_cap_it_outranks(
+    existing: Mapping[str, object], added: Mapping[str, object]
+) -> None:
+    with pytest.raises(HTTPException) as exc:
+        _check_team_admin_model_caps(existing=existing, requested={**existing, **added})
+    assert exc.value.status_code == 403
+    assert "proxy admin" in exc.value.detail["error"]
+    assert repr(next(iter(existing))) in exc.value.detail["error"]
+
+
+@pytest.mark.parametrize(
+    ("existing", "requested"),
+    [
+        (_TEAM_OPUS_FAMILY_CAP, {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 5.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {**_TEAM_OPUS_FAMILY_CAP, "claude*": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_GROUP_CAP, {**_TEAM_OPUS_GROUP_CAP, "a-gemini-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_GROUP_CAP, {**_TEAM_OPUS_GROUP_CAP, "zz-opus-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_GROUP_CAP, {**_TEAM_OPUS_GROUP_CAP, "gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {**_TEAM_OPUS_FAMILY_CAP, "gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (
+            _TEAM_OPUS_FAMILY_CAP,
+            {**_TEAM_OPUS_FAMILY_CAP, "a-gemini-group": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (
+            {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 100.0, "budget_duration": "1d"}},
+            {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 100.0, "budget_duration": "1d"}},
+        ),
+        (
+            {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 100.0, "budget_duration": "1d"}},
+            {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 50.0, "budget_duration": "1d"}},
+        ),
+        (
+            {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"rpm_limit": 10}},
+            {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"rpm_limit": 20}},
+        ),
+    ],
+    ids=[
+        "tighter_group",
+        "less_specific_pattern",
+        "group_without_shared_models",
+        "later_group_sharing_a_model",
+        "model_outside_group",
+        "model_outside_pattern",
+        "group_outside_pattern",
+        "unchanged_looser_entry",
+        "tightened_looser_entry",
+        "uncapped_entry_edited",
+    ],
+)
+def test_team_admin_can_add_entries_that_never_lift_an_outranked_cap(
+    existing: Mapping[str, object], requested: Mapping[str, object]
+) -> None:
+    assert _check_team_admin_model_caps(existing=existing, requested=requested) is None
 
 
 def test_team_model_cap_authority_skips_omitted_field_malformed_rows_and_proxy_admins() -> None:

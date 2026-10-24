@@ -50,6 +50,8 @@ export const MODEL_BUDGET_PERIOD_OPTIONS = [
 
 const DEFAULT_PERIOD = "30d";
 
+const MODEL_PATTERN_VALUE = { hint: "Model pattern", accepts: (typed: string) => typed.includes("*") };
+
 export const entriesToModelMaxBudget = (entries: readonly ModelBudgetEntry[]): ModelMaxBudget =>
   Object.fromEntries(
     entries
@@ -121,7 +123,7 @@ export function ModelMaxBudgetEditor({
   const blurb = (
     <div className="text-xs text-muted-foreground">
       {premiumUser
-        ? "Cap spend per model over its own window. A budget set on the bare model name also covers the provider-prefixed spelling of that model."
+        ? "Cap spend per model over its own window. A budget set on the bare model name also covers the provider-prefixed spelling of that model. Type an access group or a pattern like claude-opus* to share one budget across every model it covers."
         : MODEL_MAX_BUDGET_PREMIUM_HINT}
     </div>
   );
@@ -165,6 +167,8 @@ export function ModelMaxBudgetEditor({
                 onValueChange={(model) => updateEntry(entry.id, { model })}
                 placeholder="Select model"
                 emptyText="No models found"
+                customValue={MODEL_PATTERN_VALUE}
+                reservedValues={entries.flatMap((other) => (other.id !== entry.id && other.model ? [other.model] : []))}
                 disabled={!premiumUser}
               />
             </div>

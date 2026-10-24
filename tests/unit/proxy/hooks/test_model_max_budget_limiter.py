@@ -1,6 +1,9 @@
 import asyncio
+import functools
+import re
 import time
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 
@@ -8,12 +11,19 @@ import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import Litellm_EntityType
+from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
+from litellm.proxy.hooks.model_budget_shared_windows import SharedWindow, SharedWindows
 from litellm.proxy.hooks.model_max_budget_limiter import (
     PROXY_VirtualKeyModelMaxBudgetLimiter,
+    build_model_max_budget_usage,
+    model_access_groups_of,
     model_budget_spend_cache_key,
+    resolve_model_budget,
+    routed_models_of,
     team_member_budget_entity_id,
+    team_model_budget_applies,
 )
+from litellm.router import Router
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import LiteLLMBatch, Usage
 
@@ -74,10 +84,14 @@ def _event(
     }
 
 
+async def _log_success(
+    limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, event: dict[str, object], response_obj: object = None
+) -> None:
+    await limiter.async_log_success_event(event, response_obj=response_obj, start_time=None, end_time=None)
+
+
 async def _poll(limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, batch: LiteLLMBatch, response_cost: float) -> None:
-    await limiter.async_log_success_event(
-        _event("aretrieve_batch", response_cost), response_obj=batch, start_time=None, end_time=None
-    )
+    await _log_success(limiter, _event("aretrieve_batch", response_cost), response_obj=batch)
 
 
 async def _chat(
@@ -86,7 +100,8 @@ async def _chat(
     user_id: str = USER_ID,
     team_id: str = TEAM_ID,
 ) -> None:
-    await limiter.async_log_success_event(
+    await _log_success(
+        limiter,
         _event(
             "acompletion",
             CHAT_COST,
@@ -94,9 +109,6 @@ async def _chat(
             user_id=user_id,
             team_id=team_id,
         ),
-        response_obj=None,
-        start_time=None,
-        end_time=None,
     )
 
 
@@ -311,3 +323,399 @@ async def test_a_batch_polled_within_every_budget_window_is_never_charged_again(
     await _poll(limiter, finished, BATCH_COST)
 
     assert _local_spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
+
+
+OPUS_GROUP: Final = "claude-opus"
+OPUS_GROUP_MEMBERS: Final = MappingProxyType(
+    {"claude-opus-4-8": frozenset({OPUS_GROUP}), "claude-opus-5-5": frozenset({OPUS_GROUP})}
+)
+FAMILY_CAP: Final = {"budget_limit": CHAT_COST, "time_period": "1d"}  # mutable-ok: BudgetConfig validates dicts only
+ROOMY_CAP: Final = {
+    "budget_limit": CHAT_COST * 100,
+    "time_period": "1d",
+}  # mutable-ok: BudgetConfig validates dicts only
+WINDOW_EPOCH: Final = datetime(2026, 10, 20, 9, 30, tzinfo=timezone.utc).timestamp()
+
+
+def _model_access_groups(groups_by_model: Mapping[str, frozenset[str]]) -> Callable[[str], frozenset[str]]:
+    return lambda model: groups_by_model.get(model, frozenset())
+
+
+class _SharedWindowsDouble:
+    def __init__(self) -> None:
+        self.rows: Mapping[str, SharedWindow] = MappingProxyType({})
+        self.queued: tuple[tuple[str, float, float], ...] = ()
+
+    async def read(self, spend_key: str, budget_duration: str) -> SharedWindow | None:
+        return self.rows.get(spend_key)
+
+    async def open(self, spend_key: str, budget_duration: str, now: float) -> float:
+        await asyncio.sleep(0)
+        stored: Final = self.rows.get(spend_key)
+        if stored is not None and stored.is_open(budget_duration=budget_duration, now=now):
+            return stored.started_at
+        self.rows = MappingProxyType({**self.rows, spend_key: SharedWindow(started_at=now, spend=0.0)})
+        return now
+
+    async def add(self, spend_key: str, budget_duration: str, started_at: float, spend: float) -> None:
+        self.queued = (*self.queued, (spend_key, started_at, spend))
+
+    def flush(self) -> None:
+        self.rows = functools.reduce(_upsert_window_spend, self.queued, self.rows)
+        self.queued = ()
+
+
+def _upsert_window_spend(
+    rows: Mapping[str, SharedWindow], queued: tuple[str, float, float]
+) -> Mapping[str, SharedWindow]:
+    spend_key, started_at, spend = queued
+    stored: Final = rows.get(spend_key)
+    row: Final = (
+        SharedWindow(started_at=stored.started_at, spend=stored.spend + spend)
+        if stored is not None and stored.started_at >= started_at
+        else SharedWindow(started_at=started_at, spend=spend)
+    )
+    return MappingProxyType({**rows, spend_key: row})
+
+
+def _family_limiter(
+    groups_by_model: Mapping[str, frozenset[str]] = OPUS_GROUP_MEMBERS,
+    dual_cache: DualCache | None = None,
+    shared_windows: SharedWindows | None = None,
+    clock: Callable[[], float] = time.time,
+) -> PROXY_VirtualKeyModelMaxBudgetLimiter:
+    return PROXY_VirtualKeyModelMaxBudgetLimiter(
+        dual_cache=dual_cache or DualCache(),
+        clock=clock,
+        model_access_groups=_model_access_groups(groups_by_model),
+        shared_windows=shared_windows or _SharedWindowsDouble(),
+    )
+
+
+def _key(model_max_budget: Mapping[str, object]) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(token=KEY_HASH, key_alias="opus-family", model_max_budget=dict(model_max_budget))
+
+
+async def _spend_on(
+    limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, model: str, model_max_budget: Mapping[str, object]
+) -> None:
+    await _log_success(
+        limiter,
+        {
+            "call_type": "acompletion",
+            "standard_logging_object": {
+                "call_type": "acompletion",
+                "response_cost": CHAT_COST,
+                "model": f"anthropic/{model}",
+                "model_group": model,
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {"metadata": {"user_api_key_model_max_budget": dict(model_max_budget)}},
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("family_entry", ["claude-opus*", OPUS_GROUP])
+async def test_every_opus_version_draws_from_one_family_entry(family_entry: str):
+    budget: Final = {family_entry: FAMILY_CAP}
+    limiter: Final = _family_limiter()
+    assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-5-5")
+
+    await _spend_on(limiter, model="claude-opus-4-8", model_max_budget=budget)
+
+    with pytest.raises(
+        litellm.BudgetExceededError, match=rf"model=claude-opus-5-5, budget_model={re.escape(family_entry)}$"
+    ):
+        await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-5-5")
+    assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-sonnet-5")
+
+
+@pytest.mark.asyncio
+async def test_a_model_added_to_the_access_group_later_is_covered_with_no_key_change():
+    budget: Final = {OPUS_GROUP: FAMILY_CAP}
+    shared_cache: Final = DualCache()
+    before_group_change: Final = _family_limiter(dual_cache=shared_cache)
+    after_group_change: Final = _family_limiter(
+        groups_by_model={**OPUS_GROUP_MEMBERS, "claude-opus-6": frozenset({OPUS_GROUP})}, dual_cache=shared_cache
+    )
+
+    await _spend_on(before_group_change, model="claude-opus-4-8", model_max_budget=budget)
+
+    assert await before_group_change.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-6")
+    with pytest.raises(litellm.BudgetExceededError):
+        await after_group_change.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-6")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("budget", "checked_model", "blocked"),
+    [
+        ({"claude-opus-4-8": ROOMY_CAP, "claude-opus*": FAMILY_CAP}, "claude-opus-4-8", False),
+        ({"claude-opus-4-8": ROOMY_CAP, "claude-opus*": FAMILY_CAP}, "claude-opus-5-5", False),
+        ({OPUS_GROUP: FAMILY_CAP, "claude-opus*": ROOMY_CAP}, "claude-opus-5-5", True),
+        ({"claude-opus-4*": FAMILY_CAP, "claude-opus*": ROOMY_CAP}, "claude-opus-4-7", True),
+        ({"claude-opus-4*": FAMILY_CAP, "claude-opus*": ROOMY_CAP}, "claude-opus-5-5", False),
+        ({"claude-opus-4*": {"budget_limit": CHAT_COST}, "claude-opus*": FAMILY_CAP}, "claude-opus-5-5", True),
+        ({"claude-opus-4*": FAMILY_CAP, "c" + "*" * 15: ROOMY_CAP}, "claude-opus-4-7", True),
+    ],
+)
+async def test_the_most_specific_entry_takes_the_spend_and_gates_the_request(
+    budget: Mapping[str, object], checked_model: str, blocked: bool
+):
+    limiter: Final = _family_limiter()
+
+    await _spend_on(limiter, model="claude-opus-4-8", model_max_budget=budget)
+
+    if blocked:
+        with pytest.raises(litellm.BudgetExceededError):
+            await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=checked_model)
+    else:
+        assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=checked_model)
+
+
+@pytest.mark.asyncio
+async def test_an_exact_entry_refusal_reads_as_before_for_a_provider_prefixed_model():
+    budget: Final = {"claude-opus-4-8": FAMILY_CAP}
+    limiter: Final = _family_limiter()
+
+    await _spend_on(limiter, model="claude-opus-4-8", model_max_budget=budget)
+
+    with pytest.raises(litellm.BudgetExceededError, match=r"model=anthropic/claude-opus-4-8$"):
+        await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="anthropic/claude-opus-4-8")
+
+
+@pytest.mark.parametrize(
+    ("key_entry", "team_cap_applies"),
+    [("claude-opus-4-8", False), ("anthropic/claude-opus-4-8", True), ("claude-opus*", True), (OPUS_GROUP, True)],
+)
+def test_only_a_key_entry_named_after_the_model_replaces_the_team_cap(key_entry: str, team_cap_applies: bool):
+    assert team_model_budget_applies(model="claude-opus-4-8", key_model_max_budget={key_entry: ROOMY_CAP}) is (
+        team_cap_applies
+    )
+
+
+@pytest.mark.asyncio
+async def test_end_user_windows_stay_on_the_replica_without_redis():
+    budget: Final = {"claude-opus*": FAMILY_CAP}
+    table: Final = _SharedWindowsDouble()
+    limiter: Final = _family_limiter(shared_windows=table)
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "acompletion",
+            "standard_logging_object": {
+                "call_type": "acompletion",
+                "response_cost": CHAT_COST,
+                "model": "anthropic/claude-opus-4-8",
+                "model_group": "claude-opus-4-8",
+                "end_user": "end-user-1",
+                "metadata": {},
+            },
+            "litellm_params": {"metadata": {"user_api_key_end_user_model_max_budget": budget}},
+        },
+    )
+    table.flush()
+
+    assert dict(table.rows) == {}
+    with pytest.raises(litellm.BudgetExceededError, match="model=claude-opus-5-5"):
+        await limiter.is_end_user_within_model_budget(
+            end_user_id="end-user-1", end_user_model_max_budget=budget, model="claude-opus-5-5"
+        )
+
+
+def test_an_access_group_named_after_a_served_model_never_widens_that_models_entry():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                "model_info": {"access_groups": ["gpt-4o", "openai-models"]},
+            },
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"access_groups": ["gpt-4o", "openai-models"]},
+            },
+        ]
+    )
+
+    def governing_entry(model_max_budget: Mapping[str, object]) -> str | None:
+        resolved: Final = resolve_model_budget(
+            model="gpt-4o-mini",
+            model_max_budget=model_max_budget,
+            model_access_groups=lambda model: model_access_groups_of(router=router, model=model),
+        )
+        return None if resolved is None else resolved.budget_model
+
+    assert governing_entry({"gpt-4o": FAMILY_CAP}) is None
+    assert governing_entry({"openai-models": FAMILY_CAP}) == "openai-models"
+    assert routed_models_of(router).members("gpt-4o") == frozenset()
+    assert routed_models_of(router).members("openai-models") == frozenset({"gpt-4o", "gpt-4o-mini"})
+
+
+@pytest.mark.asyncio
+async def test_key_info_usage_reports_the_family_total():
+    budget: Final = {"claude-opus*": ROOMY_CAP}
+    limiter: Final = _family_limiter()
+
+    await _spend_on(limiter, model="claude-opus-4-8", model_max_budget=budget)
+    await _spend_on(limiter, model="claude-opus-5-5", model_max_budget=budget)
+
+    usage: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id=KEY_HASH,
+        model_max_budget=budget,
+        cache=limiter.dual_cache,
+    )
+    assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 2, 4)
+
+
+@pytest.mark.parametrize(
+    ("pattern", "model", "governs"),
+    [
+        ("claude-opus*", "claude-opus-4-8", True),
+        ("claude-opus*", "anthropic/claude-opus-4-8", True),
+        ("anthropic/claude-opus*", "anthropic/claude-opus-4-8", True),
+        ("anthropic/claude-opus*", "claude-opus-4-8", False),
+        ("claude-opus*", "my-claude-opus-4-8", False),
+        ("claude-opus*", "claude-sonnet-5", False),
+        ("gpt-4.1*", "gpt-401-mini", False),
+        ("*", "claude-sonnet-5", True),
+    ],
+)
+def test_glob_entries_match_the_whole_model_name_with_only_star_as_a_wildcard(pattern: str, model: str, governs: bool):
+    resolved: Final = resolve_model_budget(
+        model=model, model_max_budget={pattern: FAMILY_CAP}, model_access_groups=_model_access_groups({})
+    )
+
+    assert (resolved is not None and resolved.budget_model == pattern) is governs
+
+
+@pytest.mark.asyncio
+async def test_replicas_without_redis_enforce_one_family_cap_together():
+    budget: Final = {"claude-opus*": FAMILY_CAP}
+    table: Final = _SharedWindowsDouble()
+    replica_a: Final = _family_limiter(shared_windows=table)
+    replica_b: Final = _family_limiter(shared_windows=table)
+
+    await _spend_on(replica_a, model="claude-opus-4-8", model_max_budget=budget)
+    table.flush()
+
+    with pytest.raises(litellm.BudgetExceededError, match="model=claude-opus-5-5"):
+        await replica_b.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-5-5")
+
+
+@pytest.mark.asyncio
+async def test_replicas_sharing_redis_enforce_the_family_cap_without_the_database():
+    budget: Final = {"claude-opus*": FAMILY_CAP}
+    redis: Final = _SharedRedisDouble()
+    table: Final = _SharedWindowsDouble()
+    replica_a: Final = _family_limiter(
+        dual_cache=DualCache(redis_cache=redis),  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+        shared_windows=table,
+    )
+    replica_b: Final = _family_limiter(
+        dual_cache=DualCache(redis_cache=redis),  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+        shared_windows=table,
+    )
+
+    await _spend_on(replica_a, model="claude-opus-4-8", model_max_budget=budget)
+    await _drain_redis_pushes()
+    table.flush()
+
+    with pytest.raises(litellm.BudgetExceededError, match="model=claude-opus-5-5"):
+        await replica_b.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-5-5")
+    assert dict(table.rows) == {}
+
+
+@pytest.mark.asyncio
+async def test_a_replica_charges_the_open_shared_window_instead_of_restarting_it():
+    budget: Final = {"claude-opus*": {"budget_limit": CHAT_COST * 1.5, "time_period": "1d"}}
+    table: Final = _SharedWindowsDouble()
+    clock: Final = _Clock()
+    clock.advance(WINDOW_EPOCH)
+    replica_a: Final = _family_limiter(shared_windows=table, clock=clock.now)
+    replica_b: Final = _family_limiter(shared_windows=table, clock=clock.now)
+
+    await _spend_on(replica_a, model="claude-opus-4-8", model_max_budget=budget)
+    table.flush()
+    clock.advance(3600)
+    await _spend_on(replica_b, model="claude-opus-5-5", model_max_budget=budget)
+    table.flush()
+
+    for replica in (replica_a, replica_b):
+        with pytest.raises(litellm.BudgetExceededError):
+            await replica.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-5-5")
+
+
+@pytest.mark.asyncio
+async def test_key_info_on_one_replica_reports_spend_from_every_replica():
+    budget: Final = {"claude-opus*": ROOMY_CAP}
+    table: Final = _SharedWindowsDouble()
+    replica_a: Final = _family_limiter(shared_windows=table)
+    replica_b: Final = _family_limiter(shared_windows=table)
+
+    await _spend_on(replica_a, model="claude-opus-4-8", model_max_budget=budget)
+    await _spend_on(replica_b, model="claude-opus-5-5", model_max_budget=budget)
+    table.flush()
+
+    usage: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id=KEY_HASH,
+        model_max_budget=budget,
+        cache=replica_a.dual_cache,
+        shared_windows=table,
+    )
+    assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 2, 4)
+    assert usage["claude-opus*"]["budget_reset_at"] is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget_model", ["claude-opus*", "claude-opus-4-8"])
+async def test_replicas_starting_a_window_moments_apart_keep_each_others_spend(budget_model: str):
+    budget: Final = {budget_model: ROOMY_CAP}
+    table: Final = _SharedWindowsDouble()
+    clock: Final = _Clock()
+    clock.advance(WINDOW_EPOCH)
+    replica_a: Final = _family_limiter(shared_windows=table, clock=clock.now)
+    replica_b: Final = _family_limiter(shared_windows=table, clock=clock.now)
+
+    await _spend_on(replica_a, model="claude-opus-4-8", model_max_budget=budget)
+    clock.advance(1)
+    await _spend_on(replica_b, model="claude-opus-4-8", model_max_budget=budget)
+    table.flush()
+
+    usage: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id=KEY_HASH,
+        model_max_budget=budget,
+        cache=DualCache(),
+        now=datetime.fromtimestamp(clock.now(), tz=timezone.utc),
+        shared_windows=table,
+    )
+    assert usage[budget_model]["current_spend"] == round(CHAT_COST * 2, 4)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_charges_on_one_replica_both_count():
+    budget: Final = {"claude-opus*": ROOMY_CAP}
+    clock: Final = _Clock()
+    clock.advance(WINDOW_EPOCH)
+    limiter: Final = _family_limiter(shared_windows=_SharedWindowsDouble(), clock=clock.now)
+
+    await asyncio.gather(
+        _spend_on(limiter, model="claude-opus-4-8", model_max_budget=budget),
+        _spend_on(limiter, model="claude-opus-5-5", model_max_budget=budget),
+    )
+
+    usage: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id=KEY_HASH,
+        model_max_budget=budget,
+        cache=limiter.dual_cache,
+        now=datetime.fromtimestamp(clock.now(), tz=timezone.utc),
+        shared_windows=_SharedWindowsDouble(),
+    )
+    assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 2, 4)
