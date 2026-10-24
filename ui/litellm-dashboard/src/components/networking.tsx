@@ -5474,6 +5474,12 @@ export const teamPermissionsUpdateCall = async (accessToken: string, teamId: str
   }
 };
 
+interface SessionSpendLogsOptions {
+  page?: number;
+  page_size?: number;
+  signal?: AbortSignal;
+}
+
 /**
  * Get a page of spend logs for a particular session.
  *
@@ -5484,8 +5490,7 @@ export const teamPermissionsUpdateCall = async (accessToken: string, teamId: str
 export const sessionSpendLogsCall = async (
   accessToken: string,
   session_id: string,
-  page: number = 1,
-  page_size: number = 100,
+  { page = 1, page_size = 100, signal }: SessionSpendLogsOptions = {},
 ) => {
   try {
     const params = new URLSearchParams({
@@ -5499,6 +5504,7 @@ export const sessionSpendLogsCall = async (
 
     const response = await fetch(url, {
       method: "GET",
+      signal,
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
@@ -5515,7 +5521,7 @@ export const sessionSpendLogsCall = async (
     const data = await response.json();
     return data;
   } catch (error) {
-    console.error("Failed to fetch session logs:", error);
+    if (!signal?.aborted) console.error("Failed to fetch session logs:", error);
     throw error;
   }
 };

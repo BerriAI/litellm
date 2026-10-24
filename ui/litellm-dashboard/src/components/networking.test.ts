@@ -640,12 +640,35 @@ describe("sessionSpendLogsCall", () => {
     } as any);
     global.fetch = mockFetch as any;
 
-    await Networking.sessionSpendLogsCall("token", "session-123", 3, 100);
+    await Networking.sessionSpendLogsCall("token", "session-123", { page: 3, page_size: 100 });
 
     const [url] = mockFetch.mock.calls[0];
     const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
     expect(parsed.searchParams.get("page")).toBe("3");
     expect(parsed.searchParams.get("page_size")).toBe("100");
+  });
+
+  it("should hand the caller's abort signal to fetch so a cancelled page stops downloading", async () => {
+    const emptyPage = { data: [], total: 0, page: 2, page_size: 100, total_pages: 1 };
+    const mockFetch = vi.spyOn(global, "fetch").mockResolvedValue(Response.json(emptyPage));
+    const controller = new AbortController();
+
+    await Networking.sessionSpendLogsCall("token", "session-123", { page: 2, signal: controller.signal });
+
+    expect(mockFetch.mock.calls[0][1]?.signal).toBe(controller.signal);
+  });
+
+  it("should rethrow a cancelled page without logging it as a failure", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    vi.spyOn(global, "fetch").mockRejectedValue(new DOMException("The operation was aborted.", "AbortError"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      Networking.sessionSpendLogsCall("token", "session-123", { page: 2, signal: controller.signal }),
+    ).rejects.toThrow("aborted");
+
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });
 

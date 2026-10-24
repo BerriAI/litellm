@@ -26,6 +26,8 @@ vi.mock("../detail", () => ({
   LogDetailsDrawer: function LogDetailsDrawerMock({
     open,
     logEntry,
+    linkedLogId,
+    isLinkedLogPending,
     sessionId,
     onClose,
     allLogs = [],
@@ -33,6 +35,8 @@ vi.mock("../detail", () => ({
   }: {
     open: boolean;
     logEntry?: { request_id: string } | null;
+    linkedLogId?: string | null;
+    isLinkedLogPending?: boolean;
     sessionId?: string | null;
     onClose: () => void;
     allLogs?: { request_id: string }[];
@@ -40,7 +44,13 @@ vi.mock("../detail", () => ({
   }) {
     const nextLog = allLogs.find((log) => log.request_id !== logEntry?.request_id);
     return (
-      <div data-testid="log-details-drawer" data-log-id={logEntry?.request_id ?? ""} data-session-id={sessionId ?? ""}>
+      <div
+        data-testid="log-details-drawer"
+        data-log-id={logEntry?.request_id ?? ""}
+        data-linked-log-id={linkedLogId ?? ""}
+        data-linked-log-pending={String(Boolean(isLinkedLogPending))}
+        data-session-id={sessionId ?? ""}
+      >
         {open ? "open" : "closed"}
         <button type="button" onClick={onClose}>
           close-drawer
@@ -706,6 +716,74 @@ describe("RequestLogsPanel", () => {
       await waitFor(() => expect(drawer()).toHaveTextContent("closed"));
       expect(urlParams().get("session_id")).toBeNull();
       expect(urlParams().get("log_id")).toBeNull();
+    });
+
+    it("tells the session drawer which log a ?session_id=&log_id= link is still looking up", async () => {
+      const lookup = Promise.withResolvers<{
+        data: LogEntry[];
+        total: number;
+        page: number;
+        page_size: number;
+        total_pages: number;
+      }>();
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params }) =>
+        params?.request_id === "req-old"
+          ? lookup.promise
+          : { data: [], total: 0, page: 1, page_size: 50, total_pages: 0 },
+      );
+      renderPanel("?session_id=sess-1&log_id=req-old");
+
+      await waitFor(() => expect(drawer()).toHaveAttribute("data-linked-log-pending", "true"));
+      expect(drawer()).toHaveAttribute("data-linked-log-id", "req-old");
+      expect(drawer()).toHaveTextContent("open");
+      expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
+      expect(drawer()).toHaveAttribute("data-log-id", "");
+
+      const lookupResponse = {
+        data: [logEntry({ request_id: "req-old", session_id: "sess-1", session_total_count: 3 })],
+        total: 1,
+        page: 1,
+        page_size: 1,
+        total_pages: 1,
+      };
+      lookup.resolve(lookupResponse);
+
+      await waitFor(() => expect(drawer()).toHaveAttribute("data-log-id", "req-old"));
+      expect(drawer()).toHaveAttribute("data-linked-log-id", "");
+      expect(drawer()).toHaveAttribute("data-linked-log-pending", "false");
+    });
+
+    it("keeps naming the linked log to the session drawer when the lookup finds no row", async () => {
+      const noRows = { data: [], total: 0, page: 1, page_size: 50, total_pages: 0 };
+      vi.mocked(uiSpendLogsCall).mockResolvedValue(noRows);
+      renderPanel("?session_id=sess-1&log_id=call-in-session");
+
+      await waitFor(() => expect(drawer()).toHaveAttribute("data-linked-log-pending", "false"));
+      expect(drawer()).toHaveAttribute("data-linked-log-id", "call-in-session");
+      expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
+    });
+
+    it("stops holding the session drawer back once the first lookup attempt fails", async () => {
+      testQueryClient.setQueryDefaults(["logs", "byId"], { retry: 1, retryDelay: 60_000 });
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params }) => {
+        if (params?.request_id === "req-old") throw new Error("lookup failed");
+        return { data: [], total: 0, page: 1, page_size: 50, total_pages: 0 };
+      });
+      try {
+        renderPanel("?session_id=sess-1&log_id=req-old");
+
+        await waitFor(() =>
+          expect(vi.mocked(uiSpendLogsCall).mock.calls.some(([call]) => call.params?.request_id === "req-old")).toBe(
+            true,
+          ),
+        );
+        await waitFor(() => expect(drawer()).toHaveAttribute("data-linked-log-pending", "false"));
+        expect(drawer()).toHaveAttribute("data-linked-log-id", "req-old");
+        expect(testQueryClient.getQueryState(["logs", "byId", "req-old", "test-token"])?.fetchStatus).toBe("fetching");
+      } finally {
+        await testQueryClient.cancelQueries({ queryKey: ["logs", "byId"] });
+        testQueryClient.setQueryDefaults(["logs", "byId"], {});
+      }
     });
 
     it("opens a deep-linked multi-call session log in session mode", async () => {
