@@ -624,6 +624,96 @@
       "description": "Detects University of Toronto TCard campus ID card numbers (16-digit). Context keywords are critical to distinguish from payment card numbers.",
       "keyword_pattern": "\\b(?:tcard\\s*number|t-card\\s*number|tcard|t-card|campus\\s*card|campus\\s*id|university\\s*card)\\b",
       "allow_word_numbers": false
+    },
+    {
+      "name": "uk_nino",
+      "display_name": "National Insurance Number (UK)",
+      "pattern": "\\b(?!BG|GB|KN|NK|NT|TN|ZZ)[ABCEGHJKLMNOPRSTWXYZ][ABCEGHJKLMNPRSTWXYZ]\\s?\\d{2}(?:\\s?\\d{2}){2}\\s?[A-D]\\b",
+      "category": "UK PII Patterns",
+      "description": "Detects UK National Insurance numbers with valid prefixes and suffixes",
+      "keyword_pattern": "\\b(?:national\\s*insurance\\s*number|national\\s*insurance|NI\\s*number|NI\\s*no\\.?|NINO)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uk_nhs_number",
+      "display_name": "NHS Number (UK)",
+      "pattern": "\\b(?:\\d{10}|\\d{3}([\\s-])\\d{3}\\1\\d{4})\\b",
+      "category": "UK PII Patterns",
+      "description": "Detects 10-digit UK NHS numbers in plain, spaced, or dashed format",
+      "keyword_pattern": "\\b(?:health\\s*service\\s*number|NHS\\s*number|NHS\\s*no\\.?|NHS)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uk_driving_licence",
+      "display_name": "Driving Licence Number (UK)",
+      "pattern": "\\b[A-Z9]{5}\\d{6}[A-Z9]{2}\\d[A-Z]{2}\\b",
+      "category": "UK PII Patterns",
+      "description": "Detects 16-character UK DVLA driving licence numbers",
+      "keyword_pattern": "\\b(?:driving\\s*licence\\s*number|driver'?s\\s*licence|driving\\s*licence|licence\\s*number|DVLA)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uk_utr",
+      "display_name": "Unique Taxpayer Reference (UK)",
+      "pattern": "\\b(?:\\d{10}|\\d{5}[-\\s]\\d{5})\\b",
+      "category": "UK PII Patterns",
+      "description": "Detects 10-digit UK Unique Taxpayer References",
+      "keyword_pattern": "\\b(?:unique\\s*taxpayer\\s*reference|self\\s*assessment|tax\\s*reference|HMRC|UTR)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uk_sort_code",
+      "display_name": "Sort Code (UK)",
+      "pattern": "\\b\\d{2}[-\\s]\\d{2}[-\\s]\\d{2}\\b",
+      "category": "UK PII Patterns",
+      "description": "Detects UK bank sort codes in NN-NN-NN format",
+      "keyword_pattern": "\\b(?:sort\\s*code|sort-code|bank\\s*sort)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uk_bank_account",
+      "display_name": "Bank Account Number (UK)",
+      "pattern": "\\b\\d{8}\\b",
+      "category": "UK PII Patterns",
+      "description": "Detects 8-digit UK bank account numbers",
+      "keyword_pattern": "\\b(?:bank\\s*account\\s*number|current\\s*account|account\\s*number|bank\\s*account|account\\s*no\\.?)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uk_postcode",
+      "display_name": "Postcode (UK)",
+      "pattern": "\\b(?:GIR\\s?0AA|(?:[A-PR-UWYZ][A-HK-Y]?\\d[A-Z\\d]?|[A-PR-UWYZ]\\d[A-HJKPSTUW]?))\\s?\\d[ABD-HJLNP-UW-Z]{2}\\b",
+      "category": "UK PII Patterns",
+      "description": "Detects UK postcodes with valid outward and inward code letter sets",
+      "keyword_pattern": "\\b(?:shipping\\s*address|mailing\\s*address|street\\s*address|home\\s*address|postal\\s*code|post\\s*code|postcode)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uk_phone",
+      "display_name": "Phone Number (UK)",
+      "pattern": "(?<![A-Z0-9+])(?:\\+44|0)[\\s-]?(?:7|[123])(?:[\\s-]?\\d){9}\\b",
+      "category": "UK PII Patterns",
+      "description": "Detects UK mobile and landline numbers with 0 or +44 prefixes",
+      "keyword_pattern": "\\b(?:contact\\s*number|mobile\\s*number|phone\\s*number|telephone|mobile|phone|tel)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uk_upn",
+      "display_name": "Unique Pupil Number (UK)",
+      "pattern": "\\b[A-Z]\\d{12}\\b",
+      "category": "UK PII Patterns",
+      "description": "Detects UK Unique Pupil Numbers with one letter and 12 digits",
+      "keyword_pattern": "\\b(?:unique\\s*pupil\\s*number|pupil\\s*number|UPN)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uk_uln",
+      "display_name": "Unique Learner Number (UK)",
+      "pattern": "\\b\\d{10}\\b",
+      "category": "UK PII Patterns",
+      "description": "Detects 10-digit UK Unique Learner Numbers",
+      "keyword_pattern": "\\b(?:unique\\s*learner\\s*number|learner\\s*number|ULN)\\b",
+      "allow_word_numbers": false
     }
   ]
 }

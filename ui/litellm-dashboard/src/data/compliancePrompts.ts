@@ -2,6 +2,7 @@ import { insultsCompliancePrompts } from "./insultsCompliancePrompts";
 import { financialCompliancePrompts } from "./financialCompliancePrompts";
 import { codeExecutionCompliancePrompts } from "./codeExecutionCompliancePrompts";
 import { canadianPiiCompliancePrompts } from "./canadianPiiCompliancePrompts";
+import { ukPiiCompliancePrompts } from "./ukPiiCompliancePrompts";
 import { claimsCompliancePrompts } from "./claimsCompliancePrompts";
 
 export interface CompliancePrompt {
@@ -260,6 +261,7 @@ const compliancePrompts: CompliancePrompt[] = [
   ...financialCompliancePrompts,
   ...codeExecutionCompliancePrompts,
   ...canadianPiiCompliancePrompts,
+  ...ukPiiCompliancePrompts,
   ...claimsCompliancePrompts,
 ];
 
@@ -545,6 +547,11 @@ const frameworkMeta: Record<string, { icon: string; description: string }> = {
     icon: "graduation-cap",
     description:
       "Ontario FIPPA institutional identifier detection — masks University of Toronto student/employee numbers, UTORid logins, and TCard campus IDs.",
+  },
+  "UK PII (UK GDPR)": {
+    icon: "shield",
+    description:
+      "UK GDPR and Data Protection Act 2018 detection — masks National Insurance Numbers, NHS numbers, driving licences, tax references, financial details, contact information, and education identifiers.",
   },
   "Airline Brand Protection": {
     icon: "plane",
