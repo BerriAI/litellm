@@ -1,3 +1,4 @@
+import { v4 as uuid } from "uuid";
 import { useCallback, useEffect, useState } from "react";
 import { AssistantMessageUpdate, ChatMessage, Conversation } from "./types";
 import {
@@ -174,7 +175,7 @@ export function useChatHistory(
   }, [conversations, userId, historyLoadFailed]);
 
   const createConversation = useCallback((model: string): string => {
-    const id = crypto.randomUUID();
+    const id = uuid();
     const now = Date.now();
     const newConversation: Conversation = {
       id,
@@ -193,7 +194,7 @@ export function useChatHistory(
   const appendMessage = useCallback((conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => {
     const newMessage: ChatMessage = {
       ...message,
-      id: crypto.randomUUID(),
+      id: uuid(),
       timestamp: Date.now(),
     };
 

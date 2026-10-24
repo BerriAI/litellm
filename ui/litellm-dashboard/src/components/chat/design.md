@@ -202,7 +202,7 @@ If you need "shrink to fit content, cap at N px" rather than "always N px," you 
 
 ### Input / Textarea
 
-Use `Input` and `Textarea` from `@/components/ui`. Standalone Chat uses `MoyaiChatComposer` for the source editor and toolbar arrangement, preserving submission, cancellation, image attachments and IME handling. Other chat surfaces continue using the shared `ChatComposer` / `InputGroupTextarea`; this visual port is scoped to standalone Chat.
+Use `Input` and `Textarea` from `@/components/ui`. Standalone Chat uses `MoyaiChatComposer` for the source editor and toolbar arrangement, preserving submission, cancellation, attachments and IME handling. Uploads share a limit of four files per message and 10 MB per file. Images retain previews; PDF, DOCX, XLSX, text and code files use named file chips and native Responses `input_file` parts. File support depends on the selected model and provider. Attachment bytes stay in the existing user-scoped IndexedDB store; history metadata stays small. Legacy DOC/XLS files are not accepted. Other chat surfaces continue using the shared `ChatComposer` / `InputGroupTextarea`; this visual port is scoped to standalone Chat.
 
 ```tsx
 import { Input } from "@/components/ui/input";
