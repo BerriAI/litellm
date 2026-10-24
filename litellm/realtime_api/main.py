@@ -40,6 +40,10 @@ from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..litellm_core_utils.realtime_streaming import client_websocket_scope
 from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
+from ..llms.azure.realtime.transcription_sessions import (
+    azure_transcription_client_secret_request,
+    azure_transcription_client_secret_response,
+)
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
 from ..llms.openai.live.handler import OpenAILiveSessions
@@ -259,19 +263,27 @@ async def acreate_realtime_transcription_session(
         litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
-    request_data: Final = req.model_dump(exclude_none=True, exclude={"model"})
+    is_azure: Final = custom_llm_provider == LlmProviders.AZURE.value
+    request_data: Final = req.model_dump(exclude_none=not is_azure, exclude_unset=is_azure, exclude={"model"})
     # Ensure the upstream body's input_audio_transcription.model matches the
     # authorized routing model. This prevents a caller from supplying an allowed
     # top-level model for auth while sneaking a different model into the nested
     # transcription config that gets forwarded to the provider.
     if isinstance(request_data.get("input_audio_transcription"), dict):
         request_data["input_audio_transcription"]["model"] = model_name
-    return await base_llm_http_handler.async_realtime_transcription_session_handler(
+    create_session: Final = (
+        base_llm_http_handler.async_realtime_client_secret_handler
+        if is_azure
+        else base_llm_http_handler.async_realtime_transcription_session_handler
+    )
+    response: Final = await create_session(
         api_base=resolved_api_base,
         api_key=await _realtime_http_bearer_token(
             custom_llm_provider, resolved_api_key, resolved_api_base, litellm_params
         ),
-        request_data=request_data,
+        request_data=dict(azure_transcription_client_secret_request(request_data, model_name))
+        if is_azure
+        else request_data,
         logging_obj=litellm_logging_obj,
         timeout=timeout or request_timeout,
         provider_config=provider_config,
@@ -280,6 +292,7 @@ async def acreate_realtime_transcription_session(
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
     )
+    return azure_transcription_client_secret_response(response) if is_azure else response
 
 
 @wrapper_client
