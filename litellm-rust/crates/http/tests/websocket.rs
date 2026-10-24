@@ -7,9 +7,8 @@ use std::{
 use futures_util::{SinkExt, StreamExt};
 use http::{HeaderMap, HeaderValue};
 use litellm_http::{
-    ClientIdentity, ClientVariant, EnvironmentProxies, HttpClientConfig, HttpClientPool,
-    HttpSettings, Resolution, Verify, media::PublicDnsResolver, transport::Error,
-    websocket::connect,
+    ClientIdentity, ClientVariant, EnvironmentProxies, Error, HttpClientConfig, HttpClientPool,
+    HttpSettings, Resolution, Verify, media::PublicDnsResolver, websocket::connect,
 };
 use rcgen::{BasicConstraints, CertificateParams, CertifiedIssuer, IsCa, KeyPair};
 use rstest::rstest;
@@ -122,7 +121,7 @@ async fn open(
     let client = HttpClientPool::new(Arc::new(PublicDnsResolver))
         .client(config, ClientVariant::WebSocket)
         .unwrap();
-    connect(&client, url, headers).await
+    connect(&client, url, headers, None).await
 }
 
 async fn echo_once<S: AsyncRead + AsyncWrite + Unpin>(
@@ -269,7 +268,7 @@ async fn wss_honors_ssl_verify(#[case] verify: fn(&Pki) -> Verify, #[case] trust
 
     match result {
         Ok(mut socket) if trusted => round_trip(&mut socket).await,
-        Err(Error::Connect(_)) if !trusted => {}
+        Err(error) if !trusted && !error.dispatched() => {}
         other => panic!("unexpected handshake outcome: {:?}", other.map(drop)),
     }
 }
@@ -340,13 +339,8 @@ async fn refused_upgrade_reports_the_status_and_body() {
     )
     .await;
 
-    assert_eq!(
-        result.map(drop),
-        Err(Error::Http {
-            status: 403,
-            body: "denied".into()
-        })
-    );
+    let error = result.map(drop).unwrap_err();
+    assert_eq!(error.upstream_response(), Some((403, "denied")));
 }
 
 #[rstest]
@@ -364,7 +358,7 @@ async fn upgrade_with_a_wrong_accept_key_is_rejected() {
     )
     .await;
 
-    assert!(matches!(result, Err(Error::Network(_))));
+    assert!(matches!(result, Err(error) if error.dispatched() && !error.is_request()));
 }
 
 #[rstest]
@@ -374,7 +368,7 @@ async fn upgrade_with_a_wrong_accept_key_is_rejected() {
 async fn invalid_url_is_rejected_before_dispatch(#[case] url: &str) {
     let result = open(&config(Verify::BuiltInRoots), url, HeaderMap::new()).await;
 
-    assert!(matches!(result, Err(Error::Connect(_))));
+    assert!(matches!(result, Err(error) if !error.dispatched() && error.is_request()));
 }
 
 #[rstest]
@@ -466,7 +460,34 @@ async fn upgrade_validates_headers_and_negotiated_protocol(
 
     match result {
         Ok(mut socket) if accepted => round_trip(&mut socket).await,
-        Err(Error::Network(_)) if !accepted => {}
+        Err(error) if !accepted && error.dispatched() => {}
         other => panic!("unexpected handshake outcome: {:?}", other.map(drop)),
     }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_handshake_that_never_answers_times_out_as_dispatched() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_head(&mut stream).await;
+        let _ = stream.read(&mut [0u8; 1]).await;
+    });
+    let client = HttpClientPool::new(Arc::new(PublicDnsResolver))
+        .client(&config(Verify::BuiltInRoots), ClientVariant::WebSocket)
+        .unwrap();
+
+    let error = connect(
+        &client,
+        &format!("ws://{address}/responses"),
+        HeaderMap::new(),
+        Some(std::time::Duration::from_millis(100)),
+    )
+    .await
+    .map(drop)
+    .unwrap_err();
+
+    assert!(error.dispatched());
 }

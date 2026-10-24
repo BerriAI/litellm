@@ -342,15 +342,15 @@ mod tests {
     #[case::request_timed_out("Request timed out")]
     #[case::timed_out_generating("Timed out generating response")]
     #[case::read_operation("The read operation timed out")]
-    fn timeout_markers_win_over_every_family(#[case] marker: &str) {
+    fn timeout_markers_win_over_every_family(
+        #[case] marker: &str,
+        #[values("mistral", "vertex_ai", "cohere", "reducto")] provider: &str,
+    ) {
         let body = format!("rate limit invalid api token {marker}");
-        for provider in ["mistral", "vertex_ai", "cohere", "reducto"] {
-            assert_eq!(
-                mapped(provider, &http(429, &body)).error,
-                PublicError::Timeout { status: 408 },
-                "{provider}"
-            );
-        }
+        assert_eq!(
+            mapped(provider, &http(429, &body)).error,
+            PublicError::Timeout { status: 408 }
+        );
     }
 
     #[test]

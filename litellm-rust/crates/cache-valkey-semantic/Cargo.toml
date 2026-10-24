@@ -10,9 +10,11 @@ litellm-cache.workspace = true
 litellm-cache-redis.workspace = true
 redis = { version = "1.7.0", features = ["tls-rustls"] }
 sha2.workspace = true
+thiserror.workspace = true
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+litellm-error.workspace = true
 litellm-cache-testing.workspace = true
 redis-test = "1.0.4"
 rstest.workspace = true

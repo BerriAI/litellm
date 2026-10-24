@@ -12,7 +12,7 @@ use sqlx::{
     migrate::{AppliedMigration, Migrate, MigrateError, Migration},
 };
 
-use crate::{Connection, Error, READ_LIMITS, valid_identifier};
+use crate::{Connection, Error, READ_LIMITS, read::invalid_response, valid_identifier};
 
 pub async fn execute_statement(
     client: &Client,
@@ -22,7 +22,7 @@ pub async fn execute_statement(
 ) -> Result<(), Error> {
     let body = execute_sql(client, connection, sql, timeout).await?;
     if !body.trim().is_empty() {
-        return Err(Error::InvalidResponse);
+        return Err(Error::UnexpectedResponse);
     }
     Ok(())
 }
@@ -56,18 +56,18 @@ async fn execute_sql(
         .body(sql.to_owned())
         .send()
         .await
-        .map_err(|_| Error::Transport)?;
+        .map_err(litellm_http::Error::from)?;
     if !response.status().is_success() {
         return Err(Error::SchemaFailed(response.status().as_u16()));
     }
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| Error::Transport)? {
+    while let Some(chunk) = response.chunk().await.map_err(litellm_http::Error::from)? {
         if body.len() + chunk.len() > READ_LIMITS.response_bytes {
             return Err(Error::ResponseTooLarge);
         }
         body.extend_from_slice(&chunk);
     }
-    String::from_utf8(body).map_err(|_| Error::InvalidResponse)
+    String::from_utf8(body).map_err(invalid_response)
 }
 
 /// The startup runner records success after execution, never marks migrations dirty, and skips locks
@@ -131,13 +131,13 @@ fn encode_hex(bytes: &[u8]) -> String {
 fn decode_hex(value: &str) -> Result<Vec<u8>, Error> {
     let (pairs, remainder) = value.as_bytes().as_chunks::<2>();
     if !remainder.is_empty() {
-        return Err(Error::InvalidResponse);
+        return Err(Error::UnexpectedResponse);
     }
     pairs
         .iter()
         .map(|pair| {
-            let high = decode_hex_digit(pair[0]).ok_or(Error::InvalidResponse)?;
-            let low = decode_hex_digit(pair[1]).ok_or(Error::InvalidResponse)?;
+            let high = decode_hex_digit(pair[0]).ok_or(Error::UnexpectedResponse)?;
+            let low = decode_hex_digit(pair[1]).ok_or(Error::UnexpectedResponse)?;
             Ok((high << 4) | low)
         })
         .collect()
@@ -231,7 +231,7 @@ where
                 .filter(|line| !line.trim().is_empty())
                 .map(|line| {
                     let row = serde_json::from_str::<Applied>(line)
-                        .map_err(|_| migrate_error(Error::InvalidResponse))?;
+                        .map_err(|error| migrate_error(invalid_response(error)))?;
                     let checksum = decode_hex(&row.checksum).map_err(migrate_error)?;
                     Ok(AppliedMigration {
                         version: row.version,
@@ -288,11 +288,7 @@ where
         _table_name: &'e str,
         _migration: &'e Migration,
     ) -> MigrateFuture<'e, Result<Duration, MigrateError>> {
-        Box::pin(async {
-            Err(MigrateError::Execute(SqlxError::AnyDriverError(Box::new(
-                std::io::Error::other("ClickHouse migrations are forward-only"),
-            ))))
-        })
+        Box::pin(async { Err(migrate_error(Error::Irreversible)) })
     }
 }
 

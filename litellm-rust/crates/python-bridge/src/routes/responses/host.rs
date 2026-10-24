@@ -141,9 +141,9 @@ impl PythonBinding for ResponsesPythonHost {
         head: <Responses as litellm_host::protocol::Protocol>::StreamHead,
     ) -> PyResult<Py<PyAny>> {
         let _ = head;
-        Err(pyo3::exceptions::PyRuntimeError::new_err(
-            "native Python Responses streaming is not supported",
-        ))
+        Err(crate::errors::route_error_to_pyerr(Error::Unsupported(
+            "native Python responses streaming",
+        )))
     }
 
     fn encode_chunk(
@@ -152,16 +152,16 @@ impl PythonBinding for ResponsesPythonHost {
         chunk: <Responses as litellm_host::protocol::Protocol>::Chunk,
     ) -> PyResult<Py<PyAny>> {
         let _ = chunk;
-        Err(pyo3::exceptions::PyRuntimeError::new_err(
-            "native Python Responses streaming is not supported",
-        ))
+        Err(crate::errors::route_error_to_pyerr(Error::Unsupported(
+            "native Python responses streaming",
+        )))
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
         self.host.error(py, error)
     }
     fn host_error(error: &PyErr) -> Error {
-        Error::InvalidRequest(error.to_string().into())
+        crate::routes::inference::host_call_error(error)
     }
 }
 
