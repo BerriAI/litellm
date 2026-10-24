@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.router_strategy.complexity_router.context_compaction import CompactionState
     from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityRetryState
     from litellm.types.caching import DynamicCacheControl
     from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
@@ -392,6 +393,9 @@ class RouterState:
     fallback_depth: int | None = None
     max_fallbacks: int | None = None
     attempted_targets: "AttemptedFallbackTargets | None" = None
+    deployment_affinity_retry_state: "DeploymentAffinityRetryState | None" = field(
+        default=None, metadata=wire("_deployment_affinity_retry_state")
+    )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

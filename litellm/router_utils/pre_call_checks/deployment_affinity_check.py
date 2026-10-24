@@ -14,10 +14,12 @@ where routing to a consistent deployment is still beneficial.
 
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final, cast
 
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.affinity_cache import (
@@ -64,6 +66,18 @@ def warn_on_unknown_model_group_affinity_flags(model_group_affinity_config: Mapp
                 group,
                 VALID_MODEL_GROUP_AFFINITY_FLAGS,
             )
+
+
+@dataclass(slots=True)
+class DeploymentAffinityRetryState:
+    failed_deployment_ids: frozenset[str] = frozenset()
+
+    def record_failure(self, exception: Exception) -> None:
+        deployment_id: Final[object] = getattr(exception, "retry_skip_deployment_id", None) or getattr(
+            exception, "failed_deployment_id", None
+        )
+        if isinstance(deployment_id, str) and deployment_id:
+            self.failed_deployment_ids = self.failed_deployment_ids | frozenset((deployment_id,))
 
 
 class DeploymentAffinityCheck(CustomLogger):
@@ -297,7 +311,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return f"{cls.USER_ID_AFFINITY_PREFIX}{user_id}"
 
     @staticmethod
-    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _get_session_id_from_request_kwargs(request_kwargs: Mapping[str, object]) -> str | None:
         for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
             session_id = DeploymentAffinityCheck._get_session_id_from_metadata_dict(metadata=metadata)
             if session_id is not None:
@@ -305,7 +319,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return None
 
     @staticmethod
-    def _get_marker_session_affinity_ttl(request_kwargs: dict) -> int | None:
+    def _get_marker_session_affinity_ttl(request_kwargs: Mapping[str, object]) -> int | None:
         """TTL from the session-affinity marker the Router stamps at pre-routing time
         when an auto-router routed this request with session_affinity enabled.
         Marker presence enables session pinning for this request only; anything that
@@ -357,7 +371,7 @@ class DeploymentAffinityCheck(CustomLogger):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
@@ -411,45 +425,59 @@ class DeploymentAffinityCheck(CustomLogger):
             else None
         )
 
+        session_id: Final = (
+            self._get_session_id_from_request_kwargs(request_kwargs=request_kwargs) if session_affinity_active else None
+        )
+        retry_state: Final[object] = request_kwargs.get("_deployment_affinity_retry_state")
+        failed_deployment_ids: Final = (
+            retry_state.failed_deployment_ids
+            if isinstance(retry_state, DeploymentAffinityRetryState)
+            and (session_id is not None or (enable_user_key and user_key is not None))
+            else frozenset[str]()
+        )
+        affinity_deployments: Final = cast(  # cast-ok: filtering preserves the router deployment dictionaries
+            list[dict[str, object]],
+            litellm.utils.get_excluded_filtered_deployments(typed_healthy_deployments, failed_deployment_ids)
+            or typed_healthy_deployments,
+        )
+
         # 2) Session-id -> deployment affinity
-        if session_affinity_active:
-            session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs=request_kwargs)
-            if session_id is not None:
-                session_cache_key: Final = self.get_session_affinity_cache_key(
-                    model_group=stable_model_map_key, session_id=session_id, user_key=user_key
+        if session_id is not None:
+            session_cache_key: Final = self.get_session_affinity_cache_key(
+                model_group=stable_model_map_key, session_id=session_id, user_key=user_key
+            )
+            session_cache_result: Final = await self.cache.async_get_cache(key=session_cache_key)
+
+            session_model_id: str | None = None
+            if isinstance(session_cache_result, dict):
+                session_model_id = cast(str | None, session_cache_result.get("model_id"))
+            elif isinstance(session_cache_result, str):
+                session_model_id = session_cache_result
+
+            if session_model_id:
+                session_deployment: Final = self._find_deployment_by_model_id(
+                    healthy_deployments=affinity_deployments,
+                    model_id=session_model_id,
                 )
-                session_cache_result: Final = await self.cache.async_get_cache(key=session_cache_key)
-
-                session_model_id: str | None = None
-                if isinstance(session_cache_result, dict):
-                    session_model_id = cast(str | None, session_cache_result.get("model_id"))
-                elif isinstance(session_cache_result, str):
-                    session_model_id = session_cache_result
-
-                if session_model_id:
-                    session_deployment: Final = self._find_deployment_by_model_id(
-                        healthy_deployments=typed_healthy_deployments,
-                        model_id=session_model_id,
+                if session_deployment is not None:
+                    verbose_router_logger.debug(
+                        "DeploymentAffinityCheck: session-id affinity hit -> deployment=%s session_id=%s",
+                        session_model_id,
+                        session_id,
                     )
-                    if session_deployment is not None:
-                        verbose_router_logger.debug(
-                            "DeploymentAffinityCheck: session-id affinity hit -> deployment=%s session_id=%s",
-                            session_model_id,
-                            session_id,
-                        )
-                        return [session_deployment]
-                    else:
-                        verbose_router_logger.debug(
-                            "DeploymentAffinityCheck: session-id pinned deployment=%s not found in healthy_deployments",
-                            session_model_id,
-                        )
+                    return [session_deployment]
+                else:
+                    verbose_router_logger.debug(
+                        "DeploymentAffinityCheck: session-id pinned deployment=%s not found in healthy_deployments",
+                        session_model_id,
+                    )
 
         # 3) User key -> deployment affinity
         if not enable_user_key:
-            return typed_healthy_deployments
+            return affinity_deployments
 
         if user_key is None:
-            return typed_healthy_deployments
+            return affinity_deployments
 
         cache_key: Final = self.get_affinity_cache_key(model_group=stable_model_map_key, user_key=user_key)
         cache_result: Final = await self.cache.async_get_cache(key=cache_key)
@@ -462,10 +490,10 @@ class DeploymentAffinityCheck(CustomLogger):
             model_id = cache_result
 
         if not model_id:
-            return typed_healthy_deployments
+            return affinity_deployments
 
         deployment = self._find_deployment_by_model_id(
-            healthy_deployments=typed_healthy_deployments,
+            healthy_deployments=affinity_deployments,
             model_id=model_id,
         )
         if deployment is None:
@@ -473,7 +501,7 @@ class DeploymentAffinityCheck(CustomLogger):
                 "DeploymentAffinityCheck: pinned deployment=%s not found in healthy_deployments",
                 model_id,
             )
-            return typed_healthy_deployments
+            return affinity_deployments
 
         verbose_router_logger.debug(
             "DeploymentAffinityCheck: caller affinity hit -> deployment=%s user_key=%s",

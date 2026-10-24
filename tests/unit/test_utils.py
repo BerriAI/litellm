@@ -6541,25 +6541,20 @@ async def test_wrapper_async_failure_hook_exception_mutation_does_not_change_rai
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_failure_deployment_hook_omits_attempted_targets_from_request_data(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("private_field", ("attempted_targets", "_deployment_affinity_retry_state"))
+async def test_async_post_call_failure_deployment_hook_omits_live_routing_state_from_request_data(
+    monkeypatch: pytest.MonkeyPatch, private_field: str
 ) -> None:
-    """Regression: attempted_targets is the router's own live fallback-walk bookkeeping,
-    shared by reference across every hop of a single request - unlike the rest of
-    request_data, it is not this attempt's own isolated copy. A callback calling .record()
-    on it would make the router skip a deployment it hasn't actually tried, so the
-    dispatcher must never hand it to a callback."""
-    recorder = _RecordingDeploymentFailureLogger()
+    recorder: Final = _RecordingDeploymentFailureLogger()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
 
-    sentinel_targets = object()
     await async_post_call_failure_deployment_hook(
-        request_data={"model": "gpt-4o-mini", "attempted_targets": sentinel_targets},
+        request_data={"model": "gpt-4o-mini", private_field: object()},
         exception=ValueError("x"),
         call_type="acompletion",
     )
 
-    assert recorder.calls[0][0].get("attempted_targets") is None
+    assert private_field not in recorder.calls[0][0]
 
 
 @pytest.mark.asyncio
