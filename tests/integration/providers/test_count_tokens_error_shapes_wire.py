@@ -1,10 +1,12 @@
 import json
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Final
 
 import anthropic
 import openai
 import pytest
+import yaml
 from integration._support.client import Gateway, gateway_from_environment
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
@@ -13,7 +15,9 @@ from pydantic import JsonValue, TypeAdapter
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_BASE_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _MESSAGES: Final[list[JsonValue]] = [{"role": "user", "content": "Count this synthetic request."}]
+_UPSTREAM_REJECT: Final = {"type": "error", "error": {"type": "invalid_request_error", "message": "scripted reject"}}
 _PROVIDER_KEY_VARIABLES: Final = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -52,6 +56,32 @@ def azure_environment_key_proxy(tmp_path_factory: pytest.TempPathFactory) -> Ite
             tmp_path_factory.mktemp("count-tokens-azure-environment-key"),
             {"AZURE_API_KEY": "synthetic-azure-env-key"},
             remove_environment=tuple(name for name in _PROVIDER_KEY_VARIABLES if name != "AZURE_API_KEY"),
+            workers=1,
+        ) as owned,
+    ):
+        yield owned
+
+
+def _local_fallback_config(path: Path) -> Path:
+    base: Final = _JSON_OBJECT.validate_python(yaml.safe_load(_BASE_CONFIG.read_text()))
+    litellm_settings: Final = _JSON_OBJECT.validate_python(base.get("litellm_settings") or {})
+    path.write_text(
+        yaml.safe_dump({**base, "litellm_settings": {**litellm_settings, "token_count_local_fallback": True}})
+    )
+    return path
+
+
+@pytest.fixture(scope="module")
+def local_fallback_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedProxy]:
+    directory: Final = tmp_path_factory.mktemp("count-tokens-local-fallback")
+    with (
+        gateway_from_environment() as gateway,
+        owned_proxy_process(
+            gateway,
+            directory,
+            {},
+            config=_local_fallback_config(directory / "local-fallback.yaml"),
+            remove_environment=_PROVIDER_KEY_VARIABLES,
             workers=1,
         ) as owned,
     ):
@@ -135,9 +165,8 @@ def test_azure_ai_anthropic_count_authenticates_with_an_entra_token(keyless_prox
 
 def test_anthropic_count_request_errors_use_the_anthropic_envelope(keyless_proxy: OwnedProxy) -> None:
     gateway: Final = keyless_proxy.gateway
-    upstream_error: Final = {"type": "error", "error": {"type": "invalid_request_error", "message": "scripted reject"}}
     with (
-        wire_server(lambda _request: Reply(status=400, body=json.dumps(upstream_error).encode())) as wire,
+        wire_server(lambda _request: Reply(status=400, body=json.dumps(_UPSTREAM_REJECT).encode())) as wire,
         gateway.scenario() as scenario,
     ):
         model: Final = scenario.model(
@@ -156,7 +185,24 @@ def test_anthropic_count_request_errors_use_the_anthropic_envelope(keyless_proxy
         assert rejected.status_code == 400, rejected.text
         body: Final = _JSON_OBJECT.validate_json(rejected.content)
         assert set(body) <= {"type", "error", "request_id"}, body
-        assert body["error"] == upstream_error["error"], body
+        assert body["error"] == _UPSTREAM_REJECT["error"], body
+        assert len(wire.drain()) == 1
+
+
+def test_local_fallback_counts_a_rejected_anthropic_count_locally(local_fallback_proxy: OwnedProxy) -> None:
+    gateway: Final = local_fallback_proxy.gateway
+    with (
+        wire_server(lambda _request: Reply(status=400, body=json.dumps(_UPSTREAM_REJECT).encode())) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="anthropic/claude-sonnet-4-6", api_base=wire.url, api_key="synthetic-key", num_retries=0
+        )
+        counted: Final = gateway.request("POST", "/v1/messages/count_tokens", {"model": model, "messages": _MESSAGES})
+        assert counted.status_code == 200, counted.text
+        body: Final = _JSON_OBJECT.validate_json(counted.content)
+        assert body == {"input_tokens": body["input_tokens"], "litellm_count_source": "local_estimate"}, body
+        assert isinstance(body["input_tokens"], int) and body["input_tokens"] > 0, body
         assert len(wire.drain()) == 1
 
 

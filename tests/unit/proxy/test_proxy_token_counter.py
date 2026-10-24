@@ -10,7 +10,8 @@ import json
 import logging
 import threading
 import traceback
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
@@ -3892,3 +3893,113 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     ]
     assert [sorted(message) for message in messages if isinstance(message, dict)] == [["content", "role"]] * 3
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
+
+_NOVA_COUNT_URL: Final = r"^https://bedrock-count-tokens\.test/model/.+/count-tokens$"
+_NOVA_CANNOT_COUNT: Final = "The provided model doesn't support counting tokens."
+
+
+@contextmanager
+def _nova_count_api(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    local_fallback: bool,
+    model_info: dict[str, JsonValue] | None = None,
+) -> Iterator[respx.Route]:
+    monkeypatch.setattr(litellm, "token_count_local_fallback", local_fallback)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "nova",
+                    "litellm_params": {
+                        "model": "bedrock/us.amazon.nova-pro-v1:0",
+                        "api_base": "https://bedrock-count-tokens.test",
+                        "aws_access_key_id": "test-access-key",
+                        "aws_secret_access_key": "test-secret-key",
+                        "aws_region_name": "us-east-1",
+                    },
+                    "model_info": model_info or {},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            yield upstream.post(url__regex=_NOVA_COUNT_URL).respond(status_code, json={"message": _NOVA_CANNOT_COUNT})
+    finally:
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+def _count_nova(messages_format: TokenCountMessagesFormat = "openai") -> Awaitable[TokenCountResponse]:
+    return count_request_tokens(
+        TokenCountRequest(model="nova", messages=[{"role": "user", "content": "hello there"}]),
+        call_endpoint=True,
+        messages_format=messages_format,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("messages_format", ("anthropic", "openai"))
+async def test_local_fallback_counts_locally_when_the_provider_cannot_count_the_model(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, messages_format: TokenCountMessagesFormat
+) -> None:
+    verbose_proxy_logger.addHandler(caplog.handler)
+    try:
+        with (
+            _nova_count_api(monkeypatch, 400, local_fallback=True) as route,
+            caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name),
+        ):
+            counted: Final = await _count_nova(messages_format)
+    finally:
+        verbose_proxy_logger.removeHandler(caplog.handler)
+
+    assert (counted.count_source, counted.total_tokens > 0, route.call_count) == ("local_estimate", True, 1)
+    warnings: Final = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("status 400" in message and "token_count_local_fallback" in message for message in warnings)
+    assert not any("hello there" in message for message in warnings)
+
+
+@pytest.mark.asyncio
+async def test_local_fallback_counts_locally_on_any_provider_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _nova_count_api(monkeypatch, 401, local_fallback=True) as route:
+        counted: Final = await _count_nova()
+
+    assert (counted.count_source, counted.total_tokens > 0, route.call_count) == ("local_estimate", True, 1)
+
+
+@pytest.mark.asyncio
+async def test_without_local_fallback_the_provider_count_error_is_the_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _nova_count_api(monkeypatch, 400, local_fallback=False) as route, pytest.raises(ProxyException) as raised:
+        await _count_nova()
+
+    assert (raised.value.code, route.call_count) == ("400", 1)
+    assert _NOVA_CANNOT_COUNT in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_disabled_token_counter_wins_over_local_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+
+    with _nova_count_api(monkeypatch, 400, local_fallback=True), pytest.raises(ProxyException) as raised:
+        await _count_nova()
+
+    assert raised.value.code == "400"
+    assert _NOVA_CANNOT_COUNT in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_local_fallback_also_covers_a_token_count_model_failing_in_its_own_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    count_model: Final[dict[str, JsonValue]] = {
+        "token_count_model": {"model": "us.amazon.nova-premier-v1:0", "region": "us-east-1"}
+    }
+    with _nova_count_api(monkeypatch, 400, local_fallback=True, model_info=count_model) as route:
+        counted: Final = await _count_nova()
+
+    assert (counted.count_source, counted.total_tokens > 0, route.call_count) == ("local_estimate", True, 1)
+    assert "nova-premier" in route.calls.last.request.url.path
