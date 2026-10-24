@@ -94,7 +94,7 @@ class VertexAIBatchPrediction(VertexLLM):
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         vertex_project: str | None,
         vertex_location: str | None,
-        timeout: float | httpx.Timeout,
+        timeout: float | httpx.Timeout | None,
         max_retries: int | None,
         custom_endpoint: bool | None = None,
     ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
@@ -133,6 +133,7 @@ class VertexAIBatchPrediction(VertexLLM):
             sync_handler=sync_handler,
             api_base=api_base,
             vertex_location=vertex_location or "us-central1",
+            timeout=timeout,
         )
 
         default_api_base: Final = self.create_vertex_batch_url(
@@ -164,12 +165,14 @@ class VertexAIBatchPrediction(VertexLLM):
                 vertex_batch_request=vertex_batch_request,
                 api_base=api_base,
                 headers=headers,
+                timeout=timeout,
             )
 
         response: Final = sync_handler.post(
             url=api_base,
             headers=headers,
             data=json.dumps(vertex_batch_request),
+            timeout=timeout,
         )
 
         payload_view: Final[_VertexBatchPayloadView] = {"payload": response.json()}
@@ -204,6 +207,7 @@ class VertexAIBatchPrediction(VertexLLM):
         sync_handler: HTTPHandler,
         api_base: str | None,
         vertex_location: str,
+        timeout: float | httpx.Timeout | None = None,
     ) -> VertexAIBatchPredictionJob:
         """
         A fine-tuned Gemini deployment is configured by its endpoint id, but the v1 batch API only
@@ -227,6 +231,7 @@ class VertexAIBatchPrediction(VertexLLM):
                 sync_handler,
                 endpoint_url,
                 headers=headers,
+                timeout=timeout,
             )
         }
         response: Final = fetched["response"]
@@ -255,6 +260,7 @@ class VertexAIBatchPrediction(VertexLLM):
         vertex_batch_request: VertexAIBatchPredictionJob,
         api_base: str,
         headers: dict[str, str],
+        timeout: float | httpx.Timeout | None = None,
     ) -> LiteLLMBatch:
         client: Final = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
@@ -264,6 +270,7 @@ class VertexAIBatchPrediction(VertexLLM):
                 url=api_base,
                 headers=headers,
                 data=json.dumps(vertex_batch_request),
+                timeout=timeout,
             )
         except httpx.HTTPStatusError as e:
             error_body: Final = e.response.text
@@ -299,7 +306,7 @@ class VertexAIBatchPrediction(VertexLLM):
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         vertex_project: str | None,
         vertex_location: str | None,
-        timeout: float | httpx.Timeout,
+        timeout: float | httpx.Timeout | None,
         max_retries: int | None,
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
@@ -349,6 +356,7 @@ class VertexAIBatchPrediction(VertexLLM):
                 api_base=api_base,
                 headers=headers,
                 logging_obj=logging_obj,
+                timeout=timeout,
             )
 
         # Log the request using logging_obj if available
@@ -383,6 +391,7 @@ class VertexAIBatchPrediction(VertexLLM):
                 sync_handler,
                 api_base,
                 headers=headers,
+                timeout=timeout,
             )
         }
         response: Final = fetched["response"]
@@ -402,6 +411,7 @@ class VertexAIBatchPrediction(VertexLLM):
         api_base: str,
         headers: dict[str, str],
         logging_obj: "LiteLLMLoggingObj | None" = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> LiteLLMBatch:
         client: Final = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
@@ -438,6 +448,7 @@ class VertexAIBatchPrediction(VertexLLM):
                 client,
                 api_base,
                 headers=headers,
+                timeout=timeout,
             )
         }
         response: Final = fetched["response"]
@@ -460,7 +471,7 @@ class VertexAIBatchPrediction(VertexLLM):
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         vertex_project: str | None,
         vertex_location: str | None,
-        timeout: float | httpx.Timeout,
+        timeout: float | httpx.Timeout | None,
         max_retries: int | None,
     ):
         sync_handler: Final = get_httpx_client()
@@ -505,12 +516,14 @@ class VertexAIBatchPrediction(VertexLLM):
                 api_base=api_base,
                 headers=headers,
                 params=params,
+                timeout=timeout,
             )
 
         response: Final = sync_handler.get(
             url=api_base,
             headers=headers,
             params=params,
+            timeout=timeout,
         )
 
         if response.status_code != 200:
@@ -531,6 +544,7 @@ class VertexAIBatchPrediction(VertexLLM):
         api_base: str,
         headers: dict[str, str],
         params: dict[str, str],
+        timeout: float | httpx.Timeout | None = None,
     ):
         client: Final = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
@@ -539,6 +553,7 @@ class VertexAIBatchPrediction(VertexLLM):
             url=api_base,
             headers=headers,
             params=params,
+            timeout=timeout,
         )
         if response.status_code != 200:
             raise VertexAIError(
@@ -561,7 +576,7 @@ class VertexAIBatchPrediction(VertexLLM):
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         vertex_project: str | None,
         vertex_location: str | None,
-        timeout: float | httpx.Timeout,
+        timeout: float | httpx.Timeout | None,
         max_retries: int | None,
     ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
         access_token, project_id = self._ensure_access_token(
@@ -627,10 +642,10 @@ class VertexAIBatchPrediction(VertexLLM):
             )
             raise
 
-        # HTTPHandler.get() does not accept a timeout parameter
         retrieve_response: Final = sync_handler.get(
             url=retrieve_api_base,
             headers=headers,
+            timeout=timeout,
         )
         if retrieve_response.status_code != 200:
             litellm.verbose_logger.error(
@@ -653,7 +668,7 @@ class VertexAIBatchPrediction(VertexLLM):
         api_base: str,
         retrieve_api_base: str,
         headers: dict[str, str],
-        timeout: float | httpx.Timeout = 600.0,
+        timeout: float | httpx.Timeout | None = None,
     ) -> LiteLLMBatch:
         client: Final = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
@@ -673,10 +688,10 @@ class VertexAIBatchPrediction(VertexLLM):
             )
             raise
 
-        # AsyncHTTPHandler.get() does not accept a timeout parameter
         retrieve_response: Final = await client.get(
             url=retrieve_api_base,
             headers=headers,
+            timeout=timeout,
         )
         if retrieve_response.status_code != 200:
             litellm.verbose_logger.error(
