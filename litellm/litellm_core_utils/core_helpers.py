@@ -928,6 +928,37 @@ class _CarriesHiddenParams(Protocol):
     def hidden_params(self, hidden_params: dict[str, object]) -> None: ...  # mutable-ok: API requires mutation
 
 
+_USAGE_BLOCK_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _usage_field(usage: object, name: str) -> object:
+    if isinstance(usage, Mapping):
+        return _USAGE_BLOCK_ADAPTER.validate_python(usage).get(name)
+    return getattr(usage, name, None)
+
+
+def _reported_cost_value(value: object) -> float | None:
+    raw: Final[object] = value
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, Mapping):
+        return _reported_cost_value(_usage_field(raw, "total_cost"))
+    return None
+
+
+def provider_reported_usage_cost(usage: object, custom_llm_provider: str | None) -> float | None:
+    """The request cost a provider states on its usage block, as a number or a breakdown with ``total_cost``.
+
+    OpenCode Go reports the model's list price (peak hours and long-context tiers included) under
+    ``usage.opencode.list_cost``, while its ``usage.cost`` is what hit the prepaid balance, 0 inside the plan.
+    """
+    if custom_llm_provider == "opencode_go":
+        return _reported_cost_value(_usage_field(_usage_field(usage, "opencode"), "list_cost"))
+    return _reported_cost_value(_usage_field(usage, "cost"))
+
+
 def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: float | None) -> None:
     """Record a provider-reported cost where the cost calculator looks before the price map."""
     if cost is None:
