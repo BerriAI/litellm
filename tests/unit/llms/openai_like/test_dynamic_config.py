@@ -23,7 +23,6 @@ def _isolate_generated_class_cache():
 
 
 class TestClassCaching:
-
     def test_cache_is_keyed_on_slug_not_on_the_provider_instance(self):
         first = create_responses_config_class(_provider("cache_by_slug"))
         second = create_responses_config_class(_provider("cache_by_slug"))
@@ -206,4 +205,3 @@ class TestFunctionCallingParams:
         params = config.get_supported_openai_params("any-model")
         for tool_param in ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"):
             assert tool_param not in params
-
