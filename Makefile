@@ -147,14 +147,15 @@ lint-install:
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
 
 # Diff-scoped format check, mirroring test-linting.yml's "Check ruff format" step:
-# only the litellm Python files changed vs the base are checked, so a pre-existing
+# only the litellm Python files changed vs the base and still on disk are checked, so a pre-existing
 # format issue elsewhere doesn't block an unrelated commit. Git pathspecs match
 # recursively, so 'litellm/*.py' covers top-level files and nested modules alike,
 # the same set CI's ':(glob)litellm/**/*.py' selects.
 lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	@base_ref=$$($(RESOLVE_BASE)) && \
 	changed=$$(git diff --name-only --diff-filter=ACMR "$$base_ref...HEAD" -- 'litellm/*.py') && \
-	files=$$(printf '%s\n' "$$changed" | grep -v '^litellm/enterprise/' || true) || exit $$?; \
+	files=$$(printf '%s\n' "$$changed" | grep -v '^litellm/enterprise/' | \
+		while IFS= read -r f; do if [ -f "$$f" ]; then printf '%s\n' "$$f"; fi; done) || exit $$?; \
 	if [ -z "$$files" ]; then \
 		echo "No changed litellm Python files to format-check."; \
 	else \

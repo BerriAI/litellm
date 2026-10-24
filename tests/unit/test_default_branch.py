@@ -119,6 +119,18 @@ def test_explicit_base_works_without_remote_access(
     assert "No changed litellm Python files" in checked.stdout
 
 
+def test_format_check_skips_branch_files_deleted_from_the_working_tree(remote_and_clone: tuple[Path, Path]) -> None:
+    _, repo = remote_and_clone
+    (repo / "litellm" / "kept.py").write_text("value = 2\n")
+    (repo / "litellm" / "dropped.py").write_text("value = 3\n")
+    _commit(repo, "add two modules")
+    _git(repo, "rm", "-q", "litellm/dropped.py")
+    checked: Final = _make(repo, "lint-format-check-changed", "BASE_REF=origin/release_branch", "UV_RUN=echo")
+    assert checked.returncode == 0, checked.stderr
+    assert "litellm/kept.py" in checked.stdout
+    assert "litellm/dropped.py" not in checked.stdout
+
+
 def _freshness(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
