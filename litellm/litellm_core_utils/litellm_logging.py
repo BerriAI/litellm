@@ -161,6 +161,7 @@ from litellm.types.utils import (
     CachingDetails,
     CallTypes,
     CostBreakdown,
+    CostPerToken,
     CustomPricingLiteLLMParams,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
@@ -340,6 +341,30 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+_COST_PER_TOKEN: Final = TypeAdapter(CostPerToken)
+_OPTIONAL_COST_PER_TOKEN_KEYS: Final = ("cache_read_input_token_cost", "cache_creation_input_token_cost")
+
+
+def _resolve_custom_cost_per_token(litellm_params: Mapping[str, object]) -> CostPerToken | None:
+    input_cost: Final = litellm_params.get("input_cost_per_token")
+    output_cost: Final = litellm_params.get("output_cost_per_token")
+    if not isinstance(input_cost, (int, float)) or not isinstance(output_cost, (int, float)):
+        return None
+    optional_rates: Final = {
+        key: float(value)
+        for key in _OPTIONAL_COST_PER_TOKEN_KEYS
+        if isinstance(value := litellm_params.get(key), (int, float))
+    }
+    return _COST_PER_TOKEN.validate_python(
+        {"input_cost_per_token": float(input_cost), "output_cost_per_token": float(output_cost), **optional_rates}
+    )
+
+
+def _resolve_custom_cost_per_second(litellm_params: Mapping[str, object]) -> float | None:
+    cost_per_second: Final = litellm_params.get("cost_per_second")
+    return float(cost_per_second) if isinstance(cost_per_second, (int, float)) else None
+
+
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
@@ -621,6 +646,8 @@ class Logging(LiteLLMLoggingBaseClass):
         prometheusLogger, \
         slack_app
     custom_pricing: bool = False
+    custom_cost_per_token: CostPerToken | None = None
+    custom_cost_per_second: float | None = None
     replaced_global_callback_keys: frozenset[str] = frozenset()
     stream_options = None
     litellm_request_debug: bool = False
@@ -1145,6 +1172,11 @@ class Logging(LiteLLMLoggingBaseClass):
         ## check if custom pricing set ##
         if any(litellm_params.get(key) is not None for key in _CUSTOM_PRICING_KEYS & litellm_params.keys()):
             self.custom_pricing = True
+        pricing_params: Final = cast(  # cast-ok: litellm_params is an untyped dict from the caller
+            Mapping[str, object], litellm_params
+        )
+        self.custom_cost_per_token = _resolve_custom_cost_per_token(pricing_params)
+        self.custom_cost_per_second = _resolve_custom_cost_per_second(pricing_params)
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
@@ -2096,6 +2128,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 "call_type": self.call_type,
                 "optional_params": self.optional_params,
                 "custom_pricing": custom_pricing,
+                "custom_cost_per_token": self.custom_cost_per_token if custom_pricing else None,
+                "custom_cost_per_second": self.custom_cost_per_second if custom_pricing else None,
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,

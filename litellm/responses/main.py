@@ -42,7 +42,6 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
-from litellm.main import register_custom_pricing_for_request
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     with_compaction_items_as_summaries,
 )
@@ -556,14 +555,6 @@ def _per_call_custom_pricing(litellm_params: GenericLiteLLMParams) -> Mapping[st
     return MappingProxyType(
         litellm_params.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True)
     )
-
-
-def _registers_custom_pricing(pricing: Mapping[str, float]) -> bool:
-    token_priced: Final = "input_cost_per_token" in pricing and "output_cost_per_token" in pricing
-    second_priced: Final = not pricing.keys().isdisjoint(
-        ("input_cost_per_second", "output_cost_per_second", "cost_per_second")
-    )
-    return token_priced or second_priced
 
 
 def _bridges_to_chat_completions(
@@ -1686,7 +1677,6 @@ def responses(
             declared_reasoning_efforts=deployment_reasoning_effort_levels(deployment_model_info) or (),
         )
 
-        per_call_pricing: Final = _per_call_custom_pricing(litellm_params)
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
@@ -1694,7 +1684,7 @@ def responses(
             optional_params=dict(responses_api_request_params),
             litellm_params={
                 **responses_api_request_params,
-                **per_call_pricing,
+                **_per_call_custom_pricing(litellm_params),
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
                 "model_info": kwargs.get("model_info"),
@@ -1713,13 +1703,6 @@ def responses(
         # Call the handler with _is_async flag instead of directly calling the async handler
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
-        if _registers_custom_pricing(per_call_pricing):
-            register_custom_pricing_for_request(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                kwargs=kwargs,
-                model_info=litellm_params.model_info,
-            )
 
         fake_stream: Final = responses_api_provider_config.should_fake_stream(
             model=model, stream=stream, custom_llm_provider=custom_llm_provider

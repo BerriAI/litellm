@@ -1238,10 +1238,12 @@ def _build_custom_pricing_entry(
     merges metadata from model_info (mode, supports_prompt_caching, max_tokens)
     so that register_model() receives the full pricing configuration.
     """
-    entry: Final[dict] = {
-        "litellm_provider": custom_llm_provider,
-        **{f: kwargs[f] for f in CustomPricingLiteLLMParams.model_fields if f in kwargs and kwargs[f] is not None},
-    }
+    entry: Final[dict] = {"litellm_provider": custom_llm_provider}
+
+    for field_name in CustomPricingLiteLLMParams.model_fields:
+        value = kwargs.get(field_name)
+        if value is not None:
+            entry[field_name] = value
 
     if model_info and isinstance(model_info, dict):
         for key in ("mode", "supports_prompt_caching", "max_tokens"):
@@ -1265,7 +1267,7 @@ def _get_router_deployment_id(kwargs: dict) -> str | None:
     return None
 
 
-def register_custom_pricing_for_request(
+def _register_custom_pricing_for_request(
     model: str,
     custom_llm_provider: str,
     kwargs: dict,
@@ -5728,7 +5730,7 @@ def completion(
             or output_cost_per_second is not None
             or cost_per_second is not None
         ):
-            register_custom_pricing_for_request(
+            _register_custom_pricing_for_request(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 kwargs=kwargs,
@@ -6731,7 +6733,7 @@ def embedding(
         or output_cost_per_second is not None
         or cost_per_second is not None
     ):
-        register_custom_pricing_for_request(
+        _register_custom_pricing_for_request(
             model=model,
             custom_llm_provider=custom_llm_provider,
             kwargs=kwargs,

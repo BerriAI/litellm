@@ -1246,6 +1246,11 @@ async def _invoke_responses(sync_mode: bool, model: str, pricing: Mapping[str, f
     return response
 
 
+def _response_cost(response: ResponsesAPIResponse) -> float:
+    hidden_params: Final[dict[str, float]] = getattr(response, "_hidden_params")
+    return hidden_params["response_cost"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", (True, False))
 @pytest.mark.parametrize("model", ("openai/gpt-5.4-nano", "openai/custom-priced-model-not-in-cost-map"))
@@ -1269,8 +1274,37 @@ async def test_responses_bills_per_call_custom_pricing_from_usage(
         response.usage.input_tokens * pricing["input_cost_per_token"]
         + response.usage.output_tokens * pricing["output_cost_per_token"]
     )
-    hidden_params: Final[dict[str, float]] = getattr(response, "_hidden_params")
-    assert math.isclose(hidden_params["response_cost"], expected)
+    assert math.isclose(_response_cost(response), expected)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_responses_calls_keep_their_own_per_call_prices(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    model: Final = "openai/gpt-5.4-nano"
+    model_cost: Final[dict[str, object]] = getattr(litellm, "model_cost")
+    cost_map_row_before: Final = copy.deepcopy(model_cost.get(model))
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_concurrent", "gpt-5.4-nano"))
+    )
+    rates: Final = ((1e-5, 2e-5), (3e-5, 4e-5))
+
+    responses: Final = await asyncio.gather(
+        *(
+            _invoke_responses(False, model, {"input_cost_per_token": in_rate, "output_cost_per_token": out_rate})
+            for in_rate, out_rate in rates
+        )
+    )
+
+    for response, (in_rate, out_rate) in zip(responses, rates, strict=True):
+        assert response.usage is not None
+        assert math.isclose(
+            _response_cost(response), response.usage.input_tokens * in_rate + response.usage.output_tokens * out_rate
+        )
+    assert model_cost.get(model) == cost_map_row_before
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
