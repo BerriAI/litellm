@@ -1,24 +1,18 @@
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.litellm_core_utils.duration_parser import budget_reset_period_key
 from litellm.proxy._types import (
     TeamMemberBudgetBackfill,
     TeamMemberBudgetBackfillResult,
     UpdateTeamRequest,
-    UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.management_endpoints.common_utils import (
-    has_meaningful_budget_limit,
-    upsert_budget_and_membership,
-)
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -27,8 +21,6 @@ if TYPE_CHECKING:
     from litellm.repositories.prisma_protocols import TableActions
 
 MAX_MEMBER_BUDGETS_MOVED_PER_UPDATE: Final = 50_000
-
-_ALWAYS_OWN_LIMITS: Final = frozenset({"allowed_models"})
 
 _DEFAULT_BUDGET_COLUMNS: Final = MappingProxyType(
     {
@@ -48,23 +40,6 @@ ON CONFLICT (user_id, team_id) DO NOTHING
 _LINK_UNBUDGETED_MEMBERSHIPS_SQL: Final = (
     'UPDATE "LiteLLM_TeamMembership" SET budget_id = $2 WHERE team_id = $1 AND budget_id IS NULL'
 )
-_RELINK_TO_DEFAULT_SQL: Final = (
-    'UPDATE "LiteLLM_TeamMembership" SET budget_id = $2 WHERE team_id = $1 AND user_id = ANY($3::text[])'
-)
-_CLEAR_MAX_BUDGET_SQL: Final = """
-UPDATE "LiteLLM_BudgetTable" SET max_budget = NULL, updated_by = $2, updated_at = (NOW() AT TIME ZONE 'UTC')
-WHERE budget_id = ANY($1::text[])
-"""
-_ALIGN_RESET_TO_DEFAULT_SQL: Final = """
-UPDATE "LiteLLM_BudgetTable" b
-SET budget_reset_at = (SELECT d.budget_reset_at FROM "LiteLLM_BudgetTable" d WHERE d.budget_id = $2)
-FROM "LiteLLM_TeamMembership" m
-WHERE m.team_id = $1 AND m.user_id = ANY($3::text[]) AND m.budget_id = b.budget_id AND b.budget_id <> $2
-"""
-_SHARED_BUDGET_IDS_SQL: Final = """
-SELECT budget_id FROM "LiteLLM_TeamMembership" WHERE budget_id = ANY($1::text[])
-GROUP BY budget_id HAVING COUNT(*) > 1
-"""
 _ON_CHOSEN_SIDE_OF_DEFAULT: Final = """m.team_id = $1 AND m.budget_id <> $2 AND CASE $3::text
     WHEN 'raise_to_default' THEN b.max_budget < $4::double precision
     WHEN 'lower_to_default' THEN b.max_budget > $4::double precision
@@ -76,12 +51,40 @@ _CANDIDATES_BY_SCHEDULE_SQL: Final = (
     + _ON_CHOSEN_SIDE_OF_DEFAULT
     + " GROUP BY b.budget_duration"
 )
-_CANDIDATES_SQL: Final = (
-    "SELECT m.user_id, b.budget_id, b.soft_budget, b.max_parallel_requests, b.tpm_limit, b.rpm_limit, "
-    "b.model_max_budget, b.budget_duration, b.allowed_models, b.temp_budget_increase, b.temp_budget_expiry "
-    'FROM "LiteLLM_TeamMembership" m JOIN "LiteLLM_BudgetTable" b ON b.budget_id = m.budget_id WHERE '
+_MOVE_MEMBERS_SQL: Final = (
+    """
+WITH candidates AS MATERIALIZED (
+    SELECT m.user_id, b.*, CASE WHEN
+        b.soft_budget IS NOT NULL OR b.max_parallel_requests IS NOT NULL OR
+        b.tpm_limit IS NOT NULL OR b.rpm_limit IS NOT NULL OR b.tpd_limit IS NOT NULL OR
+        b.temp_budget_increase IS NOT NULL OR b.temp_budget_expiry IS NOT NULL OR
+        COALESCE(b.model_max_budget, '{}'::jsonb) NOT IN ('{}'::jsonb, 'null'::jsonb) OR
+        cardinality(b.allowed_models) > 0
+    THEN gen_random_uuid()::text ELSE $2 END AS next_budget_id
+    FROM "LiteLLM_TeamMembership" m JOIN "LiteLLM_BudgetTable" b ON b.budget_id = m.budget_id
+    WHERE """
     + _ON_CHOSEN_SIDE_OF_DEFAULT
-    + " AND (b.budget_duration = ANY($5::text[]) OR ($6::boolean AND b.budget_duration IS NULL))"
+    + """ AND (b.budget_duration = ANY($5::text[]) OR ($6::boolean AND b.budget_duration IS NULL))
+), copies AS (
+    INSERT INTO "LiteLLM_BudgetTable" (
+        budget_id, max_budget, soft_budget, max_parallel_requests, tpm_limit, rpm_limit, tpd_limit,
+        model_max_budget, budget_duration, budget_reset_at, allowed_models, temp_budget_increase,
+        temp_budget_expiry, created_by, updated_by, created_at, updated_at
+    )
+    SELECT next_budget_id, NULL, soft_budget, max_parallel_requests, tpm_limit, rpm_limit, tpd_limit,
+        model_max_budget, budget_duration,
+        (SELECT budget_reset_at FROM "LiteLLM_BudgetTable" WHERE budget_id = $2),
+        allowed_models, temp_budget_increase, temp_budget_expiry, $7, $7,
+        NOW() AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC'
+    FROM candidates WHERE next_budget_id <> $2
+    RETURNING budget_id
+)
+UPDATE "LiteLLM_TeamMembership" m SET budget_id = c.next_budget_id
+FROM candidates c
+WHERE m.team_id = $1 AND m.user_id = c.user_id
+    AND (c.next_budget_id = $2 OR c.next_budget_id IN (SELECT budget_id FROM copies))
+RETURNING m.user_id
+"""
 )
 
 
@@ -116,57 +119,15 @@ class _ScheduleCount(BaseModel):
     members: int
 
 
-class _BudgetLimits(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    soft_budget: float | None = None
-    max_parallel_requests: int | None = None
-    tpm_limit: int | None = None
-    rpm_limit: int | None = None
-    model_max_budget: JsonValue = None
-    budget_duration: str | None = None
-    allowed_models: tuple[str, ...] | None = None
-    temp_budget_increase: float | None = None
-    temp_budget_expiry: datetime | None = None
-
-    @field_validator("model_max_budget", mode="before")
-    @classmethod
-    def _decode_json_column(cls, value: object) -> object:
-        return _JSON_VALUE.validate_json(value) if isinstance(value, str) else value
-
-    def has_own_limits_beyond(self, default: "_BudgetLimits") -> bool:
-        own: Final = _JSON_OBJECT.validate_python(self.model_dump(mode="json"))
-        inherited: Final = _JSON_OBJECT.validate_python(default.model_dump(mode="json"))
-        return has_meaningful_budget_limit(
-            {field: value for field, value in own.items() if field in _ALWAYS_OWN_LIMITS or value != inherited[field]}
-        )
-
-
-class _MemberBudgetRef(BaseModel):
+class _MovedMember(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     user_id: str
-    budget_id: str
 
 
-@dataclass(frozen=True, slots=True)
-class _CustomMemberBudget:
-    ref: _MemberBudgetRef
-    keeps_own_limits: bool
-
-
-class _BudgetIdRow(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    budget_id: str
-
-
-_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _SCHEDULE_COUNTS: Final = TypeAdapter(tuple[_ScheduleCount, ...])
-_MEMBER_BUDGET_REFS: Final = TypeAdapter(tuple[_MemberBudgetRef, ...])
-_MEMBER_BUDGET_LIMITS: Final = TypeAdapter(tuple[_BudgetLimits, ...])
-_BUDGET_IDS: Final = TypeAdapter(tuple[_BudgetIdRow, ...])
+_MOVED_MEMBERS: Final = TypeAdapter(tuple[_MovedMember, ...])
 
 
 def plan_team_member_default_budget_write(
@@ -225,11 +186,8 @@ async def move_member_budgets_to_default(
     team_id: str,
     default_budget_id: str,
     backfill: TeamMemberBudgetBackfill,
-    changed_by: UserAPIKeyAuth,
+    changed_by: str,
 ) -> MovedMemberBudgets | TooManyMemberBudgetsToMove:
-    """Members compare on their permanent ``max_budget``, and only those resetting on the default's schedule move.
-    A member whose other limits all match the default is linked to the default row. One holding a limit of its own, or
-    any model list, keeps its row with ``max_budget`` cleared and its reset moved onto the default's."""
     if backfill == "none":
         return MovedMemberBudgets(user_ids=(), skipped_other_reset_period=0)
     default: Final = await _budget_tx_db(tx).find_unique(where={"budget_id": default_budget_id})
@@ -246,63 +204,19 @@ async def move_member_budgets_to_default(
         return TooManyMemberBudgetsToMove(count=moving)
     if moving == 0:
         return MovedMemberBudgets(user_ids=(), skipped_other_reset_period=skipped)
-    rows: Final = await tx.query_raw(
-        _CANDIDATES_SQL,
-        team_id,
-        default_budget_id,
-        backfill,
-        default.max_budget,
-        [count.duration for count in matching if count.duration is not None],
-        any(count.duration is None for count in matching),
-    )
-    default_limits: Final = _BudgetLimits.model_validate(default.model_dump())
-    candidates: Final = tuple(
-        _CustomMemberBudget(ref=ref, keeps_own_limits=limits.has_own_limits_beyond(default_limits))
-        for ref, limits in zip(
-            _MEMBER_BUDGET_REFS.validate_python(rows), _MEMBER_BUDGET_LIMITS.validate_python(rows), strict=True
+    moved: Final = _MOVED_MEMBERS.validate_python(
+        await tx.query_raw(
+            _MOVE_MEMBERS_SQL,
+            team_id,
+            default_budget_id,
+            backfill,
+            default.max_budget,
+            [count.duration for count in matching if count.duration is not None],
+            any(count.duration is None for count in matching),
+            changed_by,
         )
     )
-    await _move_to_default(tx, candidates, team_id=team_id, default_budget_id=default_budget_id, changed_by=changed_by)
-    return MovedMemberBudgets(
-        user_ids=tuple(candidate.ref.user_id for candidate in candidates), skipped_other_reset_period=skipped
-    )
-
-
-async def _move_to_default(
-    tx: "Prisma",
-    candidates: Sequence[_CustomMemberBudget],
-    *,
-    team_id: str,
-    default_budget_id: str,
-    changed_by: UserAPIKeyAuth,
-) -> None:
-    keeping: Final = tuple(candidate.ref for candidate in candidates if candidate.keeps_own_limits)
-    relinking: Final = tuple(candidate.ref.user_id for candidate in candidates if not candidate.keeps_own_limits)
-    shared: Final = frozenset(
-        row.budget_id
-        for row in _BUDGET_IDS.validate_python(
-            await tx.query_raw(_SHARED_BUDGET_IDS_SQL, list({ref.budget_id for ref in keeping}))
-        )
-    )
-    await tx.execute_raw(_RELINK_TO_DEFAULT_SQL, team_id, default_budget_id, list(relinking))
-    await tx.execute_raw(
-        _CLEAR_MAX_BUDGET_SQL,
-        list({ref.budget_id for ref in keeping if ref.budget_id not in shared}),
-        changed_by.user_id or "",
-    )
-    for ref in keeping:
-        if ref.budget_id in shared:
-            await upsert_budget_and_membership(
-                tx,
-                team_id=team_id,
-                user_id=ref.user_id,
-                existing_budget_id=ref.budget_id,
-                user_api_key_dict=changed_by,
-                budget_patch=MappingProxyType({"max_budget": None}),
-                team_default_budget_id=default_budget_id,
-                shared_budget_ids=shared,
-            )
-    await tx.execute_raw(_ALIGN_RESET_TO_DEFAULT_SQL, team_id, default_budget_id, [ref.user_id for ref in keeping])
+    return MovedMemberBudgets(user_ids=tuple(member.user_id for member in moved), skipped_other_reset_period=skipped)
 
 
 def _prisma_columns(columns: Mapping[str, object]) -> Mapping[str, object]:

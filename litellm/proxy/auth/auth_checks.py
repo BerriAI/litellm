@@ -128,7 +128,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     project_spend_counter_key,
     tag_cache_key,
     tag_registry_cache_key,
-    team_member_default_budget_cache_key,
     team_membership_auth_cache_key,
     team_membership_reservation_cache_key,
 )
@@ -1767,7 +1766,7 @@ async def get_team_member_default_budget(
     if prisma_client is None:
         return None
 
-    cache_key: Final = team_member_default_budget_cache_key(budget_id)
+    cache_key: Final = f"team_member_default_budget:{budget_id}"
 
     cached_budget: Final = await user_api_key_cache.async_get_cache(
         key=cache_key,

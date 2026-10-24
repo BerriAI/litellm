@@ -619,7 +619,7 @@ def _is_set_budget_value(value: object) -> bool:
     return True
 
 
-def has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
+def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     """A budget is meaningful if at least one limit is actually set; an empty
     list (no model restriction) and None both count as unset."""
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
@@ -704,7 +704,7 @@ async def upsert_budget_and_membership(
         existing_budget: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
         merged: Final = existing_budget.model_dump() if existing_budget is not None else {}
         merged.update(write_data)
-        if not has_meaningful_budget_limit(merged):
+        if not _has_meaningful_budget_limit(merged):
             await _fall_back_to_team_default()
             return
         await tx.litellm_budgettable.update(
@@ -746,7 +746,7 @@ async def upsert_budget_and_membership(
     if create_data.get("budget_reset_at") is None:
         create_data.pop("budget_reset_at", None)
 
-    if not has_meaningful_budget_limit(create_data):
+    if not _has_meaningful_budget_limit(create_data):
         if existing_budget_id is not None and not temp_only:
             await _fall_back_to_team_default()
         return

@@ -133,7 +133,6 @@ from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
-    team_member_default_budget_cache_key,
     team_membership_auth_cache_key,
     team_membership_reservation_cache_key,
 )
@@ -207,7 +206,6 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
 from litellm.proxy.management_helpers.ptu_share_guard import raise_if_teams_hold_ptu_shares
 from litellm.proxy.management_helpers.team_member_default_budget import (
     MAX_MEMBER_BUDGETS_MOVED_PER_UPDATE,
-    MovedMemberBudgets,
     TeamMemberDefaultBudgetWrite,
     TooManyMemberBudgetsToMove,
     move_member_budgets_to_default,
@@ -660,7 +658,7 @@ class TeamMemberBudgetHandler:
     ) -> None:
         if user_api_key_cache is not None:
             await evict_and_broadcast(
-                cache_keys=(team_member_default_budget_cache_key(budget_id),), user_api_key_cache=user_api_key_cache
+                cache_keys=(f"team_member_default_budget:{budget_id}",), user_api_key_cache=user_api_key_cache
             )
 
     @staticmethod
@@ -1246,20 +1244,8 @@ async def _write_team_update(
 @dataclass(frozen=True, slots=True)
 class _TeamWrite:
     team_row: "prisma_models.LiteLLM_TeamTable | None"
-    roster_user_ids: tuple[str, ...]
-    moved_member_budgets: MovedMemberBudgets | None
-
-    def backfill_response(self) -> Mapping[str, TeamMemberBudgetBackfillResult]:
-        if self.moved_member_budgets is None:
-            return MappingProxyType({})
-        return MappingProxyType({"team_member_budget_backfill_result": self.moved_member_budgets.result()})
-
-    def backfill_audit(self) -> Mapping[str, object]:
-        return MappingProxyType({key: result.model_dump() for key, result in self.backfill_response().items()})
-
-    def changed_member_user_ids(self) -> tuple[str, ...]:
-        moved: Final = () if self.moved_member_budgets is None else self.moved_member_budgets.user_ids
-        return tuple(dict.fromkeys((*self.roster_user_ids, *moved)))
+    changed_member_user_ids: tuple[str, ...]
+    backfill_result: TeamMemberBudgetBackfillResult | None
 
 
 async def _write_team_with_member_default_budget(
@@ -1270,7 +1256,6 @@ async def _write_team_with_member_default_budget(
     max_budget_guard: _MaxBudgetGuard | None,
     default_budget_write: TeamMemberDefaultBudgetWrite,
     backfill: TeamMemberBudgetBackfill,
-    user_api_key_dict: UserAPIKeyAuth,
     changed_by: str,
 ) -> _TeamWrite:
     """One transaction under the team lock, so the default, every member it reaches and the team row commit
@@ -1291,7 +1276,7 @@ async def _write_team_with_member_default_budget(
             team_id=team_id,
             default_budget_id=default_budget_write.budget_id,
             backfill=backfill,
-            changed_by=user_api_key_dict,
+            changed_by=changed_by,
         )
         if isinstance(moved, TooManyMemberBudgetsToMove):
             raise HTTPException(
@@ -1308,8 +1293,8 @@ async def _write_team_with_member_default_budget(
         team_row: Final = await _write_team_update(_team_tx_db(tx), team_id, team_update_data, max_budget_guard)
     return _TeamWrite(
         team_row=team_row,
-        roster_user_ids=member_user_ids,
-        moved_member_budgets=moved if backfill != "none" else None,
+        changed_member_user_ids=tuple(dict.fromkeys((*member_user_ids, *moved.user_ids))),
+        backfill_result=moved.result() if backfill != "none" else None,
     )
 
 
@@ -2606,8 +2591,8 @@ async def update_team(
                 team_row=await _write_team_update(
                     _team_db(prisma_client), data.team_id, team_update_data, max_budget_guard
                 ),
-                roster_user_ids=(),
-                moved_member_budgets=None,
+                changed_member_user_ids=(),
+                backfill_result=None,
             )
             if default_budget_write is None
             else await _write_team_with_member_default_budget(
@@ -2617,11 +2602,15 @@ async def update_team(
                 max_budget_guard=max_budget_guard,
                 default_budget_write=default_budget_write,
                 backfill=data.team_member_budget_backfill or "none",
-                user_api_key_dict=user_api_key_dict,
                 changed_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
             )
         )
         team_row: Final = team_write.team_row
+        backfill_response: Final = (
+            {"team_member_budget_backfill_result": team_write.backfill_result}
+            if team_write.backfill_result is not None
+            else {}
+        )
 
         if team_row is None or team_row.team_id is None:
             raise HTTPException(
@@ -2636,8 +2625,8 @@ async def update_team(
             )
         await evict_team_member_cache_keys(
             team_id=team_row.team_id,
-            member_user_ids=team_write.changed_member_user_ids(),
-            cache_keys=tuple(team_membership_cache_keys(team_row.team_id, team_write.changed_member_user_ids())),
+            member_user_ids=team_write.changed_member_user_ids,
+            cache_keys=tuple(team_membership_cache_keys(team_row.team_id, team_write.changed_member_user_ids)),
             user_api_key_cache=user_api_key_cache,
         )
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=team_row.team_id)
@@ -2654,14 +2643,14 @@ async def update_team(
         if is_audit_logging_enabled():
             await _create_team_update_audit_log(
                 existing_team_row=existing_team_row,
-                updated_kv={**updated_kv, **team_write.backfill_audit()},
+                updated_kv={**updated_kv, **{key: value.model_dump() for key, value in backfill_response.items()}},
                 team_id=data.team_id,
                 litellm_changed_by=litellm_changed_by,
                 user_api_key_dict=user_api_key_dict,
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
             )
 
-        return {"team_id": team_row.team_id, "data": team_row, **team_write.backfill_response()}
+        return {"team_id": team_row.team_id, "data": team_row, **backfill_response}
     except Exception as e:
         raise handle_exception_on_proxy(e)
 

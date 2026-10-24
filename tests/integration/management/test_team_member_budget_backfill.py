@@ -1,12 +1,13 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Final
 
 import pytest
 from prisma import Json
 
 from litellm.proxy.management_helpers.team_member_default_budget import MAX_MEMBER_BUDGETS_MOVED_PER_UPDATE
-from tests.integration._support.actors import create_scratch_team
+from tests.integration._support.actors import ManagementDatabase, ScratchResources, create_scratch_team
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -122,7 +123,6 @@ async def test_backfill_moves_only_members_on_the_chosen_side_of_the_new_default
     for name, budget in _ROSTER.items():
         membership = await _member_budget(db, resources, name)
         if name == "own_rpm" and name in moved:
-            assert membership.budget_id == resources.tag("own-own_rpm")
             assert membership.litellm_budget_table.max_budget is None
             assert membership.litellm_budget_table.rpm_limit == 5
         elif name in moved or budget is None:
@@ -214,9 +214,7 @@ async def test_a_moved_member_keeping_their_own_limits_resets_with_the_default(d
 async def test_a_member_with_a_model_list_keeps_it_even_when_it_matches_the_default(db, resources):
     default_budget_id = await _seed_team(db, resources, {"scoped": _Budget(20.0)})
     for budget_id in (default_budget_id, resources.tag("own-scoped")):
-        await db.db.litellm_budgettable.update(
-            where={"budget_id": budget_id}, data={"allowed_models": ["gpt-5.4-mini"]}
-        )
+        await db.db.litellm_budgettable.update(where={"budget_id": budget_id}, data={"allowed_models": ["test-model"]})
 
     response = _update_team(
         db,
@@ -226,10 +224,9 @@ async def test_a_member_with_a_model_list_keeps_it_even_when_it_matches_the_defa
 
     assert response.status_code == 200, response.text
     scoped = await _member_budget(db, resources, "scoped")
-    assert scoped.budget_id == resources.tag("own-scoped")
     assert (scoped.litellm_budget_table.max_budget, scoped.litellm_budget_table.allowed_models) == (
         None,
-        ["gpt-5.4-mini"],
+        ["test-model"],
     )
 
 
@@ -296,3 +293,36 @@ async def test_saving_a_default_links_every_roster_member_without_a_budget_to_it
     assert response.status_code == 200, response.text
     for name in ("no-row", "no-budget"):
         assert (await _member_budget(db, resources, name)).budget_id == default_budget_id, name
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"rpm_limit": 5},
+        {"tpm_limit": 7},
+        {"tpd_limit": 11},
+        {"soft_budget": 0.0},
+        {"max_parallel_requests": 0},
+        {"model_max_budget": Json({"test-model": {"max_budget": 2.0}})},
+        {"allowed_models": ["test-model"]},
+        {"temp_budget_increase": 5.0, "temp_budget_expiry": datetime(2030, 1, 1, tzinfo=timezone.utc)},
+    ],
+)
+async def test_moving_a_member_preserves_every_other_limit_even_when_it_matches_the_default(
+    limits: Mapping[str, object], db: ManagementDatabase, resources: ScratchResources
+) -> None:
+    default_id: Final = await _seed_team(db, resources, {"custom": _Budget(20.0)})
+    for budget_id in (default_id, resources.tag("own-custom")):
+        await db.db.litellm_budgettable.update(where={"budget_id": budget_id}, data=dict(limits))
+    original: Final = (await _member_budget(db, resources, "custom")).litellm_budget_table
+
+    response: Final = _update_team(
+        db, resources.prefix, {"team_member_budget": _NEW_DEFAULT, "team_member_budget_backfill": "raise_to_default"}
+    )
+
+    assert response.status_code == 200, response.text
+    moved: Final = (await _member_budget(db, resources, "custom")).litellm_budget_table
+    assert moved.max_budget is None
+    assert {field: getattr(moved, field) for field in limits} == {field: getattr(original, field) for field in limits}
+    untouched: Final = await db.db.litellm_budgettable.find_unique(where={"budget_id": original.budget_id})
+    assert untouched == original
