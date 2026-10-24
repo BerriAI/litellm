@@ -2,8 +2,8 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
-from functools import cached_property
-from typing import Final, Literal
+import threading
+from typing import ClassVar, Final, Literal
 
 import httpx
 from pydantic import Field
@@ -98,8 +98,26 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         }
         return headers
 
-    @cached_property
+    # Process-wide cache, same reasoning as the chat config: per-call config
+    # instances would otherwise re-run the two discovery GETs on every call.
+    _deployment_url_cache: ClassVar[dict[tuple[str, str], str]] = {}  # mutable-ok: process cache, guarded by the lock
+    _deployment_url_lock: ClassVar[threading.Lock] = threading.Lock()
+
+    @property
     def deployment_url(self) -> str:
+        cache_key: Final = (self.base_url, self.resource_group)
+        cached_url: Final = GenAIHubEmbeddingConfig._deployment_url_cache.get(cache_key)
+        if cached_url is not None:
+            return cached_url
+        with GenAIHubEmbeddingConfig._deployment_url_lock:
+            rechecked_url: Final = GenAIHubEmbeddingConfig._deployment_url_cache.get(cache_key)
+            if rechecked_url is not None:
+                return rechecked_url
+            fetched_url: Final = self._fetch_deployment_url()
+            GenAIHubEmbeddingConfig._deployment_url_cache[cache_key] = fetched_url
+            return fetched_url
+
+    def _fetch_deployment_url(self) -> str:
         with httpx.Client(timeout=30) as client:
             valid_deployments: Final = []
             deployments: Final = client.get(join_api_base(self.base_url, "lm/deployments"), headers=self.headers).json()
