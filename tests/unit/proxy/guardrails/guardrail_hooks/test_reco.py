@@ -150,8 +150,19 @@ async def _apply_with_reco_unreachable(guardrail: RecoGuardrail):
 
 class TestRecoGuardrailFailureModes:
     @pytest.mark.asyncio
-    async def test_unreachable_reco_lets_request_through_by_default(self, reco_guardrail):
-        result = await _apply_with_reco_unreachable(reco_guardrail)
+    async def test_unreachable_reco_blocks_request_by_default(self, reco_guardrail):
+        with pytest.raises(Exception, match="connection refused"):
+            await _apply_with_reco_unreachable(reco_guardrail)
+
+    @pytest.mark.asyncio
+    async def test_fail_open_lets_request_through_when_reco_unreachable(self):
+        guardrail = RecoGuardrail(
+            reco_tenant_id="11111111-1111-1111-1111-111111111111",
+            api_base="https://edge1.us.reco.ai",
+            fail_on_error=False,
+        )
+
+        result = await _apply_with_reco_unreachable(guardrail)
 
         assert result["texts"] == ["hello"]
 
@@ -171,6 +182,7 @@ class TestRecoGuardrailFailureModes:
     @pytest.mark.parametrize(
         ("top_level", "nested"),
         [
+            pytest.param({}, {}, id="defaults"),
             pytest.param({}, {"unreachable_fallback": "fail_closed", "fail_on_error": True}, id="optional-params"),
             pytest.param({"unreachable_fallback": "fail_closed", "fail_on_error": True}, {}, id="top-level"),
         ],
@@ -185,7 +197,8 @@ class TestRecoGuardrailFailureModes:
     @pytest.mark.parametrize(
         ("top_level", "nested"),
         [
-            pytest.param({}, {}, id="unset-ignores-top-level-fail-closed-defaults"),
+            pytest.param({}, {"fail_on_error": False}, id="optional-params"),
+            pytest.param({"fail_on_error": False}, {}, id="top-level"),
             pytest.param(
                 {"unreachable_fallback": "fail_closed", "fail_on_error": True},
                 {"fail_on_error": False},
@@ -193,7 +206,7 @@ class TestRecoGuardrailFailureModes:
             ),
         ],
     )
-    async def test_initialize_guardrail_stays_fail_open(self, top_level, nested):
+    async def test_initialize_guardrail_fails_open_when_configured(self, top_level, nested):
         guardrail = initialize_guardrail(_litellm_params(top_level, nested), {"guardrail_name": "prod-reco"})
 
         result = await _apply_with_reco_unreachable(guardrail)
