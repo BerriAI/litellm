@@ -444,8 +444,8 @@ async def test_unusable_ttft_samples_fall_back_to_recorded_latency():
     cache.set_cache(
         key=f"{MODEL_GROUP}_map",
         value={
-            FAST_TTFT_ID: {"latency": [0.1], "time_to_first_token_seconds": [-600.0]},
-            SLOW_TTFT_ID: {"latency": [5.0], "time_to_first_token_seconds": [-300.0]},
+            FAST_TTFT_ID: {"latency_normalized": [0.1], "time_to_first_token_seconds": [-600.0]},
+            SLOW_TTFT_ID: {"latency_normalized": [5.0], "time_to_first_token_seconds": [-300.0]},
         },
     )
 
