@@ -12,7 +12,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from re import Pattern
@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, cast
 import yaml
 from fastapi import HTTPException
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
@@ -75,6 +76,7 @@ from .competitor_intent import (
     BaseCompetitorIntentChecker,
 )
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
+from .validators import PATTERN_VALIDATORS
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
@@ -124,11 +126,13 @@ class CompiledPatternEntry(TypedDict):
     action: ContentFilterAction
     keyword_regex: Pattern[str] | None
     allow_word_numbers: bool
+    validator: ReadOnly[Callable[[str], bool] | None]
 
 
 class _PatternExtraLookup(TypedDict):
     keyword_pattern: str | None
     allow_word_numbers: bool
+    validator: ReadOnly[Callable[[str], bool] | None]
 
 
 class _CategoryConfigView(TypedDict):
@@ -749,7 +753,11 @@ class ContentFilterGuardrail(CustomGuardrail):
             pattern_config: ContentFilterPattern configuration
         """
         try:
-            extra_config: _PatternExtraLookup = {"keyword_pattern": None, "allow_word_numbers": False}
+            extra_config: _PatternExtraLookup = {
+                "keyword_pattern": None,
+                "allow_word_numbers": False,
+                "validator": None,
+            }
             if pattern_config.pattern_type == "prebuilt":
                 if not pattern_config.pattern_name:
                     raise ValueError("pattern_name is required for prebuilt patterns")
@@ -774,6 +782,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     "action": pattern_config.action,
                     "keyword_regex": keyword_regex,
                     "allow_word_numbers": extra_config["allow_word_numbers"],
+                    "validator": extra_config["validator"],
                 }
             )
             verbose_proxy_logger.debug("Added pattern: %s with action %s", pattern_name, pattern_config.action)
@@ -784,9 +793,11 @@ class ContentFilterGuardrail(CustomGuardrail):
     @staticmethod
     def _lookup_pattern_extra(pattern_name: str) -> _PatternExtraLookup:
         extra: Final = PATTERN_EXTRA_CONFIG.get(pattern_name)
+        validator_name: Final = extra.get("validator") if extra is not None else None
         return {
             "keyword_pattern": extra.get("keyword_pattern") if extra is not None else None,
             "allow_word_numbers": bool(extra.get("allow_word_numbers")) if extra is not None else False,
+            "validator": PATTERN_VALIDATORS[validator_name] if validator_name is not None else None,
         }
 
     def _load_blocked_words_file(self, file_path: str) -> None:
@@ -834,6 +845,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         regex: Final[Pattern[str]] = pattern_entry["regex"]
         keyword_regex: Final[Pattern[str] | None] = pattern_entry.get("keyword_regex")
         allow_word_numbers: Final[bool] = pattern_entry.get("allow_word_numbers", False)
+        validator: Final = pattern_entry.get("validator")
 
         keyword_matches: Final = list(keyword_regex.finditer(text)) if keyword_regex is not None else None
         if keyword_matches is not None and not keyword_matches:
@@ -842,6 +854,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         match_spans: Final[list[tuple[int, int]]] = []
 
         for match in regex.finditer(text):
+            if validator is not None and not validator(match.group()):
+                continue
             if keyword_matches is not None and not self._match_near_keyword(
                 match.start(), match.end(), keyword_matches, text
             ):
