@@ -77,7 +77,8 @@ def _stamp_reported_stream_cost(
     if reported is None:
         return
     set_response_cost_in_hidden_params(response, reported)
-    response.hidden_params["response_cost"] = reported
+    hidden_params: Final = response.hidden_params
+    hidden_params["response_cost"] = reported
 
 
 class AnthropicPassthroughLoggingHandler:
