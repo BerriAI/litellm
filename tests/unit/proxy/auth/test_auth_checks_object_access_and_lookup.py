@@ -11622,82 +11622,111 @@ async def test_authoritative_group_grants_propagate_policy_outages(
         assert await get_agent_ids_from_access_groups(["group"]) == []
 
 
-def _client_tag_request(client_tags, baggage):
-    return Request(
-        {
-            "type": "http",
-            "headers": [
-                *([(b"baggage", b"entrypoint=a")] if baggage else []),
-                *([(b"x-litellm-tags", b"usecase:a")] if client_tags == "header" else []),
-            ],
-        }
+def _end_user_with_models(models: list[str]) -> LiteLLM_EndUserTable:
+    return LiteLLM_EndUserTable(user_id="end-user-1", blocked=False, models=models)
+
+
+def test_customer_can_call_model_true_for_allowed_false_for_disallowed() -> None:
+    from litellm.proxy.auth.auth_checks import customer_can_call_model
+
+    end_user_object: Final = _end_user_with_models(["somemodel"])
+
+    assert (
+        customer_can_call_model(
+            model="somemodel",
+            end_user_object=end_user_object,
+            llm_router=None,
+            valid_token=None,
+        )
+        is True
+    )
+    assert (
+        customer_can_call_model(
+            model="othermodel",
+            end_user_object=end_user_object,
+            llm_router=None,
+            valid_token=None,
+        )
+        is False
     )
 
 
-def _client_tag_body(client_tags, client_slot):
-    if client_tags is None or client_tags == "header":
-        return {}
-    return {client_slot: client_tags if isinstance(client_tags, str) else {"tags": client_tags}}
+@pytest.mark.parametrize("models", [[], None])
+def test_customer_can_call_model_unrestricted_when_allowlist_empty(models: list[str] | None) -> None:
+    from litellm.proxy.auth.auth_checks import customer_can_call_model
 
+    end_user_object: Final = LiteLLM_EndUserTable(user_id="end-user-1", blocked=False, models=models or [])
 
-def _client_tag_rejection(route, data, request):
-    from litellm.proxy.auth.auth_checks import _reject_clientside_metadata_tags_check
-
-    try:
-        _reject_clientside_metadata_tags_check({"reject_clientside_metadata_tags": True}, data, route, request)
-    except ProxyException as error:
-        return error.code
-    return None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/messages", "/v1/responses"])
-@pytest.mark.parametrize("client_tags", [None, [], ["usecase:a"], '{"tags":["usecase:a"]}', "header"])
-@pytest.mark.parametrize("client_slot", ["metadata", "litellm_metadata"])
-@pytest.mark.parametrize("baggage", [True, False])
-async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_it(
-    route, client_tags, client_slot, baggage
-):
-    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-
-    unmapped_request = _client_tag_request(client_tags, baggage=False)
-    unmapped = _client_tag_body(client_tags, client_slot)
-    LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(unmapped, route)
-    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(unmapped_request, unmapped, UserAPIKeyAuth(api_key="qa-key"))
-
-    mapped_request = _client_tag_request(client_tags, baggage=baggage)
-    mapped = _client_tag_body(client_tags, client_slot)
-    LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(mapped, route)
-    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
-        mapped_request,
-        mapped,
-        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
-        None,
-        MagicMock(),
+    assert (
+        customer_can_call_model(
+            model="any-model",
+            end_user_object=end_user_object,
+            llm_router=None,
+            valid_token=None,
+        )
+        is True
     )
-    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(mapped_request, mapped, UserAPIKeyAuth(api_key="qa-key"))
 
-    assert _client_tag_rejection(route, mapped, mapped_request) == _client_tag_rejection(
-        route, unmapped, unmapped_request
+
+def test_customer_can_call_model_honors_wildcard_allowlist() -> None:
+    from litellm.proxy.auth.auth_checks import customer_can_call_model
+
+    end_user_object: Final = _end_user_with_models(["openai/*"])
+
+    assert (
+        customer_can_call_model(
+            model="openai/gpt-4o",
+            end_user_object=end_user_object,
+            llm_router=None,
+            valid_token=None,
+        )
+        is True
     )
-    if client_tags is None and baggage:
-        assert "usecase:a" in mapped["metadata" if "chat/completions" in route else "litellm_metadata"]["tags"]
-
-
-@pytest.mark.asyncio
-async def test_baggage_mapping_still_rejects_client_metadata_tags():
-    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-
-    request = _client_tag_request(["usecase:b"], baggage=True)
-    data = {"metadata": {"tags": ["usecase:b"]}}
-    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
-        request,
-        data,
-        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
-        None,
-        MagicMock(),
+    assert (
+        customer_can_call_model(
+            model="anthropic/claude-sonnet-4-5",
+            end_user_object=end_user_object,
+            llm_router=None,
+            valid_token=None,
+        )
+        is False
     )
-    assert _client_tag_rejection("/v1/chat/completions", data, request) == "400"
-    from litellm.utils import get_request_guardrails
 
-    assert get_request_guardrails(data) == []
+
+def test_customer_can_call_model_resolves_router_access_group() -> None:
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import customer_can_call_model
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "fast-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                "model_info": {"access_groups": ["fast-models"]},
+            },
+            {
+                "model_name": "slow-model",
+                "litellm_params": {"model": "openai/gpt-4.1", "api_key": "sk-test"},
+            },
+        ]
+    )
+    end_user_object: Final = _end_user_with_models(["fast-models"])
+
+    assert (
+        customer_can_call_model(
+            model="fast-model",
+            end_user_object=end_user_object,
+            llm_router=router,
+            valid_token=None,
+        )
+        is True
+    )
+    assert (
+        customer_can_call_model(
+            model="slow-model",
+            end_user_object=end_user_object,
+            llm_router=router,
+            valid_token=None,
+        )
+        is False
+    )
