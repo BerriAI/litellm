@@ -247,6 +247,10 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 strip_anthropic_total_tokens: bool = False
 anthropic_sse_ping_interval_seconds: float = 15.0
 sse_keepalive_ping_interval_seconds: float | None = None
+# Most bytes of one streamed pass-through response kept in memory for end-of-stream logging and cost
+# tracking. Past it the middle is dropped and the first and last halves are kept, so the final usage
+# event survives. None keeps everything. Set via `litellm_settings.pass_through_max_logged_stream_bytes`.
+pass_through_max_logged_stream_bytes: int | None = 16 * 1024 * 1024
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
