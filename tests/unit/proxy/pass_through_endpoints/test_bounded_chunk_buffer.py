@@ -87,6 +87,35 @@ def test_buffer_memory_stays_bounded_while_a_huge_stream_passes():
     assert buffer.retained_bytes <= 1000
 
 
+def test_buffer_trims_newline_delimited_streams_to_whole_lines():
+    # no blank-line separators: frames are single lines, as in newline-delimited JSON
+    buffer = BoundedChunkBuffer(max_bytes=40)
+    lines = [json.dumps({"n": i}).encode() + b"\n" for i in range(20)]
+
+    for line in lines:
+        buffer.append(line)
+
+    kept = b"".join(buffer)
+    assert buffer.truncated
+    assert kept.startswith(lines[0])
+    assert kept.endswith(lines[-1])
+    assert all(json.loads(part) is not None for part in kept.splitlines())
+
+
+def test_buffer_supports_indexing_slicing_and_equality_with_a_list():
+    buffer = BoundedChunkBuffer(max_bytes=1024)
+    chunks = [b"event: a\ndata: 1\n\n", b"event: b\ndata: 2\n\n"]
+    for chunk in chunks:
+        buffer.append(chunk)
+
+    assert buffer[0] == chunks[0]
+    assert buffer[-1] == chunks[-1]
+    assert buffer[0:2] == chunks
+    assert buffer == chunks
+    assert buffer != chunks[:1]
+    assert buffer != "not a sequence"
+
+
 def _response(chunks: list[bytes]) -> MagicMock:
     response = MagicMock(spec=httpx.Response)
     response.status_code = 200
