@@ -10,7 +10,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import OpenAIFileObject
 
 API_BASE: Final = "https://api.x.ai"
-KEY: Final = "xai-test-key"
+KEY: Final = "fake-key"
 
 
 @pytest.fixture(autouse=True)

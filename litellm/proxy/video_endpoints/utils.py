@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import orjson
@@ -15,13 +16,31 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-def extract_model_from_target_model_names(target_model_names: Any) -> str | None:
+def resolve_video_request_model(
+    *,
+    decoded: DecodedVideoId,
+    query_model: str | None,
+    llm_router: "Router | None",
+) -> str | None:
+    model_id: Final = decoded.get("model_id")
+    resolved: Final = video_model_group(decoded, llm_router)
+    if isinstance(resolved, str) and resolved:
+        return resolved
+    if isinstance(model_id, str) and model_id:
+        return model_id
+    if isinstance(query_model, str) and query_model:
+        return query_model
+    return None
+
+
+def extract_model_from_target_model_names(target_model_names: object) -> str | None:
     if isinstance(target_model_names, str):
-        model_names: Final = [m.strip() for m in target_model_names.split(",") if m.strip()]
-        return model_names[0] if model_names else None
-    if not isinstance(target_model_names, list):
-        return None
-    return target_model_names[0] if target_model_names else None
+        names: Final = tuple(m.strip() for m in target_model_names.split(",") if m.strip())
+        return names[0] if names else None
+    if isinstance(target_model_names, Sequence) and not isinstance(target_model_names, (str, bytes)):
+        first: Final = target_model_names[0] if target_model_names else None
+        return first if isinstance(first, str) else None
+    return None
 
 
 def video_reference_to_id(video_ref: object) -> str:
@@ -36,9 +55,9 @@ def video_reference_to_id(video_ref: object) -> str:
     return parsed_ref.get("id", "") if isinstance(parsed_ref, dict) else video_ref
 
 
-def get_custom_provider_from_data(data: dict[str, Any]) -> str | None:
+def get_custom_provider_from_data(data: Mapping[str, object]) -> str | None:
     custom_llm_provider: Final = data.get("custom_llm_provider")
-    if custom_llm_provider:
+    if isinstance(custom_llm_provider, str) and custom_llm_provider:
         return custom_llm_provider
 
     extra_body = data.get("extra_body")
