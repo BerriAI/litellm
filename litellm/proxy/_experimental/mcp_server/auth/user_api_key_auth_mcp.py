@@ -2756,7 +2756,7 @@ class MCPRequestHandler:
         requires_fresh_policy: bool = False,
     ) -> Mapping[str, Sequence[str]]:
         """The ``server_id -> tool names`` grants of this permission row's toolsets, empty when it
-        declares none. The shared resolver for the team, org, and internal-user levels, so a toolset
+        declares none. The shared resolver for the key, team, org, and internal-user levels, so a toolset
         behaves identically wherever it is attached.
 
         RAISES ``UnloadableEntitlementError`` when the row DECLARES toolsets but resolution yields
@@ -3114,17 +3114,12 @@ class MCPRequestHandler:
         # Tools granted through the key's toolsets restrict this server exactly
         # as direct tool permissions do; union with any direct grants so the
         # tool-level check sees the key's full effective tool scope
-        key_toolset_ids: Final = (key_obj_perm.mcp_toolsets or []) if key_obj_perm else []
-        key_toolset_tools: Final = (
-            (
-                await global_mcp_server_manager.resolve_toolset_tool_permissions(
-                    toolset_ids=key_toolset_ids,
-                    requires_fresh_policy=user_api_key_auth.requires_fresh_policy,
-                )
-            ).get(server_id)
-            if key_toolset_ids
-            else None
-        )
+        try:
+            key_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
+                key_obj_perm, server_id, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
+            )
+        except Exception as e:
+            raise UnloadableEntitlementError("key MCP toolset entitlement could not be resolved") from e
 
         key_group_tools: Final = await MCPRequestHandler._key_access_group_tools_for_server(
             user_api_key_auth, server_id

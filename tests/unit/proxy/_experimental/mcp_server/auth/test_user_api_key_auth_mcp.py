@@ -58,6 +58,63 @@ def test_incoming_guardrail_bearer_requires_exact_authorization_header(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolution", ["valid", "deleted", "empty", "database_error", "fresh_database_error", "cache_error", "no_database"]
+)
+@pytest.mark.parametrize("direct_tools", [None, ["read_status"], [MCP_ALL_TOOLS_WILDCARD]])
+async def test_key_declared_toolset_never_becomes_unrestricted_when_unloadable(
+    monkeypatch: pytest.MonkeyPatch,
+    resolution: str,
+    direct_tools: Sequence[str] | None,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset
+
+    row: Final = MCPToolset(
+        toolset_id="status-only",
+        toolset_name="status-only",
+        tools=[] if resolution == "empty" else [{"server_id": "probe", "tool_name": "read_status"}],
+    )
+    rows: Final = [] if resolution == "deleted" else [row]
+    table: Final = SimpleNamespace(
+        find_many=AsyncMock(
+            return_value=rows,
+            side_effect=RuntimeError("toolset database unavailable") if "database_error" in resolution else None,
+        )
+    )
+    database: Final = SimpleNamespace(litellm_mcptoolsettable=table)
+    client: Final = SimpleNamespace(db=database, writer_db=database)
+    cache: Final = (
+        SimpleNamespace(async_get_cache=AsyncMock(side_effect=RuntimeError("cache unavailable")))
+        if resolution == "cache_error"
+        else DualCache()
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None if resolution == "no_database" else client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    auth: Final = UserAPIKeyAuth(
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-toolset-scope",
+            mcp_servers=["probe"],
+            mcp_toolsets=["status-only"],
+            mcp_tool_permissions={} if direct_tools is None else {"probe": list(direct_tools)},
+        ),
+    ).model_copy(update={"requires_fresh_policy": resolution == "fresh_database_error"})
+    expected: Final = (
+        None
+        if resolution == "valid" and direct_tools == [MCP_ALL_TOOLS_WILDCARD]
+        else ["read_status"]
+        if resolution == "valid"
+        else []
+    )
+
+    assert await MCPRequestHandler.get_allowed_tools_for_server("probe", auth) == expected
+    assert await MCPRequestHandler.is_tool_allowed_for_server("read_status", "probe", auth) is (resolution == "valid")
+    assert await MCPRequestHandler.is_tool_allowed_for_server("write_record", "probe", auth) is (
+        resolution == "valid" and direct_tools == [MCP_ALL_TOOLS_WILDCARD]
+    )
+
+
+@pytest.mark.asyncio
 class TestMCPRequestHandler:
     @pytest.mark.parametrize(
         "key_servers,team_servers,expected_result,scenario",
@@ -4093,8 +4150,9 @@ async def test_get_allowed_tools_for_server_ui_session_team_keeps_key_restrictio
         user_id="test-user",
         team_id=UI_TEAM_ID,
     )
-    key_perm = MagicMock()
-    key_perm.mcp_tool_permissions = {"server_1": ["tool_a"]}
+    key_perm: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="key-scope", mcp_tool_permissions={"server_1": ["tool_a"]}
+    )
 
     mock_prisma = MagicMock()
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
@@ -4658,8 +4716,9 @@ class TestAgentMCPPermissions:
             user_id="test-user",
             agent_id="agent-tools",
         )
-        key_perm = MagicMock()
-        key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+        key_perm: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-scope", mcp_tool_permissions={"server_1": ["tool_a", "tool_b"]}
+        )
         team_perm = None
         with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm):
             with patch.object(
@@ -4691,8 +4750,9 @@ class TestAgentMCPPermissions:
             user_id="test-user",
             agent_id="agent-no-tools",
         )
-        key_perm = MagicMock()
-        key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+        key_perm: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-scope", mcp_tool_permissions={"server_1": ["tool_a", "tool_b"]}
+        )
         with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm):
             with patch.object(
                 MCPRequestHandler,
@@ -5201,8 +5261,9 @@ class TestOrgMCPPermissions:
     async def test_get_allowed_tools_for_server_org_ceiling(self):
         auth = self._make_auth(org_id="org-123")
 
-        key_perm = MagicMock()
-        key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b", "tool_c"]}
+        key_perm: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-scope", mcp_tool_permissions={"server_1": ["tool_a", "tool_b", "tool_c"]}
+        )
 
         org_perm = MagicMock()
         org_perm.mcp_toolsets = None  # a bare MagicMock attr reads as a DECLARED toolset and now denies
@@ -5232,8 +5293,9 @@ class TestOrgMCPPermissions:
     async def test_get_allowed_tools_for_server_org_no_restriction(self):
         auth = self._make_auth(org_id="org-123")
 
-        key_perm = MagicMock()
-        key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+        key_perm: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-scope", mcp_tool_permissions={"server_1": ["tool_a", "tool_b"]}
+        )
 
         org_perm = MagicMock()
         org_perm.mcp_toolsets = None  # a bare MagicMock attr reads as a DECLARED toolset and now denies
@@ -12035,9 +12097,7 @@ async def test_personal_key_guardrail_auth_preserves_native_tool_name_matching_s
     from litellm.proxy.auth import auth_checks
 
     async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
-        return _personal_key_team_granting_tools(
-            team_id, ("math-multiply",) if team_id == "team-b" else ("other",)
-        )
+        return _personal_key_team_granting_tools(team_id, ("math-multiply",) if team_id == "team-b" else ("other",))
 
     monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
     monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
@@ -12076,9 +12136,7 @@ async def test_personal_key_mcp_billing_inherits_adopted_organization_limits(
     )
 
     async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
-        return _personal_key_team_granting_tools(team_id, ("divide",)).model_copy(
-            update={"organization_id": "org-1"}
-        )
+        return _personal_key_team_granting_tools(team_id, ("divide",)).model_copy(update={"organization_id": "org-1"})
 
     org_loader: Final = AsyncMock(return_value=organization)
     monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
@@ -12124,16 +12182,12 @@ async def test_personal_key_mcp_billing_keeps_key_organization_limits(
     )
 
     async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
-        return _personal_key_team_granting_tools(team_id, ("divide",)).model_copy(
-            update={"organization_id": "org-1"}
-        )
+        return _personal_key_team_granting_tools(team_id, ("divide",)).model_copy(update={"organization_id": "org-1"})
 
     org_loader: Final = AsyncMock(return_value=organization)
     monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
     monkeypatch.setattr(auth_checks, "get_org_object_for_request", org_loader)
-    auth: Final = personal_key_owner_teams.model_copy(
-        update={"org_id": "org-k", "organization_rpm_limit": 9}
-    )
+    auth: Final = personal_key_owner_teams.model_copy(update={"org_id": "org-k", "organization_rpm_limit": 9})
     server: Final = global_mcp_server_manager.registry["srv-b"]
 
     with patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server):
@@ -12265,9 +12319,7 @@ async def test_personal_key_mcp_billing_uses_fresh_team_and_membership_for_stric
             }
         )
 
-    async def _get_team_membership(
-        user_id: str, team_id: str, **kwargs: object
-    ) -> LiteLLM_TeamMembership:
+    async def _get_team_membership(user_id: str, team_id: str, **kwargs: object) -> LiteLLM_TeamMembership:
         database_value: Final = bool(kwargs.get("check_db_only"))
         return LiteLLM_TeamMembership(
             user_id=user_id,
