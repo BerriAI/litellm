@@ -3775,6 +3775,7 @@ dependencies = [
  "tower-sessions-moka-store",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -3818,6 +3819,7 @@ dependencies = [
  "litellm-inference-messages",
  "litellm-inference-ocr",
  "litellm-inference-responses",
+ "litellm-inference-tokenize",
  "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
