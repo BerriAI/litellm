@@ -2,6 +2,7 @@
 Tests for litellm.litellm_core_utils.dot_notation_indexing module.
 """
 
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -134,3 +135,7 @@ class TestDeleteNestedValue:
         assert result == {"tags": ["a", "b"]}
         assert payload == {"tags": ["a", "b"], "secret": ["s"]}
         assert result["tags"] is not payload["tags"]
+
+    def test_delete_accepts_a_read_only_mapping(self):
+        payload: Final = MappingProxyType({"tags": ["a"], "secret": ["s"]})
+        assert delete_nested_value(payload, "secret") == {"tags": ["a"]}

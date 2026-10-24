@@ -214,8 +214,7 @@ def delete_nested_value(
     """
     import copy
 
-    copied: Final = copy.deepcopy(data)
-    result: Final = copied if isinstance(copied, dict) else dict(copied)
+    result: Final = copy.deepcopy(data if isinstance(data, dict) else dict(data))
 
     try:
         # Parse path into segments
