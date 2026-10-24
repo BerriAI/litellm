@@ -28,7 +28,7 @@ pub enum Error {
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
     #[error(transparent)]
-    Auth(#[from] litellm_auth::Error),
+    Auth(litellm_auth::Error),
     #[error(transparent)]
     Transport(#[from] TransportError),
     #[error(transparent)]
@@ -66,12 +66,35 @@ impl Error {
             | Self::InvalidRequest(_)
             | Self::Unsupported(_)
             | Self::Headers(_) => true,
-            Self::Auth(error) => !matches!(error, litellm_auth::Error::MissingApiKey { .. }),
+            Self::Auth(error) => !matches!(
+                error,
+                litellm_auth::Error::MissingApiKey { .. }
+                    | litellm_auth::Error::CredentialRequest { .. }
+                    | litellm_auth::Error::InvalidCredentialResponse(_)
+            ),
             Self::InvalidResponse(_)
             | Self::Transport(_)
             | Self::Http(_)
             | Self::Secret(_)
             | Self::PostCallHook(_) => false,
+        }
+    }
+}
+
+impl From<litellm_auth::Error> for Error {
+    fn from(error: litellm_auth::Error) -> Self {
+        match error {
+            litellm_auth::Error::CredentialRequest { status, source } => match status {
+                Some(status) => Self::Transport(TransportError::Http {
+                    status,
+                    body: source.to_string(),
+                }),
+                None => Self::Transport(TransportError::Network(source.to_string())),
+            },
+            litellm_auth::Error::InvalidCredentialResponse(source) => Self::InvalidResponse(
+                litellm_llms::ErrorDetail::invalid("credential response", source),
+            ),
+            other => Self::Auth(other),
         }
     }
 }
@@ -84,7 +107,7 @@ impl From<LlmError> for Error {
             LlmError::InvalidRequest(message) => Self::InvalidRequest(message),
             LlmError::InvalidResponse(message) => Self::InvalidResponse(message),
             LlmError::Unsupported(reason) => Self::Unsupported(reason),
-            LlmError::Auth(error) => Self::Auth(error),
+            LlmError::Auth(error) => Self::from(error),
         }
     }
 }
@@ -118,6 +141,50 @@ mod tests {
     use super::Error;
     use litellm_llms::{Error as LlmError, ErrorDetail};
     use rstest::rstest;
+
+    #[rstest]
+    #[case::legacy_acquisition(litellm_auth::Error::CredentialAcquisition("legacy".into()), true)]
+    #[case::invalid_header(litellm_auth::Error::InvalidHeader, true)]
+    #[case::missing_key(litellm_auth::Error::MissingApiKey {
+        provider: "provider",
+        environment_variable: "API_KEY",
+    }, false)]
+    fn existing_auth_errors_keep_their_variants_and_classification(
+        #[case] auth: litellm_auth::Error,
+        #[case] is_request: bool,
+    ) {
+        let error = Error::from(auth.clone());
+        assert_eq!(error, Error::Auth(auth));
+        assert_eq!(error.is_request(), is_request);
+    }
+
+    #[rstest]
+    #[case::http(Some(503))]
+    #[case::network(None)]
+    fn credential_request_errors_preserve_operational_failure_kind(#[case] status: Option<u16>) {
+        let error = Error::from(litellm_auth::Error::CredentialRequest {
+            status,
+            source: "credential endpoint failed".into(),
+        });
+        assert!(!error.is_request());
+        let expected = match status {
+            Some(status) => super::TransportError::Http {
+                status,
+                body: "credential endpoint failed".into(),
+            },
+            None => super::TransportError::Network("credential endpoint failed".into()),
+        };
+        assert_eq!(error, Error::Transport(expected));
+    }
+
+    #[rstest]
+    fn malformed_credential_responses_are_provider_failures() {
+        let error = Error::from(litellm_auth::Error::InvalidCredentialResponse(
+            "missing token".into(),
+        ));
+        assert!(!error.is_request());
+        assert!(matches!(error, Error::InvalidResponse(_)));
+    }
 
     #[test]
     fn a_missing_api_key_is_the_environment_not_the_request() {
