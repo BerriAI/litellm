@@ -932,14 +932,10 @@ def print_startup_message(message: str) -> None:
     # proxy logger (at the root's WARNING in the CLI process until initialize() runs) and of its JSON
     # handler (LITELLM_LOG). It also skips the logger's stdout cap: that cap bounds echoed request
     # payloads, while a startup message is operator text the print showed whole (the required migration
-    # SQL, the policy list), so it gets the uncapped processing of a DEBUG line, secret redaction and
-    # base64 collapse included, before the handler's filters and the formatter.
-    if not _process_record(
-        record,
-        base64_limit=_get_max_base64_length_stdout_log(),
-        text_limit=0,
-        redact=_ENABLE_SECRET_REDACTION,
-    ):
+    # SQL, the policy list). It skips secret redaction too, which the print never had and whose sk-
+    # pattern turns a model named risk-assessment-gpt4o into riREDACTED. The processed record counts as
+    # scrubbed, so the handler's secret filter and the formatter leave it alone too.
+    if not _process_record(record, base64_limit=_get_max_base64_length_stdout_log(), text_limit=0, redact=False):
         return
     # The print wrote to stdout whatever the logging config said, so the record goes through the proxy's
     # own JSON handler on stdout rather than the proxy logger's handlers: uvicorn applies an operator

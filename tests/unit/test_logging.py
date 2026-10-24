@@ -2003,24 +2003,21 @@ def test_print_startup_message_keeps_a_listing_longer_than_the_stdout_cap_whole(
     assert record["message"] == listing
 
 
-def test_print_startup_message_still_redacts_a_secret_in_the_uncapped_record(monkeypatch, capfd):
-    """Skipping the stdout cap must not skip secret redaction: a startup message that echoes a credential,
-    such as a failed migration diff quoting the database error, goes out scrubbed."""
+def test_print_startup_message_keeps_a_model_name_the_secret_patterns_would_match(monkeypatch, capfd):
+    """The model list printed `risk-assessment-gpt4o` as configured; the sk- key pattern matches inside
+    that name, so the JSON record has to carry the name as the print did, not `riREDACTED`."""
     monkeypatch.setattr(litellm, "json_logs", True)
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
     turn_on_json()
+    assert secret_redaction.redact_string("risk-assessment-gpt4o") != "risk-assessment-gpt4o"
 
-    print_startup_message(
-        'Failed to generate migration diff. Error: {"api_key": "sk-abcdefghijklmnopqrstuvwxyz0123456789"}'
-    )
+    print_startup_message("\033[32m    risk-assessment-gpt4o\033[0m")
 
     out, err = capfd.readouterr()
     assert err == ""
     lines: Final = [raw for raw in out.splitlines() if raw.strip()]
     assert len(lines) == 1, lines
-    record: Final = json.loads(lines[0])
-    assert "sk-abcdefghijklmnopqrstuvwxyz0123456789" not in lines[0]
-    assert record["message"] == 'Failed to generate migration diff. Error: {"REDACTED"}'
+    assert json.loads(lines[0])["message"] == "    risk-assessment-gpt4o"
 
 
 def test_print_startup_message_blank_spacer_emits_no_json_record(monkeypatch, capfd):

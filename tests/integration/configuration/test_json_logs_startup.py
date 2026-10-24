@@ -8,8 +8,9 @@ startup information those lines used to carry is still present as JSON records. 
 on through the environment and through the config, at one and two uvicorn workers, at the INFO, the
 default and the WARNING log level, under a concurrent burst that lands on both workers, under an operator
 --log_config that names the proxy logger or gives it a handler of its own, and with a policy list longer
-than the stdout cap. The deprecated --enforce_prisma_migration_check notice is one JSON record under a
-config-only json_logs, and a boot whose config cannot be loaded still prints it before failing.
+than the stdout cap. The model list keeps a model name the secret patterns would match. The deprecated
+--enforce_prisma_migration_check notice is one JSON record under a config-only json_logs, and a boot whose
+config cannot be loaded still prints it before failing.
 """
 
 from __future__ import annotations
@@ -288,6 +289,20 @@ def test_json_logs_keeps_a_startup_listing_longer_than_the_stdout_cap_whole(gate
     assert TRUNCATION_MARKER not in listings[0], listings[0]
     for policy in policies:
         assert policy in listings[0], (policy, listings[0])
+
+
+def test_json_logs_model_list_keeps_a_model_name_the_secret_patterns_would_match(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """The model list printed every model name as configured. The sk- key pattern matches inside a name such as
+    `risk-assessment-...`, so the JSON record must carry that name as the print did, not `riREDACTED`."""
+    models: Final = (f"risk-assessment-{uuid.uuid4().hex}",)
+    config: Final = _write_config(tmp_path, gateway.upstream_url, models, {**CACHE_SETTINGS, "json_logs": True})
+
+    log: Final = _boot_serve_and_stop(gateway, tmp_path, config, {"LITELLM_LOG": "INFO"}, 1, models)
+
+    _assert_every_line_is_json(log, 1, models)
+    assert f"    {models[0]}" in _messages(log), _messages(log)
 
 
 def test_json_logs_default_level_keeps_every_line_json(gateway: Gateway, tmp_path: Path) -> None:
