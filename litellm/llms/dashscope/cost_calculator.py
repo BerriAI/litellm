@@ -7,6 +7,7 @@ cached, cache-creation, output, reasoning) is billed at that one tier's rate.
 See https://help.aliyun.com/zh/model-studio/billing-for-model-studio
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Final
@@ -75,7 +76,7 @@ def _flat_rates(model_info: ModelInfo) -> TokenRates:
     )
 
 
-def _tier_rates(model_info: ModelInfo, tier: dict) -> TokenRates:
+def _tier_rates(model_info: ModelInfo, tier: Mapping[str, object]) -> TokenRates:
     # A tier that declares output rates keeps the request on them, all-or-nothing. A tier table
     # spelling out only input rates would serve every completion for free, so there the model's
     # own output rates stand in
