@@ -1,4 +1,4 @@
-use sqlx::PgExecutor;
+use sqlx::{PgExecutor, PgPool, Postgres, Transaction};
 
 use crate::Error;
 
@@ -75,5 +75,23 @@ pub async fn add_end_user_spend(
     )
     .execute(executor)
     .await?;
+    Ok(())
+}
+
+pub async fn begin(pool: &PgPool) -> Result<Transaction<'static, Postgres>, Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query!("SELECT set_config('lock_timeout', '5000ms', true)")
+        .fetch_one(&mut *transaction)
+        .await?;
+    Ok(transaction)
+}
+
+pub async fn lock_team(
+    transaction: &mut Transaction<'_, Postgres>,
+    team_id: &str,
+) -> Result<(), Error> {
+    sqlx::query_file!("queries/spend/lock_team.sql", team_id)
+        .fetch_one(&mut **transaction)
+        .await?;
     Ok(())
 }
