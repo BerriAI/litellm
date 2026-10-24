@@ -9834,8 +9834,14 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.AZURE_AI == provider:
             from litellm.llms.azure_ai.common_utils import (
                 azure_ai_supports_native_responses,
+                is_foundry_project_agent,
+            )
+            from litellm.llms.azure_ai.responses.transformation import (
+                AzureAIAgentResponsesAPIConfig,
             )
 
+            if is_foundry_project_agent(model):
+                return AzureAIAgentResponsesAPIConfig()
             if azure_ai_supports_native_responses(model, api_base):
                 return litellm.AzureAIResponsesAPIConfig()
             return None
