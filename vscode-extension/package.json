@@ -2,7 +2,7 @@
   "name": "litellm-vscode",
   "displayName": "LiteLLM",
   "description": "Chat with every model behind your LiteLLM AI Gateway in VS Code, with live pricing and reasoning effort controls in the model picker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "litellm",
   "license": "MIT",
   "repository": {
