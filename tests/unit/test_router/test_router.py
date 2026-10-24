@@ -23,7 +23,7 @@ import pytest
 import respx
 from fastapi import HTTPException
 from opentelemetry import trace
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import APIConnectionError, Router
@@ -93,7 +93,7 @@ from litellm.llms.base_llm.vector_store.transformation import(
     LiteLLMVectorStoreEmbeddingExecutor,
     RouterVectorStoreEmbeddingExecutor,
 )
-from litellm.types.utils import CallTypes, CredentialItem
+from litellm.types.utils import CallTypes, CredentialItem, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
@@ -7889,6 +7889,29 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
         router._count_pre_call_check_tokens(messages=None, input=None)
 
 
+def test_count_pre_call_check_tokens_skips_the_history_a_compaction_item_replaces():
+    router = litellm.Router(model_list=[{"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}}])
+    summary: Final = "The user planned a Tokyo trip."
+    compaction_item: Final = {
+        "type": "compaction",
+        "id": "cmp_1",
+        "encrypted_content": json.dumps({"type": "compaction", "content": summary}),
+    }
+    history: Final = [
+        {"role": "user", "content": "Plan a Tokyo trip. " * 200},
+        {"role": "assistant", "content": "Day one, Asakusa. " * 200},
+    ]
+    next_turn: Final = {"role": "user", "content": "And Osaka?"}
+
+    compacted_tokens: Final = router._count_pre_call_check_tokens(
+        messages=None, input=[*history, compaction_item, next_turn]
+    )
+
+    assert compacted_tokens == router._count_pre_call_check_tokens(
+        messages=None, input=[{"role": "user", "content": summary}, next_turn]
+    )
+
+
 def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
     """
     When neither messages nor input is provided (e.g. endpoints without prompt text),
@@ -9671,6 +9694,26 @@ def test_update_kwargs_with_deployment_propagates_model_tags():
     assert "tags" in kwargs["metadata"]
     assert "openai-account" in kwargs["metadata"]["tags"]
     assert "production" in kwargs["metadata"]["tags"]
+
+
+def test_update_kwargs_with_deployment_merges_many_client_tags_in_linear_time():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key", "tags": ["deployment-tag"]},
+            },
+        ],
+    )
+    client_tags: Final = [f"client-{index}" for index in range(100_000)]
+    kwargs: Final = {"metadata": {"tags": client_tags}}
+    deployment: Final = router.get_deployment_by_model_group_name(model_group_name="gpt-4o-mini")
+
+    started: Final = time.perf_counter()
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert time.perf_counter() - started < 2
+    assert kwargs["metadata"]["tags"] == [*client_tags, "deployment-tag"]
 
 
 def test_update_kwargs_with_deployment_merges_tags_without_duplicates():
@@ -15175,7 +15218,7 @@ async def test_cyclic_fallback_graph_does_not_amplify_one_request():
 
 
 _FLAT_ATTEMPT_RECORD_KEYS = frozenset(
-    {"model_group", "deployment_id", "exception_type", "exception_string", "attempted_retries"}
+    {"model_group", "deployment_id", "model", "base_model", "exception_type", "exception_string", "attempted_retries"}
 )
 _BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
 
@@ -16706,6 +16749,7 @@ class _AnthropicMessagesFakeByteStream:
         self._hidden_params = {"additional_headers": {"x-amzn-requestid": "req-1"}}
         self.closed = False
         self.closed_as_superseded = False
+        self.close_contexts: tuple[bool, ...] = ()
 
     def __aiter__(self):
         return self
@@ -16716,6 +16760,7 @@ class _AnthropicMessagesFakeByteStream:
         return self._chunks.pop(0)
 
     async def aclose(self) -> None:
+        self.close_contexts = (*self.close_contexts, closing_superseded_attempt())
         self.closed_as_superseded = self.closed_as_superseded or closing_superseded_attempt()
         self.closed = True
 
@@ -17959,6 +18004,51 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
     assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
 
 
+class _AnthropicMessagesRetryStashRecorder:
+    def __init__(self) -> None:
+        self.observed: tuple[Usage | None, ...] = ()
+
+    def record(self, usage: Usage | None) -> None:
+        self.observed = (*self.observed, usage)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_opens_without_the_superseded_attempts_partial_usage() -> None:
+    """The dropped attempt's usage stays available for terminal billing without reaching the retry's success log."""
+    router: Final = _anthropic_messages_retry_router(num_retries=1)
+    logging_obj: Final = LiteLLMLogging(
+        model="glm",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="retry-own-usage",
+        function_id="retry-own-usage",
+    )
+    partial_usage: Final = Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53)
+    logging_obj.record_partial_usage_for_failure(partial_usage, 0.01)
+    stash_recorder: Final = _AnthropicMessagesRetryStashRecorder()
+    usage_adapter: Final = TypeAdapter(Usage | None)
+
+    def retry_stream() -> _AnthropicMessagesFakeByteStream:
+        stash_recorder.record(
+            usage_adapter.validate_python(logging_obj.model_call_details.get("combined_usage_object"))
+        )
+        return _anthropic_messages_retried_stream()
+
+    provider: Final = _AnthropicMessagesScriptedProvider(_anthropic_messages_dropped_before_content, retry_stream)
+
+    stream: Final = await _anthropic_messages_stream_through_router(
+        router, provider, litellm_logging_obj=logging_obj
+    )
+    body: Final = tuple([chunk async for chunk in stream])
+
+    assert stash_recorder.observed == (None,)
+    assert body == (_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong"))
+    assert "response_cost" not in logging_obj.model_call_details
+    assert logging_obj.model_call_details["failed_attempts_usage"] == ((partial_usage, 0.01),)
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_superseded_stream_is_closed_before_the_retry_opens():
     """Both attempts log through the request's one logging object, so the superseded attempt's end-of-stream
@@ -17981,6 +18071,7 @@ async def test_anthropic_messages_superseded_stream_is_closed_before_the_retry_o
 
     assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
     assert superseded_closed_when_retry_opened == [True]
+    assert superseded.close_contexts[0] is True
 
 
 @pytest.mark.asyncio
@@ -26055,6 +26146,359 @@ class TestRouterIndexManagement:
         )
 
 
+_PRIORITY_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-priority",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-5.4-nano",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "pong"}}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+_PRIORITY_MESSAGES: Final = [{"role": "user", "content": "Reply with the single word pong"}]
+
+
+def _priority_router(default_priority: int | None) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "qa-chat",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-priority-wire"},
+            }
+        ],
+        default_priority=default_priority,
+    )
+
+
+def _priority_provider(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.Route:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    return respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_PRIORITY_CHAT_COMPLETION)
+    )
+
+
+@pytest.mark.parametrize(
+    ("default_priority", "request_kwargs", "queued_priority"),
+    [
+        (3, {}, 3),
+        (3, {"priority": None}, 3),
+        (3, {"priority": 2}, 2),
+        (None, {"priority": 2}, 2),
+        (None, {"priority": 0}, 0),
+        (None, {"priority": "1"}, 1),
+        (None, {"priority": True}, 1),
+        (3, {"priority": 1.0}, 1),
+        (3, {"priority": "high", "drop_params": True}, 3),
+    ],
+)
+async def test_acompletion_queues_the_resolved_priority_exactly_once(
+    default_priority: int | None, request_kwargs: dict[str, object], queued_priority: int
+) -> None:
+    router: Final = _priority_router(default_priority)
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        response: Final = await router.acompletion(
+            model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong", **request_kwargs
+        )
+    assert add_request.await_count == 1
+    assert add_request.await_args.kwargs["request"].priority == queued_priority
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
+async def test_acompletion_without_any_priority_never_enters_the_scheduler() -> None:
+    router: Final = _priority_router(None)
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        response: Final = await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong")
+    assert add_request.await_count == 0
+    assert "x-litellm-request-prioritization-used" not in response._hidden_params.get("additional_headers", {})
+
+
+@pytest.mark.parametrize(
+    ("default_priority", "request_kwargs"), [(3, {}), (None, {"priority": 3})], ids=["default", "explicit"]
+)
+async def test_a_request_pinned_to_a_deployment_id_is_served_while_an_earlier_one_waits_in_the_queue(
+    default_priority: int | None, request_kwargs: dict[str, object]
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "qa-chat",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-priority-wire"},
+                "model_info": {"id": "qa-chat-deployment"},
+            }
+        ],
+        default_priority=default_priority,
+    )
+    await router.scheduler.add_request(FlowItem(priority=0, request_id="ahead", model_name="qa-chat-deployment"))
+    response: Final = await asyncio.wait_for(
+        router.acompletion(
+            model="qa-chat-deployment", messages=_PRIORITY_MESSAGES, mock_response="pong", **request_kwargs
+        ),
+        timeout=5,
+    )
+    assert response.choices[0].message.content == "pong"
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
+@pytest.mark.parametrize("priority", ["high", [1], 1.5])
+async def test_acompletion_rejects_a_non_integer_priority_before_the_provider_sees_it(
+    priority: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider: Final = _priority_provider(respx_mock, monkeypatch)
+    router: Final = _priority_router(3)
+    with pytest.raises(litellm.BadRequestError, match="priority must be an integer") as raised:
+        await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, priority=priority)
+    assert raised.value.param == "priority"
+    assert not provider.called
+
+
+async def test_acompletion_drops_a_non_integer_priority_from_the_provider_call_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider: Final = _priority_provider(respx_mock, monkeypatch)
+    router: Final = _priority_router(None)
+    await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, priority="high", drop_params=True)
+    assert "priority" not in json.loads(provider.calls.last.request.content)
+
+
+@pytest.mark.parametrize("priority", [0, "1"])
+async def test_acompletion_with_an_integer_priority_sends_no_priority_to_the_provider(
+    priority: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider: Final = _priority_provider(respx_mock, monkeypatch)
+    router: Final = _priority_router(None)
+    await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, priority=priority)
+    assert "priority" not in json.loads(provider.calls.last.request.content)
+
+
+async def test_schedule_acompletion_under_a_default_priority_queues_the_explicit_priority_once() -> None:
+    router: Final = _priority_router(3)
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        response: Final = await router.schedule_acompletion(
+            model="qa-chat", messages=_PRIORITY_MESSAGES, priority=1, mock_response="pong"
+        )
+    assert add_request.await_count == 1
+    assert add_request.await_args.kwargs["request"].priority == 1
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
+@pytest.mark.parametrize(
+    ("deployment_params", "router_defaults"),
+    [
+        ({}, {"drop_params": True}),
+        ({"drop_params": True}, {}),
+        ({"drop_params": "true"}, {}),
+        ({"additional_drop_params": ["priority"]}, {}),
+        ({}, {"additional_drop_params": ["priority"]}),
+    ],
+)
+async def test_acompletion_drops_a_non_integer_priority_under_the_router_or_deployment_drop_params(
+    deployment_params: dict[str, object], router_defaults: dict[str, object]
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "qa-chat",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-priority-wire", **deployment_params},
+            }
+        ],
+        default_priority=3,
+        default_litellm_params=router_defaults,
+    )
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        response: Final = await router.acompletion(
+            model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong", priority="high"
+        )
+    assert add_request.await_args.kwargs["request"].priority == 3
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
+@pytest.mark.parametrize(
+    ("deployment", "requested_model", "routing_fields"),
+    [
+        (
+            {
+                "model_name": "model_name_team-a_team-a-chat",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-priority-wire", "drop_params": True},
+                "model_info": {"id": "team-a-chat", "team_id": "team-a", "team_public_model_name": "team-chat"},
+            },
+            "team-chat",
+            {"metadata": {"user_api_key_team_id": "team-a"}},
+        ),
+        (
+            {
+                "model_name": "qa-chat",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-priority-wire", "drop_params": True},
+                "model_info": {"id": "qa-chat-deployment"},
+            },
+            "qa-chat-deployment",
+            {},
+        ),
+        (
+            {
+                "model_name": "qa-chat",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-priority-wire", "drop_params": True},
+            },
+            "openai/gpt-5.4-nano",
+            {"specific_deployment": True},
+        ),
+    ],
+    ids=["team-route", "deployment-id", "provider-model-name"],
+)
+async def test_deployment_drop_params_drop_a_non_integer_priority_on_every_deployment_route(
+    deployment: dict[str, object],
+    requested_model: str,
+    routing_fields: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    router: Final = Router(model_list=[deployment], default_priority=3)
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        response: Final = await router.acompletion(
+            model=requested_model,
+            messages=_PRIORITY_MESSAGES,
+            mock_response="pong",
+            priority="high",
+            **routing_fields,
+        )
+    assert add_request.await_args.kwargs["request"].priority == 3
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
+async def test_schedule_acompletion_queues_a_prompt_management_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "cached-chat",
+                "litellm_params": {
+                    "model": "anthropic_cache_control_hook/openai/gpt-5.4-nano",
+                    "api_key": "sk-priority-wire",
+                    "prompt_id": "cache-points",
+                },
+            }
+        ]
+    )
+    provider: Final = AsyncMock(return_value=litellm.ModelResponse())
+    monkeypatch.setattr(litellm, "acompletion", provider)
+    logging_obj: Final = LiteLLMLogging(
+        model="cached-chat",
+        messages=_PRIORITY_MESSAGES,
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="prompt-management-priority",
+        function_id="f",
+    )
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        response: Final = await router.schedule_acompletion(
+            model="cached-chat", messages=_PRIORITY_MESSAGES, priority=1, litellm_logging_obj=logging_obj
+        )
+    assert add_request.await_count == 1
+    assert add_request.await_args.kwargs["request"].priority == 1
+    assert provider.await_count == 1
+    assert "priority" not in provider.await_args.kwargs
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [(3, 3), ("3", 3), ("-1", -1), (0, 0), (None, None)],
+    ids=["int", "digit-string", "negative-string", "zero", "unset"],
+)
+def test_the_router_parses_default_priority_once_at_init(configured: object, expected: int | None) -> None:
+    assert _priority_router(configured).default_priority == expected
+
+
+@pytest.mark.parametrize("configured", ["high", 1.5, [3], False], ids=["word", "float", "list", "yaml-off"])
+def test_an_invalid_default_priority_is_ignored_with_a_warning(
+    configured: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        router: Final = _priority_router(configured)
+    assert router.default_priority is None
+    assert any("default_priority is ignored" in record.getMessage() for record in caplog.records), caplog.records
+
+
+async def test_an_invalid_default_priority_leaves_every_request_unscheduled() -> None:
+    router: Final = _priority_router("high")
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        response: Final = await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong")
+    assert add_request.await_count == 0
+    assert "x-litellm-request-prioritization-used" not in response._hidden_params.get("additional_headers", {})
+
+
+async def test_schedule_acompletion_without_a_priority_or_a_default_is_rejected_before_the_provider(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider: Final = _priority_provider(respx_mock, monkeypatch)
+    router: Final = _priority_router(None)
+    with pytest.raises(litellm.BadRequestError, match="priority is required") as raised:
+        await router.schedule_acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES)
+    assert raised.value.param == "priority"
+    assert not provider.called
+
+
+async def test_schedule_acompletion_without_a_priority_queues_the_default_once() -> None:
+    router: Final = _priority_router(3)
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        response: Final = await router.schedule_acompletion(
+            model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong"
+        )
+    assert add_request.await_count == 1
+    assert add_request.await_args.kwargs["request"].priority == 3
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+
+
+@pytest.mark.parametrize(
+    ("default_priority", "request_kwargs", "queued_priority"),
+    [
+        (3, {}, 3),
+        (3, {"priority": None}, 3),
+        (3, {"priority": 2}, 2),
+        (None, {"priority": 0}, 0),
+        (None, {"priority": "1"}, 1),
+        (3, {"priority": "high", "drop_params": True}, 3),
+    ],
+)
+async def test_atext_completion_queues_the_resolved_priority_exactly_once(
+    default_priority: int | None,
+    request_kwargs: dict[str, object],
+    queued_priority: int,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider: Final = _priority_provider(respx_mock, monkeypatch)
+    router: Final = _priority_router(default_priority)
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        response: Final = await router.atext_completion(model="qa-chat", prompt="pong?", **request_kwargs)
+    assert add_request.await_count == 1
+    assert add_request.await_args.kwargs["request"].priority == queued_priority
+    assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
+    assert "priority" not in json.loads(provider.calls.last.request.content)
+
+
+async def test_atext_completion_without_any_priority_never_enters_the_scheduler(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider: Final = _priority_provider(respx_mock, monkeypatch)
+    router: Final = _priority_router(None)
+    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+        response: Final = await router.atext_completion(model="qa-chat", prompt="pong?")
+    assert add_request.await_count == 0
+    assert "x-litellm-request-prioritization-used" not in response._hidden_params.get("additional_headers", {})
+    assert provider.called
+
+
+@pytest.mark.parametrize("priority", ["high", [1], 1.5])
+async def test_atext_completion_rejects_a_non_integer_priority_before_the_provider_sees_it(
+    priority: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider: Final = _priority_provider(respx_mock, monkeypatch)
+    router: Final = _priority_router(3)
+    with pytest.raises(litellm.BadRequestError, match="priority must be an integer") as raised:
+        await router.atext_completion(model="qa-chat", prompt="pong?", priority=priority)
+    assert raised.value.param == "priority"
+    assert not provider.called
+
+
 def test_router_multi_org_list() -> None:
     """
     Pass list of orgs in 1 model definition,
@@ -29295,3 +29739,237 @@ def test_pre_call_checks_ignores_an_image_response_format_string(monkeypatch: py
     )
 
     assert [d["model_info"]["id"] for d in filtered] == ["only"]
+
+
+@pytest.mark.parametrize(
+    ("deployment_stream_options", "default_stream_options", "request_stream_options", "usage_chunk_choice_count"),
+    [
+        ({"include_usage": True}, None, None, 1),
+        (None, {"include_usage": True}, None, 1),
+        ({"include_usage": True}, None, {"include_usage": True}, 0),
+        (None, None, {"include_usage": True}, 0),
+    ],
+    ids=["deployment-config", "router-default", "request-over-deployment", "request-only"],
+)
+@pytest.mark.asyncio
+async def test_router_configured_stream_usage_keeps_a_choice_on_the_usage_chunk(
+    deployment_stream_options: dict[str, bool] | None,
+    default_stream_options: dict[str, bool] | None,
+    request_stream_options: dict[str, bool] | None,
+    usage_chunk_choice_count: int,
+):
+    deployment_params: Final = {"model": "openai/gpt-5-mini", "api_key": "fake", "mock_response": "hi there"}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": (
+                    deployment_params
+                    if deployment_stream_options is None
+                    else {**deployment_params, "stream_options": deployment_stream_options}
+                ),
+            }
+        ],
+        default_litellm_params=None if default_stream_options is None else {"stream_options": default_stream_options},
+    )
+    request_kwargs: Final = {} if request_stream_options is None else {"stream_options": request_stream_options}
+
+    response: Final = await router.acompletion(
+        model="m", messages=[{"role": "user", "content": "hi"}], stream=True, **request_kwargs
+    )
+    chunks: Final = [chunk async for chunk in response]
+
+    assert getattr(chunks[-1], "usage", None) is not None
+    assert len(chunks[-1].choices) == usage_chunk_choice_count
+    assert all(len(chunk.choices) == 1 for chunk in chunks[:-1])
+
+
+@pytest.mark.parametrize(
+    ("stream_options", "marked_injected"),
+    [({"include_usage": True}, True), (None, False)],
+    ids=["include-usage", "no-stream-options"],
+)
+def test_update_kwargs_with_deployment_reads_stream_options_from_pydantic_litellm_params(
+    stream_options: dict[str, bool] | None, marked_injected: bool
+):
+    from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
+    from litellm.types.router import LiteLLM_Params
+
+    kwargs: Final[dict[str, object]] = {"stream": True, "metadata": {}}
+    Router()._update_kwargs_with_deployment(
+        deployment={
+            "model_name": "gpt-5-mini",
+            "litellm_params": LiteLLM_Params(model="openai/gpt-5-mini", api_key="fake-key", stream_options=stream_options),
+            "model_info": {"id": "pydantic-params"},
+        },
+        kwargs=kwargs,
+    )
+
+    assert (kwargs.get(STREAM_USAGE_INJECTED_FIELD) is True) is marked_injected
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_streams_tokens():
+    """After a mid-stream hop, a disconnect bills the primary's relayed text plus the fallback's, not the fallback alone."""
+    import json
+
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+    def _relayed_iterator(text: str) -> ResponsesAPIStreamingIterator:
+        logging_obj: Final = MagicMock(spec=LiteLLMLogging)
+        logging_obj.model_call_details = {"litellm_params": {}}
+        logging_obj.completion_start_time = None
+        iterator: Final = ResponsesAPIStreamingIterator(
+            response=httpx.Response(200),
+            model="gpt-5.4",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=logging_obj,
+            request_data={"model": "gpt-5.4", "input": "Hi"},
+            custom_llm_provider="openai",
+        )
+        created: Final = {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1700000000.0,
+            "model": "gpt-5.4",
+            "status": "in_progress",
+            "output": [],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+        }
+        iterator._process_chunk(json.dumps({"type": "response.created", "sequence_number": 0, "response": created}))
+        iterator._process_chunk(
+            json.dumps(
+                {
+                    "type": "response.output_text.delta",
+                    "sequence_number": 1,
+                    "item_id": "msg_1",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": text,
+                }
+            )
+        )
+        return iterator
+
+    router: Final = Router(
+        model_list=[{"model_name": "primary", "litellm_params": {"model": "openai/gpt-5.4", "api_key": "k"}}]
+    )
+    primary: Final = _relayed_iterator("Once upon a time there was a lighthouse keeper")
+    fallback: Final = _relayed_iterator("who lit the lamp")
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": AsyncMock()},
+    )
+    primary_tokens: Final = primary.partial_response_on_disconnect().response.usage.output_tokens
+    fallback_tokens: Final = fallback.partial_response_on_disconnect().response.usage.output_tokens
+
+    assert wrapped.partial_response_on_disconnect().response.usage.output_tokens == primary_tokens
+
+    wrapped.adopt_fallback_headers(fallback)
+
+    assert wrapped.partial_response_on_disconnect().response.usage.output_tokens == primary_tokens + fallback_tokens
+
+
+_IMAGE_PART = {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
+_IMAGE_CHAT = [{"role": "user", "content": [{"type": "text", "text": "What is in this image?"}, _IMAGE_PART]}]
+_IMAGE_RESPONSES_INPUT = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "What is in this image?"},
+            {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo="},
+        ],
+    }
+]
+_VISION_LEG: Final[dict[str, object]] = {"litellm_params": {"model": "openai/gpt-5.6-terra"}, "model_info": {"id": "vision"}}
+_DECLARED_TEXT_LEG: Final[dict[str, object]] = {
+    "litellm_params": {"model": "bedrock/openai.gpt-oss-120b-1:0"},
+    "model_info": {"id": "declared-text", "supports_vision": False},
+}
+
+
+def _pre_call_router(*deployments: dict[str, object], routing_strategy: str = "latency-based-routing") -> litellm.Router:
+    return litellm.Router(
+        model_list=[{"model_name": "mixed", **deployment} for deployment in deployments],
+        routing_strategy=routing_strategy,
+        enable_pre_call_checks=True,
+    )
+
+
+def _pre_call_ids(router: litellm.Router, deployments: tuple[dict[str, object], ...], **request: object) -> list[str]:
+    return [d["model_info"]["id"] for d in router._pre_call_checks(model="mixed", healthy_deployments=list(deployments), **request)]
+
+
+def test_pre_call_checks_drop_declared_text_only_legs_for_image_requests():
+    router = _pre_call_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    assert _pre_call_ids(router, (_VISION_LEG, _DECLARED_TEXT_LEG), messages=_IMAGE_CHAT) == ["vision"]
+
+
+def test_pre_call_checks_keep_declared_text_only_legs_for_text_requests():
+    router = _pre_call_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    assert _pre_call_ids(router, (_VISION_LEG, _DECLARED_TEXT_LEG), messages=[{"role": "user", "content": "Say hi"}]) == [
+        "vision",
+        "declared-text",
+    ]
+
+
+def test_pre_call_checks_drop_declared_text_only_legs_for_responses_input_image():
+    router = _pre_call_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    assert _pre_call_ids(
+        router, (_VISION_LEG, _DECLARED_TEXT_LEG), messages=None, request_kwargs={"input": _IMAGE_RESPONSES_INPUT}
+    ) == ["vision"]
+
+
+def test_pre_call_checks_send_image_to_the_group_when_every_leg_is_declared_text_only():
+    other_text_leg = {**_DECLARED_TEXT_LEG, "model_info": {"id": "declared-text-2", "supports_vision": False}}
+    router = _pre_call_router(_DECLARED_TEXT_LEG, other_text_leg)
+    assert _pre_call_ids(router, (_DECLARED_TEXT_LEG, other_text_leg), messages=_IMAGE_CHAT) == [
+        "declared-text",
+        "declared-text-2",
+    ]
+
+
+def test_pre_call_checks_keep_undeclared_custom_legs_for_image_requests():
+    custom_leg = {
+        "litellm_params": {"model": "hosted_vllm/Qwen2.5-VL-7B-Instruct", "api_base": "http://localhost:8000"},
+        "model_info": {"id": "custom"},
+    }
+    router = _pre_call_router(_VISION_LEG, custom_leg)
+    assert _pre_call_ids(router, (_VISION_LEG, custom_leg), messages=_IMAGE_CHAT) == ["vision", "custom"]
+
+
+def test_pre_call_checks_resolve_vision_through_the_cost_map_and_base_model():
+    catalog_text_leg = {"litellm_params": {"model": "bedrock/deepseek.v3.2"}, "model_info": {"id": "catalog-text"}}
+    azure_text_leg = {
+        "litellm_params": {"model": "azure/my-audio-deployment", "api_base": "https://x.openai.azure.com"},
+        "model_info": {"id": "azure-text", "base_model": "azure/gpt-audio"},
+    }
+    router = _pre_call_router(_VISION_LEG, catalog_text_leg, azure_text_leg)
+    assert _pre_call_ids(router, (_VISION_LEG, catalog_text_leg, azure_text_leg), messages=_IMAGE_CHAT) == ["vision"]
+
+
+@pytest.mark.parametrize(
+    ("deployment", "expected"),
+    [
+        (_DECLARED_TEXT_LEG, True),
+        ({"litellm_params": {"model": "bedrock/openai.gpt-oss-120b-1:0"}, "model_info": {"supports_vision": True}}, False),
+        ({"litellm_params": {"model": "bedrock/deepseek.v3.2"}, "model_info": {}}, True),
+        ({"litellm_params": {"model": "azure/my-deploy"}, "model_info": {"base_model": "azure/gpt-audio"}}, True),
+        ({"litellm_params": {"model": "hosted_vllm/Qwen2.5-VL-7B-Instruct"}, "model_info": {}}, False),
+        ({"litellm_params": {"model": "no-such-model-anywhere"}, "model_info": {}}, False),
+        ({"litellm_params": {}, "model_info": {}}, False),
+    ],
+    ids=["override-false", "override-true", "cost-map-false", "base-model-false", "undeclared", "unresolvable", "no-params"],
+)
+def test_deployment_declares_no_vision_reads_the_override_then_the_cost_map(deployment: dict[str, object], expected: bool):
+    assert litellm.Router._deployment_declares_no_vision(deployment, "mixed") is expected
+
+
+def test_request_carries_image_sees_chat_parts_and_responses_input_items():
+    assert litellm.Router._request_carries_image(_IMAGE_CHAT, {}) is True
+    assert litellm.Router._request_carries_image(None, {"input": _IMAGE_RESPONSES_INPUT}) is True
+    assert litellm.Router._request_carries_image([{"role": "user", "content": "Say hi"}], {}) is False
+    assert litellm.Router._request_carries_image(None, {"input": "Say hi"}) is False

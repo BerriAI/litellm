@@ -3566,6 +3566,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         "field",
         [
             "aws_bedrock_runtime_endpoint",
+            "aws_bedrock_control_plane_endpoint",
             "langsmith_base_url",
             "langfuse_host",
             "posthog_host",
@@ -3899,6 +3900,38 @@ class TestIsRequestBodySafeBlocksNVCFFunctionOverride:
             )
             is True
         )
+
+
+def test_riva_offline_in_request_body_is_rejected() -> None:
+    with pytest.raises(ValueError, match="riva_offline"):
+        is_request_body_safe(
+            request_body={"model": "nvidia_riva/parakeet", "riva_offline": True},
+            general_settings={},
+            llm_router=None,
+            model="nvidia_riva/parakeet",
+        )
+
+
+def test_admin_opt_in_proxy_wide_allows_riva_offline() -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "nvidia_riva/parakeet", "riva_offline": True},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="nvidia_riva/parakeet",
+        )
+        is True
+    )
+
+
+def test_api_base_override_keeps_the_deployments_riva_offline_mode() -> None:
+    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+    out: Final = get_dynamic_litellm_params(
+        litellm_params={"model": "nvidia_riva/nvidia/parakeet-0.6b-tdt", "riva_offline": True},
+        request_kwargs={"api_base": "caller-riva:50051"},
+    )
+    assert (out["api_base"], out["riva_offline"]) == ("caller-riva:50051", True)
 
 
 class TestIsRequestBodySafeBlocksRivaUseSsl:
@@ -5087,7 +5120,7 @@ def test_get_model_from_request_vertex_ai_passthrough(request_data, route, expec
 
 @pytest.mark.parametrize(
     "field",
-    ["github_copilot_auth_type", "user_provider_credentials", "github_copilot_user_session"],
+    ["github_copilot_auth_type", "github_copilot_host", "user_provider_credentials", "github_copilot_user_session"],
 )
 def test_per_user_credential_slots_in_request_body_are_rejected(field: str) -> None:
     """The per-user Copilot mode is decided by the stored credential's values and the caller's

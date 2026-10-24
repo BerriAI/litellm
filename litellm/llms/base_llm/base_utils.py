@@ -5,9 +5,11 @@ Utility functions for base LLM classes.
 import copy
 import itertools
 import json
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
@@ -39,6 +41,7 @@ class BaseTokenCounter(ABC):
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         pass
 
@@ -172,7 +175,7 @@ _convert_tool_response_to_message = convert_tool_response_to_message
 
 @dataclass(frozen=True, slots=True)
 class ResponseFormatSchema:
-    property_names: frozenset[str]
+    declared_names: frozenset[str]
     required_names: frozenset[str] = frozenset()
     allows_undeclared_keys: bool = False
 
@@ -216,9 +219,10 @@ def response_format_schema(value: object) -> ResponseFormatSchema | None:
     properties: Final = as_json_object(document.get("properties", {}))
     if properties is None:
         return None
+    required_names: Final = _names(document.get("required", ()))
     return ResponseFormatSchema(
-        property_names=frozenset(properties),
-        required_names=_names(document.get("required", ())),
+        declared_names=frozenset(properties) | required_names,
+        required_names=required_names,
         allows_undeclared_keys=_allows_undeclared_keys(document),
     )
 
@@ -244,8 +248,9 @@ def _json_object_or_encoded_object(value: JsonValue) -> Mapping[str, JsonValue] 
 def _label_keys(payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema) -> frozenset[str]:
     if not schema.required_names:
         return frozenset()
-    declared: Final = schema.property_names | schema.required_names
-    return frozenset(key for key, value in payload_object.items() if isinstance(value, str) and key not in declared)
+    return frozenset(
+        key for key, value in payload_object.items() if isinstance(value, str) and key not in schema.declared_names
+    )
 
 
 def _envelope_layer(
@@ -256,7 +261,7 @@ def _envelope_layer(
     )
     label_keys: Final = name_keys or _label_keys(payload_object, schema)
     wrapper_keys: Final = tuple(key for key in payload_object if key not in label_keys)
-    if len(wrapper_keys) != 1 or wrapper_keys[0] in schema.property_names:
+    if len(wrapper_keys) != 1 or wrapper_keys[0] in schema.declared_names:
         return None
     wrapped: Final = payload_object[wrapper_keys[0]]
     inner: Final = _json_object_or_encoded_object(wrapped) if name_keys else as_json_object(wrapped)
@@ -275,15 +280,16 @@ def _envelope_layers(
 def _schema_object_inside_envelope(
     payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema, tool_name: str
 ) -> Mapping[str, JsonValue] | None:
-    layers: Final = _envelope_layers(payload_object, schema, tool_name)
-    candidates: Final = layers if schema.property_names else itertools.islice(layers, 1)
-    return next((layer.inner for layer in candidates if _holds_the_schema_object(layer, schema)), None)
+    walk: Final = _envelope_layers(payload_object, schema, tool_name)
+    layers: Final = tuple(walk if schema.declared_names else itertools.islice(walk, 1))
+    schema_object: Final = next((layer.inner for layer in layers if _shares_a_schema_key(layer.inner, schema)), None)
+    if schema_object is not None:
+        return schema_object
+    return next((layer.inner for layer in layers if layer.names_the_tool), None)
 
 
-def _holds_the_schema_object(layer: _EnvelopeLayer, schema: ResponseFormatSchema) -> bool:
-    if layer.names_the_tool:
-        return True
-    return not schema.accepts_a_lone_undeclared_key and not schema.property_names.isdisjoint(layer.inner)
+def _shares_a_schema_key(candidate: Mapping[str, JsonValue], schema: ResponseFormatSchema) -> bool:
+    return not schema.accepts_a_lone_undeclared_key and not schema.declared_names.isdisjoint(candidate)
 
 
 def response_format_envelope_contents(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object | None:
@@ -293,7 +299,15 @@ def response_format_envelope_contents(payload: object, schema: ResponseFormatSch
     schema_object: Final = _schema_object_inside_envelope(payload_object, schema, tool_name)
     if schema_object is not None:
         return schema_object
-    return None if "values" in schema.property_names else payload_object.get("values")
+    return None if "values" in schema.declared_names else payload_object.get("values")
+
+
+_LONE_SURROGATE: Final = re.compile("[\ud800-\udfff]")
+
+
+def response_format_answer_json(value: object) -> str:
+    text: Final = json.dumps(value, ensure_ascii=False)
+    return json.dumps(value) if _LONE_SURROGATE.search(text) else text
 
 
 def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object:
@@ -305,7 +319,7 @@ def _field_names(
     blocks: tuple[Mapping[str, JsonValue], ...], key: str, schema: ResponseFormatSchema
 ) -> tuple[str, ...] | None:
     values: Final = (block[key] for block in blocks)
-    names: Final = tuple(value for value in values if isinstance(value, str) and value in schema.property_names)
+    names: Final = tuple(value for value in values if isinstance(value, str) and value in schema.declared_names)
     return names if len(frozenset(names)) == len(blocks) else None
 
 
@@ -324,7 +338,7 @@ def _split_answer_fields(
     blocks: tuple[Mapping[str, JsonValue], ...], schema: ResponseFormatSchema
 ) -> Mapping[str, JsonValue] | None:
     keys: Final = frozenset(blocks[0])
-    if not keys.isdisjoint(schema.property_names) or any(frozenset(block) != keys for block in blocks):
+    if not keys.isdisjoint(schema.declared_names) or any(frozenset(block) != keys for block in blocks):
         return None
     named: Final = tuple((key, names) for key in keys if (names := _field_names(blocks, key, schema)) is not None)
     if len(named) != 1:
@@ -340,7 +354,7 @@ def _merged_partial_answers(
     blocks: tuple[Mapping[str, JsonValue], ...], schema: ResponseFormatSchema
 ) -> Mapping[str, JsonValue] | None:
     keys: Final = frozenset(itertools.chain.from_iterable(blocks))
-    if not keys <= schema.property_names or len(keys) != sum(len(block) for block in blocks):
+    if not keys <= schema.declared_names or len(keys) != sum(len(block) for block in blocks):
         return None
     return dict(itertools.chain.from_iterable(block.items() for block in blocks))
 
@@ -358,14 +372,14 @@ def split_response_format_answer(
 
 def partial_response_format_answer(encoded_block: str, schema: ResponseFormatSchema) -> Mapping[str, JsonValue] | None:
     block: Final = _json_object_or_encoded_object(encoded_block)
-    return block if block is not None and frozenset(block) <= schema.property_names else None
+    return block if block is not None and frozenset(block) <= schema.declared_names else None
 
 
 def names_a_response_format_property(encoded_block: str, schema: ResponseFormatSchema) -> bool:
     block: Final = _json_object_or_encoded_object(encoded_block)
     if block is None:
         return False
-    return any(isinstance(value, str) and value in schema.property_names for value in block.values())
+    return any(isinstance(value, str) and value in schema.declared_names for value in block.values())
 
 
 def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:

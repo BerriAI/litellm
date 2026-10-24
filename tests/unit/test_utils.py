@@ -90,7 +90,6 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_embeddings,
     ProviderConfigManager,
-    TextCompletionStreamWrapper,
     _check_provider_match,
     get_potential_model_names,
     _is_litellm_router_call,
@@ -1073,6 +1072,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "image_edit",
                         "embedding",
                         "evaluation",
+                        "extraction",
                         "guardrail",
                         "image_generation",
                         "video_generation",
@@ -1259,6 +1259,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "web_search_billing_unit": {
                     "type": "string",
                     "enum": ["per_prompt", "per_query"],
+                },
+                "search_free_requests": {
+                    "type": "object",
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 1},
+                        "period": {"type": "string", "enum": ["day", "month"]},
+                        "shared_group": {"type": "string"},
+                    },
+                    "required": ["count", "period", "shared_group"],
+                    "additionalProperties": False,
                 },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
@@ -2359,7 +2369,6 @@ def test_register_model_with_scientific_notation():
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
 @respx.mock
 def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
@@ -2516,41 +2525,6 @@ def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
     assert f"gemini/{deployment_id}" not in listed
     assert deployment_id not in litellm.models_by_provider["gemini"]
     assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.000001
-
-
-def test_reasoning_content_preserved_in_text_completion_wrapper():
-    """Ensure reasoning_content is copied from delta to text_choices."""
-    chunk = ModelResponseStream(
-        id="test-id",
-        created=1234567890,
-        model="test-model",
-        object="chat.completion.chunk",
-        choices=[
-            StreamingChoices(
-                finish_reason=None,
-                index=0,
-                delta=Delta(
-                    content="Some answer text",
-                    role="assistant",
-                    reasoning_content="Here's my chain of thought...",
-                ),
-            )
-        ],
-    )
-
-    wrapper = TextCompletionStreamWrapper(
-        completion_stream=None,  # Not used in convert_to_text_completion_object
-        model="test-model",
-        stream_options=None,
-    )
-
-    transformed = wrapper.convert_to_text_completion_object(chunk)
-
-    assert "choices" in transformed
-    assert len(transformed["choices"]) == 1
-    choice = transformed["choices"][0]
-    assert choice["text"] == "Some answer text"
-    assert choice["reasoning_content"] == "Here's my chain of thought..."
 
 
 def test_anthropic_claude_4_invoke_chat_provider_config():
@@ -3881,6 +3855,114 @@ class TestCallbackAsyncSyncSeparation:
         assert my_sync_cb not in litellm._async_input_callback
 
 
+class _DropsACallbackFromAnotherThreadWhenComparedToDynamodb:
+    def __init__(self, dropped: Callable[..., object]) -> None:
+        self.dropped = dropped
+        self.drop_thread: threading.Thread | None = None
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str) and other == "dynamodb" and self.drop_thread is None:
+            self.drop_thread = threading.Thread(
+                target=litellm.logging_callback_manager.drop_callbacks, args=((self.dropped,),)
+            )
+            self.drop_thread.start()
+            self.drop_thread.join(timeout=0.2)
+        return self is other
+
+    __hash__ = object.__hash__
+
+
+def test_function_setup_moves_async_callbacks_while_another_thread_drops_a_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def dropped_callback(*args: object, **kwargs: object) -> None:
+        return None
+
+    async def async_callback(*args: object, **kwargs: object) -> None:
+        return None
+
+    drops_on_compare: Final = _DropsACallbackFromAnotherThreadWhenComparedToDynamodb(dropped_callback)
+    monkeypatch.setattr(litellm.utils, "callback_list", ["initialized"])
+    for list_name in (
+        "callbacks",
+        "input_callback",
+        "failure_callback",
+        "service_callback",
+        "_async_input_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, list_name, [])
+    monkeypatch.setattr(litellm, "success_callback", [dropped_callback, drops_on_compare, async_callback])
+
+    litellm.utils.function_setup(
+        "completion",
+        litellm.utils.Rules(),
+        datetime.now(),
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id="callback-drop-race",
+    )
+    assert drops_on_compare.drop_thread is not None
+    drops_on_compare.drop_thread.join()
+
+    assert litellm.success_callback == [drops_on_compare]
+    assert litellm._async_success_callback == [async_callback]
+
+
+class _DropsACallbackFromAnotherThreadWhenComparedToSentry:
+    def __init__(self, dropped: Callable[..., object]) -> None:
+        self.dropped = dropped
+        self.drop_thread: threading.Thread | None = None
+        self.drop_finished_during_logger_setup = False
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str) and other == "sentry" and self.drop_thread is None:
+            self.drop_thread = threading.Thread(
+                target=litellm.logging_callback_manager.drop_callbacks, args=((self.dropped,),)
+            )
+            self.drop_thread.start()
+            self.drop_thread.join(timeout=5)
+            self.drop_finished_during_logger_setup = not self.drop_thread.is_alive()
+        return self is other
+
+    __hash__ = object.__hash__
+
+
+def test_function_setup_lets_other_threads_drop_callbacks_while_it_sets_up_loggers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def dropped_callback(*args: object, **kwargs: object) -> None:
+        return None
+
+    drops_on_compare: Final = _DropsACallbackFromAnotherThreadWhenComparedToSentry(dropped_callback)
+    monkeypatch.setattr(litellm.utils, "callback_list", [])
+    for list_name in (
+        "callbacks",
+        "input_callback",
+        "failure_callback",
+        "service_callback",
+        "_async_input_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, list_name, [])
+    monkeypatch.setattr(litellm, "success_callback", [drops_on_compare])
+
+    litellm.utils.function_setup(
+        "completion",
+        litellm.utils.Rules(),
+        datetime.now(),
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id="logger-setup-outside-lock",
+    )
+    assert drops_on_compare.drop_thread is not None
+    drops_on_compare.drop_thread.join()
+
+    assert drops_on_compare.drop_finished_during_logger_setup
+
+
 class TestMetadataNoneHandling:
     """
     Test that metadata=None in kwargs doesn't cause TypeError.
@@ -4803,8 +4885,7 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
 @pytest.mark.parametrize("rate", (0.0, 0.000123))
 @pytest.mark.parametrize("updated_rate", (None, 0.0, 0.000456))
 def test_reapply_runtime_registrations_replays_register_model_overrides(
@@ -4833,7 +4914,8 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
     # installed would make this depend on when that happens.
     monkeypatch.setattr(litellm_utils._LiveDeploymentReplay, "callback", None)
 
-    saved_model_cost = litellm.model_cost
+    saved_model_cost: Final = litellm.model_cost
+    monkeypatch.setattr(litellm, "model_cost", dict(saved_model_cost))
     try:
         litellm.register_model(
             model_cost={
@@ -4871,8 +4953,7 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
         _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-@pytest.mark.usefixtures("isolated_openai_model_sets")
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
 def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkeypatch):
     """
     Per-request custom pricing describes one call, so it must not be re-asserted
@@ -9370,7 +9451,7 @@ def test_models_by_provider():
             continue
         elif v["litellm_provider"] == "sagemaker" or v["litellm_provider"] == "bedrock_converse":
             continue
-        elif v.get("mode") in ("search", "decisions", "evaluation"):
+        elif v.get("mode") in ("search", "decisions", "evaluation", "extraction"):
             continue
         else:
             providers.add(v["litellm_provider"])
@@ -10703,3 +10784,18 @@ def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_e
 
     assert optional_params["extra_body"] == {"kept": True}
     assert "cache_control_injection_points" not in optional_params
+
+
+def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_litellm_proxy():
+    """A litellm_proxy deployment calls the downstream proxy through the OpenAI SDK, and that proxy
+    applies cache_control_injection_points itself, so the point must ride along in extra_body."""
+    point: Final = {"location": "tool_config", "control": {"type": "ephemeral"}}
+    optional_params: Final[dict[str, object]] = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="litellm_proxy",
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[point],
+        extra_body={"kept": True},
+    )
+
+    assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}

@@ -31,7 +31,7 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
 from litellm.types.llms.base import CachedTokensDetails
-from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
@@ -352,6 +352,72 @@ def test_completion_cost_prices_rule_only_response_model_at_the_azure_deployment
         completion_response=response,
         model=deployment_model,
         custom_llm_provider="azure",
+    )
+
+    assert cost == pytest.approx(usage.prompt_tokens * 0.0000111 + usage.completion_tokens * 0.0000222)
+
+
+@pytest.mark.parametrize("region", ["eu", "us"])
+@pytest.mark.parametrize(
+    ("alias", "dated"),
+    [
+        ("o1", "o1-2024-12-17"),
+        ("o3", "o3-2025-04-16"),
+        ("o3-mini", "o3-mini-2025-01-31"),
+        ("o4-mini", "o4-mini-2025-04-16"),
+        ("gpt-4o", "gpt-4o-2024-11-20"),
+        ("gpt-4o-mini", "gpt-4o-mini-2024-07-18"),
+    ],
+)
+def test_completion_cost_bills_undated_azure_data_zone_base_model_at_its_dated_rate(
+    _local_model_cost_map: None, region: str, alias: str, dated: str
+) -> None:
+    """LIT-9812: a deployment with base_model azure/eu/o3 (undated, like the global azure/o3) must bill the EU
+    Data Zone rate of its latest dated row, not $0 and not the global rate"""
+    dated_info: Final = litellm.model_cost[f"azure/{region}/{dated}"]
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(model=dated, choices=[], usage=usage)
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="azure/my-data-zone-deployment",
+        custom_llm_provider="azure",
+        base_model=f"azure/{region}/{alias}",
+    )
+
+    assert cost == pytest.approx(
+        usage.prompt_tokens * dated_info["input_cost_per_token"]
+        + usage.completion_tokens * dated_info["output_cost_per_token"]
+    )
+
+
+def test_completion_cost_prices_rule_only_base_model_from_the_response_model(
+    _local_model_cost_map: None,
+    _price_free_gpt_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LIT-9812: a deployment whose base_model is an undated name only a capability rule matches must not
+    stop the ladder at $0 when the response names a priced model"""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "azure/gpt-9.9-2026-01-01": {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "input_cost_per_token": 0.0000111,
+                "output_cost_per_token": 0.0000222,
+            }
+        },
+    )
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(model="gpt-9.9-2026-01-01", choices=[], usage=usage)
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="azure/my-eu-deployment",
+        custom_llm_provider="azure",
+        base_model="azure/eu/gpt-9.9",
     )
 
     assert cost == pytest.approx(usage.prompt_tokens * 0.0000111 + usage.completion_tokens * 0.0000222)
@@ -9066,6 +9132,33 @@ def test_azure_tts_cost_uses_test_owned_character_rate(monkeypatch: pytest.Monke
     )
 
     assert cost == pytest.approx(0.05)
+
+
+def test_speech_cost_with_custom_pricing_bills_the_reported_usage() -> None:
+    usage: Final = Usage(
+        prompt_tokens=10,
+        completion_tokens=1000,
+        total_tokens=1010,
+        completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=1000),
+    )
+    response: Final = HttpxBinaryResponseContent(
+        httpx.Response(200, content=b"RIFF....WAVE", headers={"content-type": "audio/wav"})
+    )
+    response.usage = usage
+    rates: Final = MappingProxyType({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-5})
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="vertex_ai/gemini-3.1-flash-tts-preview",
+        call_type="speech",
+        prompt="Say hello",
+        custom_cost_per_token=dict(rates),
+    )
+
+    assert cost == pytest.approx(
+        usage.prompt_tokens * rates["input_cost_per_token"]
+        + usage.completion_tokens * rates["output_cost_per_token"]
+    )
 
 
 def test_moderation_cost_uses_test_owned_token_rate() -> None:

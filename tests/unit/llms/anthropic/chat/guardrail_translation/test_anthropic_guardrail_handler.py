@@ -18,6 +18,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import Streami
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
+from litellm.llms.anthropic.pass_through.adapters.transformation import truncate_tool_name
 from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 
@@ -2691,6 +2692,143 @@ class TestStructuredWriteBackKeepsToolResults:
             {"type": "text", "text": masked},
             {"type": "text", "text": "log for <EMAIL>"},
         ]
+
+
+class NamelessComputerToolGuardrail(CustomGuardrail):
+    """Guardrail that appends an OpenAI-format computer tool without a function name."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        computer = {"display_width_px": 1024, "display_height_px": 768}
+        inputs["tools"] = [
+            *(inputs.get("tools") or []),
+            {"type": "computer_20250124", "function": {"parameters": computer}},
+        ]
+        return inputs
+
+
+class TestLongToolNamesSurviveTheWriteBack:
+    """Names over OpenAI's 64-char limit are shortened only for the guardrail, never in the request (LIT-9528)."""
+
+    _PREFIX: Final = "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspace"
+    _SHORT_NAMES: Final = {"searched": "searched_tool", "called": "called_tool", "dropped": "dropped_tool"}
+    _LONG_NAMES: Final = {
+        "searched": _PREFIX + "Resources",
+        "called": _PREFIX + "Projects",
+        "dropped": _PREFIX + "Archives",
+    }
+
+    @staticmethod
+    def _tool(name: str) -> dict:
+        return {"name": name, "description": "Returns OK", "input_schema": {"type": "object", "properties": {}}}
+
+    def _request(self, searched: str, called: str, dropped: str) -> dict:
+        return {
+            "model": "claude-sonnet-5-5",
+            "tools": [self._tool("ToolSearch"), self._tool(searched), self._tool(called)],
+            "tool_choice": {"type": "tool", "name": called},
+            "messages": [
+                {"role": "user", "content": "find the tools for bob@example.com"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Searching."},
+                        {"type": "tool_use", "id": "toolu_01", "name": "ToolSearch", "input": {"query": "x"}},
+                        {"type": "tool_use", "id": "toolu_02", "name": called, "input": {"page": 2}},
+                        {"type": "tool_use", "id": "toolu_03", "name": dropped, "input": {"all": True}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_01",
+                            "content": [{"type": "tool_reference", "tool_name": searched}],
+                        },
+                        {"type": "tool_result", "tool_use_id": "toolu_02", "content": "OK"},
+                        {"type": "tool_result", "tool_use_id": "toolu_03", "content": "OK"},
+                    ],
+                },
+                {"role": "user", "content": "say done"},
+            ],
+        }
+
+    async def _processed(self, guardrail: CustomGuardrail, names: dict) -> dict:
+        data = self._request(**names)
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+        return {key: value for key, value in data.items() if key != "metadata"}
+
+    def _with_long_names(self, processed: dict) -> dict:
+        text = json.dumps(processed)
+        for role, short in self._SHORT_NAMES.items():
+            text = text.replace(f'"{short}"', f'"{self._LONG_NAMES[role]}"')
+        return json.loads(text)
+
+    @pytest.mark.parametrize(
+        "guardrail",
+        [
+            MockPassThroughGuardrail(guardrail_name="test"),
+            ToolAppendingGuardrail(guardrail_name="test"),
+            MockStructuredMaskingGuardrail(),
+        ],
+        ids=["echoed-tools", "injected-tool", "rewritten-messages"],
+    )
+    async def test_long_tool_names_come_back_exactly_like_short_ones(self, guardrail):
+        short = await self._processed(guardrail, self._SHORT_NAMES)
+        long = await self._processed(guardrail, self._LONG_NAMES)
+
+        assert long == self._with_long_names(short)
+        assert long["tool_choice"] == {"type": "tool", "name": self._LONG_NAMES["called"]}
+
+    @pytest.mark.parametrize(
+        "guardrail",
+        [MockPassThroughGuardrail(guardrail_name="test"), MockStructuredMaskingGuardrail()],
+        ids=["echoed-tools", "rewritten-messages"],
+    )
+    async def test_short_tool_named_like_a_shortened_history_tool_keeps_its_name(self, guardrail):
+        alias = truncate_tool_name(self._LONG_NAMES["dropped"])
+        names = {**self._LONG_NAMES, "called": alias}
+
+        data = await self._processed(guardrail, names)
+
+        assert [tool["name"] for tool in data["tools"]] == ["ToolSearch", self._LONG_NAMES["searched"], alias]
+        assert data["tool_choice"] == {"type": "tool", "name": alias}
+        assert data["messages"][1]["content"][2] == {
+            "type": "tool_use",
+            "id": "toolu_02",
+            "name": alias,
+            "input": {"page": 2},
+        }
+
+    async def test_history_tool_with_the_same_shortened_name_cannot_rename_a_declared_tool(self):
+        declared, historical = (
+            "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_7aeb",
+            "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_c034",
+        )
+        assert truncate_tool_name(declared) == truncate_tool_name(historical)
+
+        data = await self._processed(
+            MockPassThroughGuardrail(guardrail_name="test"),
+            {**self._LONG_NAMES, "called": declared, "dropped": historical},
+        )
+
+        assert [tool["name"] for tool in data["tools"]] == ["ToolSearch", self._LONG_NAMES["searched"], declared]
+
+    async def test_guardrail_tool_without_a_function_name_still_reaches_the_request(self):
+        data = await self._processed(NamelessComputerToolGuardrail(guardrail_name="test"), self._LONG_NAMES)
+
+        assert data["tools"][-1] == {
+            "type": "computer_20250124",
+            "name": "computer",
+            "display_width_px": 1024,
+            "display_height_px": 768,
+        }
 
 
 class TestAnthropicMessagesHandlerStreamingScanKey:
