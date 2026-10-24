@@ -26,6 +26,9 @@ class ChatGPTConfig(OpenAIConfig):
     def api_base_without_login(self) -> str:
         return self.authenticator.get_api_base()
 
+    def get_health_check_mode(self) -> str:
+        return "responses"
+
     def _get_openai_compatible_provider_info(
         self,
         model: str,
