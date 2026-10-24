@@ -444,6 +444,7 @@ jobs:
               tests/test_litellm_rust/messages/test_dispatch.py
               tests/test_litellm_rust/ocr/test_dispatch.py
               tests/test_litellm_rust/responses/test_dispatch.py
+              tests/test_litellm_rust/tokenize
               tests/unit/compression
               tests/unit/harness
               tests/unit/rust_bridge
@@ -519,6 +520,7 @@ jobs:
               tests/unit/proxy/openai_files_endpoint
               tests/unit/proxy/health_endpoints
               tests/unit/proxy/batches_endpoints
+              tests/unit/proxy/tokenize_endpoints
               --ignore=tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
               --ignore=tests/unit/proxy/management_endpoints/test_key_generate_prisma.py
               --ignore=tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
