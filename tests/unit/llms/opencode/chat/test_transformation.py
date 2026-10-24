@@ -207,6 +207,21 @@ def test_discovery_returns_qualified_ids_and_accepts_response_metadata(base: str
         ]
 
 
+@pytest.mark.parametrize("explicit_base", [None, "https://explicit-gateway.example/go/v1"])
+def test_discovery_honors_environment_base_and_explicit_override(
+    monkeypatch: pytest.MonkeyPatch, explicit_base: str | None
+) -> None:
+    from litellm.llms.opencode.chat.transformation import OpenCodeGoChatConfig
+
+    monkeypatch.setenv("OPENCODE_GO_API_BASE", "https://env-gateway.example/go/v1/")
+    expected_base: Final = explicit_base or "https://env-gateway.example/go/v1"
+    with respx.mock(using="httpx") as transport:
+        transport.get(f"{expected_base}/models").respond(json={"data": [{"id": "gateway-only-model"}]})
+        assert OpenCodeGoChatConfig().get_models(api_key="fake-go-key", api_base=explicit_base) == [
+            "opencode_go/gateway-only-model"
+        ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ingress", ["chat", "responses", "messages"])
 async def test_gemini_streams_text_and_usage_through_all_routes(go_catalog: None, ingress: str) -> None:

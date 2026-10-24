@@ -10,6 +10,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.llms.opencode.common_utils import go_api_base, go_api_key, go_endpoint, go_headers, go_model_info
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -46,7 +47,10 @@ class OpenCodeGoChatConfig(OpenAILikeChatConfig):
     ) -> list[str]:  # mutable-ok: provider discovery requires a list
         response: Final = litellm.module_level_client.get(  # pyright: ignore[reportUnknownMemberType]  # legacy HTTP wrapper has untyped query parameters
             url=ensure_api_route(
-                (api_base or "https://opencode.ai/inference/go").rstrip("/").removesuffix("/v1"), "v1/models"
+                (api_base or get_secret_str("OPENCODE_GO_API_BASE") or "https://opencode.ai/inference/go")
+                .rstrip("/")
+                .removesuffix("/v1"),
+                "v1/models",
             ),
             headers={"Authorization": f"Bearer {go_api_key(api_key)}"} if go_api_key(api_key) else {},
         )
