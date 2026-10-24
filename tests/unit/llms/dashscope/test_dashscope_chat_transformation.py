@@ -14,6 +14,40 @@ import litellm
 from litellm import completion
 from litellm.llms.dashscope.chat.transformation import DashScopeChatConfig
 
+WORKSPACE = "https://llm-abc123.cn-beijing.maas.aliyuncs.com"
+
+
+def test_get_complete_url_derives_the_compatible_base_from_any_standard_base():
+    config = DashScopeChatConfig()
+
+    for api_base in (
+        WORKSPACE,
+        f"{WORKSPACE}/compatible-mode/v1",
+        f"{WORKSPACE}/apps/anthropic",
+        f"{WORKSPACE}/api/v1",
+    ):
+        url = config.get_complete_url(
+            api_base=api_base,
+            api_key="sk-test",
+            model="qwen3.7-plus",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == f"{WORKSPACE}/compatible-mode/v1/chat/completions"
+
+
+def test_get_complete_url_keeps_unrecognized_hosts():
+    url = DashScopeChatConfig().get_complete_url(
+        api_base="https://gateway.example.com/v1",
+        api_key="sk-test",
+        model="qwen3.7-plus",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert url == "https://gateway.example.com/v1/chat/completions"
+
 
 class TestDashScopeConfig:
     """Test class for DashScope functionality"""

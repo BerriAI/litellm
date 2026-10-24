@@ -12,14 +12,17 @@ import pytest
 from pydantic import ValidationError
 
 import litellm
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.dashscope.common_utils import (
+    DASHSCOPE_DEFAULT_ORIGIN,
+    DASHSCOPE_IMAGE_PATH,
+)
 from litellm.llms.dashscope.image_generation.transformation import (
-    DashScopeImageGenerationConfig,
     DEFAULT_API_BASE,
+    DashScopeImageGenerationConfig,
 )
 from litellm.types.utils import ImageResponse
 from litellm.utils import get_llm_provider
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
 
 # ---------------------------------------------------------------------------
 # 1. Provider detection
@@ -65,17 +68,31 @@ class TestDashScopeImageGenerationConfig:
         assert url == custom
 
     @pytest.mark.parametrize(
-        "chat_api_base",
+        ("api_base", "expected"),
         [
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/",
+            (
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            ),
+            (
+                "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/",
+                DEFAULT_API_BASE,
+            ),
+            (
+                "https://llm-abc123.cn-beijing.maas.aliyuncs.com",
+                "https://llm-abc123.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            ),
+            (
+                "https://llm-abc123.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+                "https://llm-abc123.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            ),
         ],
     )
-    def test_get_complete_url_ignores_chat_compatible_mode_base(
-        self, chat_api_base: str
+    def test_get_complete_url_derives_from_the_domain(
+        self, api_base: str, expected: str
     ):
-        url = self.cfg.get_complete_url(chat_api_base, None, "qwen-image-3.0", {}, {})
-        assert url == DEFAULT_API_BASE
+        url = self.cfg.get_complete_url(api_base, None, "qwen-image-3.0", {}, {})
+        assert url == expected
 
     def test_validate_environment_sets_auth_header(self):
         headers = self.cfg.validate_environment(
@@ -447,7 +464,7 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
         called_url = (
             call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
         )
-        assert called_url == DEFAULT_API_BASE
+        assert called_url == f"{DASHSCOPE_DEFAULT_ORIGIN}{DASHSCOPE_IMAGE_PATH}"
 
         # Verify request body contains DashScope format
         call_kwargs = call_args[1] if call_args[1] else {}
