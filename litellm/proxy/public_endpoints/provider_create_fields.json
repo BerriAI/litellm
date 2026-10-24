@@ -1470,6 +1470,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "EMPIRIOLABS",
+    "provider_display_name": "EmpirioLabs AI",
+    "litellm_provider": "empiriolabs",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.empiriolabs.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "empiriolabs/aplomb-1"
+  },
+  {
     "provider": "EMPOWER",
     "provider_display_name": "Empower",
     "litellm_provider": "empower",

@@ -3240,7 +3240,7 @@
       }
     },
     "empiriolabs": {
-      "display_name": "EmpirioLabs (`empiriolabs`)",
+      "display_name": "EmpirioLabs AI (`empiriolabs`)",
       "url": "https://docs.litellm.ai/docs/providers/empiriolabs",
       "endpoints": {
         "chat_completions": true,
@@ -3253,7 +3253,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": false
+        "a2a": false,
+        "systemone": true
       }
     },
     "openinfer": {
