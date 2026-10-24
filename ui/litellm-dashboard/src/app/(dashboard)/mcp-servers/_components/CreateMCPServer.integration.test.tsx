@@ -123,6 +123,14 @@ describe("CreateMCPServer", () => {
     expect(screen.getByText("Add New MCP Server")).toBeInTheDocument();
   });
 
+  it("shows the tools list TTL input only for OpenAPI transport", async () => {
+    render(<CreateMCPServer {...defaultProps} />);
+
+    expect(screen.queryByLabelText("Tools list TTL (ms)")).not.toBeInTheDocument();
+    await selectOption("Transport Type", "OpenAPI Spec");
+    expect(screen.getByLabelText("Tools list TTL (ms)")).toBeInTheDocument();
+  });
+
   // The modal DOES render for a non-admin; it retitles and routes the submit to the review endpoint.
   // The assertion this replaced only checked that the admin title was absent, which passed for the
   // wrong reason and left the whole non-admin submission path uncovered.

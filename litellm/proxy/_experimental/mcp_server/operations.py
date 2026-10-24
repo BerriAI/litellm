@@ -123,6 +123,7 @@ from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (  #
     request_auth_header,
     request_extra_headers,
     request_resolved_auth_headers,
+    sanitize_openapi_tool_name,
 )
 from litellm.proxy._experimental.mcp_server.result_conversion import (
     WireCompat,
@@ -827,18 +828,39 @@ def filter_tools_by_allowed_tools(
 def apply_display_name_overrides(
     tools: list[MCPTool],
     mcp_server: MCPServer,
+    *,
+    wire_compat: WireCompat = WireCompat.LEGACY,
 ) -> list[MCPTool]:
     """Apply admin-configured display name overrides, keyed by the unprefixed tool name like allowed_tools."""
     display_name_map: Final = mcp_server.tool_name_to_display_name or {}
     if not display_name_map:
         return tools
 
-    for tool in tools:
-        unprefixed = strip_known_server_prefix(tool.name, mcp_server)
-        lookup_key = unprefixed or tool.name
-        if lookup_key in display_name_map:
-            tool.name = display_name_map[lookup_key]
-    return tools
+    modern_openapi: Final = mcp_server.spec_path is not None and wire_compat == WireCompat.MODERN
+
+    def apply_override(tool: MCPTool) -> MCPTool:
+        unprefixed: Final = strip_known_server_prefix(tool.name, mcp_server)
+        lookup_key: Final = unprefixed or tool.name
+        raw_display_name: Final = display_name_map.get(lookup_key)
+        display_name: Final[str | None] = (
+            raw_display_name
+            if raw_display_name is not None
+            else next(
+                (
+                    override
+                    for key, override in display_name_map.items()
+                    if mcp_server.spec_path and sanitize_openapi_tool_name(key) == lookup_key
+                ),
+                None,
+            )
+        )
+        if display_name is None:
+            return tool
+        if modern_openapi:
+            return tool.model_copy(update={"title": display_name})
+        return tool.model_copy(update={"name": display_name})
+
+    return [apply_override(tool) for tool in tools]
 
 
 @catalog_operation(lambda: global_mcp_server_manager)
@@ -1367,6 +1389,7 @@ async def _get_tools_from_mcp_servers(
         )
 
         from litellm.proxy._experimental.mcp_server.catalog import get_filtered_server_tools
+        from litellm.proxy._experimental.mcp_server.result_conversion import wire_compat_for
 
         context: Final = OperationContext(
             _caller=user_api_key_auth,
@@ -1377,6 +1400,7 @@ async def _get_tools_from_mcp_servers(
             raw_headers=raw_headers,
             client_ip=client_ip,
             mcp_proxy_mode=mcp_proxy_mode,
+            wire_compat=wire_compat_for(protocol_version) if protocol_version is not None else WireCompat.LEGACY,
             protocol_version=protocol_version,
         )
 
@@ -1884,7 +1908,10 @@ def _resolve_display_name_to_original(
         display_map = server.tool_name_to_display_name or {}
         for unprefixed_name, display_name in display_map.items():
             if display_name == name:
-                return add_server_prefix_to_name(unprefixed_name, get_server_prefix(server))
+                return add_server_prefix_to_name(
+                    sanitize_openapi_tool_name(unprefixed_name) if server.spec_path else unprefixed_name,
+                    get_server_prefix(server),
+                )
     return name
 
 
@@ -3665,6 +3692,7 @@ def prepare_context(
     wire_compat: WireCompat = WireCompat.LEGACY,
     protocol_version: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
+    toolset_tools_ttl_ms: int | None = None,
 ) -> OperationContext:
     return OperationContext(
         _caller=user_api_key_auth,
@@ -3677,6 +3705,7 @@ def prepare_context(
         mcp_proxy_mode=mcp_proxy_mode,
         wire_compat=wire_compat,
         protocol_version=protocol_version,
+        toolset_tools_ttl_ms=toolset_tools_ttl_ms,
         incoming_bearer_token=incoming_bearer_token,
     )
 

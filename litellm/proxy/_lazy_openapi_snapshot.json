@@ -36264,6 +36264,18 @@
               ],
               "title": "Tool Name To Display Name"
             },
+            "tools_ttl_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tools Ttl Ms"
+            },
             "transport": {
               "default": "sse",
               "enum": [
@@ -38188,6 +38200,18 @@
               ],
               "title": "Tool Name To Display Name"
             },
+            "tools_ttl_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tools Ttl Ms"
+            },
             "transport": {
               "enum": [
                 "sse",
@@ -39091,6 +39115,18 @@
                 }
               ],
               "title": "Tool Name To Display Name"
+            },
+            "tools_ttl_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tools Ttl Ms"
             },
             "transport": {
               "default": "sse",
@@ -41387,6 +41423,18 @@
               ],
               "title": "Tool Name To Display Name"
             },
+            "tools_ttl_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tools Ttl Ms"
+            },
             "transport": {
               "enum": [
                 "sse",
@@ -43135,6 +43183,18 @@
               ],
               "title": "Tool Name To Display Name"
             },
+            "tools_ttl_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tools Ttl Ms"
+            },
             "transport": {
               "default": "sse",
               "enum": [
@@ -43180,6 +43240,18 @@
               },
               "title": "Tools",
               "type": "array"
+            },
+            "tools_ttl_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tools Ttl Ms"
             },
             "toolset_name": {
               "title": "Toolset Name",
@@ -43658,6 +43730,18 @@
               ],
               "title": "Tool Name To Display Name"
             },
+            "tools_ttl_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tools Ttl Ms"
+            },
             "transport": {
               "default": "sse",
               "enum": [
@@ -43712,6 +43796,18 @@
                 }
               ],
               "title": "Tools"
+            },
+            "tools_ttl_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tools Ttl Ms"
             },
             "toolset_id": {
               "title": "Toolset Id",
@@ -46598,6 +46694,18 @@
                 }
               ],
               "title": "Tool Name To Display Name"
+            },
+            "tools_ttl_ms": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tools Ttl Ms"
             },
             "transport": {
               "default": "sse",

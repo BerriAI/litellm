@@ -981,6 +981,7 @@ async def test_get_tools_from_mcp_servers():
                 proxy_logging_obj=None,
                 catalog_auth_header=None,
                 record_listing=True,
+                wire_compat=None,
             ):
                 if server.server_id == "server1_id":
                     return [mock_tool_1]

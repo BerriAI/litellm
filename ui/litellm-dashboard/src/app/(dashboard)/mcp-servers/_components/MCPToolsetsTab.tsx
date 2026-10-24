@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from "react";
 import { z } from "zod";
 import { SortingState } from "@tanstack/react-table";
-import { Inbox, Plus, X } from "lucide-react";
+import { Inbox, Info, Plus, X } from "lucide-react";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useQueryClient } from "@tanstack/react-query";
@@ -24,6 +24,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import { displayToolName, getMCPToolsetTableColumns } from "./MCPToolsetTableColumns";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 
 interface MCPToolsetsTabProps {
   accessToken: string | null;
@@ -33,6 +34,10 @@ interface MCPToolsetsTabProps {
 const toolsetSchema = z.object({
   toolset_name: z.string().min(1, "Please enter a toolset name"),
   description: z.string(),
+  tools_ttl_ms: z.preprocess(
+    (value) => (value === "" || value === null || value === undefined ? undefined : value),
+    z.coerce.number().int().min(0).optional(),
+  ),
 });
 
 type ToolsetFormValues = z.infer<typeof toolsetSchema>;
@@ -148,7 +153,12 @@ function MCPToolList({ serverId, serverName, accessToken, selectedTools, onToggl
 interface CreateToolsetModalProps {
   open: boolean;
   onClose: () => void;
-  onSave: (name: string, description: string | undefined, tools: MCPToolsetTool[]) => Promise<void>;
+  onSave: (
+    name: string,
+    description: string | undefined,
+    toolsTtlMs: number | undefined,
+    tools: MCPToolsetTool[],
+  ) => Promise<void>;
   accessToken: string | null;
   initialToolset?: MCPToolset;
 }
@@ -158,6 +168,7 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
     defaultValues: {
       toolset_name: initialToolset?.toolset_name || "",
       description: initialToolset?.description || "",
+      tools_ttl_ms: initialToolset?.tools_ttl_ms ?? undefined,
     },
   });
   const [selectedTools, setSelectedTools] = useState<MCPToolsetTool[]>(initialToolset?.tools || []);
@@ -174,6 +185,7 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
       form.reset({
         toolset_name: initialToolset?.toolset_name || "",
         description: initialToolset?.description || "",
+        tools_ttl_ms: initialToolset?.tools_ttl_ms ?? undefined,
       });
       setSelectedTools(initialToolset?.tools || []);
       setServerSearch("");
@@ -192,7 +204,7 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
   const handleSubmit = async (values: ToolsetFormValues) => {
     setSaving(true);
     try {
-      await onSave(values.toolset_name, values.description, selectedTools);
+      await onSave(values.toolset_name, values.description, values.tools_ttl_ms, selectedTools);
       onClose();
     } finally {
       setSaving(false);
@@ -217,6 +229,30 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
             </FormField>
             <FormField control={form.control} name="description" label="Description" className="flex-1">
               {(field) => <Input {...field} placeholder="Optional description" />}
+            </FormField>
+            <FormField
+              control={form.control}
+              name="tools_ttl_ms"
+              label={
+                <span className="flex items-center">
+                  Tools list TTL (ms)
+                  <SimpleTooltip content="How long MCP clients on revision 2026-07-28 may cache this server's tools/list">
+                    <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                  </SimpleTooltip>
+                </span>
+              }
+              className="w-48"
+            >
+              {(field) => (
+                <Input
+                  {...field}
+                  type="number"
+                  min={0}
+                  step={1}
+                  placeholder="Optional"
+                  value={typeof field.value === "string" || typeof field.value === "number" ? field.value : ""}
+                />
+              )}
             </FormField>
           </FieldGroup>
         </form>
@@ -386,16 +422,39 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
 
   const isAdmin = userRole === "Admin" || userRole === "proxy_admin";
 
-  const handleCreate = async (name: string, description: string | undefined, tools: MCPToolsetTool[]) => {
+  const handleCreate = async (
+    name: string,
+    description: string | undefined,
+    toolsTtlMs: number | undefined,
+    tools: MCPToolsetTool[],
+  ) => {
     if (!accessToken) return;
-    await createMCPToolset(accessToken, { toolset_name: name, description, tools });
+    const toolsetInput = {
+      toolset_name: name,
+      description,
+      tools,
+      ...(toolsTtlMs !== undefined ? { tools_ttl_ms: toolsTtlMs } : {}),
+    };
+    await createMCPToolset(accessToken, toolsetInput);
     toast.success("Toolset created");
     queryClient.invalidateQueries({ queryKey: ["mcpToolsets"] });
   };
 
-  const handleUpdate = async (name: string, description: string | undefined, tools: MCPToolsetTool[]) => {
+  const handleUpdate = async (
+    name: string,
+    description: string | undefined,
+    toolsTtlMs: number | undefined,
+    tools: MCPToolsetTool[],
+  ) => {
     if (!accessToken || !editToolset) return;
-    await updateMCPToolset(accessToken, { toolset_id: editToolset.toolset_id, toolset_name: name, description, tools });
+    const toolsetUpdate = {
+      toolset_id: editToolset.toolset_id,
+      toolset_name: name,
+      description,
+      tools,
+      ...((toolsTtlMs ?? null) !== (editToolset.tools_ttl_ms ?? null) ? { tools_ttl_ms: toolsTtlMs ?? null } : {}),
+    };
+    await updateMCPToolset(accessToken, toolsetUpdate);
     toast.success("Toolset updated");
     queryClient.invalidateQueries({ queryKey: ["mcpToolsets"] });
     setEditToolset(null);

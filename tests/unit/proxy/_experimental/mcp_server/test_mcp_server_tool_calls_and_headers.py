@@ -1017,6 +1017,9 @@ async def test_get_resource_templates_from_mcp_servers_success():
     server.server_id = "server-id"
     server.auth_type = None
     server.extra_headers = None
+    server.spec_path = None
+    server.tools_ttl_ms = None
+    server.tool_name_to_display_name = None
 
     with (
         patch(
@@ -4489,6 +4492,9 @@ async def test_list_tools_single_server_unprefixed_names():
     server.server_name = "server1"
     server.auth_type = None
     server.extra_headers = None
+    server.spec_path = None
+    server.tools_ttl_ms = None
+    server.tool_name_to_display_name = None
 
     # Mock manager: allow just one server and return a tool based on add_prefix flag
     mock_manager = MagicMock()
@@ -4557,6 +4563,9 @@ async def test_list_tools_multiple_servers_prefixed_names():
     server1.server_name = "server1"
     server1.auth_type = None
     server1.extra_headers = None
+    server1.spec_path = None
+    server1.tools_ttl_ms = None
+    server1.tool_name_to_display_name = None
 
     server2 = MagicMock()
     server2.server_id = "server2"
@@ -4567,6 +4576,9 @@ async def test_list_tools_multiple_servers_prefixed_names():
     server2.server_name = "server2"
     server2.auth_type = None
     server2.extra_headers = None
+    server2.spec_path = None
+    server2.tools_ttl_ms = None
+    server2.tool_name_to_display_name = None
 
     # Mock manager
     mock_manager = MagicMock()
@@ -4980,6 +4992,9 @@ async def test_list_tools_filters_by_key_team_permissions():
     server.server_name = "server1"
     server.auth_type = None
     server.extra_headers = None
+    server.spec_path = None
+    server.tools_ttl_ms = None
+    server.tool_name_to_display_name = None
 
     # Mock manager
     mock_manager = MagicMock()
@@ -5091,6 +5106,9 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
     server.server_name = "server1"
     server.auth_type = None
     server.extra_headers = None
+    server.spec_path = None
+    server.tools_ttl_ms = None
+    server.tool_name_to_display_name = None
 
     # Mock manager
     mock_manager = MagicMock()
@@ -5188,6 +5206,9 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
     server.server_name = "server1"
     server.auth_type = None
     server.extra_headers = None
+    server.spec_path = None
+    server.tools_ttl_ms = None
+    server.tool_name_to_display_name = None
 
     # Mock manager
     mock_manager = MagicMock()
@@ -5289,6 +5310,9 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
     server.server_name = "GITMCP"
     server.allowed_tools = None
     server.disallowed_tools = None
+    server.spec_path = None
+    server.tools_ttl_ms = None
+    server.tool_name_to_display_name = None
 
     # Mock manager
     mock_manager = MagicMock()
@@ -5494,6 +5518,74 @@ def test_apply_display_name_overrides_no_overrides():
     result = apply_display_name_overrides(tools, mcp_server)
     assert result[0].name == "my_api_mcp-getpetbyid"
     assert result[0].description == "Original description"
+
+
+def test_apply_display_name_overrides_modern_openapi_preserves_name_and_matches_camel_case() -> None:
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server.operations import apply_display_name_overrides
+    from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mcp_server = MCPServer(
+        server_id="my_api_mcp",
+        name="my_api_mcp",
+        transport=MCPTransport.http,
+        spec_path="https://api.example.com/openapi.json",
+        tool_name_to_display_name={"getPetById": "Get Pet"},
+    )
+    tool = Tool(
+        name="my_api_mcp-getpetbyid",
+        title="Get a pet",
+        description="Original description",
+        inputSchema={"type": "object", "properties": {}},
+        outputSchema={"type": "object"},
+        annotations=None,
+    )
+
+    result = apply_display_name_overrides([tool], mcp_server, wire_compat=WireCompat.MODERN)
+
+    assert result[0].name == tool.name
+    assert result[0].title == "Get Pet"
+    assert tool.title == "Get a pet"
+
+
+def test_resolve_display_name_to_original_sanitizes_openapi_operation_id() -> None:
+    from litellm.proxy._experimental.mcp_server.operations import _resolve_display_name_to_original
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="my_api_mcp",
+        name="my_api_mcp",
+        transport=MCPTransport.http,
+        spec_path="https://api.example.com/openapi.json",
+        tool_name_to_display_name={"getPetById": "Get Pet"},
+    )
+
+    assert _resolve_display_name_to_original("Get Pet", [server]) == "my_api_mcp-getpetbyid"
+
+
+def test_convert_tools_to_mcp_sdk_tool_type_serializes_modern_metadata() -> None:
+    from litellm.proxy._experimental.mcp_server.tool_registry import MCPToolRegistry
+    from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
+    from litellm.types.mcp_server.tool_registry import MCPTool
+
+    tool = MCPTool(
+        name="getpetbyid",
+        description="Get a pet",
+        input_schema={"type": "object"},
+        handler=lambda: None,
+        output_schema={"type": "object", "properties": {"id": {"type": "string"}}},
+        title="Get Pet",
+    )
+
+    serialized = MCPToolRegistry().convert_tools_to_mcp_sdk_tool_type([tool], wire_compat=WireCompat.MODERN)[0]
+
+    wire_value = serialized.model_dump(mode="json", by_alias=True)
+    assert wire_value["outputSchema"] == tool.output_schema
+    assert wire_value["title"] == "Get Pet"
 
 
 def _make_db_mcp_server(server_id: str, updated_at: datetime) -> LiteLLM_MCPServerTable:
@@ -5831,6 +5923,9 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
     server_a.server_id = "a"
     server_a.auth_type = None
     server_a.extra_headers = None
+    server_a.spec_path = None
+    server_a.tools_ttl_ms = None
+    server_a.tool_name_to_display_name = None
 
     tool_1 = MCPTool(
         name="server_a-tool_1",
@@ -5989,6 +6084,9 @@ async def test_get_tools_from_mcp_servers_returns_tools_when_success_logging_fai
     server_a.server_id = "a"
     server_a.auth_type = None
     server_a.extra_headers = None
+    server_a.spec_path = None
+    server_a.tools_ttl_ms = None
+    server_a.tool_name_to_display_name = None
 
     tool_1 = Tool(name="placeholder", inputSchema={})
     tool_1.name = "server_a-tool_1"
@@ -6312,6 +6410,9 @@ async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
     oauth2_server.server_id = SERVER_ID
     oauth2_server.auth_type = MCPAuth.oauth2
     oauth2_server.extra_headers = None
+    oauth2_server.spec_path = None
+    oauth2_server.tools_ttl_ms = None
+    oauth2_server.tool_name_to_display_name = None
 
     # Simulate the DB returning a valid credential for this user+server
     prefetched_creds = {SERVER_ID: {"access_token": STORED_TOKEN, "server_id": SERVER_ID}}

@@ -625,6 +625,54 @@ async def test_tool_catalog_preserves_upstream_freshness() -> None:
 
 
 @pytest.mark.asyncio
+async def test_toolset_ttl_overrides_complete_listing_and_keeps_private_cache_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+
+    listing_result: Final = AggregateToolListing(
+        tools=[],
+        outcomes={"server": ServerListOk(tool_count=0)},
+        ttl_ms=9000,
+    )
+    monkeypatch.setattr(operations, "_list_mcp_tools", AsyncMock(return_value=listing_result))
+    result: Final = await catalog.list_gateway_tools(
+        operations.prepare_context(toolset_tools_ttl_ms=0),
+        PaginatedRequestParams(),
+        log_list_tools_to_spendlogs=False,
+    )
+
+    assert result.ttl_ms == 0
+    assert result.model_dump(mode="json", by_alias=True, exclude_none=True)["ttlMs"] == 0
+    assert result.cache_scope == "private"
+
+
+@pytest.mark.asyncio
+async def test_toolset_ttl_does_not_override_partial_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing, ServerListFault
+
+    listing_result: Final = AggregateToolListing(
+        tools=[],
+        outcomes={
+            "healthy": ServerListOk(tool_count=0),
+            "failed": ServerListFault(tag="timeout"),
+        },
+        ttl_ms=0,
+    )
+    monkeypatch.setattr(operations, "_list_mcp_tools", AsyncMock(return_value=listing_result))
+    result: Final = await catalog.list_gateway_tools(
+        operations.prepare_context(toolset_tools_ttl_ms=9000),
+        PaginatedRequestParams(),
+        log_list_tools_to_spendlogs=False,
+    )
+
+    assert result.ttl_ms == 0
+    assert result.cache_scope == "private"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("upstream_ttl,limit,expected_ttl", [(1000, 60, 1000), (90000, 1, 1000), (0, 60, 0)])
 async def test_discovery_cache_uses_upstream_freshness_and_configured_cap(
     upstream_ttl: int, limit: float, expected_ttl: int

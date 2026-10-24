@@ -24,9 +24,11 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._experimental.mcp_server.result_conversion import age_freshness, aggregate_freshness
+from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
 
 if TYPE_CHECKING:
     from mcp.types import ListToolsResult, PaginatedRequestParams, PaginatedResult
+    from mcp.types import Tool as MCPWireTool
 
     from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult, OperationContext
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
@@ -858,6 +860,7 @@ async def get_filtered_server_tools(
                     proxy_logging_obj=proxy_logging_obj,
                     catalog_auth_header=catalog_auth_header,
                     record_listing=False,
+                    wire_compat=context.wire_compat,
                 )
             )
         else:
@@ -875,6 +878,7 @@ async def get_filtered_server_tools(
                 catalog_auth_header=catalog_auth_header,
                 record_listing=False,
                 listing_updates=listing_updates,
+                wire_compat=context.wire_compat,
             )
         tools: Final = page.tools
         filtered_tools = filter_tools_by_allowed_tools(tools, server)
@@ -907,20 +911,29 @@ async def get_filtered_server_tools(
         else:
             listing_updates.callback(record)
 
-        if mcp_proxy_mode:
+        def with_proxy_identity(tool: MCPWireTool) -> MCPWireTool:
             from litellm.proxy._experimental.mcp_server.tool_search import with_mcp_proxy_identity
 
-            filtered_tools = [with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools]
-        else:
-            filtered_tools = apply_display_name_overrides(filtered_tools, server)
+            return with_mcp_proxy_identity(tool, server.server_id)
+
+        listed_tools: Final = (
+            tuple(with_proxy_identity(tool) for tool in filtered_tools)
+            if mcp_proxy_mode
+            else apply_display_name_overrides(filtered_tools, server, wire_compat=context.wire_compat)
+        )
+        response_tools: Final = (
+            [tool.model_copy(update={"output_schema": None, "title": None}) for tool in listed_tools]
+            if not mcp_proxy_mode and server.spec_path and context.wire_compat == WireCompat.LEGACY
+            else list(listed_tools)
+        )
 
         verbose_logger.debug(
             "Successfully fetched %s tools from server %s, %s after filtering",
             len(tools),
             server.name,
-            len(filtered_tools),
+            len(response_tools),
         )
-        return page.model_copy(update={"tools": filtered_tools}), ServerListOk(tool_count=len(filtered_tools))
+        return page.model_copy(update={"tools": response_tools}), ServerListOk(tool_count=len(response_tools))
     except MCPUpstreamAuthError as e:
         # Absorb so one unauthenticated server does not empty every other server's
         # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
@@ -1067,6 +1080,7 @@ async def list_gateway_tools(
 
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
         SERVER_OUTCOMES_META_KEY,
+        ServerListOk,
         listing_failed_outright,
         outcome_wire_value,
     )
@@ -1096,10 +1110,13 @@ async def list_gateway_tools(
             message="Every MCP server in scope failed to list tools",
             data={SERVER_OUTCOMES_META_KEY: wire_outcomes},
         )
+    toolset_ttl: Final = context.toolset_tools_ttl_ms
+    complete: Final = not any(not isinstance(outcome, ServerListOk) for outcome in listing.outcomes.values())
+    ttl_ms: Final = toolset_ttl if toolset_ttl is not None and complete else listing.ttl_ms
     return ListToolsResult(
         tools=listing.tools,
         next_cursor=listing.next_cursor,
-        ttl_ms=listing.ttl_ms,
+        ttl_ms=ttl_ms,
         cache_scope="private",
         _meta={SERVER_OUTCOMES_META_KEY: wire_outcomes} if wire_outcomes else None,
     )
