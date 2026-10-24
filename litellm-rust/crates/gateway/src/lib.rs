@@ -2,6 +2,7 @@ mod auth;
 mod dispatch;
 mod error;
 mod secrets;
+mod upgrades;
 pub use dispatch::{Fallback, Forward, InvalidUpstream};
 pub use error::Error;
 
@@ -141,12 +142,25 @@ pub async fn serve(
     app: Router,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    axum::serve(
+    let upgrades = upgrades::Upgrades::new();
+    let _cancel_upgrades = upgrades.cancel.clone().drop_guard();
+    let draining = upgrades.clone();
+    let result = axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        app.layer(axum::Extension(upgrades.clone()))
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown)
-    .await
+    .with_graceful_shutdown(async move {
+        shutdown.await;
+        draining.begin_shutdown();
+    })
+    .await;
+    if result.is_err() {
+        upgrades.cancel.cancel();
+    }
+    upgrades.tasks.close();
+    upgrades.tasks.wait().await;
+    result
 }
 
 async fn log_request(request: Request, next: Next) -> Response {

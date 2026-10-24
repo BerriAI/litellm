@@ -1,10 +1,15 @@
 use std::{
+    net::SocketAddr,
     sync::{Arc, mpsc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use axum::{body::Body, http::Request};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use futures_util::StreamExt;
 use litellm_config::Config;
 use litellm_gateway::{Fallback, Forward};
 use litellm_gateway_inference::{Error, Gateway};
@@ -12,7 +17,14 @@ use litellm_http::ClientVariant;
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
-use tokio::{net::TcpListener, sync::oneshot, time::timeout};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+    sync::oneshot,
+    task::JoinHandle,
+    time::timeout,
+};
+use tokio_tungstenite::{accept_async, client_async, tungstenite::handshake::derive_accept_key};
 use tower::ServiceExt;
 
 struct LogSink(mpsc::Sender<Value>);
@@ -32,6 +44,39 @@ impl Sink for LogSink {
 #[fixture]
 fn inference() -> Arc<Gateway> {
     litellm_gateway::build_inference(&Config::from_yaml("model_list: []").unwrap()).unwrap()
+}
+
+async fn managed_gateway(
+    inference: Arc<Gateway>,
+    upstream: SocketAddr,
+) -> (
+    SocketAddr,
+    oneshot::Sender<()>,
+    JoinHandle<std::io::Result<()>>,
+) {
+    let config =
+        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
+            .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let fallback = Fallback::Forward(Forward::new(&format!("http://{upstream}")).unwrap());
+    let app = litellm_gateway::router(inference, &config, None, None, fallback);
+    let (shutdown, stopped) = oneshot::channel();
+    let server = tokio::spawn(litellm_gateway::serve(listener, app, async move {
+        let _ = stopped.await;
+    }));
+    (address, shutdown, server)
+}
+
+fn websocket_key(request: &[u8]) -> String {
+    String::from_utf8_lossy(request)
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("sec-websocket-key")
+                .then(|| value.trim().to_owned())
+        })
+        .unwrap()
 }
 
 #[rstest]
@@ -352,4 +397,268 @@ async fn python_serves_every_request_the_gateway_does_not_route(
     } else {
         assert_eq!(response.status().as_u16(), 401);
     }
+}
+
+#[rstest]
+#[tokio::test]
+async fn serve_drains_an_open_websocket_and_closes_both_peers(inference: Arc<Gateway>) {
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream = upstream_listener.local_addr().unwrap();
+    let (ready_sender, ready_receiver) = oneshot::channel();
+    let (eof_sender, eof_receiver) = oneshot::channel();
+    let upstream_task = tokio::spawn(async move {
+        let (stream, _) = upstream_listener.accept().await.unwrap();
+        let mut socket = accept_async(stream).await.unwrap();
+        ready_sender.send(()).unwrap();
+        let result = timeout(Duration::from_secs(7), socket.next())
+            .await
+            .unwrap();
+        eof_sender
+            .send(result.is_none_or(|message| message.is_err()))
+            .unwrap();
+    });
+
+    let (gateway, shutdown, server) = managed_gateway(inference, upstream).await;
+    let stream = TcpStream::connect(gateway).await.unwrap();
+    let (mut socket, response) = timeout(
+        Duration::from_secs(2),
+        client_async(format!("ws://{gateway}/realtime"), stream),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    timeout(Duration::from_secs(2), ready_receiver)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let started = Instant::now();
+    shutdown.send(()).unwrap();
+    timeout(Duration::from_secs(6), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(started.elapsed() <= Duration::from_secs(6));
+
+    let result = timeout(Duration::from_secs(2), socket.next())
+        .await
+        .unwrap();
+    assert!(result.is_none_or(|message| message.is_err()));
+    assert!(
+        timeout(Duration::from_secs(2), eof_receiver)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    upstream_task.await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn shutdown_deadline_closes_a_handshake_released_after_shutdown(inference: Arc<Gateway>) {
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream = upstream_listener.local_addr().unwrap();
+    let (request_sender, request_receiver) = oneshot::channel();
+    let (release_sender, release_receiver) = oneshot::channel();
+    let (closed_sender, closed_receiver) = oneshot::channel();
+    let upstream_task = tokio::spawn(async move {
+        let (mut stream, _) = upstream_listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut chunk = [0; 4096];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = stream.read(&mut chunk).await.unwrap();
+            if read == 0 {
+                return;
+            }
+            request.extend_from_slice(&chunk[..read]);
+        }
+        let key = websocket_key(&request);
+        request_sender.send(()).unwrap();
+        release_receiver.await.unwrap();
+        let accept = derive_accept_key(key.as_bytes());
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+        let mut bytes = [0; 64];
+        let closed = matches!(
+            timeout(Duration::from_secs(3), stream.read(&mut bytes)).await,
+            Ok(Ok(0))
+        );
+        closed_sender.send(closed).unwrap();
+    });
+
+    let config =
+        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
+            .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway = listener.local_addr().unwrap();
+    let fallback = Fallback::Forward(Forward::new(&format!("http://{upstream}")).unwrap());
+    let app = litellm_gateway::router(inference, &config, None, None, fallback);
+    let (shutdown, stopped) = oneshot::channel();
+    let (began_sender, began_receiver) = oneshot::channel();
+    let server = tokio::spawn(litellm_gateway::serve(listener, app, async move {
+        let _ = stopped.await;
+        began_sender.send(()).unwrap();
+    }));
+
+    let client = tokio::spawn(async move {
+        let mut stream = TcpStream::connect(gateway).await.unwrap();
+        let request = format!(
+            "GET /realtime HTTP/1.1\r\nHost: {gateway}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        let mut chunk = [0; 1024];
+        while !response.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = stream.read(&mut chunk).await.unwrap();
+            if read == 0 {
+                break;
+            }
+            response.extend_from_slice(&chunk[..read]);
+        }
+        (stream, response)
+    });
+    timeout(Duration::from_secs(2), request_receiver)
+        .await
+        .unwrap()
+        .unwrap();
+    shutdown.send(()).unwrap();
+    timeout(Duration::from_secs(2), began_receiver)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    release_sender.send(()).unwrap();
+
+    let (mut socket, response) = timeout(Duration::from_secs(3), client)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.starts_with(b"HTTP/1.1 101"));
+    let result = timeout(Duration::from_secs(3), socket.read(&mut [0; 64]))
+        .await
+        .unwrap();
+    assert_eq!(result.unwrap(), 0);
+    timeout(Duration::from_secs(3), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        timeout(Duration::from_secs(2), closed_receiver)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    upstream_task.await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn dropping_serve_cancels_an_open_websocket(inference: Arc<Gateway>) {
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream = upstream_listener.local_addr().unwrap();
+    let (ready_sender, ready_receiver) = oneshot::channel();
+    let (eof_sender, eof_receiver) = oneshot::channel();
+    let upstream_task = tokio::spawn(async move {
+        let (stream, _) = upstream_listener.accept().await.unwrap();
+        let mut socket = accept_async(stream).await.unwrap();
+        ready_sender.send(()).unwrap();
+        let result = timeout(Duration::from_secs(2), socket.next())
+            .await
+            .unwrap();
+        eof_sender
+            .send(result.is_none_or(|message| message.is_err()))
+            .unwrap();
+    });
+
+    let (gateway, _shutdown, server) = managed_gateway(inference, upstream).await;
+    let stream = TcpStream::connect(gateway).await.unwrap();
+    let (mut socket, response) = timeout(
+        Duration::from_secs(2),
+        client_async(format!("ws://{gateway}/realtime"), stream),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    timeout(Duration::from_secs(2), ready_receiver)
+        .await
+        .unwrap()
+        .unwrap();
+
+    server.abort();
+    assert!(
+        timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap_err()
+            .is_cancelled()
+    );
+    let result = timeout(Duration::from_secs(2), socket.next())
+        .await
+        .unwrap();
+    assert!(result.is_none_or(|message| message.is_err()));
+    assert!(
+        timeout(Duration::from_secs(2), eof_receiver)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    upstream_task.await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn unmanaged_axum_server_rejects_websocket_forwarding(inference: Arc<Gateway>) {
+    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_address = upstream.local_addr().unwrap();
+    let config =
+        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
+            .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway = listener.local_addr().unwrap();
+    let fallback = Fallback::Forward(Forward::new(&format!("http://{upstream_address}")).unwrap());
+    let app = litellm_gateway::router(inference, &config, None, None, fallback);
+    let (shutdown, stopped) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = stopped.await;
+            })
+            .await
+    });
+
+    let stream = TcpStream::connect(gateway).await.unwrap();
+    let request = axum::http::Request::builder()
+        .uri(format!("ws://{gateway}/realtime"))
+        .header("Host", gateway.to_string())
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .header("Sec-WebSocket-Version", "13")
+        .body(())
+        .unwrap();
+    let error = timeout(Duration::from_secs(2), client_async(request, stream))
+        .await
+        .unwrap()
+        .unwrap_err();
+    let response = match error {
+        tokio_tungstenite::tungstenite::Error::Http(response) => response,
+        error => panic!("expected an HTTP rejection, got {error}"),
+    };
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_ne!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    let body = String::from_utf8(response.body().clone().unwrap()).unwrap();
+    assert!(body.contains("requires litellm_gateway::serve"));
+
+    shutdown.send(()).unwrap();
+    timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }

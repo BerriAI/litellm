@@ -4,7 +4,7 @@ use axum::{
     body::Body,
     extract::{ConnectInfo, OriginalUri, Request},
     http::{
-        HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, Version,
+        HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, Version,
         header::{
             CONNECTION, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING,
             UPGRADE,
@@ -18,6 +18,8 @@ use hyper_util::{
     rt::TokioExecutor,
 };
 use litellm_core_utils::decline::Decline;
+
+use crate::upgrades::{HANDSHAKE_TIMEOUT, Upgrades};
 
 /// Python reads it to log why the gateway handed the request over.
 const DECLINED_HEADER: HeaderName = HeaderName::from_static("x-litellm-gateway-declined");
@@ -73,7 +75,36 @@ impl Forward {
         })
     }
 
-    pub(super) async fn send(&self, request: Request, decline: Decline) -> Response {
+    pub(super) async fn send(&self, mut request: Request, decline: Decline) -> Response {
+        let websocket = if request.method() == Method::GET
+            && request.version() == Version::HTTP_11
+            && is_websocket(request.headers())
+        {
+            let Some(lifecycle) = request.extensions().get::<Upgrades>().cloned() else {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "WebSocket forwarding requires litellm_gateway::serve",
+                )
+                    .into_response();
+            };
+            if lifecycle.is_draining() {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+            if request
+                .extensions()
+                .get::<hyper::upgrade::OnUpgrade>()
+                .is_none()
+            {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "WebSocket forwarding requires an HTTP upgrade transport",
+                )
+                    .into_response();
+            }
+            Some((hyper::upgrade::on(&mut request), lifecycle))
+        } else {
+            None
+        };
         let (mut parts, body) = request.into_parts();
         let path = parts
             .extensions
@@ -92,6 +123,9 @@ impl Forward {
         .expect("scheme, authority and path make an absolute uri");
         parts.version = Version::HTTP_11;
         strip_hop_by_hop(&mut parts.headers);
+        if websocket.is_some() {
+            websocket_headers(&mut parts.headers);
+        }
         if let Some(ConnectInfo(client)) = parts.extensions.get::<ConnectInfo<SocketAddr>>() {
             append_forwarded_for(&mut parts.headers, *client);
         }
@@ -103,8 +137,46 @@ impl Forward {
             path = parts.uri.path(),
             "forwarded to python"
         );
-        match self.client.request(Request::from_parts(parts, body)).await {
-            Ok(response) => {
+        let response = self.client.request(Request::from_parts(parts, body));
+        let response = if let Some((_, lifecycle)) = &websocket {
+            tokio::select! {
+                _ = lifecycle.cancelled() => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                result = tokio::time::timeout(HANDSHAKE_TIMEOUT, response) => match result {
+                    Ok(result) => result,
+                    Err(_) => return StatusCode::GATEWAY_TIMEOUT.into_response(),
+                }
+            }
+        } else {
+            response.await
+        };
+        match response {
+            Ok(mut response) => {
+                if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+                    let Some((downstream, lifecycle)) = websocket else {
+                        return StatusCode::BAD_GATEWAY.into_response();
+                    };
+                    if !is_websocket(response.headers()) {
+                        return StatusCode::BAD_GATEWAY.into_response();
+                    }
+                    let upstream = hyper::upgrade::on(&mut response);
+                    let upstream = tokio::select! {
+                        _ = lifecycle.cancelled() => {
+                            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                        }
+                        result = tokio::time::timeout(HANDSHAKE_TIMEOUT, upstream) => {
+                            match result {
+                                Ok(Ok(upstream)) => upstream,
+                                Ok(Err(_)) => return StatusCode::BAD_GATEWAY.into_response(),
+                                Err(_) => return StatusCode::GATEWAY_TIMEOUT.into_response(),
+                            }
+                        }
+                    };
+                    let (mut parts, _) = response.into_parts();
+                    strip_hop_by_hop(&mut parts.headers);
+                    websocket_headers(&mut parts.headers);
+                    lifecycle.relay(downstream, upstream);
+                    return Response::from_parts(parts, Body::empty());
+                }
                 let (mut parts, body) = response.into_parts();
                 strip_hop_by_hop(&mut parts.headers);
                 Response::from_parts(parts, Body::new(body))
@@ -115,6 +187,24 @@ impl Forward {
             }
         }
     }
+}
+
+fn is_websocket(headers: &HeaderMap) -> bool {
+    headers
+        .get(UPGRADE)
+        .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"websocket"))
+        && headers.get_all(CONNECTION).iter().any(|value| {
+            value.to_str().is_ok_and(|value| {
+                value
+                    .split(',')
+                    .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+            })
+        })
+}
+
+fn websocket_headers(headers: &mut HeaderMap) {
+    headers.insert(CONNECTION, HeaderValue::from_static("upgrade"));
+    headers.insert(UPGRADE, HeaderValue::from_static("websocket"));
 }
 
 /// Python sees the gateway as its peer, so the client's address goes on the end of the chain

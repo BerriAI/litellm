@@ -10,12 +10,13 @@ axum = { workspace = true, features = ["original-uri"] }
 bytes.workspace = true
 envy = "0.4.2"
 http-body-util = "0.1"
+hyper = { version = "1", features = ["http1"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
 litellm-core-utils.workspace = true
 litellm-inference.workspace = true
 litellm-gateway-inference.workspace = true
 litellm-gateway-mcp.workspace = true
-tokio-util = "0.7"
+tokio-util = { version = "0.7", features = ["rt"] }
 thiserror.workspace = true
 futures-util.workspace = true
 litellm-gateway-auth.workspace = true
@@ -42,4 +43,5 @@ base64.workspace = true
 rstest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+tokio-tungstenite.workspace = true
 tower = { version = "0.5", features = ["util"] }
