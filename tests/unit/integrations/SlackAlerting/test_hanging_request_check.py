@@ -1,15 +1,22 @@
-import json
+import asyncio
 import time
-from typing import Optional
+import unittest
+from collections.abc import AsyncGenerator
+from contextlib import suppress
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-
 from litellm.integrations.SlackAlerting.hanging_request_check import (
     AlertingHangingRequestCheck,
 )
+from litellm.proxy import proxy_server
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.integrations.slack_alerting import HangingRequestData
 
 
@@ -335,3 +342,123 @@ class TestAlertingHangingRequestCheck:
 
         # Should not crash and should not send any alerts
         hanging_request_checker.slack_alerting_object.send_alert.assert_not_called()
+
+
+class HangingRequestLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.now = 1000.0
+        self.clock_patch = patch("time.time", side_effect=lambda: self.now)
+        self.clock_patch.start()
+        self.logger = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+        self.logger.alerting = ["slack"]
+        self.slack = self.logger.slack_alerting_instance
+        self.slack.alerting = ["slack"]
+        self.slack.default_webhook_url = "https://example.invalid/hanging-alerts"
+        self.slack.batch_size = 1000
+        self.checker = self.slack.hanging_request_check
+        self.proxy_patch = patch.object(proxy_server, "proxy_logging_obj", self.logger)
+        self.proxy_patch.start()
+
+    async def asyncTearDown(self) -> None:
+        if self.slack._periodic_flush_task is not None:
+            self.slack._periodic_flush_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.slack._periodic_flush_task
+        self.proxy_patch.stop()
+        self.clock_patch.stop()
+
+    async def add_request(self, request_id: str, *, alerted: bool = False) -> None:
+        data: Final = HangingRequestData(request_id=request_id, model=request_id, created_at=self.now, alerted=alerted)
+        await self.checker.hanging_request_cache.async_set_cache(
+            key=request_id, value=data, ttl=self.checker.hanging_request_cache_ttl
+        )
+
+    async def test_success_removes_request_immediately(self) -> None:
+        await self.add_request("completed")
+        await self.logger.update_request_status("completed", "success")
+        self.assertIsNone(await self.checker.hanging_request_cache.async_get_cache(key="completed"))
+
+    async def test_failure_removes_request_immediately(self) -> None:
+        await self.add_request("failed")
+        await self.logger.update_request_status("failed", "fail")
+        self.assertIsNone(await self.checker.hanging_request_cache.async_get_cache(key="failed"))
+
+    async def test_finished_burst_does_not_alert_after_status_expires(self) -> None:
+        for index in range(61):
+            request_id: Final = f"finished-{index}"
+            await self.add_request(request_id)
+            await self.logger.update_request_status(request_id, "success")
+        await self.add_request("pending")
+        for elapsed in (150, 300, 450):
+            self.now = 1000.0 + elapsed
+            await self.checker.send_alerts_for_hanging_requests()
+        self.assertEqual(len(self.slack.log_queue), 1)
+        self.assertIn("Request Model: `pending`", self.slack.log_queue[0]["payload"]["text"])
+
+    async def test_more_than_twenty_hangs_are_checked_in_one_tick(self) -> None:
+        for index in range(61):
+            await self.add_request(f"pending-{index}")
+        self.now = 1300.0
+        await self.checker.send_alerts_for_hanging_requests()
+        self.assertEqual(len(self.slack.log_queue), 61)
+        await self.checker.send_alerts_for_hanging_requests()
+        self.assertEqual(len(self.slack.log_queue), 61)
+
+    async def test_alerted_entries_do_not_hide_new_hangs(self) -> None:
+        for index in range(20):
+            await self.add_request(f"already-alerted-{index}", alerted=True)
+        await self.add_request("pending")
+        self.now = 1300.0
+        await self.checker.send_alerts_for_hanging_requests()
+        self.assertEqual(len(self.slack.log_queue), 1)
+        self.assertIn("Request Model: `pending`", self.slack.log_queue[0]["payload"]["text"])
+
+    async def test_young_request_remains_tracked_until_threshold(self) -> None:
+        await self.add_request("pending")
+        self.now = 1299.0
+        await self.checker.send_alerts_for_hanging_requests()
+        self.assertEqual(len(self.slack.log_queue), 0)
+        self.assertIsNotNone(await self.checker.hanging_request_cache.async_get_cache(key="pending"))
+        self.now = 1300.0
+        await self.checker.send_alerts_for_hanging_requests()
+        self.assertEqual(len(self.slack.log_queue), 1)
+
+    async def test_missing_webhook_does_not_mark_request_alerted(self) -> None:
+        await self.add_request("pending")
+        self.now = 1300.0
+        with patch.dict("os.environ", {}, clear=True):
+            self.slack.default_webhook_url = None
+            with self.assertRaises(ValueError):
+                await self.checker.send_alerts_for_hanging_requests()
+        self.slack.default_webhook_url = "https://example.invalid/hanging-alerts"
+        await self.checker.send_alerts_for_hanging_requests()
+        self.assertEqual(len(self.slack.log_queue), 1)
+
+    async def stream(self) -> AsyncGenerator[str, None]:
+        yield "data: first\n\n"
+        yield "data: second\n\n"
+
+    async def test_client_closing_stream_removes_request(self) -> None:
+        await self.add_request("stream")
+        stream: Final = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=self.stream(),
+            user_api_key_dict=UserAPIKeyAuth(),
+            request_data={"litellm_call_id": "stream", "model": "stream"},
+            proxy_logging_obj=self.logger,
+        )
+        self.assertEqual(await anext(stream), "data: first\n\n")
+        await stream.aclose()
+        self.assertIsNone(await self.checker.hanging_request_cache.async_get_cache(key="stream"))
+
+    async def test_cancelled_stream_removes_request_and_propagates_cancellation(self) -> None:
+        await self.add_request("stream")
+        stream: Final = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=self.stream(),
+            user_api_key_dict=UserAPIKeyAuth(),
+            request_data={"litellm_call_id": "stream", "model": "stream"},
+            proxy_logging_obj=self.logger,
+        )
+        self.assertEqual(await anext(stream), "data: first\n\n")
+        with self.assertRaises(asyncio.CancelledError):
+            await stream.athrow(asyncio.CancelledError())
+        self.assertIsNone(await self.checker.hanging_request_cache.async_get_cache(key="stream"))
