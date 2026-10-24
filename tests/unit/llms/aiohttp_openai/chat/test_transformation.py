@@ -99,3 +99,38 @@ async def test_transform_response_rejects_choices_that_are_not_a_list_of_objects
 async def test_transform_response_rejects_a_choice_whose_message_is_not_an_object():
     with pytest.raises(ValidationError, match="validation error for Choices"):
         await _transform({"choices": [{"message": "text"}]})
+
+
+async def test_transform_response_forwards_service_tier():
+    response = await _transform(
+        {
+            "id": "chatcmpl-1",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "object": "chat.completion",
+            "service_tier": "flex",
+            "choices": [
+                {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Hi"}},
+            ],
+        }
+    )
+
+    assert response.service_tier == "flex"
+
+
+async def test_transform_response_omits_service_tier_when_absent_or_blank():
+    for service_tier in (None, "", 42):
+        body: dict = {
+            "id": "chatcmpl-1",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "object": "chat.completion",
+            "choices": [
+                {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Hi"}},
+            ],
+        }
+        if service_tier is not None:
+            body["service_tier"] = service_tier
+        response = await _transform(body)
+
+        assert getattr(response, "service_tier", None) is None
