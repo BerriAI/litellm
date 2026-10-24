@@ -10,6 +10,7 @@ never closed, because litellm does not own its lifecycle.
 import asyncio
 import gc
 import weakref
+from typing import Final
 from unittest.mock import AsyncMock
 
 import httpx
@@ -39,6 +40,14 @@ class AsyncClient:
 
     async def close(self) -> None:
         self.closed = True
+
+
+class RecordingAsyncClient:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
 
 
 class SyncClient:
@@ -266,6 +275,78 @@ def test_sync_client_evicted_outside_an_event_loop_is_still_closed():
     assert closer.pending_count == 0
 
 
+def test_async_client_from_collected_loop_is_not_closed_by_fresh_loops() -> None:
+    clock: Final = FakeClock()
+    closer: Final = EvictedClientCloser(grace_seconds=0, clock=clock)
+    client: Final = RecordingAsyncClient()
+    closer.mark_owned(client)
+    loop_a: Final = asyncio.new_event_loop()
+
+    async def schedule() -> None:
+        closer.schedule(client)
+
+    try:
+        loop_a.run_until_complete(schedule())
+    finally:
+        loop_a.close()
+    del loop_a
+    gc.collect()
+
+    async def reap() -> None:
+        closer.reap()
+        await asyncio.sleep(0)
+
+    def reap_on_new_loop() -> None:
+        loop: Final = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(reap())
+        finally:
+            loop.close()
+        del loop
+        gc.collect()
+
+    for _ in range(50):
+        reap_on_new_loop()
+
+    assert client.close_calls == 0
+
+
+def test_closes_queued_on_a_collected_loop_free_capacity() -> None:
+    clock: Final = FakeClock()
+    closer: Final = EvictedClientCloser(grace_seconds=0, max_pending=1, clock=clock)
+    first: Final = RecordingAsyncClient()
+    closer.mark_owned(first)
+    loop_a: Final = asyncio.new_event_loop()
+
+    async def schedule_first() -> None:
+        closer.schedule(first)
+
+    try:
+        loop_a.run_until_complete(schedule_first())
+    finally:
+        loop_a.close()
+    del loop_a
+    gc.collect()
+
+    second: Final = RecordingAsyncClient()
+    closer.mark_owned(second)
+    loop_b: Final = asyncio.new_event_loop()
+
+    async def schedule_and_reap_second() -> None:
+        closer.schedule(second)
+        closer.reap()
+        await asyncio.sleep(0)
+
+    try:
+        loop_b.run_until_complete(schedule_and_reap_second())
+    finally:
+        loop_b.close()
+
+    assert first.close_calls == 0
+    assert second.close_calls == 1
+    assert closer.pending_count == 0
+
+
 @pytest.mark.asyncio
 async def test_an_async_client_waits_for_a_loop_rather_than_being_dropped():
     clock = FakeClock()
@@ -289,8 +370,7 @@ async def test_an_async_client_waits_for_a_loop_rather_than_being_dropped():
 
 
 @pytest.mark.asyncio
-async def test_a_client_evicted_on_another_event_loop_is_left_alone():
-    """Closing a client bound to a different loop would schedule work on that loop."""
+async def test_a_client_evicted_on_a_collected_loop_is_dropped():
     clock = FakeClock()
     closer = make_closer(clock)
     client = AsyncClient()
@@ -310,7 +390,7 @@ async def test_a_client_evicted_on_another_event_loop_is_left_alone():
     await asyncio.sleep(0.05)
 
     assert client.closed is False
-    assert closer.pending_count == 1
+    assert closer.pending_count == 0
 
 
 @pytest.mark.asyncio
