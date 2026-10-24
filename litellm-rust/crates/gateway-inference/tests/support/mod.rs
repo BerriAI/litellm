@@ -11,6 +11,7 @@ use axum::{
 };
 use futures_util::future::BoxFuture;
 use litellm_gateway_inference::{Deployment, Gateway, router};
+use litellm_gateway_model_catalog::{CostMapSettings, bundled};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
 use litellm_secrets::{SecretValue, source::SecretSource};
@@ -79,7 +80,8 @@ fn configured_app(
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let http = Resolution::from(&HttpSettings::default()).config;
     let secrets = Arc::new(NoSecrets);
-    let resources = CoreResources::new(pool);
+    let (_, catalog) = bundled(&CostMapSettings::default(), time::OffsetDateTime::now_utc());
+    let resources = CoreResources::new(pool).with_catalog(catalog);
     let gateway = Gateway::new(
         resources,
         http,

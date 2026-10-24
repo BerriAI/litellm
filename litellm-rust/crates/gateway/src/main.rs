@@ -45,7 +45,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
     let config = Config::load(settings.litellm_config)?;
-    let inference = litellm_gateway::build_inference(&config)?;
+    let cost_map_settings = litellm_gateway::cost_map::settings(&config)?;
+    let (catalog_writer, catalog_reader) =
+        litellm_gateway_model_catalog::bundled(&cost_map_settings, time::OffsetDateTime::now_utc());
+    let inference = litellm_gateway::build_inference(&config, catalog_reader)?;
     let ui = match std::env::var_os("LITELLM_UI_PATH") {
         Some(directory) => {
             let ui_settings: UiSettings = settings::from_iter(std::env::vars_os())?;
@@ -65,6 +68,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     let shutdown = tokio_util::sync::CancellationToken::new();
     let _shutdown_guard = shutdown.clone().drop_guard();
+    let _catalog_revalidation = litellm_gateway::cost_map::spawn(
+        &cost_map_settings,
+        catalog_writer,
+        &inference,
+        shutdown.clone(),
+    )?;
     let signal_shutdown = shutdown.clone();
     tokio::spawn(async move {
         shutdown_signal().await;

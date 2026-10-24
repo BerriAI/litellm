@@ -3,7 +3,10 @@ use std::{
     time::Duration,
 };
 
-use axum::{body::Body, http::Request};
+use axum::{
+    body::{Body, to_bytes},
+    http::Request,
+};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use litellm_config::Config;
 use litellm_gateway_inference::{Error, Gateway};
@@ -30,7 +33,11 @@ impl Sink for LogSink {
 
 #[fixture]
 fn inference() -> Arc<Gateway> {
-    litellm_gateway::build_inference(&Config::from_yaml("model_list: []").unwrap()).unwrap()
+    let settings = litellm_gateway_model_catalog::CostMapSettings::default();
+    let (_, catalog) =
+        litellm_gateway_model_catalog::bundled(&settings, time::OffsetDateTime::now_utc());
+    litellm_gateway::build_inference(&Config::from_yaml("model_list: []").unwrap(), catalog)
+        .unwrap()
 }
 
 #[rstest]
@@ -47,6 +54,13 @@ fn inference() -> Arc<Gateway> {
 )]
 #[case::transcription("/audio/transcriptions", None, Some("gateway-key"), 401)]
 #[case::unsupported_route("/responses", None, Some("gateway-key"), 401)]
+#[case::catalog_missing_token("/model/cost_map/source", None, Some("gateway-key"), 401)]
+#[case::catalog_wrong_token(
+    "/model/cost_map/source",
+    Some("Bearer wrong"),
+    Some("gateway-key"),
+    401
+)]
 #[case::unknown_path("/unknown", None, Some("gateway-key"), 404)]
 #[case::unknown_path_unconfigured("/unknown", None, None, 404)]
 #[case::unconfigured("/v1/messages", Some("Bearer gateway-key"), None, 500)]
@@ -111,6 +125,28 @@ async fn authenticates_before_serving_mounted_inference_routes(
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn serves_cost_map_source_after_authentication(inference: Arc<Gateway>) {
+    let config =
+        Config::from_yaml("model_list: []\ngeneral_settings: {master_key: gateway-key}").unwrap();
+    let response = litellm_gateway::router(inference, &config, None, None)
+        .oneshot(
+            Request::get("/model/cost_map/source")
+                .header("authorization", "Bearer gateway-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["source"], "local");
+    assert_eq!(body["fallback_reason"], "remote revalidation pending");
+    assert!(body["model_count"].as_u64().unwrap() > 0);
 }
 
 #[rstest]

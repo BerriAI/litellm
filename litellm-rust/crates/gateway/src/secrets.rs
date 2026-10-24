@@ -46,3 +46,13 @@ pub(super) fn environment_values(values: &Object) -> Result<BTreeMap<String, Sec
         })
         .collect()
 }
+
+pub(super) fn environment_lookup(
+    values: &BTreeMap<String, SecretValue>,
+    name: &str,
+) -> Option<String> {
+    values
+        .get(name)
+        .map(|value| value.expose().to_owned())
+        .or_else(|| std::env::var(name).ok())
+}

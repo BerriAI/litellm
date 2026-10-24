@@ -1,0 +1,10 @@
+{
+  "source": "local",
+  "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+  "is_env_forced": false,
+  "fallback_reason": "remote revalidation pending",
+  "loaded_at": "2026-01-02T03:04:05Z",
+  "source_revision": "fixture-revision",
+  "etag": null,
+  "model_count": 1
+}
