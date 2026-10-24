@@ -5405,6 +5405,7 @@ def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
 
 _CONFIG_PERSISTED_SECTIONS: Final = ("general_settings", "router_settings", "litellm_settings")
 _CONFIG_UNMANAGED_EXCLUSIONS: Final = frozenset(("environment_variables", "model_list"))
+_DEFERRED_LITELLM_SETTINGS_KEYS: Final = frozenset({"callbacks", "guardrails"})
 _CONFIG_SECTION_VALUES: Final = TypeAdapter(Mapping[str, JsonValue])
 _CONFIG_SECTION_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
 
@@ -6561,7 +6562,19 @@ class ProxyConfig:
             # ANSI escape code for blue text
             blue_color_code: Final = "\033[94m"
             reset_color_code: Final = "\033[0m"
-            for key, value in litellm_settings.items():
+            litellm_settings_mapping: Final = cast(  # cast-ok: setting values are dynamically dispatched
+                Mapping[str, Any], litellm_settings
+            )
+            litellm_settings_items: Final = tuple(
+                (key, value)
+                for key, value in litellm_settings_mapping.items()
+                if key not in _DEFERRED_LITELLM_SETTINGS_KEYS
+            ) + tuple(
+                (key, value)
+                for key, value in litellm_settings_mapping.items()
+                if key in _DEFERRED_LITELLM_SETTINGS_KEYS
+            )
+            for key, value in litellm_settings_items:
                 if key == "cache" and value is True:
                     print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa: T201
                     from litellm.caching.caching import Cache

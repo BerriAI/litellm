@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 from typing import Final
 import traceback
@@ -355,3 +356,56 @@ async def test_load_config_rejects_unknown_mcp_disabled_capability(tmp_path: Pat
 
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=None, config_file_path=str(config_path))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_value_before_callbacks", [True, False], ids=["before", "after"])
+async def test_load_config_sets_litellm_settings_before_initializing_callbacks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured_value_before_callbacks: bool,
+) -> None:
+    import yaml
+
+    monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "litellm_settings_order_test_value", "default", raising=False)
+    (tmp_path / "callback_snapshot.py").write_text(
+        "import litellm\n"
+        "from litellm.integrations.custom_logger import CustomLogger\n"
+        "class ConfigSnapshot(CustomLogger):\n"
+        "    def __init__(self) -> None:\n"
+        "        super().__init__()\n"
+        "        self.configured_value = litellm.litellm_settings_order_test_value\n"
+        "instance = ConfigSnapshot()\n"
+    )
+    litellm_settings: Final[dict[str, object]] = (
+        {
+            "litellm_settings_order_test_value": "configured",
+            "callbacks": ["callback_snapshot.instance"],
+        }
+        if configured_value_before_callbacks
+        else {
+            "callbacks": ["callback_snapshot.instance"],
+            "litellm_settings_order_test_value": "configured",
+        }
+    )
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "model_list": [
+                    {
+                        "model_name": "test-model",
+                        "litellm_params": {"model": "openai/gpt-4", "api_key": "test-key"},
+                    }
+                ],
+                "litellm_settings": litellm_settings,
+            },
+            sort_keys=False,
+        )
+    )
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_path))
+
+    assert getattr(litellm.callbacks[0], "configured_value") == "configured"
