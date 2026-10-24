@@ -58,6 +58,7 @@ from litellm.router import (
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
     _without_line_breaks,
+    _longest_embedding_input_tokens,
     Span,
 )
 from litellm.router_strategy import simple_shuffle
@@ -7887,6 +7888,62 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
 
     with pytest.raises(ValueError, match='Either messages or input must be provided to count tokens'):
         router._count_pre_call_check_tokens(messages=None, input=None)
+
+
+def _embedding_router_with_context_window(max_input_tokens: int) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "fake-key"},
+                "model_info": {"max_input_tokens": max_input_tokens},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one two three four five six"] * 3, id="texts"),
+        pytest.param([list(range(6))] * 3, id="token-id-lists"),
+    ],
+)
+async def test_aembedding_batch_fits_when_every_input_fits_the_context_window(embedding_input):
+    router: Final = _embedding_router_with_context_window(10)
+
+    response: Final = await router.aembedding(model="embed", input=embedding_input, mock_response=[0.1, 0.2])
+
+    assert response.data
+
+
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one", " ".join(["word"] * 20)], id="texts"),
+        pytest.param(list(range(11)), id="token-ids"),
+        pytest.param([[1], list(range(11))], id="token-id-lists"),
+    ],
+)
+async def test_aembedding_rejects_a_batch_with_an_input_over_the_context_window(embedding_input):
+    router: Final = _embedding_router_with_context_window(10)
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aembedding(model="embed", input=embedding_input, mock_response=[0.1, 0.2])
+
+@pytest.mark.parametrize(
+    ("items", "expected"),
+    [
+        pytest.param(["one", "one two three four"], litellm.token_counter(text="one two three four"), id="texts"),
+        pytest.param(list(range(7)), 7, id="token-ids"),
+        pytest.param([[1, 2], list(range(5))], 5, id="token-id-lists"),
+        pytest.param([1, "one"], None, id="mixed"),
+        pytest.param([{"type": "message", "role": "user", "content": "hi"}], None, id="responses-items"),
+    ],
+)
+def test_longest_embedding_input_tokens_counts_only_embedding_batches(items, expected):
+    assert _longest_embedding_input_tokens(items) == expected
 
 
 def test_count_pre_call_check_tokens_skips_the_history_a_compaction_item_replaces():
