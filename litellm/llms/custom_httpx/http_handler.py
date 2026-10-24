@@ -20,7 +20,7 @@ from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import CertTypes, RequestFiles
 from httpx._utils import get_environment_proxies
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -581,14 +581,7 @@ _TIMEOUT_EXTENSION: Final = TypeAdapter(dict[str, float | None])
 
 def _timeout_phase_seconds(error: httpx.TimeoutException, phase: str) -> float | None:
     """The limit httpx enforced for ``phase`` on the request that raised ``error``, from the request itself."""
-    try:
-        request: Final = error.request
-    except RuntimeError:
-        return None
-    try:
-        return _TIMEOUT_EXTENSION.validate_python(request.extensions.get("timeout")).get(phase)
-    except ValidationError:
-        return None
+    return _TIMEOUT_EXTENSION.validate_python(error.request.extensions["timeout"]).get(phase)
 
 
 def _raise_timeout(error: httpx.TimeoutException, started_at: float) -> NoReturn:
