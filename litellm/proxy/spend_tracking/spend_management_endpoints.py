@@ -1,4 +1,5 @@
 #### SPEND MANAGEMENT #####
+import asyncio
 import collections
 import json
 import os
@@ -280,6 +281,8 @@ class _TeamTable(Protocol):
 class _VerificationTokenTable(Protocol):
     """The subset of the Prisma verification token table API this module uses."""
 
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_SupportsModelDump]: ...
+
     async def update_many(self, *, data: Mapping[str, float], where: Mapping[str, object]) -> int: ...
 
 
@@ -293,6 +296,28 @@ def _team_table(prisma_client: PrismaClient) -> _TeamTable:
 
 def _verification_token_table(prisma_client: PrismaClient) -> _VerificationTokenTable:
     return VerificationTokenRepository(prisma_client).table
+
+
+_SPEND_COUNTER_RESET_BATCH_SIZE: Final = 100
+
+
+async def _reset_spend_counters(prisma_client: PrismaClient) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        set_spend_counter_with_floor_and_broadcast,
+    )
+
+    for rows, identifier_field, prefix in (
+        (await _verification_token_table(prisma_client).find_many(where={}), "token", "spend:key:"),
+        (await _team_table(prisma_client).find_many(where={}), "team_id", "spend:team:"),
+    ):
+        for start in range(0, len(rows), _SPEND_COUNTER_RESET_BATCH_SIZE):
+            await asyncio.gather(
+                *(
+                    set_spend_counter_with_floor_and_broadcast(counter_key=f"{prefix}{identifier}", value=0.0)
+                    for row in rows[start : start + _SPEND_COUNTER_RESET_BATCH_SIZE]
+                    if isinstance(identifier := row.model_dump().get(identifier_field), str) and identifier
+                )
+            )
 
 
 def _spend_logs_daily_summary_sql(
@@ -3720,6 +3745,8 @@ async def global_spend_reset():
 
     await _verification_token_table(prisma_client).update_many(data={"spend": 0.0}, where={})
     await _team_table(prisma_client).update_many(data={"spend": 0.0}, where={})
+
+    await _reset_spend_counters(prisma_client)
 
     return {
         "message": "Spend for all API Keys and Teams reset successfully",
