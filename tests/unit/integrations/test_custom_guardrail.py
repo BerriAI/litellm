@@ -15,6 +15,7 @@ from litellm.integrations.custom_guardrail import (
     _request_is_streaming,
     guardrail_request_data_with_streaming,
     log_guardrail_information,
+    user_api_key_auth_from_request_data,
     without_server_streaming_classification,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -3786,3 +3787,41 @@ def test_default_on_guardrail() -> None:
         )
         is True
     )
+
+
+_STAMPED_IDENTITY: Final = {
+    "user_api_key_hash": "hash-a",
+    "user_api_key_team_id": "team-a",
+    "user_api_key_user_id": "user-a",
+}
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        pytest.param({"model": "m", "metadata": _STAMPED_IDENTITY}, id="chat route"),
+        pytest.param(
+            {"model": "m", "metadata": _STAMPED_IDENTITY, "litellm_metadata": {"user_api_key_token": "hash-a"}},
+            id="chat route after the unified guardrail adds litellm_metadata",
+        ),
+        pytest.param(
+            {"model": "m", "litellm_metadata": _STAMPED_IDENTITY, "metadata": {"user_api_key_hash": "forged"}},
+            id="messages route with caller metadata",
+        ),
+    ],
+)
+def test_user_api_key_auth_from_request_data_reads_the_stamped_container(request_data: dict[str, object]) -> None:
+    auth: Final = user_api_key_auth_from_request_data(request_data)
+
+    assert (auth.api_key, auth.team_id, auth.user_id) == ("hash-a", "team-a", "user-a")
+
+
+def test_user_api_key_auth_from_request_data_without_a_stamped_hash_keeps_the_route_container() -> None:
+    auth: Final = user_api_key_auth_from_request_data(
+        {
+            "litellm_metadata": {"user_api_key_user_id": "route-user"},
+            "metadata": {"user_api_key_user_id": "other-user"},
+        }
+    )
+
+    assert (auth.api_key, auth.user_id) == (None, "route-user")

@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
 
 import httpx
+from typing_extensions import TypeIs  # noqa: TID251  # narrows the metadata container without copying it
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
@@ -118,11 +119,33 @@ def is_guardrail_intervention(e: Exception) -> bool:
     return is_fastapi_http_exception(e, _GUARDRAIL_BLOCK_STATUS_CODES)
 
 
-def _user_api_key_auth_from_request(request_data: Mapping[str, object]) -> "UserAPIKeyAuth":
+def _is_str_object_mapping(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: JSON metadata keys are str
+    return isinstance(value, Mapping)
+
+
+def _stamped_metadata(request_data: Mapping[str, object]) -> Mapping[str, object]:
+    """The metadata container the proxy stamped the caller's identity into.
+
+    The unified guardrail path adds a `litellm_metadata` container built from the
+    auth object before `apply_guardrail` runs, so on chat routes that container
+    exists without the stamped fields while `metadata` carries them.
+    """
+    buckets: Final = tuple(
+        bucket
+        for bucket in (request_data.get("litellm_metadata"), request_data.get("metadata"))
+        if _is_str_object_mapping(bucket)
+    )
+    stamped: Final = next((bucket for bucket in buckets if "user_api_key_hash" in bucket), None)
+    if stamped is not None:
+        return stamped
+    fallback: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
+    return fallback if _is_str_object_mapping(fallback) else {}
+
+
+def user_api_key_auth_from_request_data(request_data: Mapping[str, object]) -> "UserAPIKeyAuth":
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
-    metadata: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
-    stamped: Final[Mapping[str, object]] = metadata if isinstance(metadata, dict) else {}
+    stamped: Final = _stamped_metadata(request_data)
 
     def stamped_str(field: str) -> str | None:
         value: Final = stamped.get(field)
@@ -915,7 +938,7 @@ class CustomGuardrail(CustomLogger):
             if target is not self:
                 kwargs["guardrail_to_apply"] = self
             result: Final = await target.async_pre_call_hook(
-                user_api_key_dict=_user_api_key_auth_from_request(kwargs),
+                user_api_key_dict=user_api_key_auth_from_request_data(kwargs),
                 cache=dc,
                 data=kwargs,
                 call_type="completion" if call_type == CallTypes.completion else "acompletion",
@@ -946,7 +969,7 @@ class CustomGuardrail(CustomLogger):
         }
         try:
             result: Final = await target.async_pre_call_hook(
-                user_api_key_dict=_user_api_key_auth_from_request(scan_request),
+                user_api_key_dict=user_api_key_auth_from_request_data(scan_request),
                 cache=dc,
                 data=scan_request,
                 call_type="acompletion",
@@ -996,7 +1019,7 @@ class CustomGuardrail(CustomLogger):
             if target is not self:
                 request_data["guardrail_to_apply"] = self  # rebind-ok: dispatch consumes this key
             result: Final = await target.async_post_call_success_hook(
-                user_api_key_dict=_user_api_key_auth_from_request(request_data),
+                user_api_key_dict=user_api_key_auth_from_request_data(request_data),
                 data=request_data,
                 response=response,
             )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -21,6 +22,7 @@ from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
+    user_api_key_auth_from_request_data,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     get_attribute_or_key,
@@ -28,6 +30,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     group_tool_exchanges,
     has_tool_with_name,
 )
+from litellm.litellm_core_utils.provider_affinity import get_stable_session_id
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
     httpxSpecialProvider,
@@ -56,6 +59,8 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 BYPASS_HEADER: Final = "x-headroom-bypass"
+AFFINITY_HEADER: Final = "x-headroom-affinity"
+_AFFINITY_KEY_LENGTH: Final = 32
 _STREAM_CONVERTIBLE_CALL_TYPES: Final = frozenset(
     (CallTypes.completion, CallTypes.acompletion, CallTypes.responses, CallTypes.aresponses)
 )
@@ -85,6 +90,27 @@ def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard
 
 def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
     return isinstance(value, list)
+
+
+def _affinity_key(request_data: Mapping[str, object]) -> str | None:
+    """Opaque routing value for related Headroom calls, or None.
+
+    Both halves must be present: without a session id there is nothing to keep
+    together, and without a key the proxy authenticated the same session id could
+    belong to different tenants. Neither raw value leaves the proxy.
+    """
+    session_id: Final = get_stable_session_id(request_data)
+    key_hash: Final = user_api_key_auth_from_request_data(request_data).api_key
+    if not session_id or not key_hash:
+        return None
+    return hashlib.sha256(f"{key_hash}|{session_id}".encode()).hexdigest()[:_AFFINITY_KEY_LENGTH]
+
+
+@dataclass(frozen=True, slots=True)
+class _IssuedHashes:
+    hashes: frozenset[str]
+    expires_at: float
+    affinity: str | None
 
 
 def _flatten_messages_for_compression(messages: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -521,7 +547,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
-        self._issued_hashes_by_call_id: dict[str, tuple[frozenset[str], float]] = {}
+        self._issued_hashes_by_call_id: dict[str, _IssuedHashes] = {}
         super().__init__(  # pyright: ignore[reportUnknownMemberType]
             guardrail_name=guardrail_name,
             event_hook=event_hook,
@@ -540,10 +566,12 @@ class HeadroomGuardrail(CustomGuardrail):
         value: Final = headers.get(BYPASS_HEADER)
         return str(value).lower() == "true"
 
-    def _request_headers(self) -> dict[str, str]:
+    def _request_headers(self, affinity: str | None = None) -> dict[str, str]:
         headers: Final[dict[str, str]] = {"Content-Type": "application/json"}
         if self.headroom_api_key:
             headers["Authorization"] = f"Bearer {self.headroom_api_key}"
+        if affinity:
+            headers[AFFINITY_HEADER] = affinity
         return headers
 
     @staticmethod
@@ -572,9 +600,7 @@ class HeadroomGuardrail(CustomGuardrail):
     def _prune_expired_hashes(self) -> None:
         now: Final = time.monotonic()
         self._issued_hashes_by_call_id = {
-            call_id: (hashes, expiry)
-            for call_id, (hashes, expiry) in self._issued_hashes_by_call_id.items()
-            if expiry > now
+            call_id: issued for call_id, issued in self._issued_hashes_by_call_id.items() if issued.expires_at > now
         }
 
     def _handle_compress_failure(
@@ -596,6 +622,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         messages: list[dict[str, object]],
         model: str | None,
+        affinity: str | None = None,
     ) -> _CompressResult:
         payload: Final[dict[str, object]] = {"messages": messages}
         if model:
@@ -605,7 +632,7 @@ class HeadroomGuardrail(CustomGuardrail):
             raw_response: HttpxResponse = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
                 url=f"{self.headroom_api_base}/v1/compress",
                 json=payload,
-                headers=self._request_headers(),
+                headers=self._request_headers(affinity),
                 timeout=self.timeout,
             )
         except httpx.HTTPStatusError as e:
@@ -734,7 +761,7 @@ class HeadroomGuardrail(CustomGuardrail):
             stats["tokens_saved"] = tokens_before - tokens_after
         return _CompressResult(filtered, True, stats, _read_ccr_hashes(body))
 
-    async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
+    async def _call_retrieve(self, hash_value: str, query: str | None = None, affinity: str | None = None) -> str:
         params: Final[dict[str, str]] = {}
         if query:
             params["query"] = query
@@ -743,7 +770,7 @@ class HeadroomGuardrail(CustomGuardrail):
             raw_response: HttpxResponse = await self.async_handler.get(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.get is untyped
                 url=f"{self.headroom_api_base}/v1/retrieve/{hash_value}",
                 params=params,
-                headers=self._request_headers(),
+                headers=self._request_headers(affinity),
                 timeout=self.timeout,
             )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
@@ -811,18 +838,20 @@ class HeadroomGuardrail(CustomGuardrail):
         # user message, so it is withheld here at some cost to history ranking.
         # request_data is a bare dict on the base signature; narrow it before
         # reading the untranslated messages so long tool names can be recovered.
-        raw_messages: Final = _REQUEST_DATA_ADAPTER.validate_python(request_data).get("messages")
-        raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(raw_messages)
+        narrowed_request_data: Final = _REQUEST_DATA_ADAPTER.validate_python(request_data)
+        raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(narrowed_request_data.get("messages"))
         protected_indices: Final = _protected_indices(messages, raw_retrieve_call_ids)
         compressible: Final = [m for i, m in enumerate(messages) if i not in protected_indices]
         if not compressible:
             return inputs
 
         model: Final = self.headroom_model or request_data.get("model")
+        affinity: Final = _affinity_key(narrowed_request_data)
         start_time: Final = time.time()
         result: Final = await self._call_compress(
             messages=_flatten_messages_for_compression(compressible),
             model=model if isinstance(model, str) else None,
+            affinity=affinity,
         )
         end_time: Final = time.time()
 
@@ -873,7 +902,11 @@ class HeadroomGuardrail(CustomGuardrail):
         if not call_id:
             call_id = str(uuid.uuid4())
             request_data["litellm_call_id"] = call_id
-        self._issued_hashes_by_call_id[call_id] = (frozenset(hashes), time.monotonic() + _HASH_CACHE_TTL_SECONDS)
+        self._issued_hashes_by_call_id[call_id] = _IssuedHashes(
+            hashes=frozenset(hashes),
+            expires_at=time.monotonic() + _HASH_CACHE_TTL_SECONDS,
+            affinity=affinity,
+        )
 
         existing_tools: Final = inputs.get("tools")
         retrieve_tool: Final = _build_headroom_retrieve_tool()
@@ -936,7 +969,9 @@ class HeadroomGuardrail(CustomGuardrail):
 
         self._prune_expired_hashes()
         call_id: Final = _resolve_call_id(logging_obj, kwargs)
-        valid_hashes = self._issued_hashes_by_call_id.get(call_id, (frozenset(), 0.0))[0] if call_id else frozenset()
+        issued: Final = self._issued_hashes_by_call_id.get(call_id) if call_id else None
+        valid_hashes: Final = issued.hashes if issued else frozenset()
+        affinity: Final = issued.affinity if issued else None
 
         retrieved: Final[list[tuple[dict[str, object], str]]] = []
         for tc in tool_calls:
@@ -959,6 +994,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 content = await self._call_retrieve(
                     hash_value=hash_value,
                     query=str(query) if query else None,
+                    affinity=affinity,
                 )
             verbose_proxy_logger.debug("Headroom CCR: retrieved hash=%s (%d chars)", hash_value, len(content))
             retrieved.append((tc, content))
