@@ -331,7 +331,7 @@ async def _build_virtual_call_logging_obj(
     headers: Final = dict(raw_headers) if raw_headers else {}
     call_id: Final = resolve_litellm_call_id(headers.get("x-litellm-call-id"))
     trace_id: Final = get_chain_id_from_headers(headers)
-    request_data: dict[str, object] = {
+    request_data: Final[dict[str, object]] = {  # mutable-ok: the proxy metadata helper updates this mapping
         "model": f"MCP: {name}",
         "call_type": CallTypes.call_mcp_tool.value,
         "litellm_call_id": call_id,
