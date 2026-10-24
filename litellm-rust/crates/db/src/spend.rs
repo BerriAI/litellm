@@ -316,3 +316,61 @@ pub async fn upsert_daily_team_spend(
     .await?;
     Ok(())
 }
+
+pub async fn upsert_daily_end_user_spend(
+    executor: impl PgExecutor<'_>,
+    rows: &[DailySpend],
+) -> Result<(), Error> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    macro_rules! column {
+        ($field:ident) => {
+            rows.iter()
+                .map(|row| row.$field.clone())
+                .collect::<Vec<_>>()
+        };
+    }
+    sqlx::query_file!(
+        "queries/spend/upsert_daily_end_user_spend.sql",
+        &column!(entity_id),
+        &column!(date),
+        &column!(api_key),
+        &column!(model),
+        &column!(custom_llm_provider),
+        &column!(endpoint),
+        &column!(model_group) as &[Option<String>],
+        &column!(prompt_tokens),
+        &column!(completion_tokens),
+        &column!(api_requests),
+        &column!(successful_requests),
+        &column!(failed_requests),
+        &column!(cache_read_input_tokens),
+        &column!(cache_creation_input_tokens),
+        &column!(total_response_time_ms),
+        &column!(timed_requests),
+        &column!(spend),
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, strum::VariantArray)]
+pub enum DailyTable {
+    User,
+    Team,
+    EndUser,
+}
+
+pub async fn upsert_daily_spend(
+    executor: impl PgExecutor<'_>,
+    table: DailyTable,
+    rows: &[DailySpend],
+) -> Result<(), Error> {
+    match table {
+        DailyTable::User => upsert_daily_user_spend(executor, rows).await,
+        DailyTable::Team => upsert_daily_team_spend(executor, rows).await,
+        DailyTable::EndUser => upsert_daily_end_user_spend(executor, rows).await,
+    }
+}
