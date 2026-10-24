@@ -5,13 +5,17 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
 from litellm.llms.vertex_ai.common_utils import (
     vertex_model_garden_model_id_in_json_body,
 )
-from litellm.llms.vertex_ai.vertex_model_garden.main import create_vertex_url
+from litellm.llms.vertex_ai.vertex_model_garden.main import (
+    VertexAIModelGardenModels,
+    create_vertex_url,
+)
 
 
 @pytest.mark.parametrize(
@@ -235,3 +239,107 @@ async def test_default_api_base_when_none_provided_publisher_model(
         "test-project/locations/us-central1/endpoints/openapi/chat/completions"
     )
     assert request_body["model"] == "xai/grok-4.1-fast-reasoning"
+
+
+USER_API_BASE = "https://my-endpoint.example.com/v1"
+CHAT_COMPLETION = {
+    "id": "chatcmpl-test",
+    "object": "chat.completion",
+    "created": 1234567890,
+    "model": "5464397967697903616",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "hi"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+STREAM_CHUNK = {
+    "id": "chatcmpl-test",
+    "object": "chat.completion.chunk",
+    "created": 1234567890,
+    "model": "5464397967697903616",
+    "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": "stop"}],
+}
+
+
+@pytest.fixture
+def model_garden_chat_route(respx_mock, monkeypatch, clean_vertex_env, _reset_litellm_http_client_cache):
+    """The Model Garden route with only the network, the token mint and the optional
+    vertexai import replaced"""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    vertexai_stub = MagicMock()
+    monkeypatch.setitem(sys.modules, "vertexai", vertexai_stub)
+    monkeypatch.setitem(sys.modules, "vertexai.preview", vertexai_stub.preview)
+    monkeypatch.setattr(
+        VertexAIModelGardenModels,
+        "_ensure_access_token",
+        lambda self, **kwargs: ("fake-token", "test-project"),
+    )
+    return respx_mock.post(f"{USER_API_BASE}/chat/completions")
+
+
+def _model_garden_kwargs(**overrides):
+    return {
+        "model": "vertex_ai/openai/5464397967697903616",
+        "messages": [{"role": "user", "content": "hello"}],
+        "api_base": USER_API_BASE,
+        "vertex_ai_location": "us-central1",
+        "vertex_ai_project": "test-project",
+        **overrides,
+    }
+
+
+@pytest.mark.parametrize("header_kwarg", ["extra_headers", "headers"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_model_garden_sends_the_callers_headers_with_the_vertex_token(
+    model_garden_chat_route, header_kwarg, sync_mode
+):
+    model_garden_chat_route.mock(return_value=httpx.Response(200, json=CHAT_COMPLETION))
+    kwargs = _model_garden_kwargs(**{header_kwarg: {"X-Test": "from-caller"}})
+
+    response = litellm.completion(**kwargs) if sync_mode else await litellm.acompletion(**kwargs)
+
+    assert response.choices[0].message.content == "hi"
+    sent_headers = model_garden_chat_route.calls[0].request.headers
+    assert sent_headers["x-test"] == "from-caller"
+    assert sent_headers["authorization"] == "Bearer fake-token"
+    assert sent_headers["content-type"] == "application/json"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_model_garden_streaming_sends_the_callers_headers(model_garden_chat_route, sync_mode):
+    model_garden_chat_route.mock(
+        return_value=httpx.Response(200, content=f"data: {json.dumps(STREAM_CHUNK)}\n\ndata: [DONE]\n\n")
+    )
+    kwargs = _model_garden_kwargs(stream=True, extra_headers={"X-Test": "from-caller"})
+
+    if sync_mode:
+        text = "".join(chunk.choices[0].delta.content or "" for chunk in litellm.completion(**kwargs))
+    else:
+        stream = await litellm.acompletion(**kwargs)
+        text = "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
+
+    assert text == "hi"
+    sent_headers = model_garden_chat_route.calls[0].request.headers
+    assert sent_headers["x-test"] == "from-caller"
+    assert sent_headers["authorization"] == "Bearer fake-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_model_garden_keeps_the_vertex_token_over_a_caller_authorization_header(
+    model_garden_chat_route,
+):
+    model_garden_chat_route.mock(return_value=httpx.Response(200, json=CHAT_COMPLETION))
+
+    await litellm.acompletion(**_model_garden_kwargs(extra_headers={"Authorization": "Bearer from-caller"}))
+
+    sent_headers = model_garden_chat_route.calls[0].request.headers
+    assert sent_headers["authorization"] == "Bearer fake-token"
