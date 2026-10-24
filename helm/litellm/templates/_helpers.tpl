@@ -698,6 +698,14 @@ shutdown drain window.
 {{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 47 | trimSuffix "-") -}}
 {{- end -}}
 
+{{- define "litellm.serverRootPath" -}}
+{{- $root := .Values.serverRootPath | default "" | trimSuffix "/" -}}
+{{- if and $root (or (not (regexMatch "^(/[A-Za-z0-9_.~-]+)+$" $root)) (regexMatch "(^|/)\\.\\.?(/|$)" $root)) -}}
+{{- fail "serverRootPath must contain safe absolute path segments without traversal" -}}
+{{- end -}}
+{{- $root -}}
+{{- end -}}
+
 {{- define "litellm.lens.mode" -}}
 {{- $mode := .Values.lensWorker.mode | default (ternary "bundled" "disabled" .Values.lensWorker.enabled) -}}
 {{- if not (has $mode (list "bundled" "external" "disabled")) -}}

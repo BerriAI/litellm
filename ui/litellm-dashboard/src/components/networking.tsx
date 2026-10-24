@@ -156,6 +156,7 @@ import {
   registerBaseUrlGetter,
   registerErrorHandler,
 } from "@/lib/http/runtime";
+import { withServerRoot } from "@/lib/assetPaths";
 import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
 
 export { serverRootPath };
@@ -566,7 +567,9 @@ export const getUiConfig = async () => {
     : await (async (): Promise<string | null> => {
         try {
           // eslint-disable-next-line no-restricted-syntax -- read the UI static config before the API origin is known
-          const response = await fetch("/ui/litellm-runtime-config.json", { cache: "no-store" });
+          const response = await fetch(withServerRoot("/ui/litellm-runtime-config.json", serverRootPath), {
+            cache: "no-store",
+          });
           if (!response.ok) return null;
           const runtimeConfig: unknown = await response.json();
           if (
@@ -584,9 +587,10 @@ export const getUiConfig = async () => {
       })();
   runtimeBackendBaseUrl = runtimeBackendUrl;
   const discoveryBaseUrl = defaultProxyBaseUrl ?? runtimeBackendUrl;
+  const discoveryRoot = resolveApiBase({ serverRootPath }) || "/litellm";
   const url = discoveryBaseUrl
     ? `${discoveryBaseUrl}/litellm/.well-known/litellm-ui-config`
-    : `/litellm/.well-known/litellm-ui-config`;
+    : `${discoveryRoot}/.well-known/litellm-ui-config`;
   const response = await fetch(url);
   const jsonData: LiteLLMWellKnownUiConfig = await response.json();
   /**
