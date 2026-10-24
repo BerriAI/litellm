@@ -14,7 +14,7 @@ pub use daily_team_spend::upsert_daily_team_spend;
 pub use daily_user_spend::{DailySpend, upsert_daily_user_spend};
 pub use end_user_spend::add_end_user_spend;
 pub use key_spend::{EntitySpend, add_key_spend};
-pub use spend_logs::{SpendLog, insert_spend_logs};
+pub use spend_logs::{SpendLog, SpendLogRow, insert_spend_logs};
 pub use team_lock::{begin, lock_team};
 pub use team_member_spend::{TeamMemberSpend, add_team_member_spend};
 pub use team_spend::add_team_spend;

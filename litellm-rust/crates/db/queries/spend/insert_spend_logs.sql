@@ -14,7 +14,7 @@ SELECT l.request_id, l.call_type, l.api_key, l.spend, l.total_tokens, l.prompt_t
        l.organization_id, l.end_user, l.requester_ip_address, '{}'::jsonb,
        '{}'::jsonb, '{}'::jsonb, l.session_id, l.status, l.litellm_call_id
 FROM UNNEST($1::text[], $2::text[], $3::text[], $4::float8[], $5::int4[], $6::int4[],
-            $7::int4[], $8::text[], $9::text[], $10::text[], $11::int4[], $12::text[],
+            $7::int4[], $8::timestamp[], $9::timestamp[], $10::timestamp[], $11::int4[], $12::text[],
             $13::text[], $14::text[], $15::text[], $16::text[], $17::text[],
             $18::jsonb[], $19::text[], $20::text[], $21::text[], $22::text[],
             $23::text[], $24::text[], $25::text[], $26::text[], $27::text[])
@@ -23,4 +23,4 @@ FROM UNNEST($1::text[], $2::text[], $3::text[], $4::float8[], $5::int4[], $6::in
           request_duration_ms, model, model_id, model_group, custom_llm_provider,
           api_base, user_id, metadata, cache_hit, cache_key, team_id, organization_id,
           end_user, requester_ip_address, session_id, status, litellm_call_id)
-ON CONFLICT (request_id) DO NOTHING
+ON CONFLICT DO NOTHING
