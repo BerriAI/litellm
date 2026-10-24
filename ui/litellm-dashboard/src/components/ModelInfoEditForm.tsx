@@ -103,6 +103,8 @@ const modelEditShape = {
   max_retries: scalar,
   timeout: scalar,
   stream_timeout: scalar,
+  weight: scalar,
+  order: scalar,
   input_cost: perMillionToPerToken,
   output_cost: perMillionToPerToken,
   cache_read_cost: perMillionToPerToken,
@@ -206,6 +208,8 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   max_retries: localModelData.litellm_params.max_retries,
   timeout: localModelData.litellm_params.timeout,
   stream_timeout: localModelData.litellm_params.stream_timeout,
+  weight: localModelData.litellm_params.weight,
+  order: localModelData.litellm_params.order,
   input_cost: perMillionTokens(
     localModelData.litellm_params.input_cost_per_token,
     localModelData.model_info?.input_cost_per_token,
@@ -247,9 +251,10 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   litellm_credential_name: localModelData.litellm_params?.litellm_credential_name ?? null,
   litellm_extra_params: JSON.stringify(
     Object.fromEntries(
-      Object.entries(localModelData.litellm_params || {}).filter(
-        ([key, value]) => key !== "litellm_credential_name" && !isMaskedSecret(value),
-      ),
+      Object.entries(localModelData.litellm_params || {}).filter(([key, value]) => {
+        const ownedByDedicatedField = key === "weight" || key === "order";
+        return !ownedByDedicatedField && key !== "litellm_credential_name" && !isMaskedSecret(value);
+      }),
     ),
     null,
     2,
@@ -545,6 +550,8 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               "Enter stream timeout",
               localModelData.litellm_params?.stream_timeout,
             )}
+            {numberField("weight", "Weight", "e.g. 0.7", localModelData.litellm_params?.weight)}
+            {numberField("order", "Order", "e.g. 1", localModelData.litellm_params?.order)}
 
             <div>
               <FieldLabel>Model Access Groups</FieldLabel>
