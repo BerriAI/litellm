@@ -297,7 +297,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return f"{cls.USER_ID_AFFINITY_PREFIX}{user_id}"
 
     @staticmethod
-    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _get_session_id_from_request_kwargs(request_kwargs: Mapping[str, object]) -> str | None:
         for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
             session_id = DeploymentAffinityCheck._get_session_id_from_metadata_dict(metadata=metadata)
             if session_id is not None:
@@ -305,7 +305,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return None
 
     @staticmethod
-    def _get_marker_session_affinity_ttl(request_kwargs: dict) -> int | None:
+    def _get_marker_session_affinity_ttl(request_kwargs: Mapping[str, object]) -> int | None:
         """TTL from the session-affinity marker the Router stamps at pre-routing time
         when an auto-router routed this request with session_affinity enabled.
         Marker presence enables session pinning for this request only; anything that
@@ -341,12 +341,26 @@ class DeploymentAffinityCheck(CustomLogger):
         return self._pinned_model_id(winner)
 
     @staticmethod
-    def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
+    def _failed_deployment_ids(metadata: Mapping[object, object]) -> frozenset[str]:
+        failed_ids: Final = metadata.get("retry_failed_deployment_ids")
+        if not isinstance(failed_ids, tuple):
+            return frozenset()
+        values: Final = cast(tuple[object, ...], failed_ids)  # cast-ok: checked tuple, opaque elements
+        return frozenset(deployment_id for deployment_id in values if isinstance(deployment_id, str))
+
+    @staticmethod
+    def _deployment_model_id(deployment: Mapping[str, object]) -> object:
+        model_info: Final = deployment.get("model_info")
+        if not isinstance(model_info, dict):
+            return None
+        return cast(Mapping[object, object], model_info).get("id")  # cast-ok: dict checked; values stay opaque
+
+    @classmethod
+    def _find_deployment_by_model_id(
+        cls, healthy_deployments: Sequence[dict[str, object]], model_id: str
+    ) -> dict[str, object] | None:
         for deployment in healthy_deployments:
-            model_info = deployment.get("model_info")
-            if not isinstance(model_info, dict):
-                continue
-            deployment_model_id = model_info.get("id")
+            deployment_model_id = cls._deployment_model_id(deployment)
             if deployment_model_id is not None and str(deployment_model_id) == str(model_id):
                 return deployment
         return None
@@ -357,7 +371,7 @@ class DeploymentAffinityCheck(CustomLogger):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
@@ -366,7 +380,7 @@ class DeploymentAffinityCheck(CustomLogger):
         2. cached API-key deployment affinity
         """
         request_kwargs = request_kwargs or {}
-        typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
+        typed_healthy_deployments: Final = cast(list[dict[str, object]], healthy_deployments)
         if request_kwargs.get("_target_order") is not None:
             return typed_healthy_deployments
 
@@ -410,46 +424,57 @@ class DeploymentAffinityCheck(CustomLogger):
             if (session_affinity_active or enable_user_key)
             else None
         )
+        session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs=request_kwargs)
+        failed_deployment_ids: Final = (
+            frozenset[str]().union(
+                *(self._failed_deployment_ids(metadata) for metadata in self._iter_metadata_dicts(request_kwargs))
+            )
+            if (session_affinity_active and session_id is not None) or (enable_user_key and user_key is not None)
+            else frozenset[str]()
+        )
+        affinity_deployments: Final = [
+            deployment
+            for deployment in typed_healthy_deployments
+            if self._deployment_model_id(deployment) not in failed_deployment_ids
+        ] or typed_healthy_deployments
 
         # 2) Session-id -> deployment affinity
-        if session_affinity_active:
-            session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs=request_kwargs)
-            if session_id is not None:
-                session_cache_key: Final = self.get_session_affinity_cache_key(
-                    model_group=stable_model_map_key, session_id=session_id, user_key=user_key
+        if session_affinity_active and session_id is not None:
+            session_cache_key: Final = self.get_session_affinity_cache_key(
+                model_group=stable_model_map_key, session_id=session_id, user_key=user_key
+            )
+            session_cache_result: Final = await self.cache.async_get_cache(key=session_cache_key)
+
+            session_model_id: str | None = None
+            if isinstance(session_cache_result, dict):
+                session_model_id = cast(str | None, session_cache_result.get("model_id"))
+            elif isinstance(session_cache_result, str):
+                session_model_id = session_cache_result
+
+            if session_model_id:
+                session_deployment: Final = self._find_deployment_by_model_id(
+                    healthy_deployments=affinity_deployments,
+                    model_id=session_model_id,
                 )
-                session_cache_result: Final = await self.cache.async_get_cache(key=session_cache_key)
-
-                session_model_id: str | None = None
-                if isinstance(session_cache_result, dict):
-                    session_model_id = cast(str | None, session_cache_result.get("model_id"))
-                elif isinstance(session_cache_result, str):
-                    session_model_id = session_cache_result
-
-                if session_model_id:
-                    session_deployment: Final = self._find_deployment_by_model_id(
-                        healthy_deployments=typed_healthy_deployments,
-                        model_id=session_model_id,
+                if session_deployment is not None:
+                    verbose_router_logger.debug(
+                        "DeploymentAffinityCheck: session-id affinity hit -> deployment=%s session_id=%s",
+                        session_model_id,
+                        session_id,
                     )
-                    if session_deployment is not None:
-                        verbose_router_logger.debug(
-                            "DeploymentAffinityCheck: session-id affinity hit -> deployment=%s session_id=%s",
-                            session_model_id,
-                            session_id,
-                        )
-                        return [session_deployment]
-                    else:
-                        verbose_router_logger.debug(
-                            "DeploymentAffinityCheck: session-id pinned deployment=%s not found in healthy_deployments",
-                            session_model_id,
-                        )
+                    return [session_deployment]
+                else:
+                    verbose_router_logger.debug(
+                        "DeploymentAffinityCheck: session-id pinned deployment=%s not found in healthy_deployments",
+                        session_model_id,
+                    )
 
         # 3) User key -> deployment affinity
         if not enable_user_key:
-            return typed_healthy_deployments
+            return affinity_deployments
 
         if user_key is None:
-            return typed_healthy_deployments
+            return affinity_deployments
 
         cache_key: Final = self.get_affinity_cache_key(model_group=stable_model_map_key, user_key=user_key)
         cache_result: Final = await self.cache.async_get_cache(key=cache_key)
@@ -462,10 +487,10 @@ class DeploymentAffinityCheck(CustomLogger):
             model_id = cache_result
 
         if not model_id:
-            return typed_healthy_deployments
+            return affinity_deployments
 
         deployment = self._find_deployment_by_model_id(
-            healthy_deployments=typed_healthy_deployments,
+            healthy_deployments=affinity_deployments,
             model_id=model_id,
         )
         if deployment is None:
@@ -473,7 +498,7 @@ class DeploymentAffinityCheck(CustomLogger):
                 "DeploymentAffinityCheck: pinned deployment=%s not found in healthy_deployments",
                 model_id,
             )
-            return typed_healthy_deployments
+            return affinity_deployments
 
         verbose_router_logger.debug(
             "DeploymentAffinityCheck: caller affinity hit -> deployment=%s user_key=%s",
