@@ -418,31 +418,45 @@ def test_vertex_warns_when_dropping_guardrail_turn_detection_update(caplog):
     )
 
 
-def test_vertex_does_not_warn_when_dropping_non_guardrail_session_update(caplog):
-    """A subsequent session.update without ``create_response: False`` is a
-    routine drop and should stay at debug level (no warning)."""
+def test_vertex_warns_once_when_dropping_a_session_update(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A dropped session.update is reported, and reported once.
+
+    Inverts what this test previously asserted: it held the drop was routine and
+    should stay at debug, which is the #44825 report. The drop is unavoidable;
+    only the silence changes.
+    """
     import logging
 
-    cfg = VertexAIRealtimeConfig(
+    cfg: Final = VertexAIRealtimeConfig(
         access_token="tok", project="my-proj", location="us-central1"
     )
 
-    session_update = {
+    session_update: Final = {
         "type": "session.update",
-        "session": {"instructions": "Be concise."},
+        "session": {"instructions": "Be concise.", "voice": "Puck"},
     }
+    already_set_up: Final = json.dumps({"setup": {"model": "x"}})
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        cfg.transform_realtime_request(
-            json.dumps(session_update),
-            "gemini-live-2.5-flash-preview-native-audio-09-2025",
-            session_configuration_request=json.dumps({"setup": {"model": "x"}}),
-        )
+        for _ in range(3):
+            cfg.transform_realtime_request(
+                json.dumps(session_update),
+                "gemini-live-2.5-flash-preview-native-audio-09-2025",
+                session_configuration_request=already_set_up,
+            )
 
-    assert not any(
-        "Vertex AI Realtime" in record.message and "session.update" in record.message
+    warnings: Final = [
+        record
         for record in caplog.records
-    )
+        if "Vertex AI Realtime" in record.message and "session.update" in record.message
+    ]
+    assert len(warnings) == 1, "three drops, one warning"
+    # the operator needs to know what was lost and what to do about it
+    assert "instructions" in warnings[0].message
+    assert "voice" in warnings[0].message
+    assert "gemini_live_defer_setup" in warnings[0].message
 
 
 @pytest.mark.asyncio

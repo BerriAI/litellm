@@ -2235,3 +2235,32 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
 
     assert input_details.get("web_search_requests") is None
     assert input_details.get("google_maps_grounding_requests") is None
+
+
+def test_gemini_warns_once_when_dropping_a_session_update(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The Gemini path reports a dropped session.update, as the Vertex path does."""
+    import logging
+    from typing import Final
+
+    cfg: Final = GeminiRealtimeConfig()
+    session_update: Final = json.dumps({"type": "session.update", "session": {"instructions": "Be concise."}})
+    already_set_up: Final = json.dumps({"setup": {"model": "x"}})
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        for _ in range(2):
+            cfg.transform_realtime_request(
+                session_update,
+                "gemini-live-2.5-flash-preview-native-audio-09-2025",
+                session_configuration_request=already_set_up,
+            )
+
+    warnings: Final = [
+        record
+        for record in caplog.records
+        if "Gemini Realtime" in record.message and "session.update" in record.message
+    ]
+    assert len(warnings) == 1
+    assert "instructions" in warnings[0].message
+    assert "gemini_live_defer_setup" in warnings[0].message
