@@ -161,10 +161,66 @@ def coerce_numeric_form_fields(
     }
 
 
+_ORJSON_INT_MIN: Final = -(2**63)
+_ORJSON_INT_MAX: Final = 2**64 - 1
+
+
+def _has_int_outside_orjson_range(body: bytes) -> bool:
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(body):
+        byte = body[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:
+                escaped = True
+            elif byte == 0x22:
+                in_string = False
+            index += 1
+            continue
+        if byte == 0x22:
+            in_string = True
+            index += 1
+            continue
+        if byte == 0x2D or 0x30 <= byte <= 0x39:
+            start = index
+            if byte == 0x2D:
+                index += 1
+            digits_start = index
+            while index < len(body) and 0x30 <= body[index] <= 0x39:
+                index += 1
+            if index == digits_start:
+                continue
+            if index < len(body) and body[index] in b".eE":
+                while index < len(body) and body[index] in b"+-.eE0123456789":
+                    index += 1
+                continue
+            if index - digits_start >= 19:
+                value = int(body[start:index])
+                if value < _ORJSON_INT_MIN or value > _ORJSON_INT_MAX:
+                    return True
+            continue
+        index += 1
+    return False
+
+
+def _loads_json_body(body: bytes) -> object:
+    if not _has_int_outside_orjson_range(body):
+        return orjson.loads(body)
+    try:
+        parsed: Final = json.loads(body)
+        json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+        return parsed
+    except (json.JSONDecodeError, UnicodeEncodeError):
+        return orjson.loads(body)
+
+
 def _parse_binary_body(body: bytes) -> dict:
     """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
     try:
-        parsed: Final = orjson.loads(body)
+        parsed: Final = _loads_json_body(body)
         if isinstance(parsed, dict):
             return parsed
     except orjson.JSONDecodeError:
@@ -272,7 +328,7 @@ async def read_request_body(request: Request | None) -> dict:
                 parsed_body = {}
             else:
                 try:
-                    parsed_body = orjson.loads(body)
+                    parsed_body = _loads_json_body(body)
                 except orjson.JSONDecodeError as e:
                     # The surrogate-repair fallback below runs two full-body re.sub
                     # passes, which block the event loop on multi-MB malformed bodies.
