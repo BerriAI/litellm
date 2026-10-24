@@ -123,6 +123,7 @@ func ResourceLiteLLMTeam() *schema.Resource {
 			"team_member_budget_duration": {
 				Type:     schema.TypeString,
 				Optional: true,
+				Computed: true,
 			},
 			"team_member_rpm_limit": {
 				Type:     schema.TypeInt,
@@ -268,16 +269,23 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 	if teamResp.Prompts != nil {
 		d.Set("prompts", teamResp.Prompts)
 	}
-	if teamResp.TeamMemberBudget != nil {
-		d.Set("team_member_budget", *teamResp.TeamMemberBudget)
+	memberBudget := teamResp.TeamMemberBudgetTable
+	if memberBudget == nil {
+		memberBudget = &TeamMemberBudgetTable{}
 	}
-	d.Set("team_member_budget_duration", GetStringValue(teamResp.TeamMemberBudgetDuration, d.Get("team_member_budget_duration").(string)))
-	if teamResp.TeamMemberRPMLimit != nil {
-		d.Set("team_member_rpm_limit", *teamResp.TeamMemberRPMLimit)
+	if teamResp.TeamMemberBudget == nil {
+		teamResp.TeamMemberBudget = memberBudget.MaxBudget
 	}
-	if teamResp.TeamMemberTPMLimit != nil {
-		d.Set("team_member_tpm_limit", *teamResp.TeamMemberTPMLimit)
+	if teamResp.TeamMemberRPMLimit == nil {
+		teamResp.TeamMemberRPMLimit = memberBudget.RPMLimit
 	}
+	if teamResp.TeamMemberTPMLimit == nil {
+		teamResp.TeamMemberTPMLimit = memberBudget.TPMLimit
+	}
+	d.Set("team_member_budget", teamResp.TeamMemberBudget)
+	d.Set("team_member_budget_duration", GetStringValue(teamResp.TeamMemberBudgetDuration, memberBudget.BudgetDuration))
+	d.Set("team_member_rpm_limit", teamResp.TeamMemberRPMLimit)
+	d.Set("team_member_tpm_limit", teamResp.TeamMemberTPMLimit)
 	d.Set("team_member_key_duration", GetStringValue(teamResp.TeamMemberKeyDuration, d.Get("team_member_key_duration").(string)))
 	if v := teamModelLimit(teamResp.ModelRPMLimit, teamResp.Metadata, "model_rpm_limit"); v != nil {
 		d.Set("model_rpm_limit", v)
@@ -287,12 +295,10 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 	}
 	if teamResp.AllowedPassthroughRoutes != nil {
 		d.Set("allowed_passthrough_routes", teamResp.AllowedPassthroughRoutes)
+	} else {
+		d.Set("allowed_passthrough_routes", toStringSlice(teamResp.Metadata["allowed_passthrough_routes"]))
 	}
-	var memberModelMaxBudget map[string]interface{}
-	if teamResp.TeamMemberBudgetTable != nil {
-		memberModelMaxBudget = teamResp.TeamMemberBudgetTable.ModelMaxBudget
-	}
-	d.Set("team_member_model_max_budget", keyModelMaxBudgetJSON(memberModelMaxBudget))
+	d.Set("team_member_model_max_budget", keyModelMaxBudgetJSON(memberBudget.ModelMaxBudget))
 
 	// Explicitly fetch the current permissions from the API
 	permResp, err := getTeamPermissions(client, d.Id())
@@ -468,6 +474,16 @@ func buildTeamData(d *schema.ResourceData, teamID string) map[string]interface{}
 		}
 	}
 
+	// The proxy treats a missing field as "leave unchanged", so a removed value is cleared with an explicit null.
+	for _, key := range []string{"team_member_budget", "team_member_rpm_limit", "team_member_tpm_limit"} {
+		if _, ok := d.GetOk(key); !ok && d.HasChange(key) {
+			teamData[key] = nil
+		}
+	}
+	if _, ok := d.GetOk("allowed_passthrough_routes"); !ok && d.HasChange("allowed_passthrough_routes") {
+		teamData["allowed_passthrough_routes"] = []string{}
+	}
+
 	for _, key := range []string{"model_rpm_limit", "model_tpm_limit"} {
 		if v, ok := d.GetOk(key); ok || d.HasChange(key) {
 			teamData[key] = v
@@ -531,7 +547,7 @@ func splitTeamMetadata(raw map[string]interface{}) (map[string]string, []string,
 			tags = toStringSlice(v)
 		case "soft_budget_alerting_emails":
 			alertEmails = toStringSlice(v)
-		case "team_member_budget_id":
+		case "team_member_budget_id", "allowed_passthrough_routes":
 		default:
 			if s, ok := v.(string); ok {
 				metadata[k] = s
