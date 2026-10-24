@@ -3852,13 +3852,21 @@ def test_gemini_keeps_forwarding_sampling_params_unless_the_model_map_flags_them
     assert body["generationConfig"] == _SAMPLING_PARAMS
 
 
-@pytest.mark.parametrize("model_key", ["gemini-zeta-9", "vertex_ai/gemini-zeta-9", "gemini/gemini-zeta-9"])
-def test_gemini_sampling_flag_is_read_from_whichever_provider_row_carries_it(
-    model_key: str, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("config_cls", "model_key"),
+    [
+        ("vertex", "gemini-zeta-9"),
+        ("vertex", "vertex_ai/gemini-zeta-9"),
+        ("studio", "gemini-zeta-9"),
+        ("studio", "gemini/gemini-zeta-9"),
+    ],
+)
+def test_gemini_sampling_flag_is_read_from_the_row_of_the_route_serving_the_call(
+    config_cls: Literal["vertex", "studio"], model_key: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setitem(litellm.model_cost, model_key, {"supports_sampling_params": False})
 
-    result: Final = VertexGeminiConfig().map_openai_params(
+    result: Final = _gemini_config(config_cls).map_openai_params(
         non_default_params={"temperature": 0.3},
         optional_params={},
         model="gemini-zeta-9",
@@ -3903,6 +3911,7 @@ def test_get_optional_params_drops_sampling_params_for_a_flagged_gemini_model_un
     assert optional_params["max_output_tokens"] == 10
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
 @pytest.mark.parametrize(
     ("model", "forwarded"),
@@ -3920,11 +3929,12 @@ def test_get_optional_params_drops_sampling_params_for_a_flagged_gemini_model_un
         ("gemini-zeta-9", True),
     ],
 )
-def test_gemini_model_unknown_to_the_map_is_judged_by_the_version_in_its_name(
+def test_gemini_model_unknown_to_the_map_is_judged_by_the_shipped_sampling_rule(
     custom_llm_provider: Literal["vertex_ai", "gemini"], model: str, forwarded: bool
 ) -> None:
     """Google ignores the knobs on Gemini 3.6 Flash, 3.5 Flash-Lite and everything later, so a model newer
-    than the map gets the same drop-or-400 contract instead of silently forwarding (#47015 follow-up)"""
+    than the map gets the same drop-or-400 contract from the gemini-sampling-params-ignored fallback
+    generalization instead of silently forwarding (#47015 follow-up)"""
     from litellm.utils import get_optional_params
 
     optional_params: Final = get_optional_params(
@@ -3936,6 +3946,7 @@ def test_gemini_model_unknown_to_the_map_is_judged_by_the_version_in_its_name(
     assert body["generationConfig"] == {**knobs, "max_output_tokens": 10}, model
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
     ("row", "forwarded"),
     [
@@ -3953,11 +3964,11 @@ def test_gemini_model_unknown_to_the_map_is_judged_by_the_version_in_its_name(
         "explicit_true",
     ],
 )
-def test_map_row_for_a_gemini_4_model_decides_before_the_version_rule(
+def test_map_row_for_a_gemini_4_model_decides_before_the_shipped_sampling_rule(
     row: dict[str, object], forwarded: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An explicit flag always wins, a row silent on it or stamped `mode: batch` by a proxy batch deployment
-    is judged by the version, and a row for another mode keeps forwarding because Google's notice covers
+    is filled by the shipped rule, and a row for another mode keeps forwarding because Google's notice covers
     the text models"""
     from litellm.utils import get_optional_params
 

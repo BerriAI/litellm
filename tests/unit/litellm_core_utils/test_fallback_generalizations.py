@@ -390,6 +390,17 @@ def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeyp
                 "litellm_provider": "openrouter",
                 "mode": "chat",
             },
+            "acme-batch": {
+                "input_cost_per_token": 9e-6,
+                "output_cost_per_token": 1e-5,
+                "litellm_provider": "openai",
+                "mode": "batch",
+            },
+            "acme-unowned": {
+                "input_cost_per_token": 2e-6,
+                "output_cost_per_token": 3e-6,
+                "mode": "chat",
+            },
         },
     )
     restore_generalizations(
@@ -419,6 +430,14 @@ def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeyp
 
     image = litellm.get_model_info("acme-image", custom_llm_provider="openai")
     assert image.get("supports_reasoning") is None
+
+    batch = litellm.get_model_info("acme-batch", custom_llm_provider="openai")
+    assert batch["supports_reasoning"] is True
+    assert batch["max_tokens"] == 5
+
+    unowned = litellm.get_model_info("acme-unowned", custom_llm_provider="openai")
+    assert unowned["supports_reasoning"] is True
+    assert litellm.get_model_info("acme-unowned", custom_llm_provider="openrouter").get("supports_reasoning") is None
 
     restore_generalizations(
         [{"name": "acme-backfill", "pattern": r"^acme-", "model_info": {"supports_reasoning": True, "max_tokens": 5}}]
@@ -504,7 +523,7 @@ def test_shipped_gemini_chat_baseline_skips_non_chat_and_pre_2_5_ids(shipped_cos
         "databricks-gemini-3-1-flash-image",
         "openrouter/google/gemini-2.0-flash-001",
     ):
-        assert match_capability_generalizations(model) is None, model
+        assert "mode" not in (match_capability_generalizations(model) or {}), model
 
 
 def test_shipped_gemini_chat_baseline_keeps_reasoning_effort_on_unmapped_model(shipped_cost_map):
@@ -983,3 +1002,60 @@ def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipp
     assert match_fill_missing_generalizations("claude-opus-5", "bedrock")["supports_tool_search"] is True
     assert match_fill_missing_generalizations("claude-opus-5", "azure_ai")["supports_tool_search"] is True
     assert match_fill_missing_generalizations("claude-opus-5", "perplexity") is None
+
+
+@pytest.mark.parametrize(
+    "model,provider,sampling",
+    [
+        ("gemini-3.6-flash-zeta", "gemini", False),
+        ("gemini-3.5-flash-lite-zeta", "vertex_ai", False),
+        ("gemini-3.10-pro-zeta", "gemini", False),
+        ("gemini-4-zeta", "gemini", False),
+        ("gemini-4.1-flash-zeta", "vertex_ai", False),
+        ("gemini-10-zeta", "gemini", False),
+        ("vertex_ai/gemini-4-zeta", None, False),
+        ("gemini-3.5-flash-zeta", "gemini", None),
+        ("gemini-3.5-pro-zeta", "vertex_ai", None),
+        ("gemini-3.1-pro-zeta", "gemini", None),
+        ("gemini-2.5-flash-zeta", "gemini", None),
+    ],
+)
+def test_shipped_gemini_sampling_rule_version_boundaries(shipped_cost_map, model, provider, sampling):
+    """The gemini-sampling-params-ignored rule marks Gemini 3.6 and every later 3.x minor, every 4+ major
+    and 3.5 Flash-Lite as not honoring temperature, top_p and top_k, and leaves 3.5 Flash, 3.5 Pro, 3.1 and
+    2.5 ids without an opinion"""
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info.get("supports_sampling_params") is sampling, model
+
+
+def test_shipped_gemini_sampling_rule_skips_non_text_ids(shipped_cost_map):
+    for model in (
+        "gemini/gemini-4-flash-image",
+        "gemini/gemini-3.8-flash-tts",
+        "gemini/gemini-4-flash-live-preview",
+        "gemini/gemini-3.6-flash-native-audio",
+        "gemini/gemini-embedding-4",
+        "gemini/gemini-4-flash-transcribe",
+        "gemini/gemini-3.6-flash-live-translate-preview",
+        "gemini/gemini-4-computer-use-preview",
+        "gemini/gemini-zeta-9",
+    ):
+        assert (match_capability_generalizations(model) or {}).get("supports_sampling_params") is None, model
+
+
+def test_shipped_gemini_sampling_rule_fills_mapped_google_rows_without_the_flag(shipped_cost_map):
+    """A mapped Gemini row past Google's cut reads as supports_sampling_params: false on AI Studio and Vertex
+    whether or not someone flagged it by hand, and a reseller copy of the same model is left alone"""
+    for key, model, provider in (
+        ("gemini/gemini-4-argon", "gemini-4-argon", "gemini"),
+        ("vertex_ai/gemini-4-argon", "gemini-4-argon", "vertex_ai"),
+        ("gemini/gemini-3.6-flash", "gemini-3.6-flash", "gemini"),
+    ):
+        assert key in litellm.model_cost
+        assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_sampling_params"] is False, key
+
+    assert match_fill_missing_generalizations("gemini-4-argon", "vertex_ai-language-models") == {
+        "supports_sampling_params": False
+    }
+    assert match_fill_missing_generalizations("gemini-4-argon", "github_copilot") is None

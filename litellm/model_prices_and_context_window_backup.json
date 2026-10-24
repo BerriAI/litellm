@@ -63592,6 +63592,15 @@
                     "supports_prompt_caching": true,
                     "supports_web_search": true
                 }
+            },
+            {
+                "name": "gemini-sampling-params-ignored",
+                "pattern": "gemini-(?!.*(?:-tts|-image|-live|-audio|-embedding|-computer-use|-robotics|-transcribe|-translate))(?:3[.-](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[4-9]|[1-9]\\d)(?:[.-]\\d{1,2})?(?!\\d)|3[.-]5-flash-lite)(?:-|$)",
+                "fill_missing_for_providers": ["gemini", "vertex_ai", "vertex_ai-language-models"],
+                "description": "Any Gemini text id at or past the version where Google stopped honoring temperature, top_p and top_k: 3.6 and every later 3.x minor, every major from 4 up with or without a minor, and 3.5 Flash-Lite by name, under any namespace (bare, gemini/, vertex_ai/, databricks-gemini-<major>-<minor>) and with any trailing variant tag, so gemini-4-argon and gemini-3.6-flash-preview match while gemini-3.5-flash, gemini-3.1-pro and the 2.x line do not. The same lookahead as gemini-chat-baseline keeps the tts, image, live, audio, embedding, computer-use, robotics, transcribe and translate lines out, since Google's notice covers the text models. Google announced with Gemini 3.6 Flash and 3.5 Flash-Lite that these models accept the sampling fields but ignore them and that a later generation will reject them (reported in #47015, 2026-10), so an unmapped id past the cut resolves to supports_sampling_params: false and a mapped Google row the map has not flagged yet is filled the same way; the Gemini and Vertex transformations turn that into a drop under drop_params or a 400 that names it. The fill is limited to Google's own providers because resellers route through transformations that do not read the flag. An explicit supports_sampling_params on a row, including one a deployment's model_info registers, always wins.",
+                "model_info": {
+                    "supports_sampling_params": false
+                }
             }
         ]
     },

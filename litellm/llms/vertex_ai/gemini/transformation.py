@@ -1192,7 +1192,9 @@ def transform_request_body(
 
         from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
-        drops_top_k: Final = "top_k" in optional_params and not VertexGeminiConfig.supports_sampling_params(model)
+        drops_top_k: Final = "top_k" in optional_params and not VertexGeminiConfig.supports_sampling_params(
+            model, custom_llm_provider
+        )
         if drops_top_k:
             request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
             VertexGeminiConfig.reject_unsupported_sampling_param(

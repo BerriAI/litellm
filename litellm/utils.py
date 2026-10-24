@@ -270,7 +270,7 @@ from litellm.types.utils import (
 )
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
-_BACKFILL_MODES: Final = frozenset({"chat", "responses"})
+_BACKFILL_MODES: Final = frozenset({"chat", "responses", "batch"})
 
 # +-----------------------------------------------+
 # |                                               |
@@ -6640,7 +6640,9 @@ def get_model_info_helper(
             _model_info: dict[str, Any] | None = lookup[1]
 
             if _model_info is not None and key is not None and _model_info.get("mode", "chat") in _BACKFILL_MODES:
-                fill_missing: Final = match_fill_missing_generalizations(key, _model_info.get("litellm_provider", ""))
+                fill_missing: Final = match_fill_missing_generalizations(
+                    key, _model_info.get("litellm_provider") or model_cost_custom_llm_provider or ""
+                )
                 if fill_missing is not None:
                     _model_info = {
                         **{k: v for k, v in fill_missing.items() if k not in _model_info},
@@ -6891,6 +6893,7 @@ def get_model_info_helper(
                 supports_web_search=_model_info.get("supports_web_search", None),
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
+                supports_sampling_params=_model_info.get("supports_sampling_params", None),
                 supports_adaptive_thinking=_model_info.get("supports_adaptive_thinking", None),
                 supports_legacy_thinking=_model_info.get("supports_legacy_thinking", None),
                 thinking_always_on=_model_info.get("thinking_always_on", None),

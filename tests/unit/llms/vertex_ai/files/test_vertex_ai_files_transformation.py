@@ -6,14 +6,15 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 import json
 import urllib.parse
 from collections.abc import Mapping
-from typing import Final
 from types import MappingProxyType
+from typing import Final
+from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from openai.types.file_deleted import FileDeleted
 from pydantic import TypeAdapter
-from unittest.mock import MagicMock
 
 import litellm
 from litellm.llms.vertex_ai.files.transformation import (
@@ -22,8 +23,7 @@ from litellm.llms.vertex_ai.files.transformation import (
     _openai_batch_jsonl_entry_to_vertex_rows,
     _sanitize_gcp_label_value,
 )
-from litellm.types.llms.openai import OpenAIFileObject, HttpxBinaryResponseContent
-from openai.types.file_deleted import FileDeleted
+from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIFileObject
 
 
 @pytest.fixture
@@ -2048,17 +2048,20 @@ def _stamp_batch_deployment_row(monkeypatch: pytest.MonkeyPatch, model: str) -> 
     monkeypatch.setitem(litellm.model_cost, model, {"mode": "batch", "litellm_provider": "vertex_ai"})
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_batch_row_for_a_gemini_4_batch_deployment_raises_a_400_naming_drop_params(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The proxy stamps a batch deployment's `mode: batch` onto the backend model's map row, so a Gemini
-    model whose name is past Google's cut must still be judged by its version and not pass as a non-chat row"""
+    model whose name is past Google's cut must still be filled by the shipped sampling rule and not pass as a
+    non-chat row"""
     _stamp_batch_deployment_row(monkeypatch, "vertex_ai/gemini-4-zeta")
     monkeypatch.setattr(litellm, "drop_params", False)
     with pytest.raises(litellm.UnsupportedParamsError, match=r"temperature, top_p, top_k.*drop_params"):
         _wrap_entries([_chat_entry("vertex_ai/gemini-4-zeta", _SAMPLING_KNOBS)])
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_batch_row_for_a_gemini_4_batch_deployment_drops_the_knobs_under_global_drop_params(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
