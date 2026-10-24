@@ -934,7 +934,7 @@ MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
 
 def _retry_policy_ceiling(policy: RetryPolicy) -> int:
     """The most retries any error class under this policy can be granted."""
-    retry_counts: Final[Iterable[object]] = policy.model_dump().values()
+    retry_counts: Final[tuple[object, ...]] = tuple(policy.model_dump().values())
     return max((retries for retries in retry_counts if isinstance(retries, int)), default=0)
 
 
@@ -6504,7 +6504,7 @@ class Router:
         has_generated_content: bool,
         buffered_lifecycle_chunks: tuple[bytes, ...],
         model: str,
-        initial_kwargs: dict[str, Any],  # mutable-ok: handed to _aanthropic_messages_fallback_attempt, which mutates it
+        initial_kwargs: dict[str, object],  # mutable-ok: _aanthropic_messages_fallback_attempt mutates it
         wrapper: "FallbackAwareAnthropicMessagesStream",
         close_superseded: Callable[[], Awaitable[None]],
     ) -> AsyncGenerator[bytes, None]:

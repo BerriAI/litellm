@@ -131,6 +131,10 @@ async def get_mcp_toolset_by_name(
     return _toolset_from_row(row)
 
 
+def _set_fields(data: UpdateMCPToolsetRequest) -> Mapping[str, object]:
+    return data.model_dump(exclude_unset=True)
+
+
 async def update_mcp_toolset(
     prisma_client: PrismaClient,
     data: UpdateMCPToolsetRequest,
@@ -143,7 +147,7 @@ async def update_mcp_toolset(
     data_dict: Final = dict(
         (
             (field, json.dumps(value) if field == "tools" else value)
-            for field, value in data.model_dump(exclude_unset=True).items()
+            for field, value in _set_fields(data).items()
             if field != "toolset_id" and (field not in ("toolset_name", "tools") or value is not None)
         ),
         updated_by=touched_by,
