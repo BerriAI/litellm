@@ -5063,6 +5063,15 @@ def get_optional_params(
         for k in non_default_params:
             if k not in supported_params:
                 if k in PROVIDER_UNVALIDATED_PARAMS:
+                    # `k` comes from `get_non_default_params`, annotated `-> dict`,
+                    # so its keys are Unknown to the type checker and passing one
+                    # as an argument trips reportUnknownArgumentType. Matching it
+                    # against the hint table's own keys yields the same string
+                    # with a known type, and the table is the set that warns.
+                    for hinted_param in UNVALIDATED_PARAM_DROP_HINTS:
+                        if hinted_param == k:
+                            warn_unvalidated_param_dropped(hinted_param, custom_llm_provider, model)
+                            break
                     continue
                 if k == "n" and n == 1:  # langchain sends n=1 as a default value
                     continue  # skip this param
@@ -5703,6 +5712,72 @@ _apply_openai_param_overrides = apply_openai_param_overrides
 
 
 PROVIDER_UNVALIDATED_PARAMS: Final = frozenset({"user", "stream_options", "stream", "max_retries"})
+
+# A param in PROVIDER_UNVALIDATED_PARAMS that the provider does not support is
+# neither sent nor refused: `_check_valid_arg` skips it before it can reach
+# `unsupported_params`, and `map_openai_params` only copies supported names, so
+# the caller sees success and a param that did nothing (#45015).
+#
+# Only params listed here warn. `stream`, `stream_options` and `max_retries` are
+# transport controls rather than things a caller tracks the effect of.
+UNVALIDATED_PARAM_DROP_HINTS: Final = {
+    "user": (
+        "`user` is only a supported param for models in OpenAI's catalog, so it is dropped here "
+        "without being sent or rejected. If you are attributing spend per end user through the "
+        "LiteLLM proxy, send the `x-litellm-end-user-id` header instead, which does not go through "
+        "provider param mapping."
+    ),
+}
+
+# A bare `Final` satisfies LIT010 without putting a mutable `set[...]` in an
+# annotation, which LIT001 counts; the parameterized constructor still gives the
+# precise element type. `Final` binds the name, not the contents, so the set is
+# mutated in place below, matching `PROVIDER_UNVALIDATED_PARAMS` above.
+_unvalidated_param_warned: Final = set[tuple[str, str, str]]()
+
+# Bounded so a proxy serving a large model fleet cannot grow the set without
+# limit. Past this many distinct (param, provider, model) triples the message
+# has stopped being news, so warning simply stops rather than repeating.
+_UNVALIDATED_PARAM_WARN_CAP: Final = 64
+
+# `model` and `custom_llm_provider` arrive from the request, so a caller could
+# embed carriage returns, newlines or terminal escapes and forge whole log
+# entries off the back of this warning (CodeQL py/log-injection), or repeat an
+# oversized value on every line. Same treatment `_sanitize_correlation_id`
+# gives a caller-set trace id.
+_MAX_LOGGED_VALUE_LENGTH: Final = 128
+
+
+def _log_safe(value: object) -> str:
+    """Bound and strip a caller-controlled value before it reaches a log line."""
+    printable: Final = "".join(ch for ch in str(value) if ch.isprintable())
+    return printable[:_MAX_LOGGED_VALUE_LENGTH]
+
+
+def warn_unvalidated_param_dropped(param: str, custom_llm_provider: object, model: object) -> None:
+    """Warn once per (param, provider, model) that a drop-silently param was dropped.
+
+    Called from `_check_valid_arg` at the point where both facts are known: the
+    provider does not list the param, and the param is exempt from raising.
+    """
+    hint: Final = UNVALIDATED_PARAM_DROP_HINTS.get(param)
+    if hint is None:
+        return
+    key: Final = (param, str(custom_llm_provider), str(model))
+    if key in _unvalidated_param_warned:
+        return
+    if len(_unvalidated_param_warned) >= _UNVALIDATED_PARAM_WARN_CAP:
+        return
+    _unvalidated_param_warned.add(key)
+    verbose_logger.warning(
+        "LiteLLM is not sending `%s` to provider=%s for model=%s: the model does not list it as a "
+        "supported param, and it is exempt from the unsupported-param error, so it is dropped "
+        "silently. %s",
+        param,
+        _log_safe(custom_llm_provider),
+        _log_safe(model),
+        hint,
+    )
 
 
 def provider_rejectable_params(passed_params: Mapping[str, object]) -> frozenset[str]:
