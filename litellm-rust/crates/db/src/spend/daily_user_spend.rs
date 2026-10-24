@@ -58,6 +58,7 @@ pub async fn upsert_daily_user_spend(
         &column!(total_response_time_ms),
         &column!(timed_requests),
         &column!(spend),
+        &column!(mcp_namespaced_tool_name),
     )
     .execute(executor)
     .await?;
@@ -72,6 +73,75 @@ mod tests {
     use crate::{DailyUserRow, test_support::database_pool};
     use rstest::rstest;
     use sqlx::{PgPool, types::chrono::NaiveDateTime};
+
+    #[rstest]
+    #[case::distinct_tools("server/search", "server/write")]
+    #[case::default_empty_tool("", "server/search")]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn daily_user_spend_separates_tools_and_accumulates(
+        #[case] first_tool: &str,
+        #[case] second_tool: &str,
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        let first = DailySpend {
+            entity_id: format!("daily-user-tools-{first_tool}"),
+            date: "2026-01-15".to_owned(),
+            api_key: "tool-key".to_owned(),
+            model: "tool-model".to_owned(),
+            custom_llm_provider: "tool-provider".to_owned(),
+            endpoint: "/mcp".to_owned(),
+            model_group: Some("tool-group".to_owned()),
+            mcp_namespaced_tool_name: first_tool.to_owned(),
+            prompt_tokens: 3,
+            api_requests: 1,
+            spend: 0.25,
+            ..Default::default()
+        };
+        let second = DailySpend {
+            mcp_namespaced_tool_name: second_tool.to_owned(),
+            prompt_tokens: 7,
+            api_requests: 2,
+            spend: 0.5,
+            ..first.clone()
+        };
+        upsert_daily_user_spend(&mut *tx, &[second.clone(), first.clone()]).await?;
+        upsert_daily_user_spend(&mut *tx, &[first.clone(), second]).await?;
+
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "The integration test reads stored rows to verify tool attribution"
+        )]
+        let rows: Vec<DailyUserRow> = sqlx::query_as(
+            r#"SELECT * FROM "LiteLLM_DailyUserSpend"
+               WHERE user_id = $1
+               ORDER BY mcp_namespaced_tool_name, endpoint"#,
+        )
+        .bind(&first.entity_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].mcp_namespaced_tool_name.as_deref(),
+            Some(first_tool)
+        );
+        assert_eq!(
+            rows[1].mcp_namespaced_tool_name.as_deref(),
+            Some(second_tool)
+        );
+        assert_eq!(
+            (rows[0].prompt_tokens, rows[0].api_requests, rows[0].spend),
+            (6, 2, 0.5)
+        );
+        assert_eq!(
+            (rows[1].prompt_tokens, rows[1].api_requests, rows[1].spend),
+            (14, 4, 1.0)
+        );
+        Ok(())
+    }
 
     #[rstest]
     #[case::full_keys(
