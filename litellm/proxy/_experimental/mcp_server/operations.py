@@ -2377,7 +2377,7 @@ async def _execute_mcp_tool(
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
-            tool=global_mcp_server_manager.get_listed_tool(
+            tool=global_mcp_server_manager.get_guardrail_tool(
                 mcp_server,
                 original_tool_name,
                 listed_tools_caller_for(
@@ -2519,7 +2519,7 @@ async def _execute_mcp_tool(
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
                 guardrail_context=guardrail_context,
-                tool=global_mcp_server_manager.get_listed_tool(
+                tool=global_mcp_server_manager.get_guardrail_tool(
                     prefix_server,
                     original_tool_name,
                     listed_tools_caller_for(

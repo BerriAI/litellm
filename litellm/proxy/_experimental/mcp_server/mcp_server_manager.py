@@ -2070,6 +2070,7 @@ class MCPServerManager:
         }
         """
         self._listed_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}  # mutable-ok: refreshed per tools/list
+        self._blocked_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}  # mutable-ok: caller-scoped cache
         self._listed_tools_generations: dict[str, int] = {}  # mutable-ok: bumped per server save
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
@@ -4562,6 +4563,9 @@ class MCPServerManager:
                     proxy_logging_obj=proxy_logging_obj,
                     user_api_key_auth=user_api_key_auth,
                     raw_headers=raw_headers,
+                    listed_caller=listed_caller,
+                    generation=listed_generation,
+                    continuation=params is not None and params.cursor is not None,
                 )
                 # OpenAPI tools are stored in the registry with their prefix already
                 # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
@@ -4594,6 +4598,9 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_auth=user_api_key_auth,
                 raw_headers=raw_headers,
+                listed_caller=listed_caller,
+                generation=listed_generation,
+                continuation=params is not None and params.cursor is not None,
             )
             prefixed_or_original_tools: Final = self._create_prefixed_tools(
                 guarded_tools,
@@ -4666,6 +4673,7 @@ class MCPServerManager:
 
     def _drop_listed_tools(self, server_id: str) -> None:
         self._listed_tools_by_server_id.pop(server_id, None)
+        self._blocked_tools_by_server_id.pop(server_id, None)
         self._listed_tools_generations[server_id] = self._listed_tools_generations.get(server_id, 0) + 1
 
     def _listed_tools_identity(self, server: MCPServer, caller: ListedToolsCaller | None) -> str | None:
@@ -4744,6 +4752,35 @@ class MCPServerManager:
             (identity, listing),
         )
         self._listed_tools_by_server_id[server.server_id] = MappingProxyType(dict(entries))
+
+    def record_blocked_tools(
+        self,
+        server: MCPServer,
+        tools: Sequence[MCPTool],
+        caller: ListedToolsCaller | None,
+        generation: int | None = None,
+        *,
+        continuation: bool = False,
+    ) -> None:
+        if generation is not None and generation != self._listed_tools_generations.get(server.server_id, 0):
+            return
+        identity: Final = self._listed_tools_identity(server, caller)
+        existing: Final[Mapping[str | None, Mapping[str, MCPTool]]] = self._blocked_tools_by_server_id.get(
+            server.server_id, MappingProxyType({})
+        )
+        prior: Final[Mapping[str, MCPTool]] = existing.get(identity, {}) if continuation else {}
+        blocked: Final[Mapping[str, MCPTool]] = MappingProxyType({**prior, **{tool.name: tool for tool in tools}})
+        shared: Final[Mapping[str, MCPTool] | None] = existing.get(None)
+        callers: Final[tuple[tuple[str | None, Mapping[str, MCPTool]], ...]] = tuple(
+            (key, value) for key, value in existing.items() if key not in (None, identity)
+        )
+        evicted: Final = 0 if identity is None else max(len(callers) + 1 - _LISTED_TOOLS_CALLERS_PER_SERVER, 0)
+        entries: Final = (
+            *(() if shared is None else ((None, shared),)),
+            *callers[evicted:],
+            (identity, blocked),
+        )
+        self._blocked_tools_by_server_id[server.server_id] = MappingProxyType(dict(entries))
 
     def _discovery_key(
         self,
@@ -5757,6 +5794,10 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         raw_headers: Mapping[str, str] | None,
+        listed_caller: ListedToolsCaller | None,
+        generation: int | None = None,
+        *,
+        continuation: bool = False,
     ) -> tuple[MCPTool, ...]:
         pinned, drift = pin_tool_catalog(tools, server.pinned_tools) if server.pinned_tools else (tuple(tools), None)
         described: Final = apply_description_overrides(pinned, server)
@@ -5766,6 +5807,15 @@ class MCPServerManager:
             server, proxy_logging_obj, AlertType.mcp_pinned_tools_changed, drift.alert(server) if drift else None
         )
         scan: Final = await scan_tool_descriptions(described, server, proxy_logging_obj, user_api_key_auth, raw_headers)
+        served_names: Final[frozenset[str]] = frozenset(tool.name for tool in scan.served)
+        blocked_tools: Final[tuple[MCPTool, ...]] = tuple(tool for tool in described if tool.name not in served_names)
+        self.record_blocked_tools(
+            server,
+            blocked_tools,
+            listed_caller,
+            generation,
+            continuation=continuation,
+        )
         await self._report_catalog_alert(
             server, proxy_logging_obj, AlertType.mcp_tool_description_blocked, scan.alert(server)
         )
@@ -5859,6 +5909,21 @@ class MCPServerManager:
         if not listed:
             return None
         return listed.get(name)
+
+    def get_guardrail_tool(
+        self,
+        server: MCPServer,
+        name: str,
+        caller: ListedToolsCaller | None = None,
+    ) -> MCPTool | None:
+        listed: Final[MCPTool | None] = self.get_listed_tool(server, name, caller)
+        if listed is not None:
+            return listed
+        identity: Final = self._listed_tools_identity(server, caller)
+        blocked: Final[Mapping[str, MCPTool] | None] = self._blocked_tools_by_server_id.get(
+            server.server_id, MappingProxyType({})
+        ).get(identity)
+        return blocked.get(name) if blocked is not None else None
 
     def _create_prefixed_prompts(
         self, prompts: Sequence[Prompt], server: MCPServer, add_prefix: bool = True
@@ -7039,7 +7104,7 @@ class MCPServerManager:
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
-            tool=self.get_listed_tool(mcp_server, name, listed_caller) if listed_tool is ... else listed_tool,
+            tool=self.get_guardrail_tool(mcp_server, name, listed_caller) if listed_tool is ... else listed_tool,
             incoming_bearer_token=incoming_bearer_token,
             guardrail_auth=effective_guardrail_auth,
         )
