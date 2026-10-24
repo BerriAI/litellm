@@ -6,10 +6,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import (
     TypeIs,  # noqa: TID251  # narrows a client input item before its mark is read
     assert_never,
@@ -59,7 +59,6 @@ from litellm.responses.mcp.round_billing import (
 )
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.common_utils import get_router_deployment_id
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_reasoning_effort_levels,
     model_group_from_metadata,
@@ -557,6 +556,22 @@ def _per_call_custom_pricing(litellm_params: GenericLiteLLMParams) -> Mapping[st
     return MappingProxyType(
         litellm_params.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True)
     )
+
+
+class _DeploymentModelInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: object = None
+
+
+_DEPLOYMENT_MODEL_INFO: Final[TypeAdapter[_DeploymentModelInfo | object]] = TypeAdapter(
+    Annotated[_DeploymentModelInfo | object, Field(union_mode="left_to_right")]
+)
+
+
+def _is_router_deployment(deployment_model_info: object) -> bool:
+    """A Router stamps the deployment's model_info (with its id) onto every call it routes."""
+    parsed: Final = _DEPLOYMENT_MODEL_INFO.validate_python(deployment_model_info)
+    return isinstance(parsed, _DeploymentModelInfo) and parsed.id is not None
 
 
 _COST_PER_TOKEN: Final = TypeAdapter(CostPerToken)
@@ -1716,7 +1731,7 @@ def responses(
             custom_llm_provider=custom_llm_provider,
         )
 
-        if get_router_deployment_id(kwargs) is None:
+        if not _is_router_deployment(deployment_model_info):
             litellm_logging_obj.custom_cost_per_token = _per_call_cost_per_token(litellm_params)
             litellm_logging_obj.custom_cost_per_second = litellm_params.cost_per_second
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
