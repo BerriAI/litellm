@@ -2,7 +2,7 @@ import json
 import os
 import sys
 from unittest.mock import AsyncMock, patch
-from typing import Optional
+from typing import Final, Optional
 
 import httpx
 import pytest
@@ -287,7 +287,7 @@ def test_compactifai_malformed_response_body_raises_the_error_of_the_failing_loo
 
     from litellm.llms.compactifai.chat.transformation import CompactifAIChatConfig
 
-    raw_response = httpx.Response(
+    raw_response: Final = httpx.Response(
         200, json=body, request=httpx.Request("POST", "https://api.compactif.ai/v1/chat/completions")
     )
 

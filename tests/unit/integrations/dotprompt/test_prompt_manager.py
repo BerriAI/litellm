@@ -364,8 +364,8 @@ def test_load_prompts_from_json_data():
 
 
 def test_load_prompts_from_json_data_skips_malformed_entries():
-    manager = PromptManager(prompt_directory=str(Path(__file__).parent))
-    initial_count = len(manager.prompts)
+    manager: Final = PromptManager(prompt_directory=str(Path(__file__).parent))
+    initial_count: Final = len(manager.prompts)
 
     manager.load_prompts_from_json_data(
         {

@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -19,7 +20,7 @@ def test_output_dict_with_non_string_values_still_yields_the_image(respx_mock):
         },
         status_code=200,
     )
-    created = httpx.Response(
+    created: Final = httpx.Response(
         200,
         json={"id": "task_1", "status": "PENDING"},
         request=httpx.Request(
@@ -27,7 +28,7 @@ def test_output_dict_with_non_string_values_still_yields_the_image(respx_mock):
         ),
     )
 
-    image_response = RunwayMLImageGenerationConfig().transform_image_generation_response(
+    image_response: Final = RunwayMLImageGenerationConfig().transform_image_generation_response(
         model="gen4_image",
         raw_response=created,
         model_response=ImageResponse(),
@@ -42,7 +43,7 @@ def test_output_dict_with_non_string_values_still_yields_the_image(respx_mock):
 
 
 def test_non_object_task_body_raises_the_base_error_class():
-    created = httpx.Response(
+    created: Final = httpx.Response(
         200,
         json=["unexpected"],
         request=httpx.Request(
@@ -65,7 +66,7 @@ def test_non_object_task_body_raises_the_base_error_class():
 
 @pytest.mark.asyncio
 async def test_async_non_object_task_body_raises_the_base_error_class():
-    created = httpx.Response(
+    created: Final = httpx.Response(
         200,
         json=["unexpected"],
         request=httpx.Request(
