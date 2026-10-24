@@ -1138,6 +1138,7 @@ openai_compatible_providers: Final[list[str]] = [
     "prism",
     "sail",
     "reka",
+    "paxa",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))

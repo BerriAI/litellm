@@ -74,6 +74,20 @@ def test_get_llm_provider_leaves_fal_ai_api_base_unset_for_global_fallback() -> 
     assert explicit == "http://edge.local/fal"
 
 
+def test_get_llm_provider_reads_the_paxa_key_and_base_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PAXA_API_KEY", "fake-paxa-key")
+    monkeypatch.delenv("PAXA_API_BASE", raising=False)
+    assert get_llm_provider(model="paxa/paxa-tts-flash-v2") == (
+        "paxa-tts-flash-v2",
+        "paxa",
+        "fake-paxa-key",
+        "https://api.paxalabs.com/v1",
+    )
+
+    monkeypatch.setenv("PAXA_API_BASE", "http://paxa.local/v1")
+    assert get_llm_provider(model="paxa/paxa-tts-flash-v2")[3] == "http://paxa.local/v1"
+
+
 def test_image_generation_fal_ai_egresses_to_global_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "api_base", "http://gateway.local/fal")
     monkeypatch.setenv("FAL_AI_API_KEY", "test")

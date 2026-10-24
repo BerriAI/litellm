@@ -3028,6 +3028,24 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Paxa",
+    "provider_display_name": "Paxa",
+    "litellm_provider": "paxa",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "paxa/paxa-tts-flash-v2"
+  },
+  {
     "provider": "Perplexity",
     "provider_display_name": "Perplexity",
     "litellm_provider": "perplexity",
