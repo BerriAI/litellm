@@ -31,13 +31,15 @@ mod tests {
     use sqlx::PgPool;
 
     #[rstest]
-    #[case::fractional_costs(0.25, 0.75, 2.5, 1.5)]
-    #[case::zero_costs(0.0, 0.0, 2.0, 0.0)]
+    #[case::fractional_costs(0.25, 0.75, false, 2.5, 1.5)]
+    #[case::zero_costs(0.0, 0.0, false, 2.0, 0.0)]
+    #[case::duplicate_ids(0.25, 0.75, true, 3.0, 3.0)]
     #[tokio::test]
     #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
     async fn end_user_spend_matches_python_upsert(
         #[case] existing_cost: f64,
         #[case] new_cost: f64,
+        #[case] duplicate_ids: bool,
         #[case] expected_existing_spend: f64,
         #[case] expected_new_spend: f64,
         #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
@@ -65,9 +67,21 @@ mod tests {
         )
         .execute(&mut *tx)
         .await?;
-        let spend = EntitySpend {
-            ids: vec!["end-user-spend-z".into(), "end-user-spend-a".into()],
-            costs: vec![existing_cost, new_cost],
+        let spend = if duplicate_ids {
+            EntitySpend {
+                ids: vec![
+                    "end-user-spend-z".into(),
+                    "end-user-spend-a".into(),
+                    "end-user-spend-z".into(),
+                    "end-user-spend-a".into(),
+                ],
+                costs: vec![existing_cost, new_cost, existing_cost, new_cost],
+            }
+        } else {
+            EntitySpend {
+                ids: vec!["end-user-spend-z".into(), "end-user-spend-a".into()],
+                costs: vec![existing_cost, new_cost],
+            }
         };
         add_end_user_spend(&mut *tx, &spend).await?;
         add_end_user_spend(&mut *tx, &spend).await?;
@@ -99,6 +113,51 @@ mod tests {
                 ),
             ]
         );
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::missing_cost(vec!["end-user-invalid-existing".into(), "end-user-invalid-new".into()], vec![1.0])]
+    #[case::extra_cost(vec!["end-user-invalid-existing".into()], vec![1.0, 2.0])]
+    #[case::empty_ids(vec![], vec![1.0])]
+    #[case::empty_costs(vec!["end-user-invalid-existing".into()], vec![])]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn malformed_end_user_spend_is_rejected_before_writes(
+        #[case] ids: Vec<String>,
+        #[case] costs: Vec<f64>,
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Fixture writes are outside the compile-checked query set"
+        )]
+        let _user = sqlx::query(
+            r#"INSERT INTO "LiteLLM_EndUserTable" (user_id, spend, blocked)
+               VALUES ('end-user-invalid-existing', 8.5, true)"#,
+        )
+        .execute(&mut *tx)
+        .await?;
+        let spend = EntitySpend { ids, costs };
+        let result = add_end_user_spend(&mut *tx, &spend).await;
+        assert!(matches!(
+            result,
+            Err(crate::Error::InvalidSpendBatch { ids, costs })
+                if ids == spend.ids.len() && costs == spend.costs.len()
+        ));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Test assertions are outside the compile-checked query set"
+        )]
+        let rows: Vec<(String, f64, bool)> = sqlx::query_as(
+            r#"SELECT user_id, spend, blocked FROM "LiteLLM_EndUserTable"
+               WHERE user_id IN ('end-user-invalid-existing', 'end-user-invalid-new')"#,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        assert_eq!(rows, vec![("end-user-invalid-existing".into(), 8.5, true)]);
         Ok(())
     }
 
