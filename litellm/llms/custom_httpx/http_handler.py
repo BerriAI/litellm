@@ -633,6 +633,7 @@ class AsyncHTTPHandler:
         shared_session: Optional["ClientSession"] = None,
         transport: httpx.AsyncBaseTransport | None = None,
         follow_redirects: bool = True,
+        client: httpx.AsyncClient | None = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -640,12 +641,16 @@ class AsyncHTTPHandler:
         self.shared_session = shared_session
         self.transport = transport
         self.follow_redirects = follow_redirects
-        self._owns_client = True
-        self._client = self.create_client(
-            timeout=timeout,
-            event_hooks=event_hooks,
-            ssl_verify=ssl_verify,
-            shared_session=shared_session,
+        self._owns_client = client is None
+        self._client = (
+            client
+            if client is not None
+            else self.create_client(
+                timeout=timeout,
+                event_hooks=event_hooks,
+                ssl_verify=ssl_verify,
+                shared_session=shared_session,
+            )
         )
         self.client_alias = client_alias
 
@@ -1762,7 +1767,10 @@ def get_async_httpx_client(
             except Exception:
                 pass
 
-    _cache_key_name: Final = "async_httpx_client" + _params_key_name + llm_provider
+    # A caller-supplied session is part of the key, so swapping it never serves a stale handler.
+    session: Final = litellm.aclient_session
+    _session_key_name: Final = f"_session{id(session)}" if session is not None else ""
+    _cache_key_name: Final = "async_httpx_client" + _params_key_name + llm_provider + _session_key_name
 
     # Lazily initialize the global in-memory client cache to avoid relying on
     # litellm globals being fully populated during import time.
@@ -1781,11 +1789,13 @@ def get_async_httpx_client(
         # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
         handler_params: Final = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
         handler_params["shared_session"] = shared_session
+        handler_params["client"] = session
         _new_client = AsyncHTTPHandler(**handler_params)
     else:
         _new_client = AsyncHTTPHandler(
             timeout=_default_cached_client_timeout(),
             shared_session=shared_session,
+            client=session,
         )
 
     cache.set_cache(
@@ -1812,7 +1822,9 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
             except Exception:
                 pass
 
-    _cache_key_name: Final = "httpx_client" + _params_key_name
+    session: Final = litellm.client_session
+    _session_key_name: Final = f"_session{id(session)}" if session is not None else ""
+    _cache_key_name: Final = "httpx_client" + _params_key_name + _session_key_name
 
     # Lazily initialize the global in-memory client cache to avoid relying on
     # litellm globals being fully populated during import time.
@@ -1830,9 +1842,10 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
     if params is not None:
         # Filter out params that are only used for cache key, not for HTTPHandler.__init__
         handler_params: Final = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        handler_params["client"] = session
         _new_client = HTTPHandler(**handler_params)
     else:
-        _new_client = HTTPHandler(timeout=_default_cached_client_timeout())
+        _new_client = HTTPHandler(timeout=_default_cached_client_timeout(), client=session)
 
     cache.set_cache(
         key=_cache_key_name,
