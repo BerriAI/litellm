@@ -1,6 +1,6 @@
 from collections import deque
 from collections.abc import Iterator, Sequence
-from typing import Final, cast, overload
+from typing import Final, overload
 
 _FRAME_SEPARATORS: Final = (b"\r\n\r\n", b"\n\n")
 
@@ -108,9 +108,7 @@ class BoundedChunkBuffer(Sequence[bytes]):
         return len(self._frames())
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Sequence):
-            return False
-        return list(self) == list(cast(Sequence[object], other))  # cast-ok: isinstance narrows to Sequence[Unknown]
+        return list(self) == other
 
     def __bool__(self) -> bool:
         return self.total_bytes > 0
