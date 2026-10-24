@@ -1,4 +1,5 @@
 from collections.abc import Iterator, Mapping, MutableMapping
+from types import MappingProxyType
 from typing import Final, Protocol, cast
 
 from pydantic import BaseModel
@@ -52,7 +53,7 @@ class HiddenParamsModelView(MutableMapping[str, object]):
 def stored_attribute(obj: object, name: str) -> object:
     if not isinstance(obj, BaseModel):
         return getattr(obj, name, None)
-    values: Final[Mapping[str, object]] = vars(obj)
+    values: Final[Mapping[str, object]] = MappingProxyType[str, object](vars(obj))
     if name in values:
         return values[name]
     extras: Final[Mapping[str, object]] = obj.__pydantic_extra__ or {}

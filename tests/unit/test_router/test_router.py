@@ -10,7 +10,7 @@ import os
 import sys
 import threading
 import warnings
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -106,6 +106,137 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
+
+
+_ROUTER_DECISIONS_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "gpt-6-luna",
+    "answers": [{"type": "predicate", "name": "damaged", "probability": 0.9}],
+    "usage": {
+        "input_tokens": 1,
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        "output_tokens": 1,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 2,
+    },
+}
+
+
+_OPENAI_DECISIONS_PARAMS: Final[Mapping[str, object]] = {
+    "model": "openai/gpt-6-luna",
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "k",
+}
+_BEDROCK_DECISIONS_PARAMS: Final[Mapping[str, object]] = {
+    "model": "bedrock/us.openai.gpt-5.6-terra",
+    "aws_access_key_id": "fake",
+    "aws_secret_access_key": "fake",
+    "aws_region_name": "us-east-1",
+}
+
+
+def _decisions_leg(leg_id: str, params: Mapping[str, object], weight: int | None = None) -> dict[str, object]:
+    return {
+        "model_name": "decision-group",
+        "litellm_params": params if weight is None else {**params, "weight": weight},
+        "model_info": {"id": leg_id},
+    }
+
+
+_OPENAI_DECISIONS_LEG: Final = _decisions_leg("openai-leg", _OPENAI_DECISIONS_PARAMS)
+_BEDROCK_DECISIONS_LEG: Final = _decisions_leg("bedrock-leg", _BEDROCK_DECISIONS_PARAMS)
+
+
+def _mixed_decisions_group_router(*legs: dict[str, object]) -> Router:
+    return Router(model_list=list(legs), routing_strategy="simple-shuffle")
+
+
+@pytest.fixture
+def _router_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.asyncio
+async def test_decisions_on_a_mixed_group_never_routes_to_a_leg_without_decisions_support(
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+) -> None:
+    router: Final = _mixed_decisions_group_router(_OPENAI_DECISIONS_LEG, _BEDROCK_DECISIONS_LEG)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(20):
+        await router.adecisions(
+            model="decision-group",
+            input=[{"role": "user", "content": "The package arrived with a broken screen."}],
+            questions=[
+                {"type": "predicate", "name": "damaged", "instructions": "Does the customer report a damaged item?"}
+            ],
+        )
+
+    assert route.call_count == 20
+
+
+def test_decisions_on_a_mixed_group_never_routes_to_a_leg_without_decisions_support_sync(
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = _mixed_decisions_group_router(_OPENAI_DECISIONS_LEG, _BEDROCK_DECISIONS_LEG)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(20):
+        router.decisions(
+            model="decision-group",
+            input=[{"role": "user", "content": "The package arrived with a broken screen."}],
+            questions=[
+                {"type": "predicate", "name": "damaged", "instructions": "Does the customer report a damaged item?"}
+            ],
+        )
+
+    assert route.call_count == 20
+
+
+@pytest.mark.asyncio
+async def test_decisions_on_a_group_with_no_capable_leg_still_returns_the_provider_error() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-only",
+                "litellm_params": {
+                    "model": "bedrock/us.openai.gpt-5.6-terra",
+                    "aws_access_key_id": "fake",
+                    "aws_secret_access_key": "fake",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": {"id": "bedrock-leg"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="Unknown Decisions provider 'bedrock'"):
+        await router.adecisions(
+            model="bedrock-only",
+            input=[{"role": "user", "content": "The package arrived with a broken screen."}],
+            questions=[
+                {"type": "predicate", "name": "damaged", "instructions": "Does the customer report a damaged item?"}
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_chat_on_a_mixed_group_still_reaches_the_leg_without_decisions_support() -> None:
+    router: Final = _mixed_decisions_group_router(
+        _decisions_leg("openai-leg", _OPENAI_DECISIONS_PARAMS, weight=0),
+        _decisions_leg("bedrock-leg", _BEDROCK_DECISIONS_PARAMS, weight=1),
+    )
+
+    response: Final = await router.acompletion(
+        model="decision-group",
+        messages=[{"role": "user", "content": "Say hi"}],
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "bedrock-leg"
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():

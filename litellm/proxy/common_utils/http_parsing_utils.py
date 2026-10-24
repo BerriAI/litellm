@@ -220,7 +220,7 @@ def _loads_json_body(body: bytes) -> object:
 def _parse_binary_body(body: bytes) -> dict:
     """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
     try:
-        parsed: Final = _loads_json_body(body)
+        parsed: Final = _DECODED_JSON.validate_python(_loads_json_body(body))
         if isinstance(parsed, dict):
             return parsed
     except orjson.JSONDecodeError:

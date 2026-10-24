@@ -3398,7 +3398,9 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is not None
         assert response_usage.input_tokens_details.cached_tokens == 5
         assert response_usage.input_tokens_details.text_tokens == 8
-        assert "cache_write_tokens" not in response_usage.input_tokens_details.model_dump()
+        assert {"cache_write_tokens", "cache_write_tokens_details"}.isdisjoint(
+            response_usage.input_tokens_details.model_dump()
+        )
 
     def test_transform_usage_with_cached_tokens_gemini(self):
         """Test that cached_tokens from Gemini are properly transformed to input_tokens_details"""

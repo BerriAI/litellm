@@ -1200,10 +1200,14 @@ def get_usage_object(
     elif isinstance(usage_obj, dict):
         return Usage(**usage_obj)
     elif isinstance(usage_obj, BaseModel):
-        return Usage(**usage_obj.model_dump())
+        return _usage_from_model(usage_obj)
     else:
         verbose_logger.debug("Unknown usage object type: %s, usage_obj: %s", type(usage_obj), usage_obj)
         return None
+
+
+def _usage_from_model(usage_model: BaseModel) -> Usage:
+    return Usage(**usage_model.model_dump())
 
 
 def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage) -> PromptTokensDetailsWrapper:
@@ -1686,7 +1690,7 @@ def completion_cost(
                         setattr(
                             completion_response,
                             "usage",
-                            litellm.Usage(**_usage_for_dump.model_dump()),
+                            _usage_from_model(_usage_for_dump),
                         )
                     if isinstance(usage_obj, (DecisionsUsage, OpenAIDecisionUsage)):
                         _usage = _decisions_usage(usage_obj).model_dump()
@@ -2879,6 +2883,7 @@ def _batch_rate(
     model_info: ModelInfo,
     key: Literal[
         "input_cost_per_audio_token_batches",
+        "cache_read_input_audio_token_cost_batches",
         "input_cost_per_image_token_batches",
         "input_cost_per_video_token_batches",
     ],
@@ -3012,6 +3017,7 @@ def _batch_prompt_cost(
 ) -> float:
     details: Final = parse_prompt_tokens_details(usage)
     cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
+    cached_audio_tokens: Final = details["cache_hit_audio_tokens"] if cache_read_rate is not None else 0
     written_tokens: Final = details["cache_creation_tokens"] if cache_creation_rate is not None else 0
     audio_tokens, image_tokens, video_tokens = (
         details["audio_tokens"],
@@ -3026,13 +3032,18 @@ def _batch_prompt_cost(
         + audio_tokens * _batch_rate(model_info, "input_cost_per_audio_token_batches", input_rate)
         + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
         + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
-        + cached_tokens * (cache_read_rate or 0.0)
+        + (cached_tokens - cached_audio_tokens) * (cache_read_rate or 0.0)
+        + cached_audio_tokens
+        * _batch_rate(model_info, "cache_read_input_audio_token_cost_batches", cache_read_rate or 0.0)
         + written_tokens * (cache_creation_rate or 0.0)
     )
 
 
+_ATTRIBUTE_VALUE: Final = TypeAdapter(object)
+
+
 def _attribute_value(obj: object, name: str) -> object:
-    return getattr(obj, name)
+    return _ATTRIBUTE_VALUE.validate_python(getattr(obj, name))
 
 
 def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> list[str]:
@@ -3667,7 +3678,26 @@ def _get_model_info_or_none(model: str, custom_llm_provider: str) -> ModelInfo |
         return None
 
 
-def _declared_transcription_rate(info: ModelInfo | None, keys: tuple[str, ...]) -> float | None:
+_TranscriptionRateKey: TypeAlias = Literal[
+    "input_cost_per_second", "input_cost_per_audio_token", "input_cost_per_token", "output_cost_per_token"
+]
+
+
+def _model_info_rate(info: ModelInfo, key: _TranscriptionRateKey) -> float | None:
+    match key:
+        case "input_cost_per_second":
+            return info.get("input_cost_per_second")
+        case "input_cost_per_audio_token":
+            return info.get("input_cost_per_audio_token")
+        case "input_cost_per_token":
+            return info.get("input_cost_per_token")
+        case "output_cost_per_token":
+            return info.get("output_cost_per_token")
+        case _:
+            assert_never(key)
+
+
+def _declared_transcription_rate(info: ModelInfo | None, keys: tuple[_TranscriptionRateKey, ...]) -> float | None:
     """First of ``keys`` this entry prices, read off the raw ``litellm.model_cost`` entry
     because ``get_model_info`` synthesizes zero token rates for entries that omit them."""
     if info is None:
@@ -3676,12 +3706,18 @@ def _declared_transcription_rate(info: ModelInfo | None, keys: tuple[str, ...]) 
     if declared is None:
         return None
     return next(
-        (float(value) for key in keys if declared.get(key) is not None and (value := info.get(key)) is not None),
+        (
+            float(value)
+            for key in keys
+            if declared.get(key) is not None and (value := _model_info_rate(info, key)) is not None
+        ),
         None,
     )
 
 
-def _transcription_rate(keys: tuple[str, ...], override: ModelInfo | None, base: ModelInfo | None) -> float:
+def _transcription_rate(
+    keys: tuple[_TranscriptionRateKey, ...], override: ModelInfo | None, base: ModelInfo | None
+) -> float:
     rates: Final = (_declared_transcription_rate(info, keys) for info in (override, base))
     return next((rate for rate in rates if rate is not None), 0.0)
 
