@@ -3,11 +3,13 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Awaitable, Callable, Mapping
+import threading
+from collections.abc import Awaitable, Callable, Hashable, Mapping
+from concurrent.futures import Future
 from contextlib import closing
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, cast
+from typing import Final, Generic, Literal, NamedTuple, TypeVar, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -94,6 +96,9 @@ def process_azure_headers(headers: httpx.Headers | dict) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
+_Token = TypeVar("_Token")
+
+
 @lru_cache(maxsize=128)
 def _cached_entra_id_token_provider(
     tenant_id: str,
@@ -131,19 +136,101 @@ def _cached_username_password_token_provider(
 
 @lru_cache(maxsize=128)
 def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
-    return get_azure_ad_token_provider(azure_scope=scope)
+    return _single_flight_azure_ad_token_provider(get_azure_ad_token_provider(azure_scope=scope))
+
+
+_refresh_provider_lookup: Final = threading.Lock()
 
 
 def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
-    return _cached_azure_ad_token_refresh_provider(scope)
+    with _refresh_provider_lookup:
+        return _cached_azure_ad_token_refresh_provider(scope)
+
+
+@lru_cache(maxsize=128)
+def _cached_oidc_token_provider(
+    azure_ad_token: str,
+    client_id: str | None,
+    tenant_id: str | None,
+    scope: str,
+) -> Callable[[], str]:
+    return lambda: get_azure_ad_token_from_oidc(
+        azure_ad_token=azure_ad_token,
+        azure_client_id=client_id,
+        azure_tenant_id=tenant_id,
+        scope=scope,
+    )
 
 
 def _async_azure_ad_token_provider(
     provider: Callable[[], str | Awaitable[str]],
 ) -> Callable[[], Awaitable[str]]:
+    if isinstance(provider, Hashable):
+        return _shared_async_azure_ad_token_provider(provider)
+    return _single_flight_async_azure_ad_token_provider(provider)
+
+
+@lru_cache(maxsize=128)
+def _shared_async_azure_ad_token_provider(
+    provider: Callable[[], str | Awaitable[str]],
+) -> Callable[[], Awaitable[str]]:
+    return _single_flight_async_azure_ad_token_provider(provider)
+
+
+class _SingleFlight(Generic[_Token]):
+    def __init__(self, provider: Callable[[], _Token]) -> None:
+        self._provider: Final = provider
+        self._lock: Final = threading.Lock()
+        self._attempt: Future[_Token] | None = None
+
+    def __call__(self) -> _Token:
+        return self.fetch()[0]
+
+    def fetch(self) -> tuple[_Token, bool]:
+        attempt, leads = self._join_or_start()
+        if not leads:
+            return attempt.result(), False
+        return self._settle(attempt), True
+
+    def _join_or_start(self) -> tuple[Future[_Token], bool]:
+        with self._lock:
+            if self._attempt is not None:
+                return self._attempt, False
+            self._attempt = Future()
+            return self._attempt, True
+
+    def _settle(self, attempt: Future[_Token]) -> _Token:
+        try:
+            token: Final = self._provider()
+        except BaseException as error:
+            self._end()
+            attempt.set_exception(error)
+            raise
+        self._end()
+        attempt.set_result(token)
+        return token
+
+    def _end(self) -> None:
+        with self._lock:
+            self._attempt = None
+
+
+def _single_flight_azure_ad_token_provider(provider: Callable[[], _Token]) -> Callable[[], _Token]:
+    return _SingleFlight(provider)
+
+
+def _single_flight_async_azure_ad_token_provider(
+    provider: Callable[[], str | Awaitable[str]],
+) -> Callable[[], Awaitable[str]]:
+    single_flight: Final = _SingleFlight(provider)
+
     async def async_provider() -> str:
-        token: Final = await asyncio.to_thread(provider)
-        return token if isinstance(token, str) else await token
+        token, led = await asyncio.to_thread(single_flight.fetch)
+        if isinstance(token, str):
+            return token
+        # A coroutine can be awaited only once, so callers that joined another caller's attempt start their own
+        own: Final = token if led else await asyncio.to_thread(provider)
+        return own if isinstance(own, str) else await own
 
     return async_provider
 
@@ -346,10 +433,10 @@ def get_azure_ad_token(
     Get Azure AD token from various authentication methods.
 
     This function tries different methods to obtain an Azure AD token:
-    1. From an existing token provider
-    2. From Entra ID using tenant_id, client_id, and client_secret
-    3. From username and password
-    4. From OIDC token
+    1. From OIDC token
+    2. From an existing token provider
+    3. From Entra ID using tenant_id, client_id, and client_secret
+    4. From username and password
     5. From a service principal with secret workflow
     6. From DefaultAzureCredential
 
@@ -381,6 +468,15 @@ def get_azure_ad_token(
     if scope is None:
         scope = "https://cognitiveservices.azure.com/.default"
 
+    if client_id and tenant_id and azure_ad_token and azure_ad_token.startswith("oidc/"):
+        verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
+        return get_azure_ad_token_from_oidc(
+            azure_ad_token=azure_ad_token,
+            azure_client_id=client_id,
+            azure_tenant_id=tenant_id,
+            scope=scope,
+        )
+
     # Try to get token provider from Entra ID
     if azure_ad_token_provider is None and tenant_id and client_id and client_secret:
         verbose_logger.debug("Using Azure AD Token Provider from Entra ID for Azure Auth")
@@ -401,22 +497,13 @@ def get_azure_ad_token(
             scope=scope,
         )
 
-    # Try to get token from OIDC
-    if client_id and tenant_id and azure_ad_token and azure_ad_token.startswith("oidc/"):
-        verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
-        azure_ad_token = get_azure_ad_token_from_oidc(
-            azure_ad_token=azure_ad_token,
-            azure_client_id=client_id,
-            azure_tenant_id=tenant_id,
-            scope=scope,
-        )
     # Try to get token provider from service principal or DefaultAzureCredential
-    elif azure_ad_token_provider is None and litellm.enable_azure_ad_token_refresh is True:
+    if azure_ad_token_provider is None and litellm.enable_azure_ad_token_refresh is True:
         verbose_logger.debug(
             "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
         )
         try:
-            azure_ad_token_provider = _cached_azure_ad_token_refresh_provider(scope)
+            azure_ad_token_provider = cached_azure_ad_token_refresh_provider(scope)
         except ValueError:
             verbose_logger.debug("Azure AD Token Provider could not be used.")
         except Exception as e:
@@ -704,27 +791,25 @@ class BaseAzureLLM(BaseOpenAILLM):
                 scope=scope,
             )
 
-        if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
+        oidc_token: Final = (
+            azure_ad_token if isinstance(azure_ad_token, str) and azure_ad_token.startswith("oidc/") else None
+        )
+        if oidc_token is not None:
             verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
-            azure_ad_token = get_azure_ad_token_from_oidc(
-                azure_ad_token=azure_ad_token,
-                azure_client_id=client_id,
-                azure_tenant_id=tenant_id,
-                scope=scope,
-            )
+            azure_ad_token_provider = _cached_oidc_token_provider(oidc_token, client_id, tenant_id, scope)
         elif not api_key and azure_ad_token_provider is None and litellm.enable_azure_ad_token_refresh is True:
             verbose_logger.debug(
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
             )
             try:
-                azure_ad_token_provider = _cached_azure_ad_token_refresh_provider(scope)
+                azure_ad_token_provider = cached_azure_ad_token_refresh_provider(scope)
             except ValueError:
                 verbose_logger.debug("Azure AD Token Provider could not be used.")
         if api_version is None:
             api_version = os.getenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
 
         _api_key = api_key
-        if _api_key is not None and isinstance(_api_key, str):
+        if _api_key is not None:
             # only show first 5 chars of api_key
             _api_key = _api_key[:8] + "*" * 15
         verbose_logger.debug(
@@ -734,7 +819,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             "api_key": api_key,
             "azure_endpoint": api_base,
             "api_version": api_version,
-            "azure_ad_token": azure_ad_token,
+            "azure_ad_token": None if oidc_token is not None else azure_ad_token,
             "azure_ad_token_provider": azure_ad_token_provider,
         }
         # init http client + SSL Verification settings

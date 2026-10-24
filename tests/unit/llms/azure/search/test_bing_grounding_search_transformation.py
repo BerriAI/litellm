@@ -132,6 +132,54 @@ def test_default_entra_minter_reuses_provider(monkeypatch: pytest.MonkeyPatch) -
         common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
 
 
+def test_a_cold_burst_of_searches_fetches_the_entra_token_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+    import itertools
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from azure.core.credentials import AccessToken
+    from azure.identity import get_bearer_token_provider
+
+    from litellm.llms.azure import common_utils
+
+    far_future_expiry: Final = 4_102_444_800
+    second_fetch_started: Final = threading.Event()
+    fetch_numbers: Final = itertools.count()
+
+    class SlowCredential:
+        def get_token(self, *scopes: str, **_: object) -> AccessToken:
+            if next(fetch_numbers) == 0:
+                second_fetch_started.wait(timeout=0.5)
+            else:
+                second_fetch_started.set()
+            return AccessToken(f"entra-token-for-{' '.join(scopes)}", far_future_expiry)
+
+    second_build_started: Final = threading.Event()
+    build_numbers: Final = itertools.count()
+
+    def provider_factory(azure_scope: str) -> object:
+        if next(build_numbers) == 0:
+            second_build_started.wait(timeout=0.5)
+        else:
+            second_build_started.set()
+        return get_bearer_token_provider(SlowCredential(), azure_scope)
+
+    provider_module: Final = importlib.import_module("litellm.secret_managers.get_azure_ad_token_provider")
+    common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
+    monkeypatch.setattr(common_utils, "get_azure_ad_token_provider", provider_factory)
+    monkeypatch.setattr(provider_module, "get_azure_ad_token_provider", provider_factory)
+
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            headers: Final = tuple(pool.map(lambda _: _config().validate_environment({}), range(4)))
+    finally:
+        common_utils._cached_azure_ad_token_refresh_provider.cache_clear()
+
+    assert [h["Authorization"] for h in headers] == ["Bearer entra-token-for-https://ai.azure.com/.default"] * 4
+    assert next(fetch_numbers) == 1
+
+
 def test_validate_environment_does_not_mutate_and_is_idempotent():
     config = _config()
     caller_headers = {"X-Custom": "keep-me"}
