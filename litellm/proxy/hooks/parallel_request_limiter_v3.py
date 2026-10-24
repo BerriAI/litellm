@@ -472,6 +472,25 @@ end
 return results
 """
 
+OPEN_WINDOW_TOKEN_INCREMENT_SCRIPT: Final = """
+-- KEYS: (window_key, counter_key) pairs; ARGV: (increment, ttl_seconds) pairs at the same indexes.
+-- A counter is incremented only while its scope's rate limit window is open. A pair whose window key is
+-- its own counter key has no window to wait for and is always incremented.
+local applied = 0
+for i = 1, #KEYS, 2 do
+    local counter_key = KEYS[i + 1]
+    if KEYS[i] == counter_key or redis.call('EXISTS', KEYS[i]) == 1 then
+        local ttl_seconds = tonumber(ARGV[i + 1])
+        redis.call('INCRBYFLOAT', counter_key, ARGV[i])
+        if ttl_seconds > 0 and redis.call('TTL', counter_key) == -1 then
+            redis.call('EXPIRE', counter_key, ttl_seconds)
+        end
+        applied = applied + 1
+    end
+end
+return applied
+"""
+
 # Redis cluster slot count
 REDIS_CLUSTER_SLOTS: Final = 16384
 REDIS_NODE_HASHTAG_NAME: Final = "all_keys"
@@ -620,6 +639,12 @@ class ReservationAwareIncrementOperation(RedisPipelineIncrementOperation):
     window_key: NotRequired[str]
     expected_window_start: NotRequired[str]
     reservation_backend: NotRequired[Literal["redis", "local"]]
+
+
+class OpenWindowIncrementOperation(RedisPipelineIncrementOperation):
+    """A token increment Redis applies only while ``open_window_key`` holds its scope's rate limit window."""
+
+    open_window_key: str
 
 
 class RateLimitResponseWithDescriptors(TypedDict):
@@ -830,6 +855,11 @@ def _as_window_guarded(operation: RedisPipelineIncrementOperation) -> Reservatio
     )
 
 
+def _open_window_key(operation: RedisPipelineIncrementOperation) -> str | None:
+    open_window_key: Final = operation.get("open_window_key")
+    return open_window_key if isinstance(open_window_key, str) else None
+
+
 def _call_id_from_callback_kwargs(kwargs: object) -> str | None:
     if not isinstance(kwargs, dict):
         return None
@@ -850,6 +880,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     batch_rate_limiter_script: _AsyncLuaScript | None
     batch_counter_read_script: _AsyncLuaScript | None
     token_increment_script: _AsyncLuaScript | None
+    open_window_token_increment_script: _AsyncLuaScript | None
     check_and_increment_by_n_script: _AsyncLuaScript | None
     window_guarded_token_increment_script: _AsyncLuaScript | None
     parallel_acquire_script: _AsyncLuaScript | None
@@ -885,6 +916,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.token_increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 TOKEN_INCREMENT_SCRIPT
             )
+            self.open_window_token_increment_script = (
+                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                    OPEN_WINDOW_TOKEN_INCREMENT_SCRIPT
+                )
+            )
             self.check_and_increment_by_n_script = (
                 self.internal_usage_cache.dual_cache.redis_cache.async_register_script(CHECK_AND_INCREMENT_BY_N_SCRIPT)
             )
@@ -906,6 +942,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.batch_rate_limiter_script = None
             self.batch_counter_read_script = None
             self.token_increment_script = None
+            self.open_window_token_increment_script = None
             self.check_and_increment_by_n_script = None
             self.window_guarded_token_increment_script = None
             self.parallel_acquire_script = None
@@ -4589,8 +4626,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Execute token increment script grouped by hash tag for cluster compatibility.
         """
-        if self.token_increment_script is None:
+        token_increment_script: Final = self.token_increment_script
+        if token_increment_script is None:
             return
+        open_window_script: Final = self.open_window_token_increment_script
 
         # Group operations by hash tag for Redis cluster compatibility
         operation_keys: Final = [op["key"] for op in pipeline_operations]
@@ -4599,6 +4638,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         for _hash_tag, group_keys in key_groups.items():
             # Get operations for this hash tag group
             group_operations = [op for op in pipeline_operations if op["key"] in group_keys]
+            window_keys = [_open_window_key(op) for op in group_operations]
+            if open_window_script is not None and any(window_key is not None for window_key in window_keys):
+                # One script for the whole group, so its plain and window-gated increments land together
+                await self._run_token_increment_script(
+                    OPEN_WINDOW_TOKEN_INCREMENT_SCRIPT,
+                    open_window_script,
+                    tuple(
+                        itertools.chain.from_iterable(
+                            (window_key or op["key"], op["key"])
+                            for op, window_key in zip(group_operations, window_keys, strict=True)
+                        )
+                    ),
+                    tuple(
+                        itertools.chain.from_iterable(
+                            (op["increment_value"], op["ttl"] or 0) for op in group_operations
+                        )
+                    ),
+                    group_operations,
+                )
+                continue
 
             keys = []
             args = []
@@ -4616,25 +4675,34 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 keys.append(op["key"])
                 args.extend([op["increment_value"], ttl_value])
 
-            if self._defer_token_increment_script(keys, args, group_operations):
-                continue
-            await self.token_increment_script(
-                keys=keys,
-                args=args,
+            await self._run_token_increment_script(
+                TOKEN_INCREMENT_SCRIPT, token_increment_script, keys, args, group_operations
             )
+
+    async def _run_token_increment_script(
+        self,
+        source: str,
+        script: _AsyncLuaScript,
+        keys: Sequence[str],
+        args: Sequence[float],
+        group_operations: Sequence[RedisPipelineIncrementOperation],
+    ) -> None:
+        if not self._defer_token_increment_script(source, script, keys, args, group_operations):
+            await script(keys=keys, args=args)
 
     def _defer_token_increment_script(
         self,
-        keys: list[str],
-        args: list[int],
-        group_operations: list["RedisPipelineIncrementOperation"],
+        source: str,
+        script: _AsyncLuaScript,
+        keys: Sequence[str],
+        args: Sequence[float],
+        group_operations: Sequence[RedisPipelineIncrementOperation],
     ) -> bool:
         """Declared into the request's post-call pipeline instead of its own EVALSHA round trip; a failed
         script falls back to the plain increment pipeline for its own group, as the direct path does."""
         redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
-        script: Final = self.token_increment_script
         batch: Final = None if redis_cache is None else active_post_call_redis_batch(redis_cache)
-        if batch is None or script is None:
+        if batch is None:
             return False
 
         async def fall_back(future: asyncio.Future[object]) -> None:
@@ -4647,10 +4715,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 future.exception(),
             )
             await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
-                increment_list=group_operations,
+                increment_list=[*group_operations],
             )
 
-        batch.script(TOKEN_INCREMENT_SCRIPT, script, keys, args).on_settled(fall_back)
+        batch.script(source, script, keys, args).on_settled(fall_back)
         return True
 
     @with_service_target("rate_limits")
@@ -5110,6 +5178,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         return ops
 
+    def _build_open_window_tpm_ops(
+        self,
+        targets: Sequence[tuple[str, str]],
+        tokens: int,
+    ) -> list[OpenWindowIncrementOperation]:
+        """Charge ``tokens`` to each target's counter while that scope has an open rate limit window."""
+        if tokens == 0:
+            return []
+        return [
+            OpenWindowIncrementOperation(
+                key=self.create_rate_limit_keys(scope_key, scope_value, "tokens"),
+                increment_value=tokens,
+                ttl=self.window_size,
+                open_window_key=f"{{{scope_key}:{scope_value}}}:window",
+            )
+            for scope_key, scope_value in targets
+        ]
+
     def _build_project_reservation_op(
         self,
         scope: tuple[str, str],
@@ -5271,10 +5357,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         pipeline_operations.extend(
             self._build_reservation_aware_tpm_ops(
-                targets=charged_targets,
+                targets=[target for target in charged_targets if target in reserved_scopes],
                 reserved_scopes=reserved_scopes,
                 actual_tokens=total_tokens,
                 reserved_tokens=reserved_tokens,
+            )
+        )
+        pipeline_operations.extend(
+            self._build_open_window_tpm_ops(
+                targets=[target for target in charged_targets if target not in reserved_scopes],
+                tokens=total_tokens,
             )
         )
         pipeline_operations.extend(

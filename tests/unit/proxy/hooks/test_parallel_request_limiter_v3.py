@@ -8933,3 +8933,83 @@ async def test_a_successful_extraction_counts_its_input_tokens_toward_the_key_tp
             call_type="aextraction",
         )
     assert refused.value.status_code == 429
+
+
+_SCOPE_TOKEN_KEYS: Final = frozenset(
+    {
+        "{api_key:key-hash}:tokens",
+        "{user:u}:tokens",
+        "{team:t}:tokens",
+        "{team_member:t:u}:tokens",
+        "{model_per_key:key-hash:gpt-4o-mini}:tokens",
+        "{model_per_team:t:gpt-4o-mini}:tokens",
+    }
+)
+
+
+def _scoped_success_kwargs(**body: object) -> dict[str, object]:
+    return {
+        "standard_logging_object": {
+            "metadata": {"user_api_key_hash": "key-hash", "user_api_key_user_id": "u", "user_api_key_team_id": "t"}
+        },
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-4o-mini",
+                "user_api_key_metadata": {},
+                "user_api_key_team_metadata": {},
+            }
+        },
+        "model": "gpt-4o-mini",
+        **body,
+    }
+
+
+async def _admit_scoped_request(handler: _PROXY_MaxParallelRequestsHandler, auth: UserAPIKeyAuth) -> None:
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=handler.internal_usage_cache.dual_cache,
+        data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 20},
+        call_type="acompletion",
+    )
+
+
+def _charged_windows(handler: _PROXY_MaxParallelRequestsHandler, kwargs: dict[str, object]) -> dict[str, object]:
+    operations: Final = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs,
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=2, completion_tokens=1, total_tokens=3)),
+        rate_limit_type="total",
+    )
+    return {operation["key"]: operation.get("open_window_key") for operation in operations}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limits, reserved",
+    [
+        ({}, frozenset()),
+        ({"rpm_limit": 100}, frozenset()),
+        ({"user_rpm_limit": 100}, frozenset()),
+        ({"tpm_limit": 1000}, frozenset({"{api_key:key-hash}:tokens"})),
+        ({"team_tpm_limit": 1000}, frozenset({"{team:t}:tokens"})),
+    ],
+    ids=["no_limits", "key_rpm", "user_rpm", "key_tpm_reserved", "team_tpm_reserved"],
+)
+async def test_success_charges_every_unreserved_scope_only_while_its_rate_limit_window_is_open(
+    limits: dict[str, object], reserved: frozenset[str]
+) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    await _admit_scoped_request(handler, UserAPIKeyAuth(api_key="key-hash", user_id="u", team_id="t", **limits))
+
+    assert _charged_windows(handler, _scoped_success_kwargs()) == {
+        key: None if key in reserved else key.removesuffix(":tokens") + ":window" for key in _SCOPE_TOKEN_KEYS
+    }
+
+
+@pytest.mark.asyncio
+async def test_success_charges_a_numeric_body_user_to_the_window_its_admission_opened() -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    await _admit_scoped_request(
+        handler, UserAPIKeyAuth(api_key="key-hash", end_user_id="123", end_user_rpm_limit=100)
+    )
+
+    assert _charged_windows(handler, _scoped_success_kwargs(user=123))["{end_user:123}:tokens"] == "{end_user:123}:window"
