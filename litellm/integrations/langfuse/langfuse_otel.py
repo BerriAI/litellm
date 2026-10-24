@@ -11,6 +11,7 @@ from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import safe_set_attribute
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
+    serialize_langfuse_datetime,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.otel.model.trace_controls import caller_trace_controls, request_trace_controls
@@ -62,7 +63,7 @@ class LangfuseOtelLogger(OpenTelemetry):
             LangfuseOtelLogger._set_trace_user_attribute(span=span, kwargs=kwargs)
 
     @staticmethod
-    def _extract_langfuse_metadata(kwargs: dict) -> dict:
+    def _extract_langfuse_metadata(kwargs: Mapping[str, Any]) -> dict:
         """
         Extracts Langfuse metadata from the standard LiteLLM kwargs structure.
 
@@ -228,7 +229,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 )
 
     @staticmethod
-    def _set_langfuse_specific_attributes(span: Span, kwargs, response_obj):
+    def _set_langfuse_specific_attributes(span: Span, kwargs: Mapping[str, Any], response_obj):
         """
         Sets Langfuse specific metadata attributes onto the OTEL span.
 
@@ -260,6 +261,14 @@ class LangfuseOtelLogger(OpenTelemetry):
                 span,
                 LangfuseSpanAttributes.OBSERVATION_INPUT.value,
                 safe_dumps(messages),
+            )
+
+        completion_start_time: Final = kwargs.get("completion_start_time")
+        if isinstance(completion_start_time, datetime):
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.OBSERVATION_COMPLETION_START_TIME.value,
+                serialize_langfuse_datetime(completion_start_time),
             )
 
         LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)
