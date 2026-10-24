@@ -2030,6 +2030,50 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert out[1]["content"][0]["tool_use_id"] == "functions_Bash_0"
         assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
 
+    def test_sanitize_tool_use_ids_preserves_thought_signature_suffix(self):
+        """
+        /v1/messages sanitizes ids before the adapter runs; the Gemini
+        __thought__ suffix must survive so later turns can recover the signature.
+        """
+        from litellm.llms.anthropic.common_utils import (
+            format_anthropic_tool_use_id_with_signature,
+            sanitize_tool_use_ids_in_anthropic_messages,
+            split_anthropic_tool_use_id_signature,
+        )
+
+        sig = "CiIBDDnWx+/a=="
+        embedded = format_anthropic_tool_use_id_with_signature("functions.Bash:0", sig)
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": embedded,
+                        "name": "Bash",
+                        "input": {},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": embedded,
+                        "content": "ok",
+                    }
+                ],
+            },
+        ]
+        out = sanitize_tool_use_ids_in_anthropic_messages(msgs)
+        assert out[0]["content"][0]["id"] == embedded
+        assert out[1]["content"][0]["tool_use_id"] == embedded
+        assert split_anthropic_tool_use_id_signature(out[0]["content"][0]["id"]) == (
+            "functions_Bash_0",
+            sig,
+        )
+
     def test_normalize_anthropic_tool_use_id_strips_thought_signature(self):
         from litellm.litellm_core_utils.prompt_templates.factory import (
             THOUGHT_SIGNATURE_SEPARATOR,
@@ -2039,6 +2083,21 @@ class TestAnthropicThinkingSignatureSelfHeal:
         base = "call_abc123"
         sig = "CiIBDDnWx+/a=="
         assert normalize_anthropic_tool_use_id(f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}") == base
+
+    def test_format_anthropic_tool_use_id_with_signature_round_trips(self):
+        import re
+
+        from litellm.llms.anthropic.common_utils import (
+            format_anthropic_tool_use_id_with_signature,
+            split_anthropic_tool_use_id_signature,
+        )
+
+        base = "functions.Bash:0"
+        sig = "CiIBDDnWx+/a=="
+        formatted = format_anthropic_tool_use_id_with_signature(base, sig)
+        assert re.fullmatch(r"[a-zA-Z0-9_-]+", formatted)
+        assert split_anthropic_tool_use_id_signature(formatted) == ("functions_Bash_0", sig)
+        assert format_anthropic_tool_use_id_with_signature(base, None) == "functions_Bash_0"
 
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx
