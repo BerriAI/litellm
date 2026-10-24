@@ -143,7 +143,7 @@ async def test_each_tokenizer_gets_its_own_cached_counter(fake_tokenizers: None)
         ("gemini/gemini-2.5-pro", "cl100k_base"),
         ("mistral/mistral-large-latest", "cl100k_base"),
         ("my-router-alias", "cl100k_base"),
-        ("azure/gpt-4o", "cl100k_base"),
+        ("azure/gpt-4o", "o200k_base"),
         ("command-r-plus", "cl100k_base"),
         ("gpt-4o", "o200k_base"),
         ("gpt-4o-mini", "o200k_base"),
