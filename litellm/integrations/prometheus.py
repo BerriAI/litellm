@@ -9,7 +9,7 @@ import os
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
@@ -4826,9 +4826,12 @@ class PrometheusLogger(CustomLogger):
 
     def _get_remaining_hours_for_budget_reset(self, budget_reset_at: datetime) -> float:
         """
-        Get remaining hours for budget reset
+        Get remaining hours for budget reset. A naive ``budget_reset_at`` is UTC, as the DB stores it
         """
-        return (budget_reset_at - datetime.now(budget_reset_at.tzinfo)).total_seconds() / 3600
+        reset_at: Final = (
+            budget_reset_at if budget_reset_at.tzinfo is not None else budget_reset_at.replace(tzinfo=timezone.utc)
+        )
+        return (reset_at - datetime.now(timezone.utc)).total_seconds() / 3600
 
     def _safe_duration_seconds(
         self,
