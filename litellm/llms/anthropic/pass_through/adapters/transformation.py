@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.pass_through.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.pass_through.utils import (
@@ -16,7 +16,10 @@ from litellm.llms.anthropic.pass_through.utils import (
     json_copy_or_original,
     prompt_cache_key_from_user_id,
 )
-from litellm.llms.base_llm.guardrail_translation.utils import extract_tool_from_addition_block
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    extract_tool_from_addition_block,
+    list_field,
+)
 from litellm.responses.utils import auto_reasoning_summary
 
 # OpenAI has a 64-character limit for function/tool names
@@ -476,7 +479,9 @@ class LiteLLMAnthropicMessagesAdapter:
     ) -> list[AllMessageValues]:
         new_messages: Final[list[AllMessageValues]] = []
         _, cleaned_input_messages = self._extract_and_apply_midturn_tool_changes(messages)
-        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(cleaned_input_messages)
+        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(
+            cast(Sequence[dict[str, object]], cleaned_input_messages)  # cast-ok: anthropic messages shape
+        )
         leading_count: Final = next(
             (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
             len(replayable_messages),
@@ -1232,10 +1237,19 @@ class LiteLLMAnthropicMessagesAdapter:
             if k not in translatable_params:  # pass remaining params as is
                 new_kwargs[k] = v
 
+    @staticmethod
+    def _adapter_tool_name(tool: object) -> str | None:
+        tool_map: Final = as_str_mapping(tool)
+        if tool_map is not None:
+            name_val: Final = tool_map.get("name")
+            if isinstance(name_val, str) and name_val:
+                return name_val
+        return None
+
     def _extract_and_apply_midturn_tool_changes(
         self,
         messages: Sequence[Mapping[str, object] | AllAnthropicPassThroughMessageValues],
-        initial_tools: Sequence[AllAnthropicToolsValues] | None = None,
+        initial_tools: Sequence[object] | None = None,
     ) -> tuple[tuple[AllAnthropicToolsValues, ...] | None, tuple[AllAnthropicPassThroughMessageValues, ...]]:
         """
         Extract and apply mid-conversation tool changes (tool_addition, tool_removal)
@@ -1248,57 +1262,67 @@ class LiteLLMAnthropicMessagesAdapter:
             - cleaned_messages: Messages tuple with tool_addition and tool_removal blocks stripped,
                                 and carrier messages left without content dropped.
         """
-        active_tools: tuple[AllAnthropicToolsValues, ...] = tuple(initial_tools or ())  # rebind-ok: tool updates
+        active_tools: tuple[AllAnthropicToolsValues, ...] = tuple(  # rebind-ok: tool updates
+            cast(  # cast-ok: initial tools
+                AllAnthropicToolsValues, t
+            )
+            for t in (initial_tools or ())
+        )
         had_tool_changes: bool = False  # rebind-ok: state flag
         cleaned_messages: Final[list[AllAnthropicPassThroughMessageValues]] = []  # mutable-ok: accumulator
 
         for m in messages:
-            if not isinstance(m, Mapping):
-                cleaned_messages.append(m)  # pyright: ignore[reportArgumentType]  # non-mapping passthrough
+            m_map = as_str_mapping(m)
+            if m_map is None:
+                cleaned_messages.append(cast(AllAnthropicPassThroughMessageValues, m))  # cast-ok: msg
                 continue
-            content: Final = m.get("content")
+            content = m_map.get("content")
             if not isinstance(content, Sequence) or isinstance(content, (str, bytes)):
-                msg_val: Final = cast(AllAnthropicPassThroughMessageValues, m)  # cast-ok: msg
+                msg_val = cast(AllAnthropicPassThroughMessageValues, m)  # cast-ok: msg
                 cleaned_messages.append(msg_val)
                 continue
 
-            remaining_blocks: Final[list[object]] = []  # mutable-ok: accumulator
-            for block in content:
-                if not isinstance(block, Mapping):
+            content_seq: Sequence[object] = cast(Sequence[object], content)  # cast-ok: content blocks
+            remaining_blocks: list[object] = []  # mutable-ok: accumulator
+            for block in content_seq:
+                block_map = as_str_mapping(block)
+                if block_map is None:
                     remaining_blocks.append(block)
                     continue
-                btype: Final = block.get("type")
+                btype = block_map.get("type")
                 if btype == "tool_addition":
                     had_tool_changes = True
-                    raw_tool: Final = extract_tool_from_addition_block(block)
-                    if isinstance(raw_tool, Mapping) and raw_tool.get("name"):
-                        tool_name: Final = str(raw_tool["name"])
-                        if not any(isinstance(t, Mapping) and t.get("name") == tool_name for t in active_tools):
-                            added_tool: Final = cast(AllAnthropicToolsValues, dict(raw_tool))  # cast-ok: tool
+                    raw_tool = extract_tool_from_addition_block(block_map)
+                    if raw_tool is not None:
+                        tool_name = self._adapter_tool_name(raw_tool)
+                        if tool_name is not None and not any(
+                            self._adapter_tool_name(t) == tool_name for t in active_tools
+                        ):
+                            added_tool = cast(AllAnthropicToolsValues, dict(raw_tool))  # cast-ok: tool
                             active_tools = (*active_tools, added_tool)
                 elif btype == "tool_removal":
                     had_tool_changes = True
-                    rem_name: Final = (
-                        block.get("tool_name")
-                        or block.get("name")
-                        or (block.get("tool", {}).get("name") if isinstance(block.get("tool"), Mapping) else None)
-                        or (block.get("tool") if isinstance(block.get("tool"), str) else None)
+                    tool_obj = block_map.get("tool")
+                    tool_map = as_str_mapping(tool_obj)
+                    rem_name = (
+                        block_map.get("tool_name")
+                        or block_map.get("name")
+                        or (tool_map.get("name") if tool_map is not None else None)
+                        or (tool_obj if isinstance(tool_obj, str) else None)
                     )
                     if rem_name:
-                        rem_name_str: Final = str(rem_name)
-                        active_tools = tuple(
-                            t for t in active_tools if not (isinstance(t, Mapping) and t.get("name") == rem_name_str)
-                        )
+                        rem_name_str = str(rem_name)
+                        active_tools = tuple(t for t in active_tools if self._adapter_tool_name(t) != rem_name_str)
                 else:
                     remaining_blocks.append(block)
 
             if remaining_blocks:
-                new_m: Final[dict[str, object]] = dict(m)  # mutable-ok: message clone
+                new_m: dict[str, object] = dict(m_map)  # mutable-ok: message clone
                 new_m["content"] = remaining_blocks
-                new_msg: Final = cast(AllAnthropicPassThroughMessageValues, new_m)  # cast-ok: msg
+                new_msg = cast(AllAnthropicPassThroughMessageValues, new_m)  # cast-ok: msg
                 cleaned_messages.append(new_msg)
             elif not had_tool_changes:
-                clean_msg: Final = cast(AllAnthropicPassThroughMessageValues, m)  # cast-ok: msg
+                clean_msg = cast(AllAnthropicPassThroughMessageValues, m)  # cast-ok: msg
                 cleaned_messages.append(clean_msg)
 
         if not had_tool_changes and initial_tools is None:
@@ -1332,25 +1356,27 @@ class LiteLLMAnthropicMessagesAdapter:
             list[AllAnthropicPassThroughMessageValues],
             anthropic_message_request["messages"],
         )
+        request_dict: Final[dict[str, object]] = dict(anthropic_message_request)  # mutable-ok: clone
+        initial_tools_val: Final = list_field(request_dict, "tools") if "tools" in request_dict else None
         (
             active_tools,
             cleaned_messages,
         ) = self._extract_and_apply_midturn_tool_changes(
             messages=messages_list,
-            initial_tools=anthropic_message_request.get("tools"),
-        )
-        request_for_translation: Final[AnthropicMessagesRequest] = cast(  # cast-ok: anthropic request type
-            AnthropicMessagesRequest, dict(anthropic_message_request)
+            initial_tools=initial_tools_val,
         )
         if active_tools is not None:
             if active_tools:
-                request_for_translation["tools"] = list(active_tools)
+                request_dict["tools"] = list(active_tools)
             else:
-                request_for_translation.pop("tools", None)
+                request_dict.pop("tools", None)
+        request_for_translation: Final[AnthropicMessagesRequest] = cast(  # cast-ok: anthropic request type
+            AnthropicMessagesRequest, request_dict
+        )
 
         new_messages: Final = self.translate_anthropic_messages_to_openai(
             messages=list(cleaned_messages),
-            model=request_for_translation.get("model"),
+            model=anthropic_message_request.get("model"),
             custom_llm_provider=custom_llm_provider,
             preserve_midturn_system=preserve_midturn_system,
         )

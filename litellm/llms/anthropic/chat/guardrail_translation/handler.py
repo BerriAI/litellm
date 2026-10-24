@@ -661,12 +661,11 @@ class AnthropicMessagesHandler(BaseTranslation):
                     ]
                 )
                 if not scan_only_tool_results:
-                    retained_names: Final = frozenset(
-                        name
-                        for t in (data.get("tools") or ())
-                        for name in anthropic_tool_names(t)  # comprehension-ok: flattens tool names across tools
+                    data_dict: Final[dict[str, object]] = cast(dict[str, object], data)  # cast-ok: request dict
+                    retained_names: Final = frozenset(  # comprehension-ok: flattens tool names across tools
+                        name for t in list_field(data_dict, "tools") for name in anthropic_tool_names(t)
                     )
-                    self._strip_disallowed_tool_additions(data, retained_names)
+                    self._strip_disallowed_tool_additions(data_dict, retained_names)
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
             if (
@@ -945,65 +944,64 @@ class AnthropicMessagesHandler(BaseTranslation):
         top_names: Final = [  # comprehension-ok: flattens tool names across tools
             name for tool in list_field(data, "tools") for name in anthropic_tool_names(tool)
         ]
-        messages: Final = data.get("messages")
-        if not isinstance(messages, Sequence):
+        messages: Final = list_field(data, "messages")
+        if not messages:
             return top_names
         extra_names: Final[list[str]] = []  # mutable-ok: accumulator
         for m in messages:
-            if isinstance(m, Mapping):
-                content: Final = m.get("content")
-                if isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
-                    for block in content:
-                        if isinstance(block, Mapping) and block.get("type") == "tool_addition":
-                            tool: Final = extract_tool_from_addition_block(block)
-                            if tool is not None:
-                                for name in anthropic_tool_names(tool):
-                                    if name not in top_names and name not in extra_names:
-                                        extra_names.append(name)
+            m_map = as_str_mapping(m)
+            if m_map is not None:
+                for block in list_field(m_map, "content"):
+                    block_map = as_str_mapping(block)
+                    if block_map is not None and block_map.get("type") == "tool_addition":
+                        tool = extract_tool_from_addition_block(block_map)
+                        if tool is not None:
+                            for name in anthropic_tool_names(tool):
+                                if name not in top_names and name not in extra_names:
+                                    extra_names.append(name)
         return [*top_names, *extra_names]
+
+    @staticmethod
+    def _is_disallowed_addition_block(block: object, retained_names: frozenset[str]) -> bool:
+        block_map: Final = as_str_mapping(block)
+        if block_map is None or block_map.get("type") != "tool_addition":
+            return False
+        tool: Final = extract_tool_from_addition_block(block_map)
+        if tool is None:
+            return True
+        tool_names: Final = anthropic_tool_names(tool)
+        if not tool_names:
+            return True
+        return any(name not in retained_names for name in tool_names)
 
     @classmethod
     def _strip_disallowed_tool_additions(cls, data: Mapping[str, object], retained_names: frozenset[str]) -> None:
-        messages: Final = data.get("messages")
-        if not isinstance(messages, list):
+        if not isinstance(data, dict):
             return
+        messages_val: Final = data.get("messages")
+        if not isinstance(messages_val, list):
+            return
+        messages: Final = cast(Sequence[object], messages_val)  # cast-ok: messages list
         cleaned_messages: Final[list[object]] = []  # mutable-ok: accumulator
         for m in messages:
-            if not isinstance(m, dict):
+            m_map = as_str_mapping(m)
+            if m_map is None:
                 cleaned_messages.append(m)
                 continue
-            content: Final = m.get("content")
-            if not isinstance(content, list):
+            content_val = m_map.get("content")
+            if not isinstance(content_val, list):
                 cleaned_messages.append(m)
                 continue
-            had_disallowed_addition: Final = any(
-                isinstance(block, dict)
-                and block.get("type") == "tool_addition"
-                and (
-                    not (tool := extract_tool_from_addition_block(block))
-                    or not (tool_names := anthropic_tool_names(tool))
-                    or not all(name in retained_names for name in tool_names)
-                )
-                for block in content
-            )
+            content: Sequence[object] = cast(Sequence[object], content_val)  # cast-ok: content list
+            had_disallowed_addition = any(cls._is_disallowed_addition_block(block, retained_names) for block in content)
             if not had_disallowed_addition:
                 cleaned_messages.append(m)
                 continue
-            remaining_blocks: Final[list[object]] = [  # mutable-ok: accumulator
-                block
-                for block in content
-                if not (
-                    isinstance(block, dict)
-                    and block.get("type") == "tool_addition"
-                    and (
-                        not (tool := extract_tool_from_addition_block(block))
-                        or not (tool_names := anthropic_tool_names(tool))
-                        or not all(name in retained_names for name in tool_names)
-                    )
-                )
+            remaining_blocks: list[object] = [  # mutable-ok: accumulator
+                block for block in content if not cls._is_disallowed_addition_block(block, retained_names)
             ]
             if remaining_blocks:
-                new_m: Final[dict[str, object]] = dict(m)  # mutable-ok: message clone
+                new_m: dict[str, object] = dict(m_map)  # mutable-ok: message clone
                 new_m["content"] = remaining_blocks
                 cleaned_messages.append(new_m)
         data["messages"] = cleaned_messages  # rebind-ok: update request in place
