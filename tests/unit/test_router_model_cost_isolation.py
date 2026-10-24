@@ -3996,8 +3996,9 @@ def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_
     registrations_landed: Final = writer_outcome.get(timeout=5)
     try:
         assert isinstance(registrations_landed, int) and registrations_landed > 0, registrations_landed
-        assert tuple(backend for backend in backends if backend in litellm.model_cost) == ()
+        assert tuple(backend for backend in backends if backend in litellm.model_cost) == backends
         for backend in backends:
+            assert litellm.model_cost[backend]["input_cost_per_token"] == canonical_prices[backend]
             assert litellm.get_model_info(backend)["input_cost_per_token"] == canonical_prices[backend]
         assert tuple(router.get_model_names()) == tuple(backend.rsplit(".", 1)[-1] for backend in backends)
     finally:
