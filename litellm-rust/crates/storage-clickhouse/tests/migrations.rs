@@ -48,7 +48,7 @@ async fn database() -> TestResult<ClickHouseDatabase> {
     Ok(ClickHouseDatabase {
         _container: container,
         url,
-        client: Client::no_redirect_for_test(),
+        client: Client::for_test(),
     })
 }
 
@@ -244,7 +244,7 @@ async fn failed_migration_is_not_recorded_and_retains_storage_error(
 
 #[rstest]
 fn invalid_database_identifier_is_rejected() {
-    let client = Client::no_redirect_for_test();
+    let client = Client::for_test();
     let connection = Connection::writer("http://127.0.0.1:1").expect("valid URL");
     assert!(matches!(
         ClickHouseMigrate::new(
@@ -327,7 +327,7 @@ async fn duplicate_ledger_rows_are_tolerated(
 #[rstest]
 #[tokio::test]
 async fn revert_reports_forward_only_error() {
-    let client = Client::no_redirect_for_test();
+    let client = Client::for_test();
     let connection = Connection::writer("http://127.0.0.1:1").expect("valid URL");
     let migration = migration(
         1,
@@ -369,7 +369,7 @@ async fn applied_int64_versions_accept_numeric_and_quoted_json(
         )
         .mount(&mock_server)
         .await;
-    let client = Client::no_redirect_for_test();
+    let client = Client::for_test();
     let connection = Connection::writer(&mock_server.uri()).expect("valid URL");
     let migrator = migrator(vec![]);
     let mut adapter = ClickHouseMigrate::new(
@@ -406,7 +406,7 @@ async fn schema_requests_override_unsafe_connection_settings(
         mock_server.uri()
     );
     execute_statement(
-        &Client::no_redirect_for_test(),
+        &Client::for_test(),
         &Connection::writer(&url).expect("valid URL"),
         "CREATE DATABASE IF NOT EXISTS trace_test",
         REQUEST_TIMEOUT,
@@ -445,7 +445,7 @@ async fn oversized_ledger_response_is_rejected_before_migrations(
         )
         .mount(&mock_server)
         .await;
-    let client = Client::no_redirect_for_test();
+    let client = Client::for_test();
     let connection = Connection::writer(&mock_server.uri()).expect("valid URL");
     let migrator = migrator(vec![]);
     let mut adapter = ClickHouseMigrate::new(

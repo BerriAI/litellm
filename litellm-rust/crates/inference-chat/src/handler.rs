@@ -283,7 +283,7 @@ mod tests {
 
         let (provider, config, request) = prepared(&upstream.uri());
         execute(
-            &Client::plain_for_test(),
+            &Client::for_test(),
             &AuthServices::default(),
             config,
             provider,
@@ -328,7 +328,7 @@ mod tests {
 
         let (provider, config, request) = prepared(&upstream.uri());
         let error = execute(
-            &Client::plain_for_test(),
+            &Client::for_test(),
             &AuthServices::default(),
             config,
             provider,
