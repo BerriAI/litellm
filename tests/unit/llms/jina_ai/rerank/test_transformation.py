@@ -48,6 +48,10 @@ def test_transform_rerank_response_maps_results_and_usage():
             {"results": [], "usage": {"total_tokens": 12, "input_tokens": 7, "output_tokens": 3, "unknown": 1}},
             {"billed_units": {"total_tokens": 12}, "tokens": {"input_tokens": 7, "output_tokens": 3}},
         ),
+        (
+            {"results": [], "usage": {"search_units": 1, "cost": 0.001}},
+            {"billed_units": {"search_units": 1, "cost": 0.001}, "tokens": {}},
+        ),
     ],
 )
 def test_transform_rerank_response_keeps_only_known_usage_counters(

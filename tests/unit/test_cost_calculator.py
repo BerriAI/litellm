@@ -34,7 +34,7 @@ from litellm.llms.together_ai.cost_calculator import get_model_params_and_catego
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.llms.xai import RealtimeMeteredUsage
-from litellm.types.rerank import RerankResponse
+from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.utils import supports_prompt_caching
@@ -1598,6 +1598,95 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
     )
 
     assert cost == pytest.approx(3 * 0.001)
+
+
+def test_rerank_completion_cost_uses_the_provider_reported_cost():
+    model: Final = "jina_ai/reranker-missing-from-the-cost-map"
+    assert litellm.model_cost.get(model) is None
+    response: Final = RerankResponse(
+        id="provider_reported_rerank_cost",
+        results=[{"index": 0, "relevance_score": 0.9}],
+        meta={"billed_units": {"search_units": 1, "cost": 0.001}},
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response, model=model, custom_llm_provider="jina_ai", call_type="arerank"
+    )
+
+    assert cost == pytest.approx(0.001)
+
+
+@pytest.mark.parametrize("call_type", ("rerank", "arerank"))
+@pytest.mark.parametrize(
+    ("billed_units", "expected_reported_cost"),
+    (
+        pytest.param({"search_units": 2, "cost": 0.001}, 0.001, id="provider-overrides-map"),
+        pytest.param({"search_units": 2, "cost": 0.0}, 0.0, id="explicit-zero-overrides-map"),
+        pytest.param({"search_units": 2}, None, id="absent-cost-uses-map"),
+        pytest.param({"search_units": 2, "cost": None}, None, id="null-cost-uses-map"),
+    ),
+)
+def test_rerank_reported_cost_precedence_and_fallback(
+    call_type: Literal["rerank", "arerank"],
+    billed_units: RerankBilledUnits,
+    expected_reported_cost: float | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model: Final = "cohere/rerank-reported-cost-test"
+    price_per_query: Final = 0.002
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_query": price_per_query, "litellm_provider": "cohere", "mode": "rerank"},
+    )
+    response: Final = RerankResponse(
+        results=[{"index": 0, "relevance_score": 0.9}],
+        meta={"billed_units": billed_units},
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="cohere",
+        call_type=call_type,
+    )
+
+    expected_cost: Final = 2 * price_per_query if expected_reported_cost is None else expected_reported_cost
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_rerank_custom_pricing_wins_over_the_provider_reported_cost():
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "semantic-ranker-reported-cost-test",
+                "litellm_params": {
+                    "model": "vertex_ai/semantic-ranker-reported-cost-test",
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-east5",
+                },
+                "model_info": {"input_cost_per_query": 0.002},
+            },
+        ]
+    )
+    response: Final = RerankResponse(
+        id="custom_priced_rerank_with_reported_cost",
+        results=[{"index": 0, "relevance_score": 0.9}],
+        meta={"billed_units": {"search_units": 3, "cost": 0.5}},
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="vertex_ai/semantic-ranker-reported-cost-test",
+        custom_llm_provider="vertex_ai",
+        call_type="arerank",
+        custom_pricing=True,
+        router_model_id=router.model_list[0]["model_info"]["id"],
+    )
+
+    assert cost == pytest.approx(3 * 0.002)
 
 
 @pytest.mark.parametrize(
