@@ -42272,9 +42272,14 @@
         "max_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://docs.mistral.ai/models/devstral-small-2-25-12",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -42287,9 +42292,14 @@
         "max_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://mistral.ai/news/devstral-2-vibe-cli",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -42302,9 +42312,14 @@
         "max_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://mistral.ai/news/devstral-2-vibe-cli",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -43003,8 +43018,13 @@
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -67323,9 +67343,14 @@
         "max_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high"
+        ],
         "source": "https://mistral.ai/news/devstral-2-vibe-cli",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
