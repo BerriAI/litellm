@@ -8,3 +8,8 @@ repository.workspace = true
 [dependencies]
 serde.workspace = true
 sqlx.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+tokio.workspace = true
