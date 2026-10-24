@@ -3310,6 +3310,59 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         self.assertEqual(parsed[0]["parts"][0]["type"], "text")
         self.assertEqual(parsed[0]["parts"][0]["content"], "Hello world")
 
+    @parameterized.expand(
+        [
+            ("batch_of_token_arrays", [[9906, 1917], [15339]]),
+            ("single_token_array", [9906, 1917]),
+        ]
+    )
+    def test_token_array_embedding_input_keeps_span_attributes(self, _name, token_input):
+        """
+        An embedding whose input is token arrays is logged with those arrays as its
+        messages. set_attributes must still set every attribute after the input messages
+        rather than stopping at the first entry that is not a message dict.
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "text-embedding-3-small",
+            "messages": token_input,
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "aembedding",
+                "metadata": {},
+            },
+        }
+        response_obj = {
+            "model": "text-embedding-3-small",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+            "usage": {"prompt_tokens": 3, "total_tokens": 3},
+        }
+
+        with patch("litellm.integrations.opentelemetry.verbose_logger") as logger:
+            otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+        logger.exception.assert_not_called()
+
+        attrs = {c[0][0]: c[0][1] for c in mock_span.set_attribute.call_args_list}
+        self.assertEqual(json.loads(attrs["gen_ai.input.messages"]), [])
+        self.assertEqual(attrs["gen_ai.operation.name"], "aembedding")
+
+    def test_choice_message_objects_are_still_transformed(self):
+        """
+        Chat output reaches the message conversion as `Message` objects, not dicts, so
+        skipping token-array entries must not skip them.
+        """
+        from litellm.types.utils import Choices, Message
+
+        choices = [Choices(finish_reason="stop", index=0, message=Message(role="assistant", content="Hi"))]
+        self.assertEqual(
+            OpenTelemetry()._transform_choices_to_otel_semantic_conventions(choices),
+            [{"role": "assistant", "parts": [{"type": "text", "content": "Hi"}], "finish_reason": "stop"}],
+        )
+
     def test_output_messages_uses_parts_structure(self):
         """
         Test that gen_ai.output.messages uses the OTEL 1.38 parts array structure.

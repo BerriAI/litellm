@@ -2823,7 +2823,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         primitive_value: Final = self._cast_as_primitive_value_type(value)
         span.set_attribute(key, primitive_value)
 
-    def _transform_messages_to_otel_semantic_conventions(self, messages: list[dict] | str) -> list[dict]:
+    def _transform_messages_to_otel_semantic_conventions(self, messages: list[Any] | str) -> list[dict]:
         """
         Transforms LiteLLM/OpenAI style messages into OTEL GenAI 1.38 compliant format.
         OTEL expects a 'parts' array instead of a single 'content' string.
@@ -2839,6 +2839,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         transformed: Final = []
         for msg in messages:
+            # An embedding's input is logged as its messages, so a token-array input
+            # (`[[9906, 1917]]` or `[9906, 1917]`) yields lists or ints with no role or content.
+            # Anything else is message-like: a dict, or a `Message` object from chat output.
+            if isinstance(msg, (list, int)):
+                continue
             role = msg.get("role", "user")
             content = msg.get("content", "")
             parts = []
