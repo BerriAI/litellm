@@ -29,6 +29,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
 from litellm.exceptions import BudgetExceededError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import (
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
@@ -1223,3 +1224,47 @@ def test_as_proxy_exception_keeps_jwt_scope_denial_message_shape():
 
     assert converted.to_dict() == plain.to_dict()
     assert converted.internal_message == denial.internal_message
+
+
+class _RecordsFailure(CustomLogger):
+    reported: Exception | None = None
+
+    async def async_post_call_failure_hook(
+        self, request_data, original_exception, user_api_key_dict, traceback_str=None
+    ):
+        self.reported = original_exception
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_error",
+    [Exception("No api key passed in."), Exception("Key is blocked. Update via `/key/unblock` if you're an admin.")],
+)
+async def test_failure_callbacks_see_the_401_the_client_gets_for_a_bare_auth_exception(auth_error):
+    recorder = _RecordsFailure()
+    with (
+        patch.object(litellm, "callbacks", [recorder]),
+        patch("litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}),
+        pytest.raises(ProxyException) as client_error,
+    ):
+        await UserAPIKeyAuthExceptionHandler().handle_authentication_error(
+            auth_error, MagicMock(), {}, "/v1/models", None, None
+        )
+
+    assert int(recorder.reported.code) == int(client_error.value.code) == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_failure_callbacks_still_see_a_budget_error_as_raised():
+    recorder = _RecordsFailure()
+    budget_error = BudgetExceededError(message="Budget exceeded", current_cost=100, max_budget=100)
+    with (
+        patch.object(litellm, "callbacks", [recorder]),
+        patch("litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}),
+        pytest.raises(ProxyException),
+    ):
+        await UserAPIKeyAuthExceptionHandler().handle_authentication_error(
+            budget_error, MagicMock(), {}, "/v1/chat/completions", None, "sk-test"
+        )
+
+    assert recorder.reported is budget_error
