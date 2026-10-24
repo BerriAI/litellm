@@ -11,7 +11,7 @@ import { getChatRoutes } from "@/components/chat/ChatShell";
 import ChatMessages from "@/components/chat/ChatMessages";
 import MCPConnectPicker from "@/components/chat/MCPConnectPicker";
 import { fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
-import type { AssistantMessageUpdate, ChatImageAttachment, ChatMessage } from "@/components/chat/types";
+import type { AssistantMessageUpdate, ChatAttachment, ChatMessage } from "@/components/chat/types";
 import ChatModelPicker, {
   ChatTeamPicker,
   chatTeamSelection,
@@ -22,7 +22,8 @@ import ChatModelPicker, {
 import MoyaiChatComposer from "@/components/chat/moyai/MoyaiChatComposer";
 import MoyaiChatHome from "@/components/chat/moyai/MoyaiChatHome";
 import { runChatRequest } from "@/components/chat/runChatRequest";
-import { readChatImage, MAX_CHAT_IMAGES } from "@/components/chat/imageHelpers";
+import { readChatAttachment, MAX_CHAT_ATTACHMENTS, CHAT_ATTACHMENT_ACCEPT } from "@/components/chat/attachmentHelpers";
+import ChatFileChip from "@/components/chat/ChatFileChip";
 import { useQueryState } from "nuqs";
 import { recordChatQuery } from "@/lib/telemetry/chat";
 
@@ -30,8 +31,49 @@ const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
 
 type ReplayMessage = Pick<ChatMessage, "role" | "content" | "attachments" | "generatedImages" | "mcpEvents">;
 
-function hasMessageContent(text: string, images: ChatImageAttachment[], mode: ChatMode): boolean {
+function hasMessageContent(text: string, images: ChatAttachment[], mode: ChatMode): boolean {
   return Boolean(text.trim()) || (mode === "chat" && images.length > 0);
+}
+
+function AttachmentPreview({
+  attachments,
+  disabled,
+  onRemove,
+}: {
+  attachments: ChatAttachment[];
+  disabled: boolean;
+  onRemove: (id: string) => void;
+}) {
+  if (!attachments.length) return null;
+  return (
+    <div className="flex w-full flex-wrap gap-3 px-4 pt-4" aria-label="Attached files">
+      {attachments.map((attachment) => (
+        <div key={attachment.id} className={attachment.kind === "file" ? "relative max-w-64" : "relative w-20"}>
+          {attachment.kind === "file" ? (
+            <ChatFileChip file={attachment} />
+          ) : (
+            <>
+              {/* User attachments use local data URLs, not the image optimizer. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={attachment.url} alt={attachment.name} className="h-20 w-20 rounded-xl border object-cover" />
+              <p className="mt-1 truncate text-[11px] text-muted-foreground">{attachment.name}</p>
+            </>
+          )}
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon-xs"
+            aria-label={`Remove ${attachment.name}`}
+            className="absolute -right-2 -top-2 rounded-full"
+            disabled={disabled}
+            onClick={() => onRemove(attachment.id)}
+          >
+            <X className="size-3" />
+          </Button>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function ChatConversationPage() {
@@ -57,11 +99,11 @@ export default function ChatConversationPage() {
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [models, setModels] = useState<ModelGroup[]>([]);
   const [mode, setMode] = useState<ChatMode>("chat");
-  const [attachments, setAttachments] = useState<ChatImageAttachment[]>([]);
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const [isReadingImages, setIsReadingImages] = useState(false);
-  const imageInputRef = useRef<HTMLInputElement>(null);
-  const readImagesRef = useRef(false);
+  const [isReadingAttachments, setIsReadingAttachments] = useState(false);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const readAttachmentsRef = useRef(false);
   const draftVersionRef = useRef(0);
   const [isLoadingModels, setIsLoadingModels] = useState(true);
 
@@ -141,7 +183,7 @@ export default function ChatConversationPage() {
   const selectModel = useCallback(
     (model: ModelGroup) => {
       if (modelChatMode(model) === "image" && attachments.length > 0) {
-        setAttachmentError("Remove the attached images before switching to image generation.");
+        setAttachmentError("Remove the attached files before switching to image generation.");
         return;
       }
       responsesSessionGenerationRef.current += 1;
@@ -159,33 +201,33 @@ export default function ChatConversationPage() {
     [attachments.length],
   );
 
-  const addImages = async (files: File[]) => {
+  const addAttachments = async (files: File[]) => {
     if (mode !== "chat" || files.length === 0) return;
-    if (isStreaming || readImagesRef.current) return;
-    if (attachments.length + files.length > MAX_CHAT_IMAGES) {
-      setAttachmentError(`Attach up to ${MAX_CHAT_IMAGES} images per message.`);
+    if (isStreaming || readAttachmentsRef.current) return;
+    if (attachments.length + files.length > MAX_CHAT_ATTACHMENTS) {
+      setAttachmentError(`Attach up to ${MAX_CHAT_ATTACHMENTS} files per message.`);
       return;
     }
     const draftVersion = draftVersionRef.current;
-    readImagesRef.current = true;
-    setIsReadingImages(true);
+    readAttachmentsRef.current = true;
+    setIsReadingAttachments(true);
     setAttachmentError(null);
     try {
-      const images = await Promise.all(files.map(readChatImage));
+      const images = await Promise.all(files.map(readChatAttachment));
       if (draftVersion === draftVersionRef.current) setAttachments((current) => [...current, ...images]);
     } catch (error) {
       if (draftVersion === draftVersionRef.current)
-        setAttachmentError(error instanceof Error ? error.message : "Could not read these images.");
+        setAttachmentError(error instanceof Error ? error.message : "Could not read these files.");
     } finally {
-      readImagesRef.current = false;
-      setIsReadingImages(false);
+      readAttachmentsRef.current = false;
+      setIsReadingAttachments(false);
     }
   };
 
-  const handleImageInput = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAttachmentInput = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
-    void addImages(files);
+    void addAttachments(files);
   };
 
   useEffect(
@@ -200,7 +242,7 @@ export default function ChatConversationPage() {
     async (
       text: string,
       historyOverride?: ReplayMessage[],
-      attachmentOverride?: ChatImageAttachment[],
+      attachmentOverride?: ChatAttachment[],
       generationModel?: string,
     ) => {
       const trimmed = text.trim();
@@ -208,7 +250,7 @@ export default function ChatConversationPage() {
       const requestMode = generationModel ? "image" : mode;
       const model = generationModel ?? selectedModel;
       if (!hasMessageContent(trimmed, images, requestMode) || !model) return;
-      if (isStreaming || abortControllerRef.current || readImagesRef.current) return;
+      if (isStreaming || abortControllerRef.current || readAttachmentsRef.current) return;
       const teamSelection = chatTeamSelection(
         models.find((item) => item.model_group === model),
         selectedTeamId,
@@ -318,7 +360,7 @@ export default function ChatConversationPage() {
   const handleEditAndResend = useCallback(
     (messageId: string, newContent: string) => {
       if (!activeConversationId || isStreaming) return;
-      if (abortControllerRef.current || readImagesRef.current) return;
+      if (abortControllerRef.current || readAttachmentsRef.current) return;
       // Compute the truncated history synchronously before the async state update lands,
       // so handleSend receives the correct pre-edit context rather than the stale closure value.
       const msgs = activeConversation?.messages ?? [];
@@ -411,10 +453,10 @@ export default function ChatConversationPage() {
     setAttachmentError(null);
   };
 
-  const isModelSelectionDisabled = isStreaming || isReadingImages;
+  const isModelSelectionDisabled = isStreaming || isReadingAttachments;
 
   const inputBar = (inConversation: boolean) => {
-    const preparing = isLoadingModels || isReadingImages;
+    const preparing = isLoadingModels || isReadingAttachments;
     const model = models.find((item) => item.model_group === selectedModel);
     const teamSelection = chatTeamSelection(model, selectedTeamId);
     const canSubmit = hasMessageContent(inputText, attachments, mode) && selectedModel;
@@ -427,7 +469,7 @@ export default function ChatConversationPage() {
         onDrop={(event) => {
           if (mode === "chat" && event.dataTransfer.files.length) {
             event.preventDefault();
-            void addImages(Array.from(event.dataTransfer.files));
+            void addAttachments(Array.from(event.dataTransfer.files));
           }
         }}
       >
@@ -451,31 +493,15 @@ export default function ChatConversationPage() {
             const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
             if (mode === "chat" && images.length > 0) {
               event.preventDefault();
-              void addImages(images);
+              void addAttachments(images);
             }
           }}
           attachmentPreview={
-            attachments.length > 0 ? (
-              <div className="flex w-full flex-wrap gap-3 px-4 pt-4" aria-label="Attached images">
-                {attachments.map((image) => (
-                  <div key={image.id} className="relative w-20">
-                    <img src={image.url} alt={image.name} className="h-20 w-20 rounded-xl border object-cover" />
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="icon-xs"
-                      aria-label={`Remove ${image.name}`}
-                      className="absolute -right-2 -top-2 rounded-full"
-                      disabled={isStreaming}
-                      onClick={() => setAttachments((current) => current.filter((item) => item.id !== image.id))}
-                    >
-                      <X className="size-3" />
-                    </Button>
-                    <p className="mt-1 truncate text-[11px] text-muted-foreground">{image.name}</p>
-                  </div>
-                ))}
-              </div>
-            ) : undefined
+            <AttachmentPreview
+              attachments={attachments}
+              disabled={isStreaming}
+              onRemove={(id) => setAttachments((current) => current.filter((item) => item.id !== id))}
+            />
           }
           modelPicker={
             <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
@@ -498,23 +524,23 @@ export default function ChatConversationPage() {
             mode === "chat" ? (
               <>
                 <input
-                  ref={imageInputRef}
+                  ref={attachmentInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  accept={CHAT_ATTACHMENT_ACCEPT}
                   multiple
-                  aria-label="Upload images"
+                  aria-label="Upload files"
                   className="sr-only"
-                  disabled={isStreaming || isReadingImages}
-                  onChange={handleImageInput}
+                  disabled={isStreaming || isReadingAttachments}
+                  onChange={handleAttachmentInput}
                 />
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  aria-label="Attach images"
-                  title="Attach images"
-                  disabled={isStreaming || isReadingImages || attachments.length >= MAX_CHAT_IMAGES}
-                  onClick={() => imageInputRef.current?.click()}
+                  aria-label="Attach files"
+                  title="Attach images, PDF, Word (.docx), Excel (.xlsx), text, or code files (up to 4 files, 10 MB each)"
+                  disabled={isStreaming || isReadingAttachments || attachments.length >= MAX_CHAT_ATTACHMENTS}
+                  onClick={() => attachmentInputRef.current?.click()}
                 >
                   <Paperclip className="size-4" />
                 </Button>
@@ -553,10 +579,13 @@ export default function ChatConversationPage() {
             )
           }
         />
-        {isReadingImages && (
+        {isReadingAttachments && (
           <p role="status" className="mt-2 text-xs text-muted-foreground">
-            Preparing images…
+            Preparing files…
           </p>
+        )}
+        {attachments.some((attachment) => attachment.kind === "file") && (
+          <p className="mt-2 text-xs text-muted-foreground">File support depends on the selected model and provider.</p>
         )}
         {attachmentError && (
           <p role="alert" className="mt-2 text-sm text-destructive">
@@ -581,7 +610,7 @@ export default function ChatConversationPage() {
     <>
       {storageUnavailable && !storageBannerDismissed && (
         <div className="bg-warning/10 border-b border-warning/20 px-5 py-1.5 text-[13px] text-warning flex justify-between items-center">
-          <span>Some chat history or images could not be saved or restored.</span>
+          <span>Some chat history or attachments could not be saved or restored.</span>
           <Button
             variant="ghost"
             size="icon-xs"

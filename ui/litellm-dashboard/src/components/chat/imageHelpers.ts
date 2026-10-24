@@ -1,10 +1,8 @@
 import OpenAI from "openai";
+import { v4 as uuid } from "uuid";
 import { getGatewayBaseUrl } from "@/components/networking";
-import type { MultimodalContent } from "@/components/chat_ui/types";
-import type { ResponsesMessage } from "@/components/llm_calls/responses_api";
-import type { ChatImageAttachment, ChatMessage } from "./types";
+import type { ChatImageAttachment } from "./types";
 
-export const MAX_CHAT_IMAGES = 4;
 export const MAX_CHAT_IMAGE_BYTES = 10 * 1024 * 1024;
 export const CHAT_IMAGE_ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
 const IMAGE_TYPES = new Set(CHAT_IMAGE_ACCEPT.split(","));
@@ -36,39 +34,7 @@ export async function readChatImage(file: File): Promise<ChatImageAttachment> {
     reader.onabort = () => reject(new Error(`Reading ${file.name} was canceled.`));
     reader.readAsDataURL(file);
   });
-  return { id: crypto.randomUUID(), name: file.name, url, mimeType: file.type };
-}
-
-export function toResponsesMessages(
-  messages: Pick<
-    ChatMessage,
-    "role" | "content" | "attachments" | "generatedImages" | "imageGeneration" | "mcpEvents"
-  >[],
-): ResponsesMessage[] {
-  return messages.flatMap((message): ResponsesMessage[] => {
-    if (message.role === "tool") return [];
-    if (message.role === "assistant") {
-      return message.content.trim() || message.mcpEvents?.length
-        ? [
-            {
-              role: "assistant",
-              content: message.content,
-              ...(message.mcpEvents?.length ? { mcpEvents: message.mcpEvents } : {}),
-            },
-          ]
-        : [];
-    }
-    if (!message.attachments?.length) return [{ role: "user", content: message.content }];
-    const content: MultimodalContent[] = [];
-    if (message.content.trim()) content.push({ type: "input_text", text: message.content });
-    for (const attachment of message.attachments) {
-      if (!isChatImageUrl(attachment.url)) {
-        throw new Error(`A saved image (${attachment.name}) is unavailable. Start a new chat and attach it again.`);
-      }
-      content.push({ type: "input_image", image_url: attachment.url, detail: "auto" });
-    }
-    return [{ role: "user", content }];
-  });
+  return { id: uuid(), name: file.name, url, mimeType: file.type };
 }
 
 export async function generateChatImages({
@@ -95,7 +61,7 @@ export async function generateChatImages({
   const images = (response.data ?? []).flatMap((image, index): ChatImageAttachment[] => {
     const url = image.b64_json ? `data:${mimeType};base64,${image.b64_json}` : image.url;
     if (!url || !isChatImageUrl(url)) return [];
-    return [{ id: crypto.randomUUID(), name: `Generated image ${index + 1}`, url }];
+    return [{ id: uuid(), name: `Generated image ${index + 1}`, url }];
   });
   if (!images.length) throw new Error("The model did not return an image. Try another prompt or image model.");
   return images;

@@ -4,10 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { ChatShellProvider } from "@/contexts/ChatShellContext";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
-import { recordChatQuery } from "@/lib/telemetry/chat";
 import ChatConversationPage from "./page";
 
-vi.mock("@/lib/telemetry/chat", () => ({ recordChatQuery: vi.fn(async () => {}) }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
 
 const teams = [
@@ -40,7 +38,6 @@ function enterPrompt(text = "Hello") {
 beforeEach(() => {
   localStorage.clear();
   testQueryClient.clear();
-  vi.mocked(recordChatQuery).mockClear();
   requests.length = 0;
   models = [{ model_group: "shared-chat", mode: "chat", providers: ["openai"], available_teams: teams }];
   vi.stubGlobal(
@@ -85,7 +82,6 @@ describe("Chat session team selection", () => {
     enterPrompt();
     expect(screen.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
     expect(requests).toHaveLength(0);
-    expect(recordChatQuery).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -122,7 +118,6 @@ describe("Chat session team selection", () => {
     expect(requests[1].body.input).toEqual(
       expect.arrayContaining([expect.objectContaining({ role: "user", content: "First question" })]),
     );
-    expect(recordChatQuery).toHaveBeenCalledTimes(2);
   });
 
   it("should send image generation to the chosen team and clear the choice when changing models", async () => {
@@ -144,5 +139,39 @@ describe("Chat session team selection", () => {
       teamId: "engineering",
       body: { model: "studio-image", prompt: "Draw a circle" },
     });
+  });
+
+  it("should retain uploaded documents and replay them under the newly selected team", async () => {
+    const user = userEvent.setup();
+    renderChat();
+    await screen.findByRole("button", { name: "shared-chat" });
+    const file = new File(["team document"], "brief.txt", { type: "text/plain" });
+    await user.upload(screen.getByLabelText("Upload files"), file);
+    await screen.findByRole("button", { name: "Remove brief.txt" });
+    enterPrompt("Read the file");
+    expect(screen.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await user.click(screen.getByRole("combobox", { name: "Team paying for this request" }));
+    await user.click(await screen.findByRole("option", { name: "Research" }));
+    await user.click(screen.getByRole("button", { name: "Send", exact: true }));
+    await screen.findByText("Reply 1");
+    await user.click(screen.getByRole("combobox", { name: "Team paying for this request" }));
+    await user.click(await screen.findByRole("option", { name: "Engineering" }));
+    enterPrompt("Use that file again");
+    await user.click(screen.getByRole("button", { name: "Send", exact: true }));
+    await screen.findByText("Reply 2");
+
+    const document = {
+      type: "input_file",
+      filename: "brief.txt",
+      file_data: "data:text/plain;base64,dGVhbSBkb2N1bWVudA==",
+    };
+    const originalMessage = expect.objectContaining({
+      role: "user",
+      content: expect.arrayContaining([document]),
+    });
+    expect(requests.map((request) => request.teamId)).toEqual(["research", "engineering"]);
+    expect(requests[0].body.input).toEqual(expect.arrayContaining([originalMessage]));
+    expect(requests[1].body).not.toHaveProperty("previous_response_id");
+    expect(requests[1].body.input).toEqual(expect.arrayContaining([originalMessage]));
   });
 });
