@@ -14193,12 +14193,11 @@ class Router:
         declared: Final = model_info.get("supports_vision")
         if declared is not None:
             return declared is False
-        plain_params: Final = cast(
-            Mapping[str, object], plain_deployment.get("litellm_params") or {}
-        )  # cast-ok: plain dict
-        if not plain_params:
+        raw_params: Final = plain_deployment.get("litellm_params") or {}
+        params: Final = cast(Mapping[str, object], raw_params)  # cast-ok: router deployments are plain dicts
+        if not params:
             return False
-        base_model: Final = model_info.get("base_model") or plain_params.get("base_model")
+        base_model: Final = model_info.get("base_model") or params.get("base_model")
         try:
             model, custom_llm_provider = Router._capability_model_and_provider(deployment["litellm_params"], group)
             return litellm.utils.is_vision_explicitly_disabled(
@@ -14260,7 +14259,7 @@ class Router:
         # We only pop from the list, not modify deployment dicts - 100x+ faster on hot path (every request)
         _returned_deployments = list(healthy_deployments)
 
-        invalid_model_indices: Final[set[int]] = set()  # Use set for O(1) membership checks
+        invalid_model_indices: Final = set[int]()  # Use set for O(1) membership checks
 
         _context_window_error = False
         _potential_error_str = ""
