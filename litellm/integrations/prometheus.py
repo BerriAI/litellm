@@ -2854,20 +2854,27 @@ class PrometheusLogger(CustomLogger):
         A request can fail before a deployment is resolved, so the provider is
         not always known. Prefer the resolved ``custom_llm_provider`` on
         ``litellm_params``, then any provider recovered onto a partial
-        ``standard_logging_object`` (e.g. a stream that broke mid-flight), and
-        finally infer it from the requested model name (e.g. ``gpt-4o-mini`` ->
+        ``standard_logging_object`` (e.g. a stream that broke mid-flight), then
+        the provider the request itself declares (e.g. a Gemini pass-through
+        route), and finally infer it from the requested model name (e.g. ``gpt-4o-mini`` ->
         ``openai``) since the proxy's failure ``request_data`` usually carries
-        only the client-supplied model. Return ``None`` when it cannot be
+        only the client-supplied model. Declared values outside the known
+        provider set are ignored, since the request body can carry any string
+        and this label must stay bounded. Return ``None`` when it cannot be
         determined so the label emits empty rather than a guess.
         """
         litellm_params: Final = request_data.get("litellm_params") or {}
-        provider = litellm_params.get("custom_llm_provider")
-        if provider:
-            return provider
         standard_logging_object: Final = request_data.get("standard_logging_object") or {}
-        provider = standard_logging_object.get("custom_llm_provider")
-        if provider:
-            return provider
+        declared_providers: Final = (
+            litellm_params.get("custom_llm_provider"),
+            standard_logging_object.get("custom_llm_provider"),
+            request_data.get("custom_llm_provider"),
+        )
+        known_provider: Final = next(
+            (p for p in declared_providers if isinstance(p, str) and _is_llm_provider(p)), None
+        )
+        if known_provider:
+            return known_provider
         model: Final = litellm_params.get("model") or request_data.get("model")
         if not model:
             return None

@@ -19,6 +19,8 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.llms.vertex_ai.common_utils import (
     get_vertex_ai_lyria_generation_cost,
     get_vertex_location_from_url,
+    get_vertex_model_id_from_url,
+    get_vertex_project_id_from_url,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
@@ -47,6 +49,8 @@ from litellm.types.utils import (
 )
 
 vertex_search_api_config: Final = VertexSearchAPIVectorStoreConfig()
+GEMINI_API_HOST_SUFFIX: Final = "generativelanguage.googleapis.com"
+VERTEX_API_HOST_SUFFIX: Final = "aiplatform.googleapis.com"
 if TYPE_CHECKING:
     from litellm.types.utils import LiteLLMBatch
 
@@ -684,11 +688,16 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def extract_model_from_url(url: str) -> str:
-        pattern: Final = r"/models/([^:]+)"
-        match: Final = re.search(pattern, url)
-        if match:
-            return match.group(1)
-        return "unknown"
+        return get_vertex_model_id_from_url(url) or "unknown"
+
+    @staticmethod
+    def model_from_url_route(url_route: str) -> str | None:
+        model: Final = get_vertex_model_id_from_url(url_route)
+        if model is None:
+            return "vertex_ai/search_api" if ":search" in url_route else None
+        if "rawPredict" in url_route or "streamRawPredict" in url_route:
+            return f"vertex_ai/{model}"
+        return model
 
     @staticmethod
     def extract_model_name_from_vertex_path(vertex_model_path: str) -> str:
@@ -734,17 +743,35 @@ class VertexPassthroughLoggingHandler:
         return None
 
     @staticmethod
-    def _get_custom_llm_provider(url: str, logging_obj: LiteLLMLoggingObj) -> str:
-        hostname: Final = urlparse(url).hostname
-        if logging_obj.model_call_details.get("custom_llm_provider") == litellm.LlmProviders.GEMINI.value or (
-            hostname is not None
-            and (
-                hostname == "generativelanguage.googleapis.com"
-                or hostname.endswith(".generativelanguage.googleapis.com")
-            )
+    def is_google_ai_url(url: str) -> bool:
+        parsed_url: Final = urlparse(url)
+        if parsed_url.hostname is not None and parsed_url.hostname.endswith(
+            (GEMINI_API_HOST_SUFFIX, VERTEX_API_HOST_SUFFIX)
         ):
+            return True
+        return (
+            get_vertex_project_id_from_url(parsed_url.path) is not None
+            and get_vertex_location_from_url(parsed_url.path) is not None
+        )
+
+    @staticmethod
+    def is_gemini_api_host(url: str) -> bool:
+        hostname: Final = urlparse(url).hostname
+        return hostname is not None and (
+            hostname == GEMINI_API_HOST_SUFFIX or hostname.endswith(f".{GEMINI_API_HOST_SUFFIX}")
+        )
+
+    @staticmethod
+    def custom_llm_provider_from_url(url: str) -> str:
+        if VertexPassthroughLoggingHandler.is_gemini_api_host(url):
             return litellm.LlmProviders.GEMINI.value
         return litellm.LlmProviders.VERTEX_AI.value
+
+    @staticmethod
+    def _get_custom_llm_provider(url: str, logging_obj: LiteLLMLoggingObj) -> str:
+        if logging_obj.model_call_details.get("custom_llm_provider") == litellm.LlmProviders.GEMINI.value:
+            return litellm.LlmProviders.GEMINI.value
+        return VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url)
 
     @staticmethod
     def _is_multimodal_embedding_response(json_response: dict) -> bool:
