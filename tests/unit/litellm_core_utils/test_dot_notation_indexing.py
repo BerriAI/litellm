@@ -2,6 +2,8 @@
 Tests for litellm.litellm_core_utils.dot_notation_indexing module.
 """
 
+from typing import Final
+
 import pytest
 
 from litellm.litellm_core_utils.dot_notation_indexing import (
@@ -125,3 +127,10 @@ class TestDeleteNestedValue:
         data = {"items": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]}
         result = delete_nested_value(data, "items[0].b")
         assert result == {"items": [{"a": 1}, {"a": 3, "b": 4}]}
+
+    def test_delete_returns_a_fresh_dict_and_leaves_a_narrowly_typed_input_untouched(self):
+        payload: Final[dict[str, list[str]]] = {"tags": ["a", "b"], "secret": ["s"]}
+        result = delete_nested_value(payload, "secret")
+        assert result == {"tags": ["a", "b"]}
+        assert payload == {"tags": ["a", "b"], "secret": ["s"]}
+        assert result["tags"] is not payload["tags"]
