@@ -106,6 +106,43 @@ def test_oidc_env_path():
         del os.environ[env_var_name]
 
 
+def test_get_secret_returns_default_value_when_the_secret_is_missing(monkeypatch):
+    from litellm.secret_managers.main import get_secret_bool, get_secret_str
+
+    monkeypatch.delenv("LITELLM_TEST_MISSING_SECRET", raising=False)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
+
+    assert get_secret("LITELLM_TEST_MISSING_SECRET", default_value="dflt") == "dflt"
+    assert get_secret_str("LITELLM_TEST_MISSING_SECRET", default_value="dflt") == "dflt"
+    assert get_secret_bool("LITELLM_TEST_MISSING_SECRET", default_value=True) is True
+    assert get_secret_bool("LITELLM_TEST_MISSING_SECRET", default_value=False) is False
+    # Without a default the missing secret is still None.
+    assert get_secret("LITELLM_TEST_MISSING_SECRET") is None
+
+
+def test_get_secret_prefers_a_set_value_over_default_value(monkeypatch):
+    from litellm.secret_managers.main import get_secret_bool
+
+    monkeypatch.setattr(litellm, "_key_management_system", None)
+    monkeypatch.setenv("LITELLM_TEST_SET_SECRET", "real")
+    monkeypatch.setenv("LITELLM_TEST_EMPTY_SECRET", "")
+    monkeypatch.setenv("LITELLM_TEST_FALSE_SECRET", "false")
+
+    assert get_secret("LITELLM_TEST_SET_SECRET", default_value="dflt") == "real"
+    # An empty string is a value that was set, so it is not replaced by the default.
+    assert get_secret("LITELLM_TEST_EMPTY_SECRET", default_value="dflt") == ""
+    assert get_secret_bool("LITELLM_TEST_FALSE_SECRET", default_value=True) is False
+
+
+def test_get_secret_returns_default_value_when_the_secret_manager_has_no_secret(monkeypatch):
+    monkeypatch.delenv("LITELLM_TEST_MISSING_SECRET", raising=False)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.GOOGLE_KMS)
+
+    with patch("litellm.secret_managers.main.get_secret_from_manager", return_value=None):
+        assert get_secret("LITELLM_TEST_MISSING_SECRET", default_value="dflt") == "dflt"
+        assert get_secret("LITELLM_TEST_MISSING_SECRET") is None
+
+
 def test_should_read_secret_from_secret_manager():
     """
     Test that _should_read_secret_from_secret_manager returns correct values based on access mode
