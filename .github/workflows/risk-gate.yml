@@ -1,0 +1,113 @@
+name: risk-gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - litellm_internal_staging
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  floor:
+    name: risk-gate floor (shadow)
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      tier: ${{ steps.floor.outputs.tier }}
+      summary: ${{ steps.floor.outputs.summary }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Fetch the pull request head and its merge base
+        id: revisions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          merge_base="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_SHA}...${HEAD_SHA}" --jq '.merge_base_commit.sha')"
+          git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
+          echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Compute the floor tier
+        id: floor
+        shell: bash
+        env:
+          MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          uv run --frozen python .github/scripts/risk_tier.py \
+            --config .github/risk-tiers.yml \
+            --base "$MERGE_BASE" \
+            --head "$HEAD_SHA" \
+            --author "$PR_AUTHOR" \
+            --json-out "${RUNNER_TEMP}/risk.json" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo "tier=$(jq -r '.tier' "${RUNNER_TEMP}/risk.json")"
+            echo "summary<<RISK_SUMMARY"
+            jq -r '.summary' "${RUNNER_TEMP}/risk.json"
+            echo "RISK_SUMMARY"
+          } >> "$GITHUB_OUTPUT"
+
+  report:
+    name: risk-gate report (shadow)
+    needs: floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+      checks: write
+    steps:
+      - name: Publish the risk-gate check run and the risk label
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          TIER: ${{ needs.floor.outputs.tier }}
+          SUMMARY: ${{ needs.floor.outputs.summary }}
+        with:
+          script: |
+            const tier = process.env.TIER;
+            if (!['low', 'medium', 'high'].includes(tier)) {
+              core.setFailed(`unexpected tier ${JSON.stringify(tier)} from the floor job`);
+              return;
+            }
+            const pr = context.payload.pull_request;
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            await github.rest.checks.create({
+              ...repo,
+              name: 'risk-gate',
+              head_sha: pr.head.sha,
+              status: 'completed',
+              conclusion: 'neutral',
+              output: { title: `risk: ${tier} (shadow)`, summary: process.env.SUMMARY },
+            });
+            const wanted = `risk:${tier}`;
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              ...repo,
+              issue_number: pr.number,
+              per_page: 100,
+            });
+            const current = labels.map((label) => label.name).filter((name) => name.startsWith('risk:'));
+            for (const name of current.filter((name) => name !== wanted)) {
+              await github.rest.issues.removeLabel({ ...repo, issue_number: pr.number, name });
+            }
+            if (!current.includes(wanted)) {
+              await github.rest.issues.addLabels({ ...repo, issue_number: pr.number, labels: [wanted] });
+            }
