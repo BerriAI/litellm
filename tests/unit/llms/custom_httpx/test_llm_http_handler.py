@@ -5627,11 +5627,11 @@ async def test_messages_opencode_session_header(
     assert received.empty()
 
 
-def test_vector_store_retrieve_handler_sends_id_before_azure_api_version_query():
-    sent_urls: list[str] = []
+def test_vector_store_retrieve_handler_sends_id_before_azure_api_version_query() -> None:
+    received: Final[list[httpx.Request]] = []
 
     def answer(request: httpx.Request) -> httpx.Response:
-        sent_urls.append(str(request.url))
+        received.append(request)
         return httpx.Response(200, json={"id": "vs_abc", "object": "vector_store"})
 
     handler: Final = BaseLLMHTTPHandler()
@@ -5651,6 +5651,6 @@ def test_vector_store_retrieve_handler_sends_id_before_azure_api_version_query()
         _is_async=False,
     )
 
-    assert sent_urls == [
-        "https://x.openai.azure.com/openai/vector_stores/vs_abc?api-version=2025-04-01-preview",
-    ]
+    sent: Final = received[0]
+    assert str(sent.url) == "https://x.openai.azure.com/openai/vector_stores/vs_abc?api-version=2025-04-01-preview"
+    assert len(received) == 1
