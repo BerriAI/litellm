@@ -1797,7 +1797,7 @@ if MCP_AVAILABLE:
             return acting.model_copy(update={"mcp_toolset_id": toolset_id})
 
         tool_permissions = await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(
-            toolset_ids=[toolset_id]
+            toolset_ids=[toolset_id], requires_fresh_policy=acting.requires_fresh_policy
         )
         server_ids: Final = list(tool_permissions.keys())
         existing_op: Final = acting.object_permission

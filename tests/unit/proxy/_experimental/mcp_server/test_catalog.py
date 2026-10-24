@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock
@@ -13,6 +13,7 @@ from mcp.types import (
     ListResourcesResult,
     ListResourceTemplatesRequest,
     ListResourceTemplatesResult,
+    ListToolsRequest,
     ListToolsResult,
     PaginatedRequestParams,
     Tool,
@@ -32,6 +33,104 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 CatalogKind = Literal["tools", "prompts", "resources", "templates"]
 OptionalCatalogResult = ListPromptsResult | ListResourcesResult | ListResourceTemplatesResult
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selected,revoked,expected",
+    [
+        ("narrow", False, ("alpha-read_item",)),
+        ("full", False, ("alpha-read_item", "alpha-write_item", "beta-read_item", "beta-write_item")),
+        (None, False, ("alpha-read_item", "alpha-write_item", "beta-read_item", "beta-write_item")),
+        ("narrow", True, ()),
+    ],
+)
+async def test_catalog_refresh_keeps_selected_toolset_with_current_grants_and_contents(
+    monkeypatch: pytest.MonkeyPatch,
+    selected: str | None,
+    revoked: bool,
+    expected: tuple[str, ...],
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset, MCPToolsetTool
+
+    grants: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="catalog-grants", mcp_toolsets=["narrow", "full"]
+    )
+    live_grants: Final = grants.model_copy(update={"mcp_toolsets": ["full"]}) if revoked else grants
+    tools: Final[tuple[MCPToolsetTool, ...]] = (
+        {"server_id": "alpha", "tool_name": "read_item"},
+        {"server_id": "alpha", "tool_name": "write_item"},
+        {"server_id": "beta", "tool_name": "read_item"},
+        {"server_id": "beta", "tool_name": "write_item"},
+    )
+    toolsets: Final = (
+        MCPToolset(toolset_id="narrow", toolset_name="narrow", tools=[tools[0]]),
+        MCPToolset(toolset_id="full", toolset_name="full", tools=list(tools)),
+    )
+
+    async def read_toolsets(where: Mapping[str, Mapping[str, Sequence[str]]]) -> tuple[MCPToolset, ...]:
+        return tuple(toolset for toolset in toolsets if toolset.toolset_id in where["toolset_id"]["in"])
+
+    tables: Final = SimpleNamespace(
+        litellm_objectpermissiontable=SimpleNamespace(find_unique=AsyncMock(return_value=live_grants)),
+        litellm_mcptoolsettable=SimpleNamespace(find_many=read_toolsets),
+    )
+    database: Final = SimpleNamespace(
+        db=tables,
+        writer_db=tables,
+        get_data=AsyncMock(return_value=UserAPIKeyAuth(object_permission_id=grants.object_permission_id)),
+    )
+    cache: Final = DualCache()
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": []})
+    await cache.async_set_cache(key="toolset_perms:narrow", value={"alpha": ["read_item", "write_item"]})
+    manager: Final = operations.global_mcp_server_manager
+    for server_id in ("alpha", "beta"):
+        monkeypatch.setitem(
+            manager.registry,
+            server_id,
+            MCPServer(server_id=server_id, name=server_id, transport=MCPTransport.http, spec_path="/catalog.yaml"),
+        )
+
+    async def tool_handler() -> str:
+        return "ok"
+
+    for tool in tools:
+        global_mcp_tool_registry.register_tool(
+            name=f"{tool['server_id']}-{tool['tool_name']}",
+            description=tool["tool_name"],
+            input_schema={"type": "object"},
+            handler=tool_handler,
+        )
+    original: Final = UserAPIKeyAuth(
+        api_key="catalog-key-hash", object_permission=grants,
+        object_permission_id=grants.object_permission_id,
+    )
+    original.via_virtual_key = True
+    caller: Final = await apply_toolset_scope(original, selected) if selected is not None else original
+    before: Final = caller.model_dump()
+    context: Final = operations.prepare_context(user_api_key_auth=caller)
+    if revoked:
+        with pytest.raises(HTTPException, match="does not have access to toolset") as denied:
+            await catalog.list_gateway_catalog(context, ListToolsRequest(), log_list_tools_to_spendlogs=False)
+        assert denied.value.status_code == 403
+    else:
+        result: Final = await catalog.list_gateway_catalog(
+            context, ListToolsRequest(), log_list_tools_to_spendlogs=False
+        )
+        assert isinstance(result, ListToolsResult)
+        assert tuple(sorted(tool.name for tool in result.tools)) == expected
+    assert caller.model_dump() == before
+    assert original.object_permission == grants
 
 
 def page(name: str, cursor: str | None = None, revision: str = "stable") -> ListToolsResult:
