@@ -6584,7 +6584,7 @@ def _model_not_mapped_message(model: str, custom_llm_provider: str | None) -> st
     )
 
 
-def get_model_info_helper(
+def _get_model_info_helper_impl(
     model: str,
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
@@ -6593,17 +6593,6 @@ def get_model_info_helper(
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
     """
-    from litellm.llms.bedrock.claude_platform.common_utils import claude_platform_pricing_model
-
-    claude_platform_model: Final = claude_platform_pricing_model(model, custom_llm_provider)
-    if claude_platform_model is not None:
-        return get_model_info_helper(
-            model=claude_platform_model,
-            custom_llm_provider="anthropic",
-            api_base=api_base,
-            api_key=api_key,
-        )
-
     from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 
     try:
@@ -7009,6 +6998,30 @@ def get_model_info_helper(
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
         raise Exception(_model_not_mapped_message(model, custom_llm_provider))
+
+
+def get_model_info_helper(
+    model: str,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+) -> ModelInfoBase:
+    from litellm.llms.bedrock.claude_platform.common_utils import claude_platform_pricing_model
+
+    claude_platform_model: Final = claude_platform_pricing_model(model, custom_llm_provider)
+    if claude_platform_model is not None:
+        return _get_model_info_helper_impl(
+            model=claude_platform_model,
+            custom_llm_provider="anthropic",
+            api_base=api_base,
+            api_key=api_key,
+        )
+    return _get_model_info_helper_impl(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
+    )
 
 
 _get_model_info_helper = get_model_info_helper

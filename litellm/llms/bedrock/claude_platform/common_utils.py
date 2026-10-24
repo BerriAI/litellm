@@ -80,9 +80,7 @@ def strip_claude_platform_route(model: str) -> str:
 
 
 def claude_platform_pricing_model(model: str, custom_llm_provider: str | None) -> str | None:
-    if custom_llm_provider != "bedrock" and not (
-        custom_llm_provider is None and model.startswith("bedrock/")
-    ):
+    if custom_llm_provider != "bedrock" and not (custom_llm_provider is None and model.startswith("bedrock/")):
         return None
     model_without_bedrock_prefix: Final = model.removeprefix("bedrock/")
     if not model_without_bedrock_prefix.startswith(CLAUDE_PLATFORM_BEDROCK_ROUTE):
