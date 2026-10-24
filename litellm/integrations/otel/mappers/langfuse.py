@@ -6,7 +6,7 @@ Langfuse ingests OTLP spans and reads from its own vendor namespace
 
 Every attribute is declared as a ``key -> extractor`` table entry (one callable
 per mapping operation): ``_LLM_CALL_ATTRS`` for scalars and ``_BLOB_ATTRS`` for
-the JSON-serialized payloads. ``trace_attributes`` maps the caller's trace controls
+the JSON-serialized payloads. ``trace_attributes`` maps the request's trace controls
 (shared with the root observation); ``_llm_call`` applies both tables plus it.
 """
 
