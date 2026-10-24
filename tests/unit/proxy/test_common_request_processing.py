@@ -34,6 +34,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
@@ -511,6 +512,168 @@ class TestProxyBaseLLMRequestProcessing:
         assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
         assert exc_info.value.param == "model"
         add_litellm_data_to_request.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "route_type", "has_router", "priority_header", "body_priority", "expected_priority"),
+        [
+            ("/v1/chat/completions", "acompletion", True, "0", 5, 0),
+            ("/v1/completions", "atext_completion", True, "0", 5, 0),
+            ("/v1/chat/completions", "acompletion", True, "1", None, 1),
+            ("/v1/completions", "atext_completion", True, "1", None, 1),
+            ("/v1/chat/completions", "acompletion", True, None, 5, 5),
+            ("/v1/chat/completions", "acompletion", True, "", 5, 5),
+            ("/cursor/chat/completions", "aresponses", True, "0", None, None),
+            ("/v1/responses", "aresponses", True, "0", 5, 5),
+            ("/v1/embeddings", "aembedding", True, "0", None, None),
+            ("/v1/chat/completions", "acompletion", False, "0", None, None),
+            ("/v1/chat/completions", "acompletion", False, "0", 5, 5),
+        ],
+        ids=(
+            "chat-header-beats-body",
+            "text-completion-header-beats-body",
+            "chat-header-only",
+            "text-completion-header-only",
+            "chat-body-only",
+            "chat-empty-header-keeps-body",
+            "cursor-responses-route-ignores-header",
+            "responses-keeps-body",
+            "embeddings-ignores-header",
+            "routerless-ignores-header",
+            "routerless-keeps-body",
+        ),
+    )
+    async def test_common_processing_pre_call_logic_applies_priority_header_only_where_the_router_schedules(
+        self,
+        path: str,
+        route_type: Literal["acompletion", "atext_completion", "aresponses", "aembedding"],
+        has_router: bool,
+        priority_header: str | None,
+        body_priority: int | None,
+        expected_priority: str | int | None,
+    ) -> None:
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+        header_entries: Final[tuple[tuple[bytes, bytes], ...]] = (
+            () if priority_header is None else ((b"x-litellm-priority", priority_header.encode()),)
+        )
+        request: Final = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": path,
+                "scheme": "http",
+                "server": ("localhost", 4000),
+                "client": ("127.0.0.1", 12345),
+                "query_string": b"",
+                "headers": ((b"content-type", b"application/json"), *header_entries),
+            }
+        )
+        router: Final = (
+            Router(
+                model_list=[
+                    {
+                        "model_name": "qa-model",
+                        "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test", "mock_response": "hi"},
+                    }
+                ]
+            )
+            if has_router
+            else None
+        )
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "qa-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                **({"priority": body_priority} if body_priority is not None else {}),
+            }
+        )
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            proxy_config=RealProxyConfig(),
+            route_type=route_type,
+            llm_router=router,
+        )
+
+        assert ("priority" in returned_data, returned_data.get("priority")) == (
+            expected_priority is not None,
+            expected_priority,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("requested_model", "deployment_drops_params", "body_priority", "expected_priority"),
+        [
+            ("qa-model", True, 5, 5),
+            ("qa-model", True, None, None),
+            ("key-alias", True, 5, 5),
+            ("qa-model", False, 5, "high"),
+        ],
+        ids=(
+            "drop-params-keeps-body",
+            "drop-params-without-body-leaves-default",
+            "drop-params-read-from-the-aliased-deployment",
+            "no-drop-params-passes-header-on-to-400",
+        ),
+    )
+    async def test_common_processing_pre_call_logic_drops_only_a_malformed_priority_header_under_drop_params(
+        self,
+        requested_model: str,
+        deployment_drops_params: bool,
+        body_priority: int | None,
+        expected_priority: str | int | None,
+    ) -> None:
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+        request: Final = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "scheme": "http",
+                "server": ("localhost", 4000),
+                "client": ("127.0.0.1", 12345),
+                "query_string": b"",
+                "headers": ((b"content-type", b"application/json"), (b"x-litellm-priority", b"high")),
+            }
+        )
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "qa-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "api_key": "sk-test",
+                        "mock_response": "hi",
+                        "drop_params": deployment_drops_params,
+                    },
+                }
+            ]
+        )
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": requested_model,
+                "messages": [{"role": "user", "content": "hi"}],
+                **({"priority": body_priority} if body_priority is not None else {}),
+            }
+        )
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", aliases={"key-alias": "qa-model"}),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            proxy_config=RealProxyConfig(),
+            route_type="acompletion",
+            llm_router=router,
+        )
+
+        assert ("priority" in returned_data, returned_data.get("priority")) == (
+            expected_priority is not None,
+            expected_priority,
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("safe_memory_mode", [False, True])
