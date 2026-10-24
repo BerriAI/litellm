@@ -9430,6 +9430,16 @@ async def get_available_models_for_user(
         get_key_models,
         get_team_models,
     )
+    from litellm.proxy.auth.ui_session_models import load_ui_session_model_sources
+
+    session_sources: Final = (
+        await load_ui_session_model_sources(
+            user_api_key_dict, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
+        )
+        if user_api_key_cache is not None and proxy_logging_obj is not None and team_id is None
+        else None
+    )
+    model_auth: Final = session_sources.auth if session_sources is not None else user_api_key_dict
 
     # Get proxy model list and access groups
     if llm_router is None:
@@ -9441,7 +9451,7 @@ async def get_available_models_for_user(
 
     requested_team_object: Final = (
         await _get_validated_team_object(
-            user_api_key_dict=user_api_key_dict,
+            user_api_key_dict=model_auth,
             team_id=team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -9453,9 +9463,9 @@ async def get_available_models_for_user(
 
     key_models: Final[Sequence[str]] = (
         ()
-        if requested_team_object is not None and requested_team_object.team_id != user_api_key_dict.team_id
+        if requested_team_object is not None and requested_team_object.team_id != model_auth.team_id
         else get_key_models(
-            user_api_key_dict=user_api_key_dict,
+            user_api_key_dict=model_auth,
             proxy_model_list=proxy_model_list,
             model_access_groups=model_access_groups,
             include_model_access_groups=include_model_access_groups,
@@ -9463,19 +9473,17 @@ async def get_available_models_for_user(
     )
 
     team_models: Final = get_team_models(
-        team_models=(
-            requested_team_object.models if requested_team_object is not None else user_api_key_dict.team_models
-        ),
+        team_models=(requested_team_object.models if requested_team_object is not None else model_auth.team_models),
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
     )
 
-    effective_team_id: Final = team_id or user_api_key_dict.team_id
+    effective_team_id: Final = team_id or model_auth.team_id
 
     access_group_models: Final = (
         await _get_access_group_models(
-            user_api_key_dict=user_api_key_dict,
+            user_api_key_dict=model_auth,
             team_object=requested_team_object
             or await _get_team_object_for_access_groups(
                 team_id=effective_team_id,
@@ -9491,9 +9499,9 @@ async def get_available_models_for_user(
         else _AccessGroupModels()
     )
 
-    key_model_names: Final = cast("list[str]", user_api_key_dict.models)  # cast-ok: key models are a string array
+    key_model_names: Final = cast("list[str]", model_auth.models)  # cast-ok: key models are a string array
     key_model_check_skipped: Final = (
-        bool(user_api_key_dict.config) or SpecialModelNames.all_team_models.value in key_model_names
+        bool(model_auth.config) or SpecialModelNames.all_team_models.value in key_model_names
     )
     granted_key_models: Final = (
         (
@@ -9526,19 +9534,38 @@ async def get_available_models_for_user(
         list(
             await personal_key_team_visible_models(
                 models=complete_models,
-                user_api_key_dict=user_api_key_dict,
+                user_api_key_dict=model_auth,
                 llm_router=llm_router,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
             )
         )
-        if personal_key_team_model_access_applies(user_api_key_dict)
+        if personal_key_team_model_access_applies(model_auth)
         else complete_models
     )
 
+    if session_sources is not None:
+        candidates: Final = list(all_models)
+        for source in session_sources.teams:
+            candidates.extend(
+                await get_available_models_for_user(
+                    user_api_key_dict=source.auth,
+                    llm_router=llm_router,
+                    general_settings=general_settings,
+                    user_model=user_model,
+                    prisma_client=prisma_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                    include_model_access_groups=include_model_access_groups,
+                    only_model_access_groups=only_model_access_groups,
+                    return_wildcard_routes=return_wildcard_routes,
+                    user_api_key_cache=user_api_key_cache,
+                )
+            )
+        return [name for name in dict.fromkeys(candidates) if await session_sources.available_teams(name) is not None]
+
     agent_visible: Final = await _agent_access_group_visible_models(
-        user_api_key_dict=user_api_key_dict,
+        user_api_key_dict=model_auth,
         llm_router=llm_router,
         include_model_access_groups=include_model_access_groups,
         return_wildcard_routes=return_wildcard_routes,

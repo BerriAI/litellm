@@ -1,6 +1,8 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatHistory } from "@/components/chat/useChatHistory";
+import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import ChatConversationPage from "./page";
 import { renderWithProviders } from "@/../tests/test-utils";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
@@ -64,10 +66,13 @@ vi.mock("@/contexts/ChatShellContext", () => ({
   },
 }));
 
-const ONE_TURN_ARG_COUNT = 25;
+const ONE_TURN_ARG_COUNT = 26;
 const ON_TIMING_DATA_INDEX = 7;
 const ON_USAGE_DATA_INDEX = 8;
 const ON_TOTAL_LATENCY_INDEX = 24;
+const CUSTOM_HEADERS_INDEX = 25;
+const ON_RESPONSE_ID_INDEX = 15;
+const PREVIOUS_RESPONSE_ID_INDEX = 14;
 
 async function sendOneMessage(onUrlUpdate?: OnUrlUpdateFunction): Promise<void> {
   renderWithProviders(<ChatConversationPage />, { onUrlUpdate });
@@ -83,6 +88,7 @@ describe("/ui/chat request metrics", () => {
   beforeEach(() => {
     localStorage.clear();
     mockMakeOpenAIResponsesRequest.mockReset();
+    vi.mocked(fetchAvailableModels).mockResolvedValue([{ model_group: "gpt-5.4-mini" }]);
     shellState.storageUnavailable = false;
   });
 
@@ -109,7 +115,7 @@ describe("/ui/chat request metrics", () => {
     expect(screen.getByLabelText("Cost: $0.000063")).toBeInTheDocument();
   });
 
-  it("supplies the timing, usage and latency callbacks at the positional slots the Responses helper reads", async () => {
+  it("should preserve metric callback positions and omit a team header for a direct model grant", async () => {
     mockMakeOpenAIResponsesRequest.mockResolvedValue(undefined);
 
     await sendOneMessage();
@@ -119,6 +125,57 @@ describe("/ui/chat request metrics", () => {
     expect(typeof call[ON_TIMING_DATA_INDEX]).toBe("function");
     expect(typeof call[ON_USAGE_DATA_INDEX]).toBe("function");
     expect(typeof call[ON_TOTAL_LATENCY_INDEX]).toBe("function");
+    expect(call[CUSTOM_HEADERS_INDEX]).toBeUndefined();
+  });
+
+  it("should ignore a late old-team response ID after selecting a different billing team", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchAvailableModels).mockResolvedValue([
+      {
+        model_group: "gpt-5.4-mini",
+        available_teams: [
+          { team_id: "research", team_alias: "Research" },
+          { team_id: "engineering", team_alias: "Engineering" },
+        ],
+      },
+    ]);
+    mockMakeOpenAIResponsesRequest.mockImplementation(async (...args: unknown[]) => {
+      const turn = mockMakeOpenAIResponsesRequest.mock.calls.length;
+      const updateText = args[1] as (role: string, delta: string) => void;
+      const onResponseId = args[ON_RESPONSE_ID_INDEX] as (id: string) => void;
+      updateText("assistant", `Reply ${turn}`);
+      onResponseId(`response-${turn}`);
+    });
+    renderWithProviders(<ChatConversationPage />);
+    await screen.findByRole("button", { name: "gpt-5.4-mini" });
+    await user.click(screen.getByRole("combobox", { name: "Team paying for this request" }));
+    await user.click(await screen.findByRole("option", { name: "Research" }));
+
+    async function send(text: string) {
+      act(() =>
+        fireEvent.change(screen.getByRole("textbox", { name: "Message", exact: true }), {
+          target: { value: text },
+        }),
+      );
+      await user.click(screen.getByRole("button", { name: "Send", exact: true }));
+    }
+
+    await send("First question");
+    await screen.findByText("Reply 1");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Team paying for this request" })).toBeEnabled());
+    const oldResponseId = mockMakeOpenAIResponsesRequest.mock.calls[0][ON_RESPONSE_ID_INDEX] as (id: string) => void;
+    await user.click(screen.getByRole("combobox", { name: "Team paying for this request" }));
+    await user.click(await screen.findByRole("option", { name: "Engineering" }));
+    act(() => oldResponseId("late-research-response"));
+
+    await send("Continue with Engineering");
+    await screen.findByText("Reply 2");
+    const engineeringRequest = mockMakeOpenAIResponsesRequest.mock.calls[1];
+    expect(engineeringRequest[PREVIOUS_RESPONSE_ID_INDEX]).toBeNull();
+    expect(engineeringRequest[CUSTOM_HEADERS_INDEX]).toEqual({ "x-litellm-team-id": "engineering" });
+    await send("Continue again");
+    await screen.findByText("Reply 3");
+    expect(mockMakeOpenAIResponsesRequest.mock.calls[2][PREVIOUS_RESPONSE_ID_INDEX]).toBe("response-2");
   });
 
   it("puts the new conversation ID in the URL after the first message is sent", async () => {

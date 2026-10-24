@@ -38354,6 +38354,8 @@ export interface components {
         };
         /** ModelGroupInfoProxy */
         ModelGroupInfoProxy: {
+            /** Available Teams */
+            available_teams?: components["schemas"]["ModelGroupTeam"][] | null;
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Output"])[] | null;
             /** Custom Metadata */
@@ -38446,6 +38448,18 @@ export interface components {
             supports_web_search: boolean;
             /** Tpm */
             tpm?: number | null;
+        };
+        /** ModelGroupInfoResponse */
+        ModelGroupInfoResponse: {
+            /** Data */
+            data: components["schemas"]["ModelGroupInfoProxy"][];
+        };
+        /** ModelGroupTeam */
+        ModelGroupTeam: {
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id: string;
         };
         /** ModelInfoDelete */
         ModelInfoDelete: {
@@ -65518,7 +65532,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ModelGroupInfoResponse"];
                 };
             };
             /** @description Validation Error */

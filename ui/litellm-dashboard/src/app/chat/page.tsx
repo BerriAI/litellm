@@ -12,7 +12,13 @@ import ChatMessages from "@/components/chat/ChatMessages";
 import MCPConnectPicker from "@/components/chat/MCPConnectPicker";
 import { fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
 import type { AssistantMessageUpdate, ChatAttachment, ChatMessage } from "@/components/chat/types";
-import ChatModelPicker, { isChatModel, modelChatMode, type ChatMode } from "@/components/chat/ChatModelPicker";
+import ChatModelPicker, {
+  ChatTeamPicker,
+  chatTeamSelection,
+  isChatModel,
+  modelChatMode,
+  type ChatMode,
+} from "@/components/chat/ChatModelPicker";
 import MoyaiChatComposer from "@/components/chat/moyai/MoyaiChatComposer";
 import MoyaiChatHome from "@/components/chat/moyai/MoyaiChatHome";
 import { runChatRequest } from "@/components/chat/runChatRequest";
@@ -90,6 +96,7 @@ export default function ChatConversationPage() {
   } = useChatShell();
 
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [models, setModels] = useState<ModelGroup[]>([]);
   const [mode, setMode] = useState<ChatMode>("chat");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -181,6 +188,7 @@ export default function ChatConversationPage() {
       }
       responsesSessionGenerationRef.current += 1;
       setSelectedModel(model.model_group);
+      setSelectedTeamId(null);
       setMode(modelChatMode(model));
       setResponsesSessionId(null);
       setAttachmentError(null);
@@ -243,6 +251,14 @@ export default function ChatConversationPage() {
       const model = generationModel ?? selectedModel;
       if (!hasMessageContent(trimmed, images, requestMode) || !model) return;
       if (isStreaming || abortControllerRef.current || readAttachmentsRef.current) return;
+      const teamSelection = chatTeamSelection(
+        models.find((item) => item.model_group === model),
+        selectedTeamId,
+      );
+      if (teamSelection.needsSelection) {
+        setAttachmentError("Choose which team should pay for this request.");
+        return;
+      }
       const sessionGeneration = responsesSessionGenerationRef.current;
       setInputText("");
 
@@ -296,6 +312,7 @@ export default function ChatConversationPage() {
         mode: requestMode,
         prompt: trimmed,
         accessToken,
+        teamId: teamSelection.teamId,
         signal: requestController.signal,
         messages: history,
         previousResponseId,
@@ -320,6 +337,8 @@ export default function ChatConversationPage() {
       activeConversationId,
       activeConversation,
       selectedModel,
+      selectedTeamId,
+      models,
       selectedMCPServers,
       mode,
       attachments,
@@ -353,11 +372,31 @@ export default function ChatConversationPage() {
         return;
       }
       if (!newContent.trim() && !original.attachments?.length) return;
+      const requestModel = original.imageGeneration?.model ?? selectedModel;
+      if (
+        chatTeamSelection(
+          models.find((item) => item.model_group === requestModel),
+          selectedTeamId,
+        ).needsSelection
+      ) {
+        setAttachmentError("Choose a team for this model before resending the message.");
+        return;
+      }
       const priorMessages = msgs.slice(0, idx);
       truncateFromMessage(activeConversationId, messageId);
       handleSend(newContent, priorMessages, original.attachments ?? [], original.imageGeneration?.model);
     },
-    [activeConversationId, isStreaming, activeConversation, truncateFromMessage, handleSend, mode, selectedModel],
+    [
+      activeConversationId,
+      isStreaming,
+      activeConversation,
+      truncateFromMessage,
+      handleSend,
+      mode,
+      selectedModel,
+      models,
+      selectedTeamId,
+    ],
   );
 
   // Track scroll position to show/hide scroll-to-bottom button
@@ -407,9 +446,21 @@ export default function ChatConversationPage() {
 
   const showBlankState = !activeConversation || activeConversation.messages.length === 0;
 
+  const selectTeam = (teamId: string | null) => {
+    responsesSessionGenerationRef.current += 1;
+    setSelectedTeamId(teamId);
+    setResponsesSessionId(null);
+    setAttachmentError(null);
+  };
+
+  const isModelSelectionDisabled = isStreaming || isReadingAttachments;
+
   const inputBar = (inConversation: boolean) => {
     const preparing = isLoadingModels || isReadingAttachments;
-    const submitDisabled = !hasMessageContent(inputText, attachments, mode) || !selectedModel || preparing;
+    const model = models.find((item) => item.model_group === selectedModel);
+    const teamSelection = chatTeamSelection(model, selectedTeamId);
+    const canSubmit = hasMessageContent(inputText, attachments, mode) && selectedModel;
+    const submitDisabled = !canSubmit || preparing || teamSelection.needsSelection;
     return (
       <div
         onDragOver={(event) => {
@@ -453,13 +504,21 @@ export default function ChatConversationPage() {
             />
           }
           modelPicker={
-            <ChatModelPicker
-              models={models}
-              selectedModel={selectedModel}
-              loading={isLoadingModels}
-              disabled={isStreaming || isReadingAttachments}
-              onSelect={selectModel}
-            />
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
+              <ChatTeamPicker
+                model={model}
+                selectedTeamId={selectedTeamId}
+                disabled={isModelSelectionDisabled}
+                onSelect={selectTeam}
+              />
+              <ChatModelPicker
+                models={models}
+                selectedModel={selectedModel}
+                loading={isLoadingModels}
+                disabled={isModelSelectionDisabled}
+                onSelect={selectModel}
+              />
+            </div>
           }
           tools={
             mode === "chat" ? (
