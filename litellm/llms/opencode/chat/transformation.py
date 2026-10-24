@@ -107,26 +107,24 @@ class OpenCodeGoMessagesChatConfig(AnthropicConfig):
 
 
 class OpenCodeGoGeminiChatConfig(GoogleAIStudioGeminiConfig):
-    def __init__(self, logging_obj: "Logging | None" = None) -> None:
-        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # legacy Gemini config has untyped optional parameters
-        self.logging_obj = logging_obj
-
     @property
     def supports_stream_param_in_request_body(self) -> bool:
         return False
 
-    def get_model_response_iterator(
+    def get_model_response_iterator_for_request(
         self,
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: bool | None = False,
+        json_mode: bool | None,
+        optional_params: Mapping[str, object],
+        logging_obj: "Logging | None" = None,
     ) -> object:
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
 
-        if self.logging_obj is None:
+        if logging_obj is None:
             raise ValueError("OpenCode Go Gemini streaming requires the request logging context")
         iterator: Final = ModelResponseIterator(
-            streaming_response=streaming_response, sync_stream=sync_stream, logging_obj=self.logging_obj
+            streaming_response=streaming_response, sync_stream=sync_stream, logging_obj=logging_obj
         )
         return iter(iterator) if sync_stream else iterator
 
@@ -187,11 +185,11 @@ class OpenCodeGoGeminiChatConfig(GoogleAIStudioGeminiConfig):
         return TypeAdapter(dict[str, object]).validate_python(body)
 
 
-def go_chat_config(model: str, logging_obj: "Logging | None" = None) -> BaseConfig:
+def go_chat_config(model: str) -> BaseConfig:
     match go_endpoint(model):
         case "/v1/messages":
             return OpenCodeGoMessagesChatConfig()
         case "/v1beta/models":
-            return OpenCodeGoGeminiChatConfig(logging_obj)
+            return OpenCodeGoGeminiChatConfig()
         case _:
             return OpenCodeGoChatConfig()

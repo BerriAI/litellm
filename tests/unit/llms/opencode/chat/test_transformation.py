@@ -1,5 +1,6 @@
 import json
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Final
 
 import httpx
@@ -7,6 +8,8 @@ import pytest
 import respx
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.opencode.common_utils import go_headers
 
 
@@ -250,6 +253,71 @@ async def test_gemini_streams_text_and_usage_through_all_routes(go_catalog: None
                 next(event["usage"]["output_tokens"] for event in message_events if event["type"] == "message_delta")
                 == 5
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("factory_path", [False, True])
+@pytest.mark.parametrize("async_stream", [False, True])
+async def test_gemini_streams_with_dispatcher_and_factory_configs(
+    go_catalog: None, factory_path: bool, async_stream: bool
+) -> None:
+    messages: Final = [{"role": "user", "content": "hello"}]
+    logging_obj: Final = Logging(
+        model="fixture-gemini",
+        messages=messages,
+        stream=True,
+        call_type="acompletion" if async_stream else "completion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="go-stream-regression",
+        function_id="go-stream-regression",
+    )
+    logging_obj.update_environment_variables(
+        model="fixture-gemini",
+        user="",
+        optional_params={"stream_options": {"include_usage": True}},
+        litellm_params={},
+        custom_llm_provider="opencode_go",
+        stream_options={"include_usage": True},
+    )
+    with respx.mock(using="httpx") as transport:
+        transport.post(
+            "https://opencode.ai/inference/go/google/v1beta/models/fixture-gemini:streamGenerateContent?alt=sse"
+        ).respond(
+            headers={"content-type": "text/event-stream"},
+            text="data: " + json.dumps(upstream_reply("gemini", "fixture-gemini")) + "\n\n",
+        )
+        if factory_path:
+            result: Final = BaseLLMHTTPHandler().completion(
+                model="fixture-gemini",
+                messages=messages,
+                api_base=None,
+                custom_llm_provider="opencode_go",
+                model_response=litellm.ModelResponse(),
+                encoding=None,
+                logging_obj=logging_obj,
+                optional_params={"stream_options": {"include_usage": True}},
+                timeout=30,
+                litellm_params={},
+                acompletion=async_stream,
+                stream=True,
+                api_key="fake-go-key",
+            )
+        else:
+            completion: Final = litellm.acompletion if async_stream else litellm.completion
+            result: Final = completion(
+                model="opencode_go/fixture-gemini",
+                messages=messages,
+                stream=True,
+                stream_options={"include_usage": True},
+                api_key="fake-go-key",
+            )
+        if async_stream:
+            stream: Final = await result
+            chunks: Final = [chunk async for chunk in stream]
+        else:
+            chunks: Final = tuple(result)
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "hello"
+        assert chunks[-1].usage.total_tokens == 15
 
 
 @pytest.mark.parametrize("suffix", ["", "/v1beta", "/v1beta/models", "/v1beta/models/"])

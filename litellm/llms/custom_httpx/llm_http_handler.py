@@ -977,7 +977,7 @@ class BaseLLMHTTPHandler:
         original_data: dict,
         model: str,
         messages: list,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
         timeout: float | httpx.Timeout,
@@ -1031,6 +1031,7 @@ class BaseLLMHTTPHandler:
                 sync_stream=True,
                 json_mode=json_mode,
                 optional_params=_OPTIONAL_PARAMS.validate_python(optional_params),
+                logging_obj=logging_obj,
             )
             if isinstance(completion_stream, BaseModelResponseIterator):
                 completion_stream.http_response = response
@@ -1173,6 +1174,7 @@ class BaseLLMHTTPHandler:
                 sync_stream=False,
                 json_mode=json_mode,
                 optional_params=_OPTIONAL_PARAMS.validate_python(optional_params),
+                logging_obj=logging_obj,
             )
             if isinstance(completion_stream, BaseModelResponseIterator):
                 completion_stream.http_response = response

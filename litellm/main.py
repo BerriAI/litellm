@@ -2193,8 +2193,6 @@ def _complete_groq(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
 
 
 def _complete_opencode_go(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
-    from litellm.llms.opencode.chat.transformation import go_chat_config
-
     return base_llm_http_handler.completion(  # pyright: ignore[reportUnknownMemberType]  # shared legacy handler has untyped request mappings
         model=ctx.model,
         stream=ctx.stream,
@@ -2212,7 +2210,6 @@ def _complete_opencode_go(ctx: CompletionDispatchContext) -> _CompletionDispatch
         api_key=ctx.api_key,
         logging_obj=ctx.logging,
         client=_dispatch_client_http(ctx),
-        provider_config=go_chat_config(ctx.model, ctx.logging),
     )
 
 
