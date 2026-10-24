@@ -376,7 +376,9 @@ class GenericAPILogger(CustomBatchLogger):
         batch: Final = tuple(self.log_queue)
         if not batch:
             return
-        failed_events: Final[list[Mapping[str, object] | StandardLoggingPayload]] = []  # mutable-ok: filled while the send runs and drained into the queue in finally
+        failed_events: Final[
+            list[Mapping[str, object] | StandardLoggingPayload]
+        ] = []  # mutable-ok: filled while the send runs and drained into the queue in finally
         try:
             verbose_logger.debug(
                 "Generic API Logger - about to flush %s events in '%s' format", len(batch), self.log_format
