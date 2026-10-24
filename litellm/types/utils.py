@@ -1612,6 +1612,9 @@ class Delta(SafeAttributeModel, OpenAIObject):
         if function_call is not None and isinstance(function_call, dict):
             function_call = FunctionCall(**function_call)
 
+        if tool_calls is not None and not isinstance(tool_calls, (list, tuple)):
+            tool_calls = [tool_calls]
+
         if tool_calls is not None and isinstance(tool_calls, (list, tuple)):
             coerced_tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] = []
             current_index = 0
@@ -1633,6 +1636,8 @@ class Delta(SafeAttributeModel, OpenAIObject):
                             tool_call["type"] = "function"
                         coerced_tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
                 elif isinstance(tool_call, (ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall)):
+                    coerced_tool_calls.append(tool_call)
+                else:
                     coerced_tool_calls.append(tool_call)
             tool_calls = coerced_tool_calls
 

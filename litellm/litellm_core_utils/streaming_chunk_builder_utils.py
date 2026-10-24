@@ -484,7 +484,10 @@ class ChunkProcessor:
                 if not delta:
                     continue
                 choice_index = choice.get("index", 0)
-                for tool_call in delta.get("tool_calls") or ():
+                tool_calls = delta.get("tool_calls") or ()
+                if tool_calls and not isinstance(tool_calls, (list, tuple)):
+                    tool_calls = [tool_calls]
+                for tool_call in tool_calls:
                     if not tool_call:
                         continue
                     if isinstance(tool_call, dict):
@@ -532,6 +535,8 @@ class ChunkProcessor:
             for choice in choices:
                 delta = choice.get("delta", {})
                 tool_calls = delta.get("tool_calls") or ()
+                if tool_calls and not isinstance(tool_calls, (list, tuple)):
+                    tool_calls = [tool_calls]
                 choice_index = choice.get("index", 0)
 
                 for tool_call in tool_calls:
