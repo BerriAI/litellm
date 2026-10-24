@@ -2,6 +2,7 @@ from collections.abc import Mapping, Sequence
 from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import AfterValidator, BeforeValidator, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator
+from pydantic.json_schema import SkipJsonSchema
 from pydantic_core import PydanticCustomError
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -23,7 +24,10 @@ def _unique_include(value: tuple[TokenizeRepresentation, ...]) -> tuple[Tokenize
 
 
 TokenizeInclude: TypeAlias = Annotated[
-    tuple[TokenizeRepresentation, ...], BeforeValidator(_include_array), AfterValidator(_unique_include)
+    tuple[TokenizeRepresentation, ...],
+    BeforeValidator(_include_array),
+    AfterValidator(_unique_include),
+    Field(json_schema_extra={"uniqueItems": True}),
 ]
 
 
@@ -110,7 +114,7 @@ class TokenizeRequest(LiteLLMPydanticObjectBase):
     model: str = Field(min_length=1)
     prompt: str
     include: TokenizeInclude = ()
-    add_special_tokens: bool | None = None
+    add_special_tokens: bool | SkipJsonSchema[None] = Field(default_factory=lambda: None)
 
     @field_validator("add_special_tokens", mode="before")
     @classmethod

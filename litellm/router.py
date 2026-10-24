@@ -6266,8 +6266,6 @@ class Router:
                                 _LITELLM_PARAMS_ADAPTER.validate_python(kwargs).get("session"),
                                 _TOKENIZE_MODEL_NAME_ADAPTER.validate_python(model_name),
                             )
-                            if handler_name == "atokenize"
-                            else {}
                         ),
                     }
                 )

@@ -45,6 +45,15 @@ def test_empty_prompt_is_valid() -> None:
     request: Final = TokenizeRequest(model="tokenizer", prompt="")
     assert request.prompt == ""
     assert request.include == ()
+    assert request.add_special_tokens is None
+
+
+def test_tokenize_request_schema_matches_runtime_contract() -> None:
+    schema: Final = TokenizeRequest.model_json_schema()
+    assert schema["properties"]["include"]["uniqueItems"] is True
+    assert schema["properties"]["add_special_tokens"]["type"] == "boolean"
+    assert "default" not in schema["properties"]["add_special_tokens"]
+    assert "add_special_tokens" not in schema["required"]
 
 
 @pytest.mark.parametrize(
