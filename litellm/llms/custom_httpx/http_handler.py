@@ -180,6 +180,12 @@ def _default_cached_client_timeout() -> httpx.Timeout:
     return httpx.Timeout(timeout=configured, connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS)
 
 
+def _with_bounded_connect(timeout: float | httpx.Timeout | None) -> httpx.Timeout | None:
+    if timeout is None or isinstance(timeout, httpx.Timeout):
+        return timeout
+    return httpx.Timeout(timeout=timeout, connect=min(timeout, HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS))
+
+
 _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER: Final = 2
 
 
@@ -843,7 +849,7 @@ class AsyncHTTPHandler:
                 json=json,
                 params=params,
                 headers=headers,
-                timeout=timeout,
+                timeout=_with_bounded_connect(timeout),
                 files=files,
                 content=request_content,
             )
@@ -854,7 +860,7 @@ class AsyncHTTPHandler:
             return response
         except httpx.ConnectError:
             # Retry the request with a new session if there is a connection error
-            new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
+            new_client: Final = self.create_client(timeout=_with_bounded_connect(timeout), event_hooks=self.event_hooks)
             try:
                 return await self.single_connection_request(
                     url=url,
