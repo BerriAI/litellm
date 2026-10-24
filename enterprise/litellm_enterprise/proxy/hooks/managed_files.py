@@ -305,6 +305,7 @@ def _is_xai_batch_output(
 class _ManagedFileRow(Protocol):
     unified_file_id: str
     file_object: OpenAIFileObject
+    model_mappings: Mapping[str, str]
     flat_model_file_ids: Sequence[str]
     storage_backend: Optional[str]
     storage_url: Optional[str]
@@ -2251,14 +2252,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         user_api_key_dict: UserAPIKeyAuth,
         limit: Optional[int] = None,
         after: Optional[str] = None,
+        model_mapping_keys: Optional[frozenset[str]] = None,
+        before: Optional[str] = None,
         **data: Dict,
     ) -> FileListPage:
         """List the managed files the caller owns, newest first.
 
         Pagination is keyset based on ``unified_file_id`` so a key that owns
         every file on the proxy still reads one bounded page at a time.
+        ``after`` pages toward older files and ``before`` toward newer ones,
+        each page still ordered newest first.
         ``purpose`` is applied after parsing, because the managed file table
-        keeps it inside the ``file_object`` blob instead of a column, and rows
+        keeps it inside the ``file_object`` blob instead of a column, and
+        ``model_mapping_keys`` keeps only files mapped to one of those
+        deployment ids, or model names for storage-backed files, read from
+        ``model_mappings``, a JSON column. Rows
         whose blob will not parse drop out there too, so a chunk of rows can
         yield fewer matches than the page holds. Successive chunks are read
         until the page is full or the caller's rows run out, which keeps
@@ -2278,30 +2286,44 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if owner_filter is None:
             return FileListPage.model_validate(build_list_page([]))
 
-        if after:
+        if after and before:
+            raise ProxyException(
+                message="Pass either 'after' (or 'after_id') or 'before_id' when listing files, not both.",
+                type="invalid_request_error",
+                param="before_id",
+                code=400,
+                openai_code="invalid_value",
+            )
+        cursor_param: Final = "before_id" if before else "after"
+        cursor: Final = before or after
+        if cursor:
             cursor_row = await _managed_file_table(self.prisma_client).find_first(
-                where={**owner_filter, "unified_file_id": after}
+                where={**owner_filter, "unified_file_id": cursor}
             )
             if cursor_row is None:
                 raise ProxyException(
-                    message=f"Invalid 'after' cursor: no file found with id '{after}'.",
+                    message=f"Invalid '{cursor_param}' cursor: no file found with id '{cursor}'.",
                     type="invalid_request_error",
-                    param="after",
+                    param=cursor_param,
                     code=400,
                     openai_code="invalid_value",
                 )
 
+        if model_mapping_keys is not None and not model_mapping_keys:
+            return FileListPage.model_validate(build_list_page([]))
+
         page_size: Final = min(limit or MAX_FILE_LIST_LIMIT, MAX_FILE_LIST_LIMIT)
         matches: Final[List[OpenAIFileObject]] = []
-        cursor_id = after
+        cursor_id = cursor
         chunk_size = page_size + 1
+        direction: Final = "asc" if before else "desc"
 
         while len(matches) <= page_size:
             cursor_args: _CursorPageArgs = {"cursor": {"unified_file_id": cursor_id}, "skip": 1} if cursor_id else {}
             chunk = await _managed_file_table(self.prisma_client).find_many(
                 where=owner_filter,
                 take=chunk_size,
-                order=[{"created_at": "desc"}, {"unified_file_id": "desc"}],
+                order=[{"created_at": direction}, {"unified_file_id": direction}],
                 **cursor_args,
             )
             matches.extend(
@@ -2309,13 +2331,17 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 for row in chunk
                 if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
                 and (purpose is None or parsed_file_object.purpose == purpose)
+                and (model_mapping_keys is None or not model_mapping_keys.isdisjoint(row.model_mappings))
             )
             if len(chunk) < chunk_size:
                 break
             cursor_id = chunk[-1].unified_file_id
             chunk_size = max(chunk_size, FILE_LIST_CONTINUATION_CHUNK_SIZE)
 
-        return FileListPage.model_validate(build_list_page(matches[:page_size], has_more=len(matches) > page_size))
+        page: Final = matches[:page_size]
+        return FileListPage.model_validate(
+            build_list_page(page[::-1] if before else page, has_more=len(matches) > page_size)
+        )
 
     def _is_batch_polling_enabled(self) -> bool:
         """

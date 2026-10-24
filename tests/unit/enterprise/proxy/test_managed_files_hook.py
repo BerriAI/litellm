@@ -650,6 +650,22 @@ async def test_afile_list_denies_a_caller_with_no_identity_at_all():
 
 
 @pytest.mark.asyncio
+async def test_afile_list_reads_no_rows_when_no_deployment_can_hold_a_file() -> None:
+    managed_files, table = _make_managed_files_over_rows([_make_managed_file_row("unified-mine")])
+
+    response: Final = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=_make_user_api_key_dict(),
+        model_mapping_keys=frozenset(),
+    )
+
+    assert response.data == []
+    assert response.has_more is False
+    assert table.find_many_calls == []
+
+
+@pytest.mark.asyncio
 async def test_afile_list_filters_by_purpose():
     managed_files, _ = _make_managed_files_over_rows(
         [

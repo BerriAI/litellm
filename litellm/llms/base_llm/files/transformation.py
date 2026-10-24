@@ -274,6 +274,8 @@ class BaseFileEndpoints(ABC):
         user_api_key_dict: UserAPIKeyAuth,
         limit: int | None = None,
         after: str | None = None,
+        model_mapping_keys: frozenset[str] | None = None,
+        before: str | None = None,
         **data: dict,
     ) -> FileListPage:
         pass
