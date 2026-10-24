@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    MODEL_LIST_ROUTES,
     UI_TEAM_ID,
     CommonProxyErrors,
     KeyManagementRoutes,
@@ -93,8 +94,7 @@ _SELF_SCOPED_CREDENTIAL_ROUTES: Final = (
 
 _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
     {
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         "/utils/token_counter",
         "/utils/transform_request",
         "/responses/input_tokens",

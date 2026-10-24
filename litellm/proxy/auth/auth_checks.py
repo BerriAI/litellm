@@ -47,6 +47,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
+    MODEL_LIST_ROUTES,
     RBAC_ROLES,
     UI_TEAM_ID,
     CallInfo,
@@ -910,8 +911,7 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
         and not skip_budget_checks
         and global_proxy_spend is not None
         and RouteChecks.is_llm_api_route(route=route)
-        and route != "/v1/models"
-        and route != "/models"
+        and route not in MODEL_LIST_ROUTES
     ):
         if math.isfinite(litellm.max_budget) and global_proxy_spend > litellm.max_budget:
             raise litellm.BudgetExceededError(
@@ -1028,8 +1028,7 @@ async def check_tools_allowlist(
 # budget cannot reach side-effectful routes like /health/services (Slack/email/webhook). See #27923.
 MODEL_DISCOVERY_ROUTES: Final = frozenset(
     {
-        "/v1/models",
-        "/models",
+        *MODEL_LIST_ROUTES,
         "/model/info",
         "/v1/model/info",
         "/v2/model/info",

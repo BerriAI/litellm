@@ -813,3 +813,95 @@ def test_messages_gated_by_enable_flag():
     with _gateway_env(enabled=False) as (client, _):
         resp = client.post("/claude_code_gateway/v1/messages", json={"model": "claude-sonnet-4-5", "messages": []})
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("headers", [{}, {"anthropic-version": "2023-06-01"}])
+def test_gateway_model_discovery_preserves_grants_and_format(
+    monkeypatch: pytest.MonkeyPatch, headers: dict[str, str]
+) -> None:
+    from litellm import Router
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    model_router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": f"openai/{name}", "api_key": "local-placeholder"},
+            }
+            for name in ("discovery-example", "restricted-example")
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", model_router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_claude_code_gateway": True})
+    caller: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=["discovery-example"],
+    )
+    app: Final = FastAPI()
+    app.include_router(proxy_server.router)
+    app.include_router(gateway_endpoints.router)
+    app.dependency_overrides[gateway_endpoints.user_api_key_auth] = lambda: caller
+    with TestClient(app) as client:
+        standard: Final = client.get("/v1/models", headers=headers)
+        gateway: Final = client.get("/claude_code_gateway/v1/models", headers=headers)
+        assert standard.status_code == 200, standard.text
+        assert gateway.status_code == 200, gateway.text
+        assert gateway.json() == standard.json()
+        assert [model["id"] for model in gateway.json()["data"]] == ["discovery-example"]
+        invalid_scope: Final = client.get("/claude_code_gateway/v1/models?scope=invalid", headers=headers)
+        assert invalid_scope.status_code == 400
+
+
+def test_gateway_model_discovery_requires_authentication() -> None:
+    with _gateway_env(real_auth=True) as (client, _), pytest.raises(ProxyException) as exc_info:
+        client.get("/claude_code_gateway/v1/models")
+    assert exc_info.value.code == "401"
+
+
+@pytest.mark.parametrize("settings", [{}, {"enable_claude_code_gateway": False}])
+def test_gateway_model_discovery_disabled(monkeypatch: pytest.MonkeyPatch, settings: dict[str, bool]) -> None:
+    from litellm.proxy import proxy_server
+
+    with _gateway_env(real_auth=True) as (client, _):
+        monkeypatch.setattr(proxy_server, "general_settings", settings)
+        response: Final = client.get(
+            "/claude_code_gateway/v1/models", headers={"Authorization": f"Bearer {_MASTER_KEY}"}
+        )
+        assert response.status_code == 404, response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/models", "/v1/models", "/claude_code_gateway/v1/models"])
+async def test_gateway_model_discovery_preserves_route_exemptions(monkeypatch: pytest.MonkeyPatch, route: str) -> None:
+    from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
+
+    import litellm
+    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    monkeypatch.setattr(litellm, "max_budget", 1.0)
+    result: Final = await common_checks(
+        request_body={},
+        team_object=LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0),
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=2.0,
+        general_settings={},
+        route=route,
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=UserAPIKeyAuth(team_id="test-team"),
+        request=MagicMock(),
+    )
+    assert result is True
+    assert RouteChecks.is_unbilled_route(route)
+    assert RouteChecks.is_llm_api_route(route)
+    monkeypatch.setenv("DISABLE_LLM_API_ENDPOINTS", "true")
+    monkeypatch.setenv("DISABLE_ADMIN_ENDPOINTS", "true")
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    EnterpriseRouteChecks.should_call_route(route)
