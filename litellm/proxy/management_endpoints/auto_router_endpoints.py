@@ -216,9 +216,12 @@ def _shadow_eval_attempts(prisma_client: "PrismaClient") -> _ShadowEvalAttemptTa
     return prisma_client.db.litellm_shadowevalattempt
 
 
+_RAW_ROWS: Final = TypeAdapter(Sequence[dict[str, object]], config=ConfigDict(strict=True))
+
+
 async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
     async with db_span("auto_router_report_query", sql_relation(query)):
-        return await prisma_client.db.query_raw(query, *args)
+        return _RAW_ROWS.validate_python(await prisma_client.db.query_raw(query, *args))
 
 
 async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> LiteLLM_TeamTable | None:

@@ -3,6 +3,7 @@ from types import UnionType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, Union, get_args, get_origin
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 from pydantic import fields as pyd_fields
 
 import litellm
@@ -36,6 +37,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_RESPONSE_BODY: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class _EventModelClass(Protocol):
@@ -415,7 +418,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     @staticmethod
     def _parsed_response_body(raw_response: httpx.Response) -> dict[str, object]:
-        return raw_response.json()
+        return _RESPONSE_BODY.validate_python(raw_response.json())
 
     @staticmethod
     def _annotation_origin(annotation: object) -> object:

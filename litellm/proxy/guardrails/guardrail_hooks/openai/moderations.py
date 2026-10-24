@@ -164,7 +164,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         from litellm.types.llms.openai import OpenAIModerationResponse
 
-        return OpenAIModerationResponse(**response.json())
+        return OpenAIModerationResponse.model_validate(response.json())
 
     def _check_moderation_result(self, moderation_response: "OpenAIModerationResponse") -> None:
         """

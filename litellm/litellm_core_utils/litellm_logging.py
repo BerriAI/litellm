@@ -3437,7 +3437,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             start_time=start_time,
                             end_time=end_time,
                             print_verbose=print_verbose,
-                            level=LogfireLevel.INFO.value,
+                            level=LogfireLevel.INFO,
                         )
 
                     if callback == "lunary" and lunaryLogger is not None:
@@ -4394,7 +4394,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
-                            level=LogfireLevel.ERROR.value,
+                            level=LogfireLevel.ERROR,
                             print_verbose=print_verbose,
                         )
 

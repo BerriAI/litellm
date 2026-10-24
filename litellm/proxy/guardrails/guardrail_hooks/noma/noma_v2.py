@@ -13,6 +13,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, TypeAlias, cast
 from urllib.parse import urlparse
 
+from pydantic import ConfigDict, TypeAdapter
+
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -37,6 +39,7 @@ if TYPE_CHECKING:
 
 _DEFAULT_API_BASE: Final = "https://api.noma.security/"
 _AIDR_SCAN_ENDPOINT: Final = "/litellm/guardrail"
+_AIDR_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 _INTERVENED_INPUT_FIELDS: Final = ("texts", "images", "tools", "tool_calls")
 _DEFAULT_API_BASE_HOSTNAME: Final = urlparse(_DEFAULT_API_BASE).hostname
 
@@ -257,7 +260,7 @@ class NomaV2Guardrail(CustomGuardrail):
             response.text,
         )
         response.raise_for_status()
-        response_json: Final[dict[str, object]] = response.json()
+        response_json: Final = _AIDR_RESPONSE.validate_python(response.json())
         verbose_proxy_logger.debug(
             "Noma v2 AIDR response parsed: %s",
             json.dumps(response_json, default=str),

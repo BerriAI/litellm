@@ -34,7 +34,7 @@ def safe_json_structure(
     def _transform(key: str | None, value: str) -> str:
         return value if value_transform is None else value_transform(key, value)
 
-    def _serialize(obj: object, seen: set[int], depth: int, key: str | None = None) -> Any:
+    def _serialize(obj: object, seen: set[int], depth: int, key: str | None = None) -> object:
         # Check for maximum depth.
         if depth > max_depth:
             return "MaxDepthExceeded"
@@ -48,32 +48,32 @@ def safe_json_structure(
         if id(obj) in seen:
             return "CircularReference Detected"
         seen.add(id(obj))
-        result: dict | list | tuple | set | str
         if isinstance(obj, dict):
-            result = {}
-            for k, v in obj.items():
-                if isinstance(k, (str)):
-                    clean_k = k.replace("\x00", "") if "\x00" in k else k
-                    result[clean_k] = _serialize(v, seen, depth + 1, clean_k)
+            mapping_result: Final = {
+                (clean_k := k.replace("\x00", "") if "\x00" in k else k): _serialize(v, seen, depth + 1, clean_k)
+                for k, v in obj.items()
+                if isinstance(k, str)
+            }
             seen.remove(id(obj))
-            return result
+            return mapping_result
         elif isinstance(obj, list):
-            result = [_serialize(item, seen, depth + 1, key) for item in obj]
+            list_result: Final = [_serialize(item, seen, depth + 1, key) for item in obj]
             seen.remove(id(obj))
-            return result
+            return list_result
         elif isinstance(obj, tuple):
-            result = tuple(_serialize(item, seen, depth + 1, key) for item in obj)
+            tuple_result: Final = tuple(_serialize(item, seen, depth + 1, key) for item in obj)
             seen.remove(id(obj))
-            return result
+            return tuple_result
         elif isinstance(obj, set):
-            result = sorted([_serialize(item, seen, depth + 1, key) for item in obj])
+            sortable_values: Final[list[Any]] = [_serialize(item, seen, depth + 1, key) for item in obj]
+            set_result: Final = sorted(sortable_values)
             seen.remove(id(obj))
-            return result
+            return set_result
         elif isinstance(obj, BaseModel):
             dumped: Final = obj.model_dump()
-            result = _serialize(dumped, seen, depth + 1, key)
+            model_result: Final = _serialize(dumped, seen, depth + 1, key)
             seen.remove(id(obj))
-            return result
+            return model_result
         else:
             # Fall back to string conversion for non-serializable objects.
             try:

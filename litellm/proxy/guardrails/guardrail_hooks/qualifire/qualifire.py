@@ -10,6 +10,8 @@ import os
 from typing import Any, Final, Literal
 
 from fastapi import HTTPException
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -29,6 +31,26 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 GUARDRAIL_NAME: Final = "qualifire"
 DEFAULT_QUALIFIRE_API_BASE: Final = "https://proxy.qualifire.ai"
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _QualifireFlaggedResult(TypedDict, total=False):
+    flagged: NotRequired[ReadOnly[object]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _QualifireEvaluationResult(TypedDict, total=False):
+    results: NotRequired[ReadOnly[list[_QualifireFlaggedResult] | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _QualifireResponse(TypedDict, total=False):
+    score: NotRequired[ReadOnly[object]]
+    status: NotRequired[ReadOnly[object]]
+    evaluationResults: NotRequired[ReadOnly[list[_QualifireEvaluationResult] | None]]
+
+
+_QUALIFIRE_RESPONSE: Final = TypeAdapter(_QualifireResponse)
 
 
 class QualifireGuardrail(CustomGuardrail):
@@ -244,7 +266,7 @@ class QualifireGuardrail(CustomGuardrail):
 
         return api_tools if api_tools else None
 
-    def _check_if_flagged(self, result: dict[str, Any]) -> bool:
+    def _check_if_flagged(self, result: _QualifireResponse) -> bool:
         """
         Check if the Qualifire evaluation result indicates flagged content.
 
@@ -381,7 +403,7 @@ class QualifireGuardrail(CustomGuardrail):
                 timeout=self.timeout,
             )
             response.raise_for_status()
-            result: Final = response.json()
+            result: Final = _QUALIFIRE_RESPONSE.validate_python(response.json())
 
             # Extract response info for logging
             qualifire_response: Final[dict[str, object]] = {

@@ -300,12 +300,13 @@ def decode_state_hash(encrypted_state: str) -> dict:
     if decrypted_json is None:
         raise ValueError("Failed to decrypt state parameter")
 
-    state_data: Final = json.loads(decrypted_json)
+    state_data: Final = _DECODED_STATE.validate_python(json.loads(decrypted_json))
     return state_data
 
 
 _MANAGED_AUTH_CODE_PREFIX: Final = "llm_scope_"
 _DECODED_JSON: Final = TypeAdapter(object)
+_DECODED_STATE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class _ManagedAuthorizationCode(LiteLLMBaseModel):

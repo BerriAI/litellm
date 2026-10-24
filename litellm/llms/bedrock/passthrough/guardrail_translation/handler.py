@@ -10,7 +10,7 @@ from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias, TypeVar
 
-from pydantic import InstanceOf, TypeAdapter, ValidationError
+from pydantic import ConfigDict, InstanceOf, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -768,6 +768,7 @@ class InvokeStreamFrame:
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_STRICT_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
 _Frame: Final = TypeVar("_Frame", ConverseStreamFrame, InvokeStreamFrame)
 
 
@@ -1217,7 +1218,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             texts: Sequence[tuple[_StreamGroupKey, str]] = ()
             if event_type == "contentBlockDelta":
                 try:
-                    payload_dict: dict[str, object] = json.loads(payload_bytes)
+                    payload_dict = _STRICT_JSON_OBJECT.validate_python(json.loads(payload_bytes))
                     texts = _delta_frame_texts(payload_dict)
                 except Exception as e:
                     verbose_proxy_logger.debug(
@@ -1255,7 +1256,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             headers_bytes = frame_raw[12 : 12 + orig_hdrs_len]
 
             try:
-                payload_dict = json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
+                payload_dict = _STRICT_JSON_OBJECT.validate_python(
+                    json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
+                )
                 for local_idx, (_, container, key) in enumerate(
                     _collect_stream_delta_text_holders(payload_dict.get("delta"))
                 ):
