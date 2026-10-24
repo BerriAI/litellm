@@ -1316,10 +1316,15 @@ class CustomStreamWrapper:
             and not is_generic_chunk
             and (chunk.keys() <= _GCHUNK_FIELDS or is_registered_custom_provider)
         ):
-            partial_chunk_usage: Final = chunk.get("usage")
+            partial_chunk: Final = cast(  # cast-ok: chunk is narrowed to a generic dictionary above
+                dict[str, object], chunk
+            )
+            partial_chunk_usage: Final = partial_chunk.get("usage")
             if isinstance(partial_chunk_usage, dict):
-                model_response.usage = litellm.Usage(**partial_chunk_usage)
-                return _ProviderChunkParsed(cast(dict[str, object], chunk))
+                model_response.usage = (  # rebind-ok: retain usage from a partial provider chunk
+                    litellm.Usage.model_validate(partial_chunk_usage)
+                )
+                return _ProviderChunkParsed(partial_chunk)
             return _ProviderChunkEarlyReturn(None)
 
         if is_generic_chunk:
