@@ -312,6 +312,7 @@ from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
 )
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
+    DeploymentAffinityRetryState,
     warn_on_unknown_model_group_affinity_flags,
 )
 from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
@@ -8893,6 +8894,9 @@ class Router:
         verbose_router_logger.debug(
             "async function w/ retries: original_function - %s, num_retries - %s", original_function, num_retries
         )
+        affinity_retry_state: Final = DeploymentAffinityRetryState()
+        kwargs["_deployment_affinity_retry_state"] = affinity_retry_state  # rebind-ok: kwargs is local to this loop
+
         ## ADD RETRY TRACKING TO METADATA - used for spend logs retry tracking
         _metadata["attempted_retries"] = 0
         _metadata["max_retries"] = num_retries  # Updated after overrides in exception handler
@@ -8907,6 +8911,7 @@ class Router:
                 raise
             current_attempt = None
             original_exception = e
+            affinity_retry_state.record_failure(e)
             deployment_num_retries: Final = getattr(e, "num_retries", None)
 
             if (
@@ -9008,6 +9013,7 @@ class Router:
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
                     original_exception = e
+                    affinity_retry_state.record_failure(e)
 
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
