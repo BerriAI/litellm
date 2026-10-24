@@ -110,7 +110,12 @@ ENV HOME=/home/nonroot \
     PYTHONUNBUFFERED=1 \
     PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries
 
-COPY --from=builder --chown=nonroot:nonroot /app /app
+COPY --from=builder --chown=nonroot:nonroot /app/.venv /app/.venv
+COPY --from=builder --chown=nonroot:nonroot /app/litellm /app/litellm
+COPY --from=builder --chown=nonroot:nonroot /app/enterprise /app/enterprise
+COPY --from=builder --chown=nonroot:nonroot /app/gateway /app/gateway
+COPY --from=builder --chown=nonroot:nonroot /app/docker/component_entrypoint.sh /app/docker/component_entrypoint.sh
+COPY --from=builder --chown=nonroot:nonroot /app/schema.prisma /app/schema.prisma
 COPY --from=builder /opt/prisma /opt/prisma
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
