@@ -369,6 +369,16 @@ class DeploymentAffinityCheck(CustomLogger):
         typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
         if request_kwargs.get("_target_order") is not None:
             return typed_healthy_deployments
+        raw_retry_skipped_ids: Final[object] = cast(  # cast-ok: request kwargs use string parameter names
+            dict[str, object], request_kwargs
+        ).get("_retry_skipped_deployment_ids")
+        retry_skipped_ids: Final[tuple[object, ...]] = (
+            cast(  # cast-ok: isinstance validates the tuple container before membership checks
+                tuple[object, ...], raw_retry_skipped_ids
+            )
+            if isinstance(raw_retry_skipped_ids, tuple)
+            else ()
+        )
 
         (
             enable_user_key,
@@ -386,7 +396,7 @@ class DeploymentAffinityCheck(CustomLogger):
                         healthy_deployments=typed_healthy_deployments,
                         model_id=responses_model_id,
                     )
-                    if deployment is not None:
+                    if deployment is not None and responses_model_id not in retry_skipped_ids:
                         verbose_router_logger.debug(
                             "DeploymentAffinityCheck: previous_response_id pinning -> deployment=%s",
                             responses_model_id,
@@ -431,7 +441,7 @@ class DeploymentAffinityCheck(CustomLogger):
                         healthy_deployments=typed_healthy_deployments,
                         model_id=session_model_id,
                     )
-                    if session_deployment is not None:
+                    if session_deployment is not None and session_model_id not in retry_skipped_ids:
                         verbose_router_logger.debug(
                             "DeploymentAffinityCheck: session-id affinity hit -> deployment=%s session_id=%s",
                             session_model_id,
@@ -468,7 +478,7 @@ class DeploymentAffinityCheck(CustomLogger):
             healthy_deployments=typed_healthy_deployments,
             model_id=model_id,
         )
-        if deployment is None:
+        if deployment is None or model_id in retry_skipped_ids:
             verbose_router_logger.debug(
                 "DeploymentAffinityCheck: pinned deployment=%s not found in healthy_deployments",
                 model_id,
