@@ -13,11 +13,9 @@ struct BudgetFixture {
 }
 
 #[fixture]
-async fn database_pool() -> Result<Option<PgPool>, sqlx::Error> {
-    let Ok(database_url) = std::env::var("DATABASE_URL") else {
-        return Ok(None);
-    };
-    PgPool::connect(&database_url).await.map(Some)
+async fn database_pool() -> Result<PgPool, Box<dyn StdError>> {
+    let database_url = std::env::var("DATABASE_URL")?;
+    Ok(PgPool::connect(&database_url).await?)
 }
 
 async fn insert_budget(
@@ -79,13 +77,12 @@ async fn insert_end_user(
     tpm_limit: 1300,
 }))]
 #[tokio::test]
+#[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
 async fn missing_end_user_maps_to_defaults(
     #[case] default_budget: Option<BudgetFixture>,
-    #[future(awt)] database_pool: Result<Option<PgPool>, sqlx::Error>,
+    #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
 ) -> Result<(), Box<dyn StdError>> {
-    let Some(pool) = database_pool? else {
-        return Ok(());
-    };
+    let pool = database_pool?;
     let mut tx = pool.begin().await?;
     if let Some(budget) = default_budget {
         insert_budget(&mut tx, budget).await?;
@@ -259,6 +256,7 @@ async fn missing_end_user_maps_to_defaults(
     false
 )]
 #[tokio::test]
+#[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
 async fn budget_resolution_matches_python_precedence(
     #[case] user_id: &'static str,
     #[case] user_budget: Option<BudgetFixture>,
@@ -266,11 +264,9 @@ async fn budget_resolution_matches_python_precedence(
     #[case] override_budget: Option<BudgetFixture>,
     #[case] expected_budget: Option<BudgetFixture>,
     #[case] insert_override_budget: bool,
-    #[future(awt)] database_pool: Result<Option<PgPool>, sqlx::Error>,
+    #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
 ) -> Result<(), Box<dyn StdError>> {
-    let Some(pool) = database_pool? else {
-        return Ok(());
-    };
+    let pool = database_pool?;
     let mut tx = pool.begin().await?;
     insert_budget(&mut tx, default_budget).await?;
     if let Some(budget) = user_budget {
