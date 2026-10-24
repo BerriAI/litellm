@@ -378,6 +378,7 @@ _CALLER_CREDENTIAL_FIELDS: Final = frozenset(
         "client_id",
         "client_secret",
         "gigachat_access_token",
+        "litellm_credential_name",
         "oci_fingerprint",
         "oci_key",
         "oci_key_file",
@@ -415,7 +416,7 @@ def _sent_a_provider_credential_or_endpoint(caller_body: Mapping[str, object]) -
 def _used_a_caller_credential(logged_call: Mapping[str, object]) -> bool:
     """True when the provider was called with a credential or at an endpoint that belongs to the caller rather than
     the deployment: an api_key, header, OpenAI organization or other provider credential or endpoint field the caller
-    sent with the request, the caller's own Anthropic OAuth token, the caller's own GitHub Copilot connection, or the
+    sent with the request, a stored credential the caller picked by name, the caller's own Anthropic OAuth token, the caller's own GitHub Copilot connection, or the
     caller's identity token that a token-exchange deployment trades in on every call."""
     litellm_params: Final = _logged_fields(logged_call.get("litellm_params"))
     proxy_server_request: Final = _logged_fields(litellm_params.get("proxy_server_request"))

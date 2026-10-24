@@ -261,6 +261,23 @@ class TestSkipMetricsValidation:
                 False,
             ),
             ({"litellm_params": {"proxy_server_request": {"body": {"extra_body": "azure_ad_token"}}}}, False),
+            (
+                {
+                    "litellm_params": {
+                        "proxy_server_request": {"body": {"litellm_credential_name": "caller-credential"}}
+                    }
+                },
+                True,
+            ),
+            (
+                {
+                    "litellm_params": {
+                        "litellm_credential_name": "deployment-credential",
+                        "proxy_server_request": {"body": {"model": "openai-deployment"}},
+                    }
+                },
+                False,
+            ),
             ({"litellm_params": {"proxy_server_request": {"caller_credential_fields": ("extra_headers",)}}}, True),
             ({"litellm_params": {"proxy_server_request": {"caller_credential_fields": ("organization",)}}}, True),
             (
@@ -293,6 +310,8 @@ class TestSkipMetricsValidation:
             "caller-supplied-azure-ad-token-in-extra-body",
             "deployment-azure-ad-token",
             "malformed-extra-body",
+            "caller-named-credential",
+            "deployment-named-credential",
             "caller-supplied-extra-headers",
             "caller-supplied-organization",
             "headers-that-cannot-change-provider-auth",

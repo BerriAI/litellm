@@ -34,6 +34,7 @@ AGENT_365_GUARDRAIL: Final = f"agent-365-{RUN}"
 CALLER_OAUTH_TOKEN: Final = f"sk-ant-oat01-caller-{RUN}"
 REVOKED_GATEWAY_KEY: Final = f"revoked-gateway-key-{RUN}"
 UNKNOWN_ORGANIZATION: Final = f"org-unknown-{RUN}"
+REVOKED_STORED_KEY: Final = f"sk-revoked-stored-credential-{RUN}"
 AZURE_API_VERSION: Final = "2024-02-01"
 CALLER_AZURE_CELLS: Final = (
     ("chat", False),
@@ -140,6 +141,8 @@ class Provider:
         model: Final = str(sent.get("model") or sent.get("model_id") or request.target.split("/")[2])
         if request.headers.get("x-portkey-api-key") == REVOKED_GATEWAY_KEY:
             return _error(401, "Invalid gateway API key", "invalid_request_error", "invalid_api_key")
+        if request.headers.get("authorization") == f"Bearer {REVOKED_STORED_KEY}":
+            return _error(401, "Incorrect API key provided: sk-revok*****", "invalid_request_error", "invalid_api_key")
         if request.headers.get("openai-organization") == UNKNOWN_ORGANIZATION:
             return _error(
                 401,
@@ -299,10 +302,29 @@ def config(directory: Path, upstream: Wire) -> Path:
             },
             "model_info": {"id": identity("caller-credential")},
         },
+        {
+            "model_name": name("caller-credential-name"),
+            "litellm_params": {
+                "model": f"openai/{HEALTHY}",
+                "api_base": api_base,
+                "litellm_credential_name": f"deployment-key-{RUN}",
+            },
+            "model_info": {"id": identity("caller-credential-name")},
+        },
     ]
     configuration["credential_list"] = [
         *configuration.get("credential_list", []),
         {"credential_name": f"m365-obo-{RUN}", "credential_values": {**TOKEN_EXCHANGE_SETTINGS}, "credential_info": {}},
+        {
+            "credential_name": f"deployment-key-{RUN}",
+            "credential_values": {"api_key": "sk-deployment-credential-caller-credential-name"},
+            "credential_info": {},
+        },
+        {
+            "credential_name": f"revoked-key-{RUN}",
+            "credential_values": {"api_key": REVOKED_STORED_KEY},
+            "credential_info": {},
+        },
     ]
     configuration["guardrails"] = [
         {
@@ -595,6 +617,26 @@ def test_a_provider_401_on_an_api_key_the_caller_sent_stays_out_of_the_deploymen
     assert [request.headers["authorization"] for request in rig.upstream.drain()] == [f"Bearer {caller_key}"]
     samples: Final = until(rig.gateway, PROXY_FAILED, requested_model=name("caller-api-key"))
     assert deployment_series(samples) - before == frozenset(), recorded(samples, requested_model=name("caller-api-key"))
+
+
+def test_a_provider_401_on_a_stored_credential_the_caller_names_leaves_a_healthy_deployment_healthy(rig: Rig) -> None:
+    cell: Final = "caller-credential-name"
+    rig.upstream.drain()
+    assert send(rig.gateway, cell).status_code == 200
+    assert_reached_with_the_deployment_credential(rig, cell)
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": name(cell), "messages": messages(cell), "litellm_credential_name": f"revoked-key-{RUN}"},
+    )
+    assert response.status_code == 401, response.text
+    assert [request.headers["authorization"] for request in rig.upstream.drain()] == [f"Bearer {REVOKED_STORED_KEY}"]
+    samples: Final = until(rig.gateway, PROXY_FAILED, requested_model=name(cell))
+    observed: Final = recorded(samples, model_id=identity(cell))
+    assert values(samples, FAILURES, model_id=identity(cell)) == [], observed
+    assert values(samples, LLM_FAILED, model_id=identity(cell)) == [], observed
+    assert values(samples, TOTALS, model_id=identity(cell)) == [1.0], observed
+    assert values(samples, STATE, model_id=identity(cell)) == [0.0], observed
 
 
 def anthropic_messages(gateway: Gateway, cell: str, key: str, headers: dict[str, str]) -> httpx.Response:
