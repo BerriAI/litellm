@@ -13,7 +13,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
 )
-from litellm.llms.xai.common_utils import XAIModelInfo, xai_reported_cost_in_usd
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.xai.common_utils import XAIModelInfo, xai_error_status_code, xai_reported_cost_in_usd
 from litellm.llms.xai.cost_calculator import (
     apply_server_side_tool_usage_details_to_usage,
 )
@@ -74,12 +76,14 @@ class XAIChatConfig(OpenAIGPTConfig):
             XAIOAuthAuthenticator,
             XAIOAuthError,
             should_use_xai_oauth,
+            xai_oauth_token_file,
         )
 
         dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
         if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
             try:
-                headers["Authorization"] = f"Bearer {XAIOAuthAuthenticator().get_access_token()}"
+                authenticator: Final = XAIOAuthAuthenticator(auth_file=xai_oauth_token_file(litellm_params))
+                headers["Authorization"] = f"Bearer {authenticator.get_access_token()}"
             except XAIOAuthError as exc:
                 raise AuthenticationError(
                     model=model,
@@ -122,6 +126,15 @@ class XAIChatConfig(OpenAIGPTConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
             stream=stream,
+        )
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, str] | httpx.Headers
+    ) -> BaseLLMException:
+        return OpenAIError(
+            status_code=xai_error_status_code(status_code, error_message),
+            message=error_message,
+            headers=httpx.Headers(headers),
         )
 
     def get_supported_openai_params(self, model: str) -> list:

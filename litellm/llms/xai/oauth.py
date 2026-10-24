@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 import threading
@@ -30,6 +31,7 @@ XAI_OAUTH_REDIRECT_PORT: Final = 56121
 XAI_OAUTH_REDIRECT_PATH: Final = "/callback"
 XAI_OAUTH_EXPIRY_SKEW_SECONDS: Final = 120
 XAI_OAUTH_CALLBACK_TIMEOUT_SECONDS: Final = 180
+_XAI_OAUTH_ACCOUNT_NAME_RE: Final = re.compile(r"^[A-Za-z0-9_-]+$")
 _XAI_OAUTH_REFRESH_LOCK: Final = threading.Lock()
 
 
@@ -73,6 +75,30 @@ class XAIOAuthError(Exception):
 
 class XAIOAuthLoginRequiredError(XAIOAuthError):
     pass
+
+
+def _default_xai_oauth_token_dir() -> str:
+    return get_secret_str("XAI_OAUTH_TOKEN_DIR") or os.path.expanduser("~/.config/litellm/xai_oauth")
+
+
+def resolve_xai_oauth_auth_file(auth_file: str | None, token_dir: str) -> str:
+    if not auth_file:
+        return os.path.join(token_dir, get_secret_str("XAI_OAUTH_AUTH_FILE") or "auth.json")
+    resolved: Final = os.path.realpath(os.path.join(token_dir, auth_file))
+    if resolved.startswith(os.path.realpath(token_dir) + os.sep):
+        return resolved
+    raise XAIOAuthError("xAI OAuth auth file must stay inside the token directory")
+
+
+def oauth_auth_file_for_account(account: str) -> str:
+    if not _XAI_OAUTH_ACCOUNT_NAME_RE.fullmatch(account):
+        raise ValueError("xAI OAuth account must match ^[A-Za-z0-9_-]+$")
+    return f"auth-{account}.json"
+
+
+def xai_oauth_token_file(litellm_params: Mapping[str, object] | None) -> str | None:
+    token_file: Final = (litellm_params or {}).get("xai_oauth_token_file")
+    return token_file if isinstance(token_file, str) else None
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
@@ -121,9 +147,14 @@ class _CallbackServer(HTTPServer):
 
 
 class XAIOAuthAuthenticator:
-    def __init__(self, http_client: httpx.Client | HTTPHandler | None = None) -> None:
-        self.token_dir = get_secret_str("XAI_OAUTH_TOKEN_DIR") or os.path.expanduser("~/.config/litellm/xai_oauth")
-        self.auth_file = os.path.join(self.token_dir, get_secret_str("XAI_OAUTH_AUTH_FILE") or "auth.json")
+    def __init__(
+        self,
+        http_client: httpx.Client | HTTPHandler | None = None,
+        auth_file: str | None = None,
+        token_dir: str | None = None,
+    ) -> None:
+        self.token_dir = token_dir or _default_xai_oauth_token_dir()
+        self.auth_file = resolve_xai_oauth_auth_file(auth_file, self.token_dir)
         self.http_client = http_client
 
     def get_api_base(self) -> str:
