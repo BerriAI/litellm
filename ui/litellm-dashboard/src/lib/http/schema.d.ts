@@ -47080,7 +47080,7 @@ export interface components {
              * Litellm Count Source
              * @enum {string}
              */
-            litellm_count_source?: "provider" | "token_count_model" | "local_estimate";
+            litellm_count_source?: "provider" | "token_count_model" | "local_estimate" | "billed_request";
             /** Prompttokensdetails */
             promptTokensDetails: components["schemas"]["PromptTokensDetails"][];
             /** Totaltokens */
@@ -47110,7 +47110,7 @@ export interface components {
         /** TokenCountResponse */
         TokenCountResponse: {
             /** Count Source */
-            count_source?: ("provider" | "token_count_model" | "local_estimate") | null;
+            count_source?: ("provider" | "token_count_model" | "local_estimate" | "billed_request") | null;
             /**
              * Error
              * @default false

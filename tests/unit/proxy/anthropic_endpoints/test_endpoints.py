@@ -5,12 +5,18 @@ Test for anthropic_endpoints/endpoints.py, focusing on handling dictionary objec
 import json
 import logging
 import unittest
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
+from fastapi import Request, Response
 from fastapi.testclient import TestClient
+from starlette.types import Message
 
+import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -462,7 +468,7 @@ class TestErrorLogCarriesCallId:
             ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
         ):
-            response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+            response = await ep.count_tokens(fastapi_response=Response(), request=request, user_api_key_dict=UserAPIKeyAuth())
 
         assert response.status_code == 500
         record = self._error_record(caplog)
@@ -514,7 +520,7 @@ async def test_count_tokens_answers_400_for_malformed_tools_without_counting(mod
         patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
         patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(fastapi_response=Response(), request=request, user_api_key_dict=UserAPIKeyAuth())
 
     assert response.status_code == 400
     assert json.loads(response.body)["error"]["type"] == "invalid_request_error"
@@ -537,7 +543,7 @@ async def test_count_tokens_counts_malformed_tool_entries_for_a_model_the_router
         patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
         patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(fastapi_response=Response(), request=request, user_api_key_dict=UserAPIKeyAuth())
 
     assert response == {"input_tokens": 7}
     assert counter.await_args.kwargs["request"].tools == _MALFORMED_TOOL_ENTRY
@@ -570,7 +576,7 @@ async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
         patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
         patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(fastapi_response=Response(), request=request, user_api_key_dict=UserAPIKeyAuth())
 
     assert response == {"input_tokens": 7}
     counted: Final = counter.await_args.kwargs["request"]
@@ -609,10 +615,211 @@ async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_e
         patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
         patch.object(proxy_server, "llm_router", new=router),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(fastapi_response=Response(), request=request, user_api_key_dict=UserAPIKeyAuth())
 
     assert response == {"input_tokens": 7}
     assert counter.await_args.kwargs["request"].tools is None
+
+
+_ANTHROPIC_MESSAGES_URL: Final = "https://api.anthropic.com/v1/messages"
+_ANTHROPIC_COUNT_TOKENS_URL: Final = "https://api.anthropic.com/v1/messages/count_tokens"
+_OPTED_IN: Final = {"token_count_billed_request": True}
+_WEATHER_TOOL: Final = {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+_COUNT_BODY: Final = {
+    "model": "claude-count",
+    "max_tokens": 64,
+    "system": [{"type": "text", "text": "Answer in one word."}],
+    "tools": [_WEATHER_TOOL],
+    "messages": [{"role": "user", "content": [{"type": "text", "text": "What is the weather in Paris?"}]}],
+}
+
+
+def _count_router(*model_infos: Mapping[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "claude-count",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-test"},
+                "model_info": dict(model_info),
+            }
+            for model_info in model_infos
+        ],
+        num_retries=0,
+    )
+
+
+def _count_request(body: Mapping[str, object]) -> Request:
+    payload: Final = json.dumps(body).encode()
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/messages/count_tokens",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+
+def _billed_reply(model: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_count",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": "Sunny"}],
+            "stop_reason": "max_tokens",
+            "usage": {
+                "input_tokens": 1200,
+                "cache_read_input_tokens": 30,
+                "cache_creation_input_tokens": 4,
+                "output_tokens": 1,
+            },
+        },
+    )
+
+
+@pytest.fixture
+def count_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("count_proxy")
+async def test_count_tokens_answers_the_billed_input_of_a_one_token_request_when_every_deployment_opts_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(proxy_server, "llm_router", _count_router(_OPTED_IN, _OPTED_IN))
+    fastapi_response: Final = Response()
+
+    with respx.mock:
+        messages_route: Final = respx.post(_ANTHROPIC_MESSAGES_URL).mock(return_value=_billed_reply("claude-sonnet-5-5"))
+        count_route: Final = respx.post(_ANTHROPIC_COUNT_TOKENS_URL).mock(
+            return_value=httpx.Response(200, json={"input_tokens": 9})
+        )
+        response: Final = await ep.count_tokens(
+            fastapi_response, _count_request({**_COUNT_BODY, "stream": True}), UserAPIKeyAuth()
+        )
+
+    assert response == {"input_tokens": 1234, "litellm_count_source": "billed_request"}
+    assert not count_route.called
+    sent: Final = json.loads(messages_route.calls.last.request.content)
+    assert sent["max_tokens"] == 1
+    assert sent.get("stream", False) is False
+    assert sent["system"] == _COUNT_BODY["system"]
+    assert sent["tools"] == _COUNT_BODY["tools"]
+    assert sent["messages"] == _COUNT_BODY["messages"]
+    assert float(fastapi_response.headers["x-litellm-response-cost"]) > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("count_proxy")
+@pytest.mark.parametrize(
+    "model_infos",
+    [({}, {}), (_OPTED_IN, {}), ({"token_count_billed_request": "true"},)],
+    ids=["knob_off", "one_of_two_deployments", "string_value"],
+)
+async def test_count_tokens_keeps_the_provider_count_unless_every_deployment_opts_in(
+    monkeypatch: pytest.MonkeyPatch, model_infos: tuple[Mapping[str, object], ...]
+) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(proxy_server, "llm_router", _count_router(*model_infos))
+
+    with respx.mock:
+        messages_route: Final = respx.post(_ANTHROPIC_MESSAGES_URL).mock(return_value=_billed_reply("claude-sonnet-5-5"))
+        respx.post(_ANTHROPIC_COUNT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        response: Final = await ep.count_tokens(Response(), _count_request(_COUNT_BODY), UserAPIKeyAuth())
+
+    assert response == {"input_tokens": 9, "litellm_count_source": "provider"}
+    assert not messages_route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("count_proxy")
+async def test_count_tokens_estimates_a_model_with_no_deployments_without_a_billed_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(proxy_server, "llm_router", _count_router(_OPTED_IN))
+
+    with respx.mock:
+        messages_route: Final = respx.post(_ANTHROPIC_MESSAGES_URL).mock(return_value=_billed_reply("claude-sonnet-5-5"))
+        response: Final = await ep.count_tokens(
+            Response(), _count_request({**_COUNT_BODY, "model": "claude-unlisted"}), UserAPIKeyAuth()
+        )
+
+    assert response["litellm_count_source"] == "local_estimate"
+    assert not messages_route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("count_proxy")
+async def test_count_tokens_answers_a_failed_billed_request_as_its_error_without_falling_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-count",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-test"},
+                "model_info": dict(_OPTED_IN),
+            },
+            {
+                "model_name": "claude-backup",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-test"},
+            },
+        ],
+        fallbacks=[{"claude-count": ["claude-backup"]}],
+        num_retries=0,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        model: Final = json.loads(request.content)["model"]
+        if model == "claude-haiku-5-5":
+            return _billed_reply(model)
+        return httpx.Response(
+            429, json={"type": "error", "error": {"type": "rate_limit_error", "message": "Number of requests is high"}}
+        )
+
+    with respx.mock:
+        messages_route: Final = respx.post(_ANTHROPIC_MESSAGES_URL).mock(side_effect=reply)
+        response: Final = await ep.count_tokens(Response(), _count_request(_COUNT_BODY), UserAPIKeyAuth())
+
+    assert isinstance(response, Response)
+    assert response.status_code == 429
+    body: Final = json.loads(response.body)
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "rate_limit_error"
+    assert [json.loads(call.request.content)["model"] for call in messages_route.calls] == ["claude-sonnet-5-5"]
 
 
 class TestEventLoggingBatchEndpoint:
