@@ -45,6 +45,7 @@ export const toSSOFormValues = (values: SSOSettingsValues): SSOSettingsFormValue
     generic_token_endpoint: values.generic_token_endpoint ?? "",
     generic_userinfo_endpoint: values.generic_userinfo_endpoint ?? "",
     generic_scope: values.generic_scope ?? undefined,
+    generic_authorization_params: values.generic_authorization_params ?? undefined,
     saml_idp_metadata_url: values.saml_idp_metadata_url ?? undefined,
     saml_idp_metadata_xml: values.saml_idp_metadata_xml ?? undefined,
     saml_sp_entity_id: values.saml_sp_entity_id ?? undefined,
