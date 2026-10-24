@@ -12030,13 +12030,13 @@ class TestResponseCostFromLoggingObjForCacheHits:
 
 
 def test_maybe_get_model_id_reads_the_chat_metadata_the_router_updated_in_place():
-    processing_obj = ProxyBaseLLMRequestProcessing(data={"metadata": {"model_info": {"id": "declared-text"}}})
+    processing_obj: Final = ProxyBaseLLMRequestProcessing(data={"metadata": {"model_info": {"id": "declared-text"}}})
 
     assert processing_obj.maybe_get_model_id(None) == "declared-text"
 
 
 def test_maybe_get_model_id_prefers_litellm_metadata_over_caller_metadata_without_a_deployment():
-    processing_obj = ProxyBaseLLMRequestProcessing(
+    processing_obj: Final = ProxyBaseLLMRequestProcessing(
         data={
             "metadata": {"trace_id": "t-1"},
             "litellm_metadata": {"model_info": {"id": "vision"}},
