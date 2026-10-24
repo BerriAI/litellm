@@ -122,8 +122,15 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         returned_response: Final = ModelResponse(**response_json)
         set_provider_response_headers_in_hidden_params(returned_response, response.headers)
 
+        if hasattr(model_response, "_hidden_params") and model_response._hidden_params:
+            for k, v in model_response._hidden_params.items():
+                if k not in returned_response._hidden_params:
+                    returned_response._hidden_params[k] = v
+
         if custom_llm_provider is not None:
-            returned_response.model = custom_llm_provider + "/" + (returned_response.model or "")
+            returned_response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            if returned_response.model and not returned_response.model.startswith(f"{custom_llm_provider}/"):
+                returned_response.model = custom_llm_provider + "/" + returned_response.model
 
         if base_model is not None:
             returned_response.hidden_params["model"] = base_model
@@ -143,6 +150,15 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
+        resolved_custom_llm_provider = (
+            litellm_params.get("custom_llm_provider")
+            if isinstance(litellm_params, dict)
+            else None
+        ) or (
+            getattr(model_response, "_hidden_params", {}).get("custom_llm_provider")
+            if hasattr(model_response, "_hidden_params") and isinstance(getattr(model_response, "_hidden_params"), dict)
+            else None
+        )
         return OpenAILikeChatConfig._transform_response(
             model=model,
             response=raw_response,
@@ -156,7 +172,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             print_verbose=None,
             encoding=None,
             json_mode=json_mode,
-            custom_llm_provider=None,
+            custom_llm_provider=resolved_custom_llm_provider,
             base_model=None,
         )
 
