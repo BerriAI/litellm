@@ -616,7 +616,7 @@ from litellm.proxy.db.request_error_tracking import (
     flush_request_errors,
     request_error_accumulator,
 )
-from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
+from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
     ui_discovery_endpoints_router,
@@ -3168,6 +3168,7 @@ async def get_current_spend(
     window_duration: str | None = None,
     window_start: datetime | None = None,
     fallback_authoritative: bool = False,
+    fallback_loaded_spend: float | None = None,
 ) -> float:
     """
     Read current spend from the cross-pod spend counter.
@@ -3197,6 +3198,11 @@ async def get_current_spend(
     skipped for healthy primary counters (counter at or above recorded spend)
     and cached in-process for a few seconds, so a persistently stale counter
     drives at most one read per counter per window rather than one per request.
+
+    ``fallback_loaded_spend`` is the DB spend ``fallback_spend`` was loaded
+    from before this worker added its own charges to it. While the row is still
+    at or above that value, ``fallback_spend`` floors the read, so charges the
+    batch writer has not flushed yet are not lost with a wiped counter.
     """
     current, verified = await _read_spend_counter_estimate(counter_key=counter_key, fallback_spend=fallback_spend)
     if fallback_authoritative:
@@ -3224,6 +3230,9 @@ async def get_current_spend(
             verified = True
             if authoritative > current:
                 await _repair_stale_spend_counter(counter_key=counter_key, db_spend=authoritative)
+            if fallback_loaded_spend is not None and fallback_loaded_spend <= authoritative:
+                return max(current, authoritative, fallback_spend)
+            if authoritative > current:
                 return authoritative
         elif fallback_spend > current:
             # nothing to read (tag counters, an end user without a row or a DB client, a
@@ -3292,7 +3301,7 @@ async def reseed_spend_counter_from_db(counter_key: str) -> bool:
     the read-time floor (_authoritative_floor_spend) converges to the true total
     as the buffer flushes. The point is to restore enforcement to a real floor
     rather than leave the counter deleted and unenforced (the prior fail-open).
-    Counters with no DB row (window/end-user/tag) are left untouched rather than
+    Counters with no DB row (window/tag) are left untouched rather than
     deleted, so enforcement keeps reading whatever value they hold.
     """
     db_spend: Final = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
@@ -3309,8 +3318,6 @@ async def _floor_spend_from_db(
     window_duration: str | None,
     window_start: datetime | None,
 ) -> float | None:
-    if counter_key.startswith(END_USER_COUNTER_PREFIX):
-        return await SpendCounterReseed.end_user_from_db(prisma_client=prisma_client, counter_key=counter_key)
     entity_spend: Final = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
     if entity_spend is not None:
         return entity_spend
