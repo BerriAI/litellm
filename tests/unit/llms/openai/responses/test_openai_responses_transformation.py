@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Callable, Mapping
 from types import SimpleNamespace
 from typing import Final, cast
@@ -2386,6 +2387,57 @@ class TestResponsesSurfaceSharesTheEffortRule:
             drop_params=True,
         )
         assert mapped["reasoning"] == {"summary": "auto"}
+
+    def test_dropping_a_refused_effort_logs_one_warning_naming_the_level_and_the_fix(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        refused: Final = next(
+            level
+            for level in ("none", "minimal", "low")
+            if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": refused}},
+                model="gpt-6.1-sol",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in mapped
+        drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+        assert len(drop_warnings) == 1
+        assert all(
+            fragment in drop_warnings[0]
+            for fragment in (repr(refused), "gpt-6.1-sol", "model_info.reasoning_effort_levels")
+        )
+
+    def test_dropping_reasoning_for_a_model_without_supports_reasoning_logs_one_warning(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium"}},
+                model="gpt-4o",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in mapped
+        drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+        assert len(drop_warnings) == 1
+        assert all(fragment in drop_warnings[0] for fragment in ("'medium'", "gpt-4o", "supports_reasoning"))
+
+    def test_a_forwarded_effort_logs_no_drop_warning(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium"}},
+                model="gpt-6.1-sol",
+                drop_params=True,
+            )
+
+        assert mapped["reasoning"] == {"effort": "medium"}
+        assert not [record for record in caplog.records if "Dropping" in record.getMessage()]
 
     @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
     def test_gpt5_3_codex_forwards_exactly_the_effort_levels_its_map_row_allows(self, local_model_cost_map, level):

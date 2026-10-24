@@ -426,6 +426,27 @@ def _log_remap(
     logged_deployment_id: Final = _single_line(deployment_id)
     logged_model_group: Final = _single_line(model_group)
     logged_deployment_model: Final = _single_line(deployment_model)
+    extra: Final = MappingProxyType(
+        {
+            "reasoning_effort_deployment_id": logged_deployment_id,
+            "reasoning_effort_model_group": logged_model_group,
+            "reasoning_effort_deployment_model": logged_deployment_model,
+            "reasoning_effort_requested": logged_requested_level,
+            "reasoning_effort_sent": logged_sent_level,
+            "reasoning_effort_rounding": rounding,
+        }
+    )
+    if sent_level is None and requested_level != _DEFAULT_EFFORT:
+        verbose_logger.warning(
+            "Dropping reasoning level %s (drop_params=True) for deployment %s, model group %s, model %s because its "
+            "model_info.reasoning_effort_levels does not list that level. List every level the deployment supports.",
+            logged_requested_level,
+            logged_deployment_id,
+            logged_model_group,
+            logged_deployment_model,
+            extra=extra,
+        )
+        return
     verbose_logger.info(
         "reasoning_effort %s sent as %s (rounding %s) to deployment %s, model group %s, model %s",
         logged_requested_level,
@@ -434,14 +455,7 @@ def _log_remap(
         logged_deployment_id,
         logged_model_group,
         logged_deployment_model,
-        extra={
-            "reasoning_effort_deployment_id": logged_deployment_id,
-            "reasoning_effort_model_group": logged_model_group,
-            "reasoning_effort_deployment_model": logged_deployment_model,
-            "reasoning_effort_requested": logged_requested_level,
-            "reasoning_effort_sent": logged_sent_level,
-            "reasoning_effort_rounding": rounding,
-        },
+        extra=extra,
     )
 
 

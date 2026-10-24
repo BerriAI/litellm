@@ -1,6 +1,7 @@
 import base64
 import copy
 import json
+import logging
 import os
 import re
 from collections.abc import Iterator, Mapping
@@ -966,7 +967,9 @@ def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(mode
         "us.openai.gpt-6-astra",
     ],
 )
-def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(model, local_model_cost_map):
+def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(
+    model: str, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
     config = AmazonConverseConfig()
     assert litellm.utils.is_explicitly_disabled_factory(
         model=model, custom_llm_provider="bedrock_converse", key="supports_minimal_reasoning_effort"
@@ -980,15 +983,18 @@ def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(model, 
             drop_params=False,
         )
 
-    optional_params = config.map_openai_params(
-        non_default_params={"reasoning_effort": "minimal"},
-        optional_params={},
-        model=model,
-        drop_params=True,
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
     _, additional_request_params, _, _ = config._prepare_request_params(optional_params, model)
     assert "reasoning" not in additional_request_params
     assert "thinking" not in additional_request_params
+    dropped = [r.getMessage() for r in caplog.records if "Dropping reasoning_effort='minimal'" in r.getMessage()]
+    assert len(dropped) == 1 and model in dropped[0]
 
 
 @pytest.mark.parametrize(

@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_5_transformation import (
+    DROP_REFUSED_REASONING_EFFORT_WARNING,
     is_gpt_reasoning_series_name,
     unsupported_reasoning_effort_message,
 )
@@ -50,6 +51,9 @@ from ..common_utils import OpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
+DROP_UNSUPPORTED_REASONING_WARNING: Final = (
+    "Dropping reasoning=%r for model=%r (drop_params=True) because its model cost map entry lacks supports_reasoning."
+)
 _RAW_RESPONSE_JSON: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 if TYPE_CHECKING:
@@ -401,7 +405,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             and not self._supports_reasoning_param(model=model)
         ):
             if drop_params or litellm.drop_params:
-                params.pop("reasoning", None)
+                dropped_reasoning: Final = params.pop("reasoning", None)
+                verbose_logger.warning(DROP_UNSUPPORTED_REASONING_WARNING, dropped_reasoning, model)
             else:
                 raise litellm.UnsupportedParamsError(
                     message=(
@@ -427,6 +432,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                         message=unsupported_reasoning_effort_message("reasoning.effort", requested_effort, model),
                         status_code=400,
                     )
+                verbose_logger.warning(
+                    DROP_REFUSED_REASONING_EFFORT_WARNING, "reasoning.effort", requested_effort, model, lookup_name
+                )
                 remaining: Final = reasoning.copy()
                 remaining.pop("effort", None)
                 if remaining:

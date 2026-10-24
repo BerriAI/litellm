@@ -4972,6 +4972,14 @@ def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tupl
     return deployment_reasoning_effort_levels(model_info) or ()
 
 
+_DROPPED_REASONING_PARAM_FIXES: Final = MappingProxyType(
+    {
+        "reasoning_effort": "If the deployment is a reasoning model, set model_info.base_model to its underlying model.",
+        "thinking": "If the deployment is a reasoning model, send reasoning_effort instead.",
+    }
+)
+
+
 def get_optional_params(
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -5059,19 +5067,27 @@ def get_optional_params(
         verbose_logger.info("\nLiteLLM completion() model= %s; provider = %s", model, custom_llm_provider)
         verbose_logger.debug("\nLiteLLM: Params passed to completion() %s", passed_params)
         verbose_logger.debug("\nLiteLLM: Non-Default params passed to completion() %s", non_default_params)
-        unsupported_params: Final = {}
-        for k in non_default_params:
-            if k not in supported_params:
-                if k in PROVIDER_UNVALIDATED_PARAMS:
-                    continue
-                if k == "n" and n == 1:  # langchain sends n=1 as a default value
-                    continue  # skip this param
-                unsupported_params[k] = non_default_params[k]
+        unsupported_params: Final[Mapping[str, object]] = {
+            k: non_default_params[k]
+            for k in non_default_params
+            if k not in supported_params and k not in PROVIDER_UNVALIDATED_PARAMS and not (k == "n" and n == 1)
+        }
 
         if unsupported_params:
             if litellm.drop_params is True or (drop_params is not None and drop_params is True):
                 for k in unsupported_params:
                     non_default_params.pop(k, None)
+                for reasoning_param, fix in _DROPPED_REASONING_PARAM_FIXES.items():
+                    if reasoning_param in unsupported_params:
+                        verbose_logger.warning(
+                            "Dropping %s=%r for model=%r (drop_params=True) because %s does not support %s for it. %s",
+                            reasoning_param,
+                            unsupported_params[reasoning_param],
+                            model,
+                            custom_llm_provider,
+                            reasoning_param,
+                            fix,
+                        )
             else:
                 raise UnsupportedParamsError(
                     status_code=500,

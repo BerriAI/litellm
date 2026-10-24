@@ -1182,8 +1182,9 @@ class AmazonConverseConfig(BaseConfig):
                         ),
                         status_code=400,
                     )
-                verbose_logger.debug(
-                    "Dropping unsupported `reasoning_effort=%s` for Bedrock model=%s.",
+                verbose_logger.warning(
+                    "Dropping reasoning_effort=%r for Bedrock model=%r (drop_params=True) because the model map "
+                    "marks that level unsupported.",
                     value,
                     model,
                 )
