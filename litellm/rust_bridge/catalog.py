@@ -21,6 +21,7 @@ class Route(str, Enum):
     RESPONSES = "responses"
     TRANSCRIPTION = "transcription"
     OCR = "ocr"
+    TOKENIZE = "tokenize"
     TOKEN_COUNTER = "token_counter"
     TOKENIZER = "tokenizer"
 
@@ -206,6 +207,7 @@ RULES: Final[Rules] = (
     RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
     RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
+    RouteRule(Route.TOKENIZE, Rollout.RUST_REQUIRED),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, targets=frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES})),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=MESSAGES_PYTHON_FEATURES),
     RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),

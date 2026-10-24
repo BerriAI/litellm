@@ -32,6 +32,10 @@ from starlette.types import Receive, Scope, Send
 from typing_extensions import Never
 
 import litellm
+
+if TYPE_CHECKING:
+    from litellm.tokenize.routing import TokenizeAdmissionContext
+
 from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
@@ -190,6 +194,7 @@ ProxyRouteType: TypeAlias = Literal[
     "avector_store_file_update",
     "avector_store_file_delete",
     "aocr",
+    "atokenize",
     "asearch",
     "adecisions",
     "asystemone",
@@ -273,6 +278,8 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     Usage,
 )
+
+_TOKENIZE_ROUTE_DATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 # Datadog streaming spans are a no-op when ddtrace is not enabled, but the
 # ``with tracer.trace(...)`` context manager still allocates a NullSpan and
@@ -1981,9 +1988,15 @@ def _content_text(fields: Mapping[str, object]) -> str:
 
 
 class ProxyBaseLLMRequestProcessing:
-    def __init__(self, data: dict, served_model: str | None = None):
+    def __init__(
+        self,
+        data: dict,  # mutable-ok: existing request handlers mutate this compatibility payload
+        served_model: str | None = None,
+        tokenize_admission_context: "TokenizeAdmissionContext | None" = None,
+    ):
         self.data = data
         self.served_model = served_model
+        self.tokenize_admission_context = tokenize_admission_context
         self._tags_before_guardrails: frozenset[str] | None = None
         self.route_type: str | None = None
 
@@ -2216,6 +2229,7 @@ class ProxyBaseLLMRequestProcessing:
             "avector_store_file_update",
             "avector_store_file_delete",
             "aocr",
+            "atokenize",
             "asearch",
             "adecisions",
             "asystemone",
@@ -2927,7 +2941,14 @@ class ProxyBaseLLMRequestProcessing:
         ### ROUTE THE REQUEST ###
         # Do not change this - it should be a constant time fetch - ALWAYS
         llm_call: Final = await route_request(
-            data=self.data,
+            data=(
+                {
+                    **_TOKENIZE_ROUTE_DATA_ADAPTER.validate_python(self.data),
+                    "_tokenize_context": self.tokenize_admission_context,
+                }
+                if route_type == "atokenize" and self.tokenize_admission_context is not None
+                else self.data
+            ),
             route_type=route_type,
             llm_router=llm_router,
             user_model=user_model,
