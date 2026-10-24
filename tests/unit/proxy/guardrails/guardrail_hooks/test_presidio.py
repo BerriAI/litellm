@@ -1455,6 +1455,34 @@ async def test_get_session_iterator_thread_safety(presidio_guardrail):
     print("✓ Session iterator thread safety test passed")
 
 
+@pytest.mark.asyncio
+async def test_get_session_iterator_lock_is_not_held_while_request_uses_session():
+    """
+    The shared session lock must only protect session creation.
+
+    If it is held while callers use the session, every Presidio HTTP request in
+    a proxy process is serialized even though async_pre_call_hook fans out with
+    asyncio.gather.
+    """
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True)
+
+    entered = 0
+    both_entered = asyncio.Event()
+
+    async def use_session():
+        nonlocal entered
+        async with guardrail._get_session_iterator() as session:
+            assert session is guardrail._http_session
+            entered += 1
+            if entered == 2:
+                both_entered.set()
+            await asyncio.wait_for(both_entered.wait(), timeout=1.0)
+
+    await asyncio.gather(use_session(), use_session())
+
+    await guardrail._close_http_session()
+
+
 from litellm.types.utils import ModelResponseStream
 
 
