@@ -2056,11 +2056,9 @@ def test_calculate_cache_writing_cost():
         cache_creation_cost_by_ttl={"1hr": 6e-06, "12hr": 6e-06},
     )
 
-    # Expected calculation: 0 (for None 5m tokens) + (100 * 6e-06) = 0.0006
-    expected_cost_partial = (0.0) + (100 * 6e-06)
+    expected_cost_partial = (400 * 3e-06) + (100 * 6e-06)
 
     assert round(result_partial, 6) == round(expected_cost_partial, 6)
-    assert round(result_partial, 6) == 0.0006
 
     # Test case 4: Zero costs
     result_zero = calculate_cache_writing_cost(
@@ -2084,6 +2082,18 @@ def test_calculate_cache_writing_cost_bills_every_reported_lifetime(field: str) 
         cache_creation_cost_by_ttl={"1hr": 2.0, "12hr": 2.0},
     )
     assert cost == 20.0
+
+
+def test_calculate_cache_writing_cost_bills_writes_of_an_unknown_lifetime_at_the_base_rate() -> None:
+    cost = calculate_cache_writing_cost(
+        cache_creation_tokens=10,
+        cache_creation_token_details=CacheCreationTokenDetails(
+            ephemeral_30m_input_tokens=2, ephemeral_12h_input_tokens=3
+        ),
+        cache_creation_cost=1.0,
+        cache_creation_cost_by_ttl={"1hr": 4.0, "12hr": 4.0},
+    )
+    assert cost == 2 * 1.0 + 3 * 4.0 + 5 * 1.0
 
 
 @pytest.mark.parametrize(
