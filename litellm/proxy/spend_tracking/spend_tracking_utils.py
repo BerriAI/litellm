@@ -1210,7 +1210,7 @@ def _get_messages_for_spend_logs_payload(
     return "{}"
 
 
-_SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
+_SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields", "privaite_map"})
 _REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
 _TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_tool_use"})
 _TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
