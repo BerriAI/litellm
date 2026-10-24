@@ -2,12 +2,23 @@ import type { MCPEvent } from "../mcp_tools/types";
 import type { TokenUsage } from "../chat_ui/ResponseMetrics";
 export type { MCPEvent };
 
-export interface ChatImageAttachment {
+interface AttachmentData {
   id: string;
   name: string;
   url: string;
   mimeType?: string;
 }
+
+export interface ChatImageAttachment extends AttachmentData {
+  kind?: "image";
+}
+
+export interface ChatFileAttachment extends AttachmentData {
+  kind: "file";
+  mimeType: string;
+}
+
+export type ChatAttachment = ChatImageAttachment | ChatFileAttachment;
 
 export interface ChatImageGeneration {
   model: string;
@@ -18,7 +29,7 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "tool";
   content: string;
-  attachments?: ChatImageAttachment[];
+  attachments?: ChatAttachment[];
   generatedImages?: ChatImageAttachment[];
   imageGeneration?: ChatImageGeneration;
   reasoningContent?: string;

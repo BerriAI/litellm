@@ -247,4 +247,33 @@ describe("useChatHistory", () => {
     expect(second.result.current.conversations).toEqual([]);
     expect(deleteChatImages).toHaveBeenCalledWith("alice", [image.id]);
   });
+  it("should save, restore, and delete document bytes with the existing user-scoped media store", async () => {
+    const file = {
+      id: "file-1",
+      kind: "file" as const,
+      name: "brief.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      url: "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,ZmlsZQ==",
+    };
+    const first = renderHook(() => useChatHistory(null, "alice"));
+    let id!: string;
+    act(() => {
+      id = first.result.current.createConversation("file-model");
+    });
+    act(() => {
+      first.result.current.appendMessage(id, { role: "user", content: "Read this", attachments: [file] });
+    });
+    await waitFor(() => expect(persistChatImages).toHaveBeenCalledWith("alice", [file]));
+    await waitFor(() => expect(localStorage.getItem(aliceStorageKey)).toContain("brief.docx"));
+    expect(localStorage.getItem(aliceStorageKey)).not.toContain(file.url);
+    first.unmount();
+    vi.mocked(loadChatImages).mockResolvedValue(new Map([[file.id, file.url]]));
+    const restored = renderHook(() => useChatHistory(id, "alice"));
+    await waitFor(() => expect(restored.result.current.activeConversation?.messages[0].attachments).toEqual([file]));
+    act(() => {
+      restored.result.current.deleteConversation(id);
+    });
+    await waitFor(() => expect(deleteChatImages).toHaveBeenCalledWith("alice", [file.id]));
+    expect(JSON.parse(localStorage.getItem(aliceStorageKey)!)).toEqual([]);
+  });
 });

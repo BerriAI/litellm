@@ -56,7 +56,7 @@ function renderChat() {
 
 async function uploadImage(user: ReturnType<typeof userEvent.setup>, name = "diagram.png") {
   const bytes = Uint8Array.from(atob(pixel), (character) => character.charCodeAt(0));
-  await user.upload(screen.getByLabelText("Upload images"), new File([bytes], name, { type: "image/png" }));
+  await user.upload(screen.getByLabelText("Upload files"), new File([bytes], name, { type: "image/png" }));
   await screen.findByRole("img", { name });
 }
 
@@ -117,9 +117,63 @@ describe("chat image workflows", () => {
   it("should render the permitted models and image controls for a research team member", async () => {
     renderChat();
     expect(await screen.findByRole("button", { name: "research-chat" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Attach images" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Attach files" })).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "research-chat", exact: true }));
     expect(await screen.findByRole("button", { name: /^studio-image/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(recordChatQuery).not.toHaveBeenCalled();
+  });
+
+  it("should upload a document as a file part, preserve it on edit, and keep contents out of metrics", async () => {
+    const user = userEvent.setup();
+    renderChat();
+    await screen.findByRole("button", { name: "research-chat" });
+    await user.upload(
+      screen.getByLabelText("Upload files"),
+      new File(["private fixture"], "brief.docx", {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }),
+    );
+    expect(await screen.findByText("brief.docx")).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "brief.docx" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("I can see the uploaded image.");
+    const filePart = {
+      type: "input_file",
+      filename: "brief.docx",
+      file_data:
+        "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,cHJpdmF0ZSBmaXh0dXJl",
+    };
+    expect(requests[0].body).toMatchObject({ input: [{ role: "user", content: [filePart] }] });
+    expect(recordChatQuery).toHaveBeenCalledExactlyOnceWith("media-test-user");
+    await user.click(screen.getByRole("button", { name: "Edit message" }));
+    act(() =>
+      fireEvent.change(screen.getByRole("textbox", { name: "Edit message" }), {
+        target: { value: "Summarize the document" },
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save & Send" }));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1].body).toMatchObject({
+      input: [{ role: "user", content: [{ type: "input_text", text: "Summarize the document" }, filePart] }],
+    });
+    expect(requests[1].body).not.toHaveProperty("previous_response_id");
+  });
+
+  it("should enforce the shared file limit and remove a document before submission", async () => {
+    const user = userEvent.setup();
+    renderChat();
+    await screen.findByRole("button", { name: "research-chat" });
+    const files = Array.from(
+      { length: 5 },
+      (_, index) => new File(["text"], `note-${index}.txt`, { type: "text/plain" }),
+    );
+    await user.upload(screen.getByLabelText("Upload files"), files);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Attach up to 4 files per message.");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    await user.upload(screen.getByLabelText("Upload files"), files[0]);
+    await user.click(await screen.findByRole("button", { name: "Remove note-0.txt" }));
+    expect(screen.queryByText("note-0.txt")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(recordChatQuery).not.toHaveBeenCalled();
   });

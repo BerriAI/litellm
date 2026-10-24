@@ -18,7 +18,8 @@ import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
 import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
-import { ChatImageAttachment, ChatMessage } from "./types";
+import { ChatAttachment, ChatImageAttachment, ChatMessage } from "./types";
+import ChatFileChip from "./ChatFileChip";
 import { isChatImageUrl } from "./imageHelpers";
 
 const REDACTED_KEY_PATTERNS = /token|key|secret|password|auth/i;
@@ -127,13 +128,17 @@ function ChatImage({ image, allowImages }: { image: ChatImageAttachment; allowIm
   );
 }
 
-function ChatImages({ images, allowImages }: { images?: ChatImageAttachment[]; allowImages: boolean }) {
+function ChatImages({ images, allowImages }: { images?: ChatAttachment[]; allowImages: boolean }) {
   if (!images?.length) return null;
   return (
     <div className={`grid gap-3 ${images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
-      {images.map((image) => (
-        <ChatImage key={image.id} image={image} allowImages={allowImages} />
-      ))}
+      {images.map((image) =>
+        image.kind === "file" ? (
+          <ChatFileChip key={image.id} file={image} />
+        ) : (
+          <ChatImage key={image.id} image={image} allowImages={allowImages} />
+        ),
+      )}
     </div>
   );
 }

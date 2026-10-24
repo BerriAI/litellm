@@ -1,4 +1,4 @@
-import type { ChatImageAttachment, Conversation } from "./types";
+import type { ChatAttachment, Conversation } from "./types";
 
 const DATABASE_NAME = "litellm_chat_media_v1";
 const STORE_NAME = "images";
@@ -21,8 +21,8 @@ function openDatabase(): Promise<IDBDatabase> {
         };
         resolve(database);
       };
-      request.onerror = () => reject(request.error ?? new Error("Image storage is unavailable."));
-      request.onblocked = () => reject(new Error("Image storage is blocked by another browser tab."));
+      request.onerror = () => reject(request.error ?? new Error("Attachment storage is unavailable."));
+      request.onblocked = () => reject(new Error("Attachment storage is blocked by another browser tab."));
     }).catch((error: unknown) => {
       databasePromise = undefined;
       throw error;
@@ -31,13 +31,13 @@ function openDatabase(): Promise<IDBDatabase> {
   return databasePromise;
 }
 
-export function getConversationImages(conversations: Conversation[]): ChatImageAttachment[] {
+export function getConversationImages(conversations: Conversation[]): ChatAttachment[] {
   return conversations.flatMap((conversation) =>
     conversation.messages.flatMap((message) => [...(message.attachments ?? []), ...(message.generatedImages ?? [])]),
   );
 }
 
-export function persistChatImages(userId: string, images: ChatImageAttachment[]): Promise<void> {
+export function persistChatImages(userId: string, images: ChatAttachment[]): Promise<void> {
   return Promise.all(
     images
       .filter((image) => image.url.startsWith("data:"))
@@ -52,8 +52,9 @@ export function persistChatImages(userId: string, images: ChatImageAttachment[])
                   const transaction = database.transaction(STORE_NAME, "readwrite");
                   transaction.objectStore(STORE_NAME).put({ userId, id: image.id, url: image.url });
                   transaction.oncomplete = () => resolve();
-                  transaction.onerror = () => reject(transaction.error ?? new Error("Could not save the image."));
-                  transaction.onabort = () => reject(transaction.error ?? new Error("Saving the image was canceled."));
+                  transaction.onerror = () => reject(transaction.error ?? new Error("Could not save the attachment."));
+                  transaction.onabort = () =>
+                    reject(transaction.error ?? new Error("Saving the attachment was canceled."));
                 }),
             )
             .catch((error: unknown) => {
@@ -80,8 +81,8 @@ export async function loadChatImages(userId: string, ids: string[]): Promise<Map
       };
     }
     transaction.oncomplete = () => resolve(loaded);
-    transaction.onerror = () => reject(transaction.error ?? new Error("Could not restore saved images."));
-    transaction.onabort = () => reject(transaction.error ?? new Error("Restoring saved images was canceled."));
+    transaction.onerror = () => reject(transaction.error ?? new Error("Could not restore saved attachments."));
+    transaction.onabort = () => reject(transaction.error ?? new Error("Restoring saved attachments was canceled."));
   });
 }
 
@@ -93,13 +94,13 @@ export async function deleteChatImages(userId: string, ids: string[]): Promise<v
     const transaction = database.transaction(STORE_NAME, "readwrite");
     for (const id of ids) transaction.objectStore(STORE_NAME).delete([userId, id]);
     transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error ?? new Error("Could not delete saved images."));
-    transaction.onabort = () => reject(transaction.error ?? new Error("Deleting saved images was canceled."));
+    transaction.onerror = () => reject(transaction.error ?? new Error("Could not delete saved attachments."));
+    transaction.onabort = () => reject(transaction.error ?? new Error("Deleting saved attachments was canceled."));
   });
 }
 
 export function withoutImageData(conversations: Conversation[]): Conversation[] {
-  const stripData = (images: ChatImageAttachment[] | undefined) =>
+  const stripData = <T extends ChatAttachment>(images: T[] | undefined) =>
     images?.map((image) => (image.url.startsWith("data:") ? { ...image, url: "" } : image));
   return conversations.map((conversation) => ({
     ...conversation,
@@ -112,7 +113,7 @@ export function withoutImageData(conversations: Conversation[]): Conversation[] 
 }
 
 export function withRestoredImages(conversations: Conversation[], images: Map<string, string>): Conversation[] {
-  const restore = (attachments: ChatImageAttachment[]) =>
+  const restore = <T extends ChatAttachment>(attachments: T[]) =>
     attachments.map((image) => (!image.url && images.has(image.id) ? { ...image, url: images.get(image.id)! } : image));
   return conversations.map((conversation) => ({
     ...conversation,

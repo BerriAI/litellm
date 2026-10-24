@@ -157,7 +157,7 @@ describe("/ui/chat storage banner", () => {
   it("keeps the dismiss control amber on hover instead of the ghost variant's foreground", async () => {
     renderWithProviders(<ChatConversationPage />);
 
-    const banner = await screen.findByText("Some chat history or images could not be saved or restored.");
+    const banner = await screen.findByText("Some chat history or attachments could not be saved or restored.");
     const dismiss = within(banner.parentElement!).getByRole("button");
     expect(dismiss).toHaveClass("hover:text-warning/80");
     expect(dismiss).not.toHaveClass("hover:text-foreground");
