@@ -3505,18 +3505,23 @@ def _builtin_cost_map() -> dict[str, Mapping[str, object]]:
 
 
 def _replace_cost_map_entry(
-    cost_map: dict[str, Mapping[str, object]], key: str, entry: Mapping[str, object], registration: Mapping[str, object]
+    cost_map: dict[str, Mapping[str, object]],
+    key: str,
+    entry: Mapping[str, object],
+    registration: Mapping[str, object],
+    aliases: tuple[str, ...] = (),
 ) -> None:
     current: Final = cost_map.get(key)
     merged: Final = {**(current or {}), **entry}
-    names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
+    previous_names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
+    names: Final = tuple(dict.fromkeys((*previous_names, *aliases)))
     previous_fields: Final[frozenset[str]] = (
         current.registered_fields if isinstance(current, AliasedCostEntry) else frozenset()
     )
     registered_fields: Final = previous_fields | frozenset(
         name for name, value in registration.items() if value is not None
     )
-    sharing_names: Final = tuple(name for name in names if cost_map.get(name) is current)
+    sharing_names: Final = tuple(name for name in names if name in aliases or cost_map.get(name) is current)
     cost_map.update(dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, names, registered_fields)))
 
 
@@ -3749,15 +3754,26 @@ def _skips_builtin_registration_lookup(key: str, provider: object) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
-class _RegistrationWrite:
+class _RegistrationBase:
     key: str
     entry: Mapping[str, object]
 
 
+@dataclass(frozen=True, slots=True)
+class _RegistrationWrite:
+    keys: tuple[str, ...]
+    entry: Mapping[str, object]
+
+
+def _write_keys(caller_key: str, resolved_key: str) -> tuple[str, ...]:
+    if resolved_key == caller_key:
+        return (caller_key,)
+    provider, _, bare = caller_key.partition("/")
+    return (caller_key, resolved_key) if bare == resolved_key and provider in LlmProvidersSet else (caller_key,)
+
+
 def model_cost_registration_row(key: str, provider: object) -> Mapping[str, object]:
-    """The row a ``register_model`` write of a ``key`` entry with this ``litellm_provider`` merges onto: the
-    ``litellm.model_cost`` row it resolves to (``openai/o3-pro`` lands on ``o3-pro``), else the row it seeds ``key``
-    with from the built-in entry it falls back to (an OpenAI fine-tune takes its base model's row)."""
+    """The inheritance base for a registration, independent of which keys it writes."""
     base: Final = _registration_base(
         key, {"litellm_provider": provider}, custom_llm_provider=None, warning_display_name=None
     )
@@ -3766,15 +3782,15 @@ def model_cost_registration_row(key: str, provider: object) -> Mapping[str, obje
 
 def _registration_base(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
-) -> _RegistrationWrite:
+) -> _RegistrationBase:
     provider: Final = str(value.get("litellm_provider") or "")
     if _skips_builtin_registration_lookup(key, provider):
-        return _RegistrationWrite(key=key, entry=dict(_builtin_cost_map().get(key, {})))
+        return _RegistrationBase(key=key, entry=dict(_builtin_cost_map().get(key, {})))
     builtin_model_info: Final = _get_builtin_model_info_for_registration(
         model=key, custom_llm_provider=custom_llm_provider
     )
     if not isinstance(builtin_model_info, ModelInfoLookupMiss):
-        return _RegistrationWrite(
+        return _RegistrationBase(
             key=builtin_model_info["key"],
             entry=dict(_without_synthesized_costs(builtin_model_info, key=key, value=value)),
         )
@@ -3789,7 +3805,7 @@ def _registration_base(
             "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost and cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
             warning_display_name or key,
         )
-    return _RegistrationWrite(key=key, entry=dict(fallback.entry))
+    return _RegistrationBase(key=key, entry=dict(fallback.entry))
 
 
 def _base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
@@ -3816,7 +3832,7 @@ def _registration_write(
         if name != "litellm_provider" or field_value is not None
     }
     return _RegistrationWrite(
-        key=base.key,
+        keys=_write_keys(key, base.key),
         entry={**update_dictionary(existing_model, value), **dict.fromkeys(_base_fields_replaced_by(value))},
     )
 
@@ -3830,7 +3846,10 @@ def _registration_attempt(
 ) -> _RegistrationWrite | None:
     source: Final = _builtin_cost_map()
     write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
-    _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry, value)
+    target: Final = _builtin_cost_map() if final_attempt else source
+    aliases: Final = write.keys if len(write.keys) > 1 else ()
+    for write_key in reversed(write.keys):
+        _replace_cost_map_entry(target, write_key, write.entry, value, aliases)
     return write if final_attempt or litellm.model_cost is source else None
 
 
@@ -3997,7 +4016,7 @@ def register_model(
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()
 
-        verbose_logger.debug("added/updated model=%s in litellm.model_cost: %s", write.key, write.key)
+        verbose_logger.debug("added/updated models=%s in litellm.model_cost", write.keys)
         if add_to_provider_model_sets and value.get("litellm_provider") == "openrouter":
             litellm.openrouter_models.add(str(key).split("/", 1)[-1])
     if add_to_provider_model_sets:

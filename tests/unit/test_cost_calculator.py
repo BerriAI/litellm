@@ -4842,7 +4842,6 @@ def test_completion_cost_legacy_mantle_route_prices_after_router_registration(lo
             }
         ]
     )
-    assert "bedrock/mantle/anthropic.claude-sonnet-5" not in litellm.model_cost
 
     response = litellm.ModelResponse(
         id="msg_x",
@@ -4851,6 +4850,9 @@ def test_completion_cost_legacy_mantle_route_prices_after_router_registration(lo
         usage={"prompt_tokens": 16, "completion_tokens": 4, "total_tokens": 20},
     )
     row = litellm.model_cost["anthropic.claude-sonnet-5"]
+    registered_row: Final = litellm.model_cost["bedrock/mantle/anthropic.claude-sonnet-5"]
+    assert registered_row["input_cost_per_token"] == row["input_cost_per_token"]
+    assert registered_row["output_cost_per_token"] == row["output_cost_per_token"]
     expected = 16 * row["input_cost_per_token"] + 4 * row["output_cost_per_token"]
     assert expected > 0
 
