@@ -10462,6 +10462,10 @@ async def async_data_generator(
                 stream_started = True
                 yield ": ping\n\n"
                 continue
+            # Hand the event loop back once per chunk. A buffered backlog is
+            # otherwise drained back-to-back and starves every other task on
+            # the worker for as long as the backlog lasts
+            await asyncio.sleep(0)
             chunk = item
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
