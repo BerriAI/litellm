@@ -120,6 +120,7 @@ class CooldownCache:
             )
 
             # Set the cache with a TTL equal to the cooldown time
+            self._drop_in_memory_entry_if_extending(cooldown_key, _cooldown_time)
             with service_target(ROUTER_COOLDOWNS_TARGET):
                 self.cooldown_store.set_cache(
                     value=cooldown_data,
@@ -129,6 +130,14 @@ class CooldownCache:
         except Exception as e:
             verbose_logger.error("CooldownCache::add_deployment_to_cooldown - Exception occurred - %s", e)
             raise e
+
+    def _drop_in_memory_entry_if_extending(self, cooldown_key: str, new_cooldown_time: float) -> None:
+        """InMemoryCache keeps a live key's expiry, so a longer cooldown lands only if the entry is deleted first."""
+        current_expiry: Final = self.in_memory_cache.ttl_dict.get(cooldown_key)
+        if current_expiry is None:
+            return
+        if float(current_expiry) < time.time() + float(new_cooldown_time):
+            self.in_memory_cache.delete_cache(cooldown_key)
 
     @staticmethod
     @functools.lru_cache(maxsize=1024)
