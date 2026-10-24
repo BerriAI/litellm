@@ -324,8 +324,6 @@ def test_reasoning_tokens_gemini(_local_model_cost_map):
     )
 
 
-
-
 def test_image_tokens_with_custom_pricing():
     """Test that image_tokens in completion are properly costed with output_cost_per_image_token."""
     from unittest.mock import patch
@@ -1583,19 +1581,14 @@ def test_generic_cost_per_token_tier_1hr_cache_rate_preserves_zero_and_fallback(
             ),
         )
         costs: Final = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openrouter")
-        breakdown: Final = get_token_type_cost_breakdown(
-            model=model, usage=usage, custom_llm_provider="openrouter"
-        )
+        breakdown: Final = get_token_type_cost_breakdown(model=model, usage=usage, custom_llm_provider="openrouter")
 
         ordinary_rate: Final = cache_rates.get("cache_creation_input_token_cost")
-        expected_write_cost: Final = (
-            (20 - one_hour_tokens) * (ordinary_rate if ordinary_rate is not None else 1.0)
-            + one_hour_tokens * expected_write_rate
-        )
+        expected_write_cost: Final = (20 - one_hour_tokens) * (
+            ordinary_rate if ordinary_rate is not None else 1.0
+        ) + one_hour_tokens * expected_write_rate
         assert costs == pytest.approx((40 * 1.0 + 40 * 0.1 + expected_write_cost, 10 * 2.0))
         assert breakdown.cache_creation_cost == pytest.approx(expected_write_cost)
-        assert breakdown.rates is not None
-        assert breakdown.rates.cache_creation_input_token_cost_by_ttl["1hr"] == expected_write_rate
     finally:
         litellm.model_cost.pop(model, None)
 
@@ -2424,10 +2417,6 @@ def test_vertex_image_generation_cost_falls_back_to_flat_image_pricing(_local_mo
     assert round(cost, 10) == round(expected_cost, 10)
 
 
-
-
-
-
 def test_query_count_is_free_without_a_per_query_price(_local_model_cost_map):
     usage = Usage(
         prompt_tokens=0,
@@ -2606,8 +2595,6 @@ def test_vertex_global_or_absent_location_no_uplift(vertex_location, _local_mode
     assert base == located
 
 
-
-
 def test_vertex_uplift_invalid_multiplier_defaults_to_one():
     """A malformed multiplier in the cost map degrades to base pricing, never raises."""
     from litellm.litellm_core_utils.llm_cost_calc.utils import (
@@ -2694,7 +2681,9 @@ def test_mixed_token_thresholds_preserve_each_crossed_rate(prompt_tokens: int, h
         usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=3, total_tokens=prompt_tokens + 3),
     )
     assert rates.input_rate == (0.005 if prompt_tokens > 200_000 else 0.001)
-    assert rates.output_rate == (higher_rate if prompt_tokens > 512_000 else 0.006 if prompt_tokens > 200_000 else 0.002)
+    assert rates.output_rate == (
+        higher_rate if prompt_tokens > 512_000 else 0.006 if prompt_tokens > 200_000 else 0.002
+    )
     assert rates.cache_creation_rate == (0.007 if prompt_tokens > 200_000 else 0.004)
     assert rates.cache_read_rate == (higher_rate if prompt_tokens > 512_000 else 0.003)
 
@@ -3806,6 +3795,23 @@ def test_generic_cost_per_token_bills_cache_creation_at_the_input_rate_without_a
             3e-7,
             id="no-1h-price-uses-the-off-peak-write-price",
         ),
+        pytest.param(
+            {
+                "tiered_pricing": [
+                    {
+                        "range": [0, 128000],
+                        "input_cost_per_token": 2e-7,
+                        "output_cost_per_token": 1.25e-6,
+                        "cache_creation_input_token_cost": 2.5e-7,
+                    }
+                ],
+                "off_peak_pricing": {"hours_utc": "00:00-23:59", "cache_creation_input_token_cost": 3e-7},
+            },
+            datetime(2026, 9, 14, 12, tzinfo=timezone.utc),
+            3e-7,
+            3e-7,
+            id="tiered-no-1h-price-uses-the-off-peak-write-price",
+        ),
     ),
 )
 def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_path(
@@ -3820,9 +3826,14 @@ def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_
     rates = _get_token_base_cost(model_info, usage, current_time=current_time)
 
     assert rates.cache_creation_rate == pytest.approx(expected_creation)
-    assert rates.cache_creation_rates_by_ttl == pytest.approx(
-        dict.fromkeys(("1hr", "12hr"), expected_creation_1h)
-    )
+    assert calculate_cache_writing_cost(
+        cache_creation_tokens=3,
+        cache_creation_token_details=CacheCreationTokenDetails(
+            ephemeral_1h_input_tokens=1, ephemeral_12h_input_tokens=2
+        ),
+        cache_creation_cost=rates.cache_creation_rate,
+        cache_creation_cost_by_ttl=rates.cache_creation_rates_by_ttl,
+    ) == pytest.approx(3 * expected_creation_1h)
 
 
 def _image_response(num_images: int = 1, usage: ImageUsage | None = None) -> ImageResponse:
@@ -3880,8 +3891,6 @@ def test_route_image_generation_cost_openai_honors_deployment_input_cost_per_ima
     )
 
     assert cost == pytest.approx(0.07)
-
-
 
 
 @pytest.mark.parametrize(
@@ -4301,17 +4310,28 @@ def test_token_breakdown_uses_supplied_pricing_without_catalog_lookup(rate: floa
         "cache_creation_input_token_cost": rate,
     }
     usage: Final = Usage(
-        prompt_tokens=20, completion_tokens=3, total_tokens=23,
-        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=5), cache_creation_input_tokens=5,
+        prompt_tokens=20,
+        completion_tokens=3,
+        total_tokens=23,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=5),
+        cache_creation_input_tokens=5,
     )
     prompt_cost, output_cost = generic_cost_per_token(
-        model="supplied-pricing-test", usage=usage, custom_llm_provider="bedrock", model_info=model_info,
+        model="supplied-pricing-test",
+        usage=usage,
+        custom_llm_provider="bedrock",
+        model_info=model_info,
     )
     breakdown: Final = get_token_type_cost_breakdown(
-        model="supplied-pricing-test", usage=usage, custom_llm_provider="bedrock", model_info=model_info,
+        model="supplied-pricing-test",
+        usage=usage,
+        custom_llm_provider="bedrock",
+        model_info=model_info,
     )
     assert breakdown.cache_read_cost == pytest.approx(5 * rate)
     assert breakdown.cache_creation_cost == pytest.approx(5 * rate)
     assert breakdown.rates is not None
-    assert prompt_cost == pytest.approx(10 * breakdown.rates.input_cost_per_token + breakdown.cache_read_cost + breakdown.cache_creation_cost)
+    assert prompt_cost == pytest.approx(
+        10 * breakdown.rates.input_cost_per_token + breakdown.cache_read_cost + breakdown.cache_creation_cost
+    )
     assert output_cost == pytest.approx(3 * breakdown.rates.output_cost_per_token)

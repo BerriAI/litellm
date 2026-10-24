@@ -413,10 +413,7 @@ def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> "tuple[TokenR
         reasoning_rate=None,
     )
     return rates, MappingProxyType(
-        {
-            ttl: tier_rate(tier, key) if tier.get(key) is not None else cache_creation_rate
-            for ttl, key in _CACHE_WRITE_RATE_KEYS.items()
-        }
+        {ttl: tier_rate(tier, key) for ttl, key in _CACHE_WRITE_RATE_KEYS.items() if tier.get(key) is not None}
     )
 
 
@@ -694,17 +691,22 @@ def _apply_off_peak_to_base_costs(
         output_rate=rates.output_rate,
         cache_read_rate=rates.cache_read_rate,
         cache_creation_rate=rates.cache_creation_rate,
-        cache_creation_rates_by_ttl=cache_creation_rates_by_ttl,
+        cache_creation_rates_by_ttl=_default_to_base_cache_write_rate(
+            cache_creation_rates_by_ttl, rates.cache_creation_rate
+        ),
+    )
+
+
+def _default_to_base_cache_write_rate(
+    declared_rates_by_ttl: Mapping[str, float], cache_creation_rate: float
+) -> Mapping[str, float]:
+    return MappingProxyType(
+        {ttl: declared_rates_by_ttl.get(ttl, cache_creation_rate) for ttl in _CACHE_WRITE_RATE_KEYS}
     )
 
 
 def _first_present_key(model_info: ModelInfo, preferred_key: str, fallback_key: str) -> str:
     return preferred_key if model_info.get(preferred_key) is not None else fallback_key
-
-
-def _rate_or_default(model_info: ModelInfo, key: str, default: float) -> float:
-    rate: Final = get_cost_per_unit(model_info, key, default_value=default)
-    return default if rate is None else rate
 
 
 def _get_token_base_cost(
@@ -881,11 +883,15 @@ def _get_token_base_cost(
         output_rate=base_rates.output_rate,
         cache_read_rate=base_rates.cache_read_rate,
         cache_creation_rate=base_rates.cache_creation_rate,
-        cache_creation_rates_by_ttl=MappingProxyType(
-            {
-                ttl: _rate_or_default(model_info, key, base_rates.cache_creation_rate)
-                for ttl, key in cache_creation_keys_by_ttl.items()
-            }
+        cache_creation_rates_by_ttl=_default_to_base_cache_write_rate(
+            MappingProxyType(
+                {
+                    ttl: rate
+                    for ttl, key in cache_creation_keys_by_ttl.items()
+                    if (rate := get_cost_per_unit(model_info, key, default_value=None)) is not None
+                }
+            ),
+            base_rates.cache_creation_rate,
         ),
     )
 
