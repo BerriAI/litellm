@@ -1,7 +1,10 @@
+from typing import Final
+
 import pytest
 
+import litellm
 from litellm.llms.openai_like import dynamic_config
-from litellm.llms.openai_like.dynamic_config import create_responses_config_class
+from litellm.llms.openai_like.dynamic_config import create_config_class, create_responses_config_class
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -139,3 +142,33 @@ class TestForceStoreFalse:
             headers={},
         )
         assert params["store"] is True
+
+
+class TestToolParamsFollowTheModelMap:
+    _TOOLS: Final = [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}]
+
+    @pytest.mark.parametrize(
+        ("model_map_entry", "tools_forwarded"),
+        [
+            (None, True),
+            ({"litellm_provider": "tools_map", "mode": "chat", "supports_function_calling": True}, True),
+            ({"litellm_provider": "tools_map", "mode": "chat", "supports_function_calling": False}, False),
+        ],
+        ids=["unmapped", "mapped_as_supported", "mapped_as_unsupported"],
+    )
+    def test_tools_are_dropped_only_when_the_model_map_says_unsupported(
+        self, model_map_entry: dict | None, tools_forwarded: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        if model_map_entry is not None:
+            monkeypatch.setitem(litellm.model_cost, "tools_map/some-model", model_map_entry)
+        config: Final = create_config_class(_provider("tools_map"))()
+
+        optional_params: Final = config.map_openai_params(
+            non_default_params={"tools": self._TOOLS, "tool_choice": "auto"},
+            optional_params={},
+            model="some-model",
+            drop_params=True,
+        )
+
+        assert ("tools" in optional_params) is tools_forwarded
+        assert ("tool_choice" in optional_params) is tools_forwarded
