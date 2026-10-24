@@ -4550,6 +4550,7 @@ class LlmProviders(str, Enum):
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
     DARKBLOOM = "darkbloom"
+    TSUBASA = "tsubasa"
     META = "meta"
     SAIL = "sail"
     REKA = "reka"

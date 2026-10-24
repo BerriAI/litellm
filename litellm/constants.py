@@ -1130,6 +1130,7 @@ openai_compatible_providers: Final[list[str]] = [
     "pinstripes",  # Pinstripes - JSON-configured provider
     "openinfer",
     "darkbloom",
+    "tsubasa",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "coralbricks",
