@@ -479,7 +479,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
 
-            ttft_samples = _usable_latency_samples(item_ttft_latency)
+            ttft_samples: Final = _usable_latency_samples(item_ttft_latency)
             use_ttft = (
                 request_kwargs is not None
                 and request_kwargs.get("stream", None) is not None
@@ -525,7 +525,6 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
         valid_deployments: Final = tuple(x for x in sorted_deployments if x[1] <= lowest_latency + buffer)
 
-        # An empty window means the samples or the buffer are unusable; degrade to all candidates.
         random_valid_deployment: Final = random.choice(valid_deployments or sorted_deployments)
         deployment = random_valid_deployment[0]
         metadata_field: Final = self._select_metadata_field(request_kwargs)
