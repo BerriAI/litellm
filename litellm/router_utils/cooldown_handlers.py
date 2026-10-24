@@ -57,6 +57,7 @@ else:
     Span = Any
 
 _ADVISOR_ORCHESTRATION_FAILURE_ATTR: Final = "_litellm_advisor_orchestration_failure"
+_DEPLOYMENT_SELECTION_FAILURE_ATTR: Final = "_litellm_deployment_selection_failure"
 _CREDENTIAL_VALUES_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -77,6 +78,16 @@ def mark_advisor_orchestration_failure(exception: BaseException) -> None:
 def is_advisor_orchestration_failure(exception: BaseException | None) -> bool:
     """Whether ``exception`` was tagged by ``mark_advisor_orchestration_failure``."""
     return bool(getattr(exception, _ADVISOR_ORCHESTRATION_FAILURE_ATTR, False))
+
+
+def mark_deployment_selection_failure(exception: BaseException) -> None:
+    setattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, True)
+
+
+def is_failure_outside_selected_deployment(exception: BaseException | None) -> bool:
+    return is_advisor_orchestration_failure(exception) or bool(
+        getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False)
+    )
 
 
 _BACKGROUND_RESPONSE_POLL_CALL_ORIGINS: Final[frozenset[InternalCallOrigin]] = frozenset(
@@ -741,14 +752,17 @@ def _is_allowed_fails_set_on_router(
     litellm_router_instance: LitellmRouter,
 ) -> bool:
     """
-    Check if Router.allowed_fails is set or is Non-default Value
+    Check if Router.allowed_fails was passed to the Router or is a Non-default Value
 
     Returns:
-    - True if Router.allowed_fails is set or is Non-default Value
-    - False if Router.allowed_fails is None or is Default Value
+    - True if allowed_fails was passed to the Router, even when it equals the default
+    - True if Router.allowed_fails is a Non-default Value
+    - False if Router.allowed_fails is None, or is the Default Value and was not passed
     """
     if litellm_router_instance.allowed_fails is None:
         return False
+    if litellm_router_instance.explicit_allowed_fails is not None:
+        return True
     if litellm_router_instance.allowed_fails != litellm.allowed_fails:
         return True
     return False
