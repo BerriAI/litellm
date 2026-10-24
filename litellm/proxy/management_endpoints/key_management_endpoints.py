@@ -3502,6 +3502,34 @@ async def _owner_may_change_key_budget(
             return True
 
 
+def _refuse_get_spend_routes_unless_premium(
+    permissions: object | None,
+    premium_user: bool,
+) -> None:
+    """Block minting truthy `get_spend_routes` on non-Enterprise proxies.
+
+    Used by `/key/generate`, `/key/update`, and `/key/regenerate`. An explicit
+    `false` is allowed so callers can clear or set the flag without a licence.
+    """
+    if not isinstance(permissions, dict):
+        return
+    typed_permissions: Final = (
+        cast(  # cast-ok: isinstance(dict) narrows to dict[Unknown, Unknown]; permission map is str-keyed
+            dict[str, object], permissions
+        )
+    )
+    if typed_permissions.get("get_spend_routes") and premium_user is not True:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    "get_spend_routes permission is only available for "
+                    f"LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
+                )
+            },
+        )
+
+
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -3516,6 +3544,8 @@ async def _validate_update_key_data(
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
+    # Default permissions={} is inert; only a truthy get_spend_routes trips the gate.
+    _refuse_get_spend_routes_unless_premium(data.permissions, premium_user)
     validate_budget_duration(data.budget_duration)
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
@@ -5242,10 +5272,16 @@ async def generate_key_helper_fn(
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
-            if "get_spend_routes" in saved_token["permissions"] and premium_user is not True:
-                raise ValueError("get_spend_routes permission is only available for LiteLLM Enterprise users")
-
+            # Same json.loads → assign pattern as aliases/config/metadata above.
             saved_token["permissions"] = json.loads(saved_token["permissions"])
+            # Refuse only when the permission is requested (truthy). An explicit
+            # false must not trip a substring check on the serialized JSON.
+            _refuse_get_spend_routes_unless_premium(
+                cast(  # cast-ok: permissions column stores a JSON object of permission flags
+                    dict[str, object], saved_token["permissions"]
+                ),
+                premium_user,
+            )
         if isinstance(saved_token["model_max_budget"], str):
             saved_token["model_max_budget"] = json.loads(saved_token["model_max_budget"])
         router_settings = cast(dict | None, saved_token.get("router_settings"))
@@ -6340,6 +6376,7 @@ async def regenerate_key_fn(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
             )
+            _refuse_get_spend_routes_unless_premium(data.permissions, premium_user)
             # Mirror /key/generate's post-handle_key_type recheck so a
             # non-admin can't elevate via a key_type preset that the
             # regenerate flow would otherwise carry through unchecked.

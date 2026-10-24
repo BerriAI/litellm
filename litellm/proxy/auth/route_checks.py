@@ -298,6 +298,20 @@ class RouteChecks:
         )
 
     @staticmethod
+    def _has_truthy_permission(permissions: object | None, name: str) -> bool:
+        """True when `name` is opted in with a truthy value (dict) or listed (sequence)."""
+        if isinstance(permissions, dict):
+            typed: Final = (
+                cast(  # cast-ok: isinstance(dict) narrows to dict[Unknown, Unknown]; keys are permission names
+                    dict[str, object], permissions
+                )
+            )
+            return bool(typed.get(name))
+        if isinstance(permissions, (list, tuple, set)):
+            return name in permissions
+        return False
+
+    @staticmethod
     def non_proxy_admin_allowed_routes_check(
         user_obj: LiteLLM_UserTable | None,
         _user_role: LitellmUserRoles | None,
@@ -356,7 +370,10 @@ class RouteChecks:
         elif (
             route in LiteLLMRoutes.global_spend_tracking_routes.value
             and getattr(valid_token, "permissions", None) is not None
-            and "get_spend_routes" in getattr(valid_token, "permissions", [])
+            and RouteChecks._has_truthy_permission(
+                getattr(valid_token, "permissions", None),
+                "get_spend_routes",
+            )
         ):
             pass
         elif route == "/lens" or route.startswith("/lens/"):
