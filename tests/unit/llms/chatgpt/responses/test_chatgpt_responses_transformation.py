@@ -189,6 +189,27 @@ class TestChatGPTResponsesAPITransformation:
         assert "reasoning.encrypted_content" in request["include"]
         assert request["instructions"].startswith("You are Codex, based on GPT-5.")
 
+    def test_chatgpt_omits_foreign_previous_response_id(self):
+        config = ChatGPTResponsesAPIConfig()
+        input_items = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "continue"}],
+            }
+        ]
+
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input=input_items,
+            response_api_optional_request_params={"previous_response_id": "resp_foreign_fixture"},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "previous_response_id" not in request
+        assert request["input"] == input_items
+
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -230,7 +251,7 @@ class TestChatGPTResponsesAPITransformation:
         assert "stream_options" not in request
 
         assert request["truncation"] == "auto"
-        assert request["previous_response_id"] == "resp_123"
+        assert "previous_response_id" not in request
         assert request["reasoning"] == {"effort": "medium"}
         assert request["tools"] == [{"type": "function", "function": {"name": "hello"}}]
         assert request["tool_choice"] == {
