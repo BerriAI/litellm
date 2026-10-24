@@ -1627,13 +1627,11 @@ class Delta(SafeAttributeModel, OpenAIObject):
         if function_call is not None and isinstance(function_call, dict):
             function_call = FunctionCall(**function_call)
 
-        if tool_calls is not None and not isinstance(tool_calls, (list, tuple)):
-            tool_calls = [tool_calls]
-
-        if tool_calls is not None and isinstance(tool_calls, (list, tuple)):
+        if tool_calls is not None:
+            raw_tool_calls: Final = [tool_calls] if not isinstance(tool_calls, (list, tuple)) else tool_calls
             coerced_tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] = []
             current_index = 0
-            for tool_call in tool_calls:
+            for tool_call in raw_tool_calls:
                 if isinstance(tool_call, dict):
                     if tool_call.get("index", None) is None:
                         tool_call["index"] = current_index
