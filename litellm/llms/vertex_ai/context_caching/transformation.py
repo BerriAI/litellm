@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal
 
+from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
 from litellm.utils import is_cached_message
@@ -112,6 +113,14 @@ def separate_cached_messages(
     """
     Returns separated cached and non-cached messages.
 
+    Vertex reads cachedContent as a prefix of contents, so context caching is only
+    used when the cached block is a true prefix of the conversation. Leading system
+    messages are folded into the cached block (they are preserved as the cache's
+    system_instruction downstream). If any other message sits before the cached
+    block, or a system message sits after it, no caching is applied: earlier
+    messages would be re-sent after the cached block, reordering the conversation,
+    and a system message outside the cache is dropped alongside cachedContent.
+
     Args:
         messages: List of messages to be separated.
 
@@ -136,8 +145,27 @@ def separate_cached_messages(
         first_cached_idx: Final = filtered_messages[0][0]
         last_cached_idx: Final = filtered_messages[last_continuous_block_idx][0]
 
-        cached_messages = messages[first_cached_idx : last_cached_idx + 1]
-        non_cached_messages = messages[:first_cached_idx] + messages[last_cached_idx + 1 :]
+        prefix_messages: Final = messages[:first_cached_idx]
+        suffix_messages: Final = messages[last_cached_idx + 1 :]
+
+        # Only "system" counts as foldable: the Vertex/Gemini mapping does not
+        # fold "developer" messages into system_instruction, so a developer
+        # message around the block intentionally disables caching.
+        non_system_prefix: Final = any(m["role"] != "system" for m in prefix_messages)
+        trailing_system: Final = any(m["role"] == "system" for m in suffix_messages)
+        if non_system_prefix or trailing_system:
+            # Not a true prefix: send the conversation uncached so nothing is
+            # reordered and no system message is silently dropped.
+            verbose_logger.debug(
+                "Vertex context caching skipped: cached block is not a true prefix (%s)",
+                "non-system message before the cached block"
+                if non_system_prefix
+                else "system message after the cached block",
+            )
+            return [], list(messages)
+
+        cached_messages = list(prefix_messages) + messages[first_cached_idx : last_cached_idx + 1]
+        non_cached_messages = list(suffix_messages)
     else:
         non_cached_messages = messages
 
