@@ -1,12 +1,15 @@
 import json
 import os
+from collections.abc import Iterator
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 
 from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles
+from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.proxy_server import app
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -14,6 +17,16 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 )
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def isolate_sso_environment() -> Iterator[None]:
+    with patch.dict(
+        os.environ,
+        {key: value for key, value in os.environ.items() if key not in SSO_FIELD_ENV_VARS.values()},
+        clear=True,
+    ):
+        yield
 
 
 @pytest.mark.asyncio
