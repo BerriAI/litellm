@@ -9,6 +9,7 @@
 
 
 import asyncio
+import copy
 import json
 import re
 import threading
@@ -1190,14 +1191,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
         """
         Masks the input and output before logging to langfuse, datadog, etc.
+        Operates on a defensive copy of result so the client-facing response is not modified in-place (#47605).
         """
-        if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
+        result_for_logging: Final[object] = (
+            copy.deepcopy(result) if call_type in {"completion", "acompletion"} else result
+        )
+        if call_type in {"completion", "acompletion"}:  # /chat/completions requests
             messages: Final[list | None] = kwargs.get("messages", None)
             tasks: Final = []
             task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
 
             if messages is None:
-                return kwargs, result
+                return kwargs, result_for_logging
 
             presidio_config: Final = self.get_presidio_settings_from_request_data(kwargs)
 
@@ -1249,19 +1254,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             kwargs["messages"] = messages
 
             if (
-                isinstance(result, ModelResponse)
-                and result.choices
-                and not isinstance(result.choices[0], StreamingChoices)
+                isinstance(result_for_logging, ModelResponse)
+                and result_for_logging.choices
+                and not isinstance(result_for_logging.choices[0], StreamingChoices)
             ):
-                await self._process_response_for_pii(response=result, request_data=kwargs, mode="mask")
-            elif isinstance(result, dict) and self._is_anthropic_message_response(result):
+                await self._process_response_for_pii(response=result_for_logging, request_data=kwargs, mode="mask")
+            elif isinstance(result_for_logging, dict) and self._is_anthropic_message_response(result_for_logging):
                 await self._process_anthropic_response_for_pii(
-                    response=result,
+                    response=result_for_logging,
                     request_data=kwargs,
                     mode="mask",
                 )
 
-        return kwargs, result
+        return kwargs, result_for_logging
 
     async def async_post_call_success_hook(
         self,
