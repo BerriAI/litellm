@@ -3775,3 +3775,99 @@ def test_reservation_counts_a_compaction_item_by_its_summary(rate_limiter):
     ) == handler._estimate_input_and_output_tokens(
         data={"model": "gpt-4o", "input": _COMPACTED_INPUT[2:], "max_output_tokens": 1}, call_type="aresponses"
     )
+
+
+def test_responses_api_custom_tool_output_image_base64_bounded(rate_limiter):
+    """
+    Regression for #47814: Responses TPM reservation counts base64 in
+    custom_tool_call_output images as text and doubles the estimate.
+    Ensure structured images in custom_tool_call_output are bounded and do not inflate
+    input or default output reservations into millions of tokens.
+    """
+    handler, _cache = rate_limiter
+    url = "data:image/png;base64," + "A" * 4_000_000
+    data = {
+        "model": "synthetic-test-model",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Inspect the generated test images."}],
+            },
+            {
+                "type": "custom_tool_call",
+                "call_id": "call_synthetic",
+                "name": "render_test",
+                "input": "generate test images",
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call_synthetic",
+                "output": [{"type": "input_text", "text": "Synthetic output only."}]
+                + [{"type": "input_image", "detail": "high", "image_url": url} for _ in range(3)],
+            },
+        ],
+    }
+
+    input_tokens, output_tokens = handler._estimate_input_and_output_tokens(
+        data=data,
+        call_type="aresponses",
+        min_configured_tpm_limit=5_000_000,
+    )
+
+    # 3 images should estimate ~750 tokens (250 tokens each) + text/tool metadata (<100 tokens), NOT 3,000,000+
+    assert 750 <= input_tokens <= 1000
+    assert output_tokens <= 2000
+    assert input_tokens + output_tokens < 5_000_000
+
+    # With configured_output_tokens, operator override is respected
+    i_cfg, o_cfg = handler._estimate_input_and_output_tokens(
+        data=data,
+        call_type="aresponses",
+        min_configured_tpm_limit=5_000_000,
+        configured_output_tokens=32768,
+    )
+    assert i_cfg == input_tokens
+    assert o_cfg == 32768
+
+
+def test_responses_api_message_image_detail_low_and_high(rate_limiter):
+    """
+    Verify detail='low' uses 85 tokens and detail='high' uses default image token count
+    in Responses API message content while preserving adjacent text.
+    """
+    handler, _cache = rate_limiter
+    url = "data:image/png;base64," + "B" * 2_000_000
+    data_low = {
+        "model": "gpt-4o",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "A brief prompt"},
+                    {"type": "input_image", "detail": "low", "image_url": url},
+                ],
+            }
+        ],
+    }
+    input_low, _ = handler._estimate_input_and_output_tokens(data=data_low, call_type="aresponses")
+    # 85 tokens for low detail + text chars // 4
+    assert 85 <= input_low <= 140
+
+    data_high = {
+        "model": "gpt-4o",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "A brief prompt"},
+                    {"type": "input_image", "detail": "high", "image_url": url},
+                ],
+            }
+        ],
+    }
+    input_high, _ = handler._estimate_input_and_output_tokens(data=data_high, call_type="aresponses")
+    # 250 tokens for high detail + text chars // 4
+    assert 250 <= input_high <= 300

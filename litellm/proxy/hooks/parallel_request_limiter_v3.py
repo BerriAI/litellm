@@ -10,6 +10,7 @@ import itertools
 import json
 import logging
 import os
+import re
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Set
 from contextlib import asynccontextmanager
@@ -42,7 +43,11 @@ from litellm.caching.redis_batch import (
     active_request_redis_batch,
 )
 from litellm.caching.redis_cache import log_redis_failure
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.constants import (
+    DEFAULT_IMAGE_TOKEN_COUNT,
+    DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+)
 from litellm.cost_calculator import get_usage_object
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -502,6 +507,11 @@ GOOGLE_GENAI_NATIVE_CALL_TYPES: Final = (
     CallTypes.agenerate_content_stream.value,
 )
 RESPONSES_API_MIN_OUTPUT_TOKENS: Final = 16
+_IMAGE_CONTENT_TYPES: Final = frozenset({"input_image", "image_url", "image"})
+_DATA_IMAGE_PREFIX: Final = "data:image/"
+_DEFAULT_IMAGE_CHARS: Final[int] = int(DEFAULT_IMAGE_TOKEN_COUNT) * 4
+_LOW_DETAIL_IMAGE_CHARS: Final[int] = 85 * 4
+_BASE64_IMAGE_PATTERN: Final = re.compile(r"data:image/[^;'\"]+;base64,[A-Za-z0-9+/=]+")
 # litellm.token_counter has no per-type handling for "input_audio" content
 # blocks (unlike images, which use use_default_image_token_count) -- it
 # silently contributes 0 tokens for them. When the block carries a base64
@@ -1200,6 +1210,31 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         return max(round(normalized), 1)
 
+    @classmethod
+    def _estimate_item_chars(cls, item: object) -> int:
+        """
+        Estimate character count for an input item in Responses API or prompt endpoints.
+
+        Transport payloads containing multi-megabyte base64 images (such as in
+        custom_tool_call_output.output or input_image blocks) are counted using
+        bounded multimodal token estimates rather than measuring raw base64 text,
+        preventing single requests from exhausting entire TPM quotas (#47814).
+        """
+        s: Final[str] = str(item)
+        if _DATA_IMAGE_PREFIX in s or ";base64," in s:
+            target_image_chars: Final[int] = int(
+                _LOW_DETAIL_IMAGE_CHARS
+                if ('"detail": "low"' in s or "'detail': 'low'" in s)
+                else _DEFAULT_IMAGE_CHARS
+            )
+            base64_chars: int = 0  # rebind-ok: accumulate image string reduction
+            for match in _BASE64_IMAGE_PATTERN.finditer(s):
+                m_len: int = len(match.group(0))
+                if m_len > target_image_chars:
+                    base64_chars += m_len - target_image_chars
+            return max(len(s) - base64_chars, target_image_chars)
+        return len(s)
+
     def _estimate_input_and_output_tokens(
         self,
         data: object,
@@ -1254,15 +1289,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
         total_chars: Final = (
-            len(get_str_from_messages(messages))
+            self._estimate_item_chars(get_str_from_messages(messages))
             if isinstance(messages, list) and messages
             else len(prompt)
             if isinstance(prompt, str)
             else sum(len(str(item)) for item in prompt)
             if isinstance(prompt, list)
-            else len(input_text)
+            else self._estimate_item_chars(input_text)
             if isinstance(input_text, str)
-            else sum(len(str(item)) for item in input_text)
+            else sum(self._estimate_item_chars(item) for item in input_text)
             if isinstance(input_text, list)
             else 0
         )
