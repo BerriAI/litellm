@@ -48,6 +48,8 @@ mod _native {
     #[pymodule_export]
     use crate::routes::token_counter::TokenCounter;
     #[pymodule_export]
+    use crate::routes::tokenize::{atokenize, tokenize};
+    #[pymodule_export]
     use crate::routes::traces::trace_encode_error;
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
@@ -93,6 +95,8 @@ mod tests {
                 "ProcessReservedForForking",
                 "ocr",
                 "aocr",
+                "tokenize",
+                "atokenize",
                 "ocr_health_check_document",
                 "ocr_passthrough_response",
                 "embedding",
