@@ -27,7 +27,7 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -268,3 +268,26 @@ async def test_langgraph_streaming_acompletion_without_a_client_posts_through_th
         "assistant_id": "agent",
         "input": {"messages": [{"role": "human", "content": "What is 25 * 4?"}]},
     }
+
+
+@pytest.mark.asyncio
+async def test_langgraph_async_stream_delivers_every_step_of_the_run_before_its_stop():
+    async def events():
+        question = {"type": "human", "content": "What is 25 * 4?"}
+        answers = [{"type": "ai", "content": "25 * 4"}, {"type": "ai", "content": " is 100"}]
+        yield b'event: metadata\ndata: {"run_id": "run-1", "attempt": 1}\n\n'
+        for step in range(len(answers) + 1):
+            yield b"event: values\ndata: " + json.dumps({"messages": [question, *answers[:step]]}).encode() + b"\n\n"
+
+    client = AsyncHTTPHandler(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=events())))
+
+    response = await litellm.acompletion(
+        model="langgraph/agent",
+        messages=[{"role": "user", "content": "What is 25 * 4?"}],
+        api_base="http://langgraph.test",
+        stream=True,
+        client=client,
+    )
+    streamed = [(chunk.choices[0].delta.content, chunk.choices[0].finish_reason) async for chunk in response]
+
+    assert streamed == [("25 * 4", None), (" is 100", None), (None, "stop")]

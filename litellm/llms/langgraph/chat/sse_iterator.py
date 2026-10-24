@@ -37,8 +37,9 @@ class LangGraphSSEStreamIterator:
         return self
 
     def __aiter__(self):
-        """Initialize async iteration."""
-        self.async_line_iterator = self.response.aiter_lines()
+        """Initialize async iteration once; CustomStreamWrapper re-enters `async for` on every chunk."""
+        if self.async_line_iterator is None:
+            self.async_line_iterator = self.response.aiter_lines()
         return self
 
     def _parse_sse_line(self, line: str) -> ModelResponseStream | None:
