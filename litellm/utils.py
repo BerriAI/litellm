@@ -91,7 +91,11 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from litellm.litellm_core_utils.get_model_cost_map import (
+    AliasedCostEntry,
+    await_pending_import_model_cost_map,
+    wait_for_pending_import_model_cost_map,
+)
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
@@ -2169,6 +2173,7 @@ def client(original_function):
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):
+        await await_pending_import_model_cost_map()
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time: Final = datetime.datetime.now()
         call_type: Final = _get_call_type_from_public_name(original_function.__name__)
@@ -6593,6 +6598,7 @@ def get_model_info_helper(
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
     """
+    wait_for_pending_import_model_cost_map()
     from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 
     try:
@@ -8442,7 +8448,7 @@ def get_valid_models(
     Returns:
         A list of valid LLMs
     """
-
+    wait_for_pending_import_model_cost_map()
     try:
         ################################
         # init litellm_params
