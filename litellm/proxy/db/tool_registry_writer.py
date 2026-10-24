@@ -17,14 +17,13 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import TOOL_DISCOVERY_COMMIT_JOB_NAME
 from litellm.proxy._types import ToolDiscoveryQueueItem
 from litellm.proxy.db.db_span import db_span
-from litellm.proxy.db.db_spend_update_writer import spend_commit_failure_is_requeue_safe
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
     aggregate_tool_discoveries,
 )
-from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
+from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry, db_write_failure_is_requeue_safe
 from litellm.proxy.db.tool_table_bulk_upsert import build_tool_bulk_upsert
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -172,7 +171,7 @@ async def _commit_tool_discoveries_from_redis(
     try:
         await batch_upsert_tools(prisma_client=prisma_client, items=items)
     except Exception as e:  # noqa: BLE001  # the rows go back to redis or are dropped, the scheduler job must not fail
-        if spend_commit_failure_is_requeue_safe(e):
+        if db_write_failure_is_requeue_safe(e):
             await redis_update_buffer.restore_tool_discoveries_to_redis(items)
             verbose_proxy_logger.error(
                 "Tool discovery - %d tool rows went back to Redis for the next tick. Error: %s", len(items), str(e)

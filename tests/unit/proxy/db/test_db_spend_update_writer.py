@@ -19,9 +19,7 @@ from redis.exceptions import DataError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
-from litellm.constants import (
-    SPEND_ROLLUP_LOCK_TIMEOUT_MS,
-)
+from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,

@@ -69,7 +69,9 @@ def _make_prisma(
     prisma.db.litellm_tooltable = MagicMock()
     prisma.db.litellm_tooltable.upsert = AsyncMock(return_value=upsert_return)
     prisma.db.execute_raw = AsyncMock(return_value=1)
-    prisma.db.litellm_tooltable.find_many = AsyncMock(return_value=find_many_rows if find_many_rows is not None else [])
+    prisma.db.litellm_tooltable.find_many = AsyncMock(
+        return_value=find_many_rows if find_many_rows is not None else []
+    )
     prisma.db.litellm_tooltable.find_unique = AsyncMock(return_value=find_unique_row)
     prisma.db.litellm_verificationtoken = MagicMock()
     prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=list(key_rows))
@@ -225,7 +227,9 @@ async def test_get_tool_found():
     result = await get_tool(prisma, "my_tool")
     assert result is not None
     assert result.tool_name == "my_tool"
-    prisma.db.litellm_tooltable.find_unique.assert_awaited_once_with(where={"tool_name": "my_tool"})
+    prisma.db.litellm_tooltable.find_unique.assert_awaited_once_with(
+        where={"tool_name": "my_tool"}
+    )
 
 
 @pytest.mark.asyncio
@@ -262,7 +266,9 @@ async def test_update_tool_policy_calls_upsert_then_get_tool():
         updated_by="admin",
     )
     prisma = _make_prisma(find_unique_row=row)
-    result = await update_tool_policy(prisma, "my_tool", updated_by="admin", input_policy="blocked")
+    result = await update_tool_policy(
+        prisma, "my_tool", updated_by="admin", input_policy="blocked"
+    )
     assert result is not None
     assert result.input_policy == "blocked"
     prisma.db.litellm_tooltable.upsert.assert_awaited_once()
