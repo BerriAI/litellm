@@ -28,14 +28,14 @@ pub async fn find_end_user(
     executor: impl PgExecutor<'_>,
     end_user_id: &str,
     default_budget_id: Option<&str>,
-    override_budget_id: Option<&str>,
+    key_budget_id: Option<&str>,
 ) -> Result<EndUser, Error> {
     let row = sqlx::query_file_as!(
         EndUserRow,
         "queries/end_user/find_end_user.sql",
         end_user_id,
         default_budget_id,
-        override_budget_id,
+        key_budget_id,
     )
     .fetch_one(executor)
     .await?;

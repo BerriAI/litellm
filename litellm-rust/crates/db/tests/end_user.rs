@@ -156,7 +156,7 @@ async fn missing_end_user_maps_to_defaults(
     }),
     false
 )]
-#[case::override_wins_when_all_ids_differ(
+#[case::assigned_budget_precedes_key_when_all_ids_differ(
     "override-priority-user",
     Some(BudgetFixture {
         budget_id: "override-priority-row",
@@ -177,14 +177,14 @@ async fn missing_end_user_maps_to_defaults(
         tpm_limit: 6001,
     }),
     Some(BudgetFixture {
-        budget_id: "override-priority-override",
-        max_budget: 60.0,
-        rpm_limit: 601,
-        tpm_limit: 6001,
+        budget_id: "override-priority-row",
+        max_budget: 40.0,
+        rpm_limit: 401,
+        tpm_limit: 4001,
     }),
     true
 )]
-#[case::dangling_override_does_not_fall_back(
+#[case::missing_key_budget_keeps_assigned_budget(
     "dangling-override-user",
     Some(BudgetFixture {
         budget_id: "dangling-override-row",
@@ -204,11 +204,62 @@ async fn missing_end_user_maps_to_defaults(
         rpm_limit: 901,
         tpm_limit: 9001,
     }),
+    Some(BudgetFixture {
+        budget_id: "dangling-override-row",
+        max_budget: 70.0,
+        rpm_limit: 701,
+        tpm_limit: 7001,
+    }),
+    false
+)]
+#[case::key_budget_precedes_proxy_default(
+    "key-default-user",
     None,
+    BudgetFixture {
+        budget_id: "key-default-proxy",
+        max_budget: 80.0,
+        rpm_limit: 801,
+        tpm_limit: 8001,
+    },
+    Some(BudgetFixture {
+        budget_id: "key-default-key",
+        max_budget: 90.0,
+        rpm_limit: 901,
+        tpm_limit: 9001,
+    }),
+    Some(BudgetFixture {
+        budget_id: "key-default-key",
+        max_budget: 90.0,
+        rpm_limit: 901,
+        tpm_limit: 9001,
+    }),
+    true
+)]
+#[case::missing_key_budget_falls_back_to_proxy_default(
+    "missing-key-default-user",
+    None,
+    BudgetFixture {
+        budget_id: "missing-key-default-proxy",
+        max_budget: 80.0,
+        rpm_limit: 801,
+        tpm_limit: 8001,
+    },
+    Some(BudgetFixture {
+        budget_id: "missing-key-default-key",
+        max_budget: 90.0,
+        rpm_limit: 901,
+        tpm_limit: 9001,
+    }),
+    Some(BudgetFixture {
+        budget_id: "missing-key-default-proxy",
+        max_budget: 80.0,
+        rpm_limit: 801,
+        tpm_limit: 8001,
+    }),
     false
 )]
 #[tokio::test]
-async fn budget_resolution_obeys_precedence_and_does_not_fall_back(
+async fn budget_resolution_matches_python_precedence(
     #[case] user_id: &'static str,
     #[case] user_budget: Option<BudgetFixture>,
     #[case] default_budget: BudgetFixture,

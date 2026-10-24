@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT e.spend AS \"spend?\",\n       e.blocked AS \"blocked?\",\n       b.max_budget AS \"max_budget?\",\n       b.rpm_limit AS \"rpm_limit?\",\n       b.tpm_limit AS \"tpm_limit?\"\nFROM (SELECT 1) AS one\nLEFT JOIN \"LiteLLM_EndUserTable\" AS e ON e.user_id = $1\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON b.budget_id = COALESCE($3, e.budget_id, $2)\n",
+  "query": "SELECT e.spend AS \"spend?\",\n       e.blocked AS \"blocked?\",\n       b.max_budget AS \"max_budget?\",\n       b.rpm_limit AS \"rpm_limit?\",\n       b.tpm_limit AS \"tpm_limit?\"\nFROM (SELECT 1) AS one\nLEFT JOIN \"LiteLLM_EndUserTable\" AS e ON e.user_id = $1\nLEFT JOIN \"LiteLLM_BudgetTable\" AS assigned ON assigned.budget_id = e.budget_id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS key_budget ON key_budget.budget_id = $3\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON b.budget_id = COALESCE(assigned.budget_id, key_budget.budget_id, $2)\n",
   "describe": {
     "columns": [
       {
@@ -74,5 +74,5 @@
       true
     ]
   },
-  "hash": "0c9447f3e2a02feb1ad996c24990b9ec18c3143f2442826a51122018528d6e62"
+  "hash": "377d063cd0fc3a265d07d01f5aa64311d25428fd393bac4250891f148597e92e"
 }
