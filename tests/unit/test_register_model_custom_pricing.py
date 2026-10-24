@@ -883,9 +883,9 @@ def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(mo
         _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.parametrize("route", ["", "converse/", "invoke/"])
-def test_register_model_leaves_no_shadow_key_when_the_lookup_trips_once(
-    monkeypatch: pytest.MonkeyPatch, route: str
+@pytest.mark.parametrize("route, expected_input_cost", [("", 9e-06), ("converse/", 3.3e-06), ("invoke/", 3.3e-06)])
+def test_register_model_keeps_exact_key_and_only_links_provider_twins_when_the_lookup_trips_once(
+    monkeypatch: pytest.MonkeyPatch, route: str, expected_input_cost: float
 ) -> None:
     catalog_key: Final = "au.anthropic.lit-5853-geo-model"
     alias: Final = f"bedrock/{route}{catalog_key}"
@@ -919,8 +919,9 @@ def test_register_model_leaves_no_shadow_key_when_the_lookup_trips_once(
     litellm.register_model({catalog_key: {"input_cost_per_token": repriced_input_cost}}, persist_across_reloads=False)
 
     try:
-        assert litellm.get_model_info(alias)["key"] == catalog_key
-        assert litellm.get_model_info(alias)["input_cost_per_token"] == repriced_input_cost
+        assert litellm.get_model_info(alias)["key"] == alias
+        assert litellm.get_model_info(alias)["input_cost_per_token"] == expected_input_cost
+        assert litellm.get_model_info(catalog_key)["input_cost_per_token"] == repriced_input_cost
     finally:
         _invalidate_model_cost_lowercase_map()
 
@@ -1163,7 +1164,9 @@ def _token_prices(name: str) -> tuple[float | None, float | None]:
     return info["input_cost_per_token"], info["output_cost_per_token"]
 
 
-@pytest.mark.parametrize("registered_key", [_CANONICAL_KEY, _ALIAS_KEY])
+@pytest.mark.parametrize(
+    "registered_key", [_CANONICAL_KEY, _ALIAS_KEY, f"openai/{_CANONICAL_KEY}", f"openai/{_ALIAS_KEY}"]
+)
 def test_register_model_prices_every_alias_of_the_registered_entry(
     monkeypatch: pytest.MonkeyPatch, registered_key: str
 ) -> None:

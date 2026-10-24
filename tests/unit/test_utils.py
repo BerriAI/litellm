@@ -2217,6 +2217,82 @@ class TestProxyFunctionCalling:
         )
 
 
+@pytest.mark.parametrize(
+    "caller_key, base_key, provider",
+    [
+        ("databricks/databricks-claude-opus-4-99", "databricks/databricks-claude-opus-4", "databricks"),
+        ("bedrock/us.anthropic.claude-sonnet-4-6", "anthropic.claude-sonnet-4-6", "bedrock"),
+        ("openai/gpt-4o-2026-01-01", "gpt-4o", "openai"),
+    ],
+)
+def test_register_model_preserves_exact_key_and_inherited_sibling(
+    monkeypatch: pytest.MonkeyPatch, caller_key: str, base_key: str, provider: str
+) -> None:
+    builtin: Final = {
+        "max_tokens": 32000,
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+        "cache_read_input_token_cost": 0.0001,
+        "supports_function_calling": True,
+        "litellm_provider": provider,
+        "mode": "chat",
+    }
+    monkeypatch.setattr(litellm, "model_cost", {base_key: dict(builtin)})
+    assert litellm.get_model_info(caller_key, custom_llm_provider=provider)["key"] == base_key
+
+    litellm.register_model(
+        {caller_key: {"max_tokens": 123456}}, custom_llm_provider=provider, persist_across_reloads=False
+    )
+
+    assert litellm.model_cost[base_key] == builtin
+    assert litellm.model_cost[caller_key]["max_tokens"] == 123456
+    info: Final = litellm.get_model_info(caller_key)
+    assert info["key"] == caller_key
+    assert info["max_tokens"] == 123456
+    assert info["cache_read_input_token_cost"] == builtin["cache_read_input_token_cost"]
+    assert info["supports_function_calling"] is True
+    assert litellm.cost_per_token(model=caller_key, prompt_tokens=10, completion_tokens=5) == pytest.approx(
+        (0.01, 0.01)
+    )
+
+
+@pytest.mark.parametrize("update_key", ("openai/o3-pro", "o3-pro"))
+def test_register_model_provider_prefix_keeps_bare_price_and_responses_mode(
+    monkeypatch: pytest.MonkeyPatch, update_key: str
+) -> None:
+    from litellm.utils import model_cost_registration_row
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "o3-pro": {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "litellm_provider": "openai",
+                "mode": "responses",
+            }
+        },
+    )
+    assert model_cost_registration_row("openai/o3-pro", "openai")["mode"] == "responses"
+
+    litellm.register_model({"openai/o3-pro": {"input_cost_per_token": 0.003}}, persist_across_reloads=False)
+
+    assert litellm.model_cost["openai/o3-pro"]["input_cost_per_token"] == 0.003
+    assert litellm.model_cost["o3-pro"]["input_cost_per_token"] == 0.003
+    assert model_cost_registration_row("openai/o3-pro", "openai")["mode"] == "responses"
+    assert litellm.cost_per_token(model="o3-pro", prompt_tokens=10, completion_tokens=5) == pytest.approx((0.03, 0.01))
+
+    litellm.register_model({update_key: {"input_cost_per_token": 0.004}}, persist_across_reloads=False)
+
+    assert litellm.model_cost["openai/o3-pro"]["input_cost_per_token"] == 0.004
+    assert litellm.model_cost["o3-pro"]["input_cost_per_token"] == 0.004
+    assert model_cost_registration_row("openai/o3-pro", "openai")["mode"] == "responses"
+    assert litellm.cost_per_token(model="openai/o3-pro", prompt_tokens=10, completion_tokens=5) == pytest.approx(
+        (0.04, 0.01)
+    )
+
+
 @pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
 def test_register_model_price_is_used_for_completion_cost() -> None:
     model: Final = "migration-custom-pricing-model"
