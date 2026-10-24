@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
+    calculate_cache_writing_cost,
     calculate_cost_component,
     generic_cost_per_character,
     generic_cost_per_token,
@@ -2969,7 +2970,12 @@ def batch_cost_calculator(
     total_completion_cost = 0.0
     if batch_rates.input is not None:
         total_prompt_cost = _batch_prompt_cost(
-            usage, model_info, batch_rates.input, batch_rates.cache_read, batch_rates.cache_creation
+            usage,
+            model_info,
+            batch_rates.input,
+            batch_rates.cache_read,
+            batch_rates.cache_creation,
+            batch_rates.cache_creation_rates_by_ttl,
         )
     elif input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
@@ -3014,6 +3020,7 @@ def _batch_prompt_cost(
     input_rate: float,
     cache_read_rate: float | None,
     cache_creation_rate: float | None,
+    cache_creation_rates_by_ttl: Mapping[str, float],
 ) -> float:
     details: Final = parse_prompt_tokens_details(usage)
     cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
@@ -3035,7 +3042,12 @@ def _batch_prompt_cost(
         + (cached_tokens - cached_audio_tokens) * (cache_read_rate or 0.0)
         + cached_audio_tokens
         * _batch_rate(model_info, "cache_read_input_audio_token_cost_batches", cache_read_rate or 0.0)
-        + written_tokens * (cache_creation_rate or 0.0)
+        + calculate_cache_writing_cost(
+            written_tokens,
+            details["cache_creation_token_details"],
+            cache_creation_rate or 0.0,
+            cache_creation_rates_by_ttl,
+        )
     )
 
 
