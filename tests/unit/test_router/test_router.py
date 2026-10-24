@@ -29884,14 +29884,14 @@ _IMAGE_RESPONSES_INPUT = [
         ],
     }
 ]
-_VISION_LEG = {"litellm_params": {"model": "openai/gpt-5.6-terra"}, "model_info": {"id": "vision"}}
-_DECLARED_TEXT_LEG = {
+_VISION_LEG: Final[dict[str, object]] = {"litellm_params": {"model": "openai/gpt-5.6-terra"}, "model_info": {"id": "vision"}}
+_DECLARED_TEXT_LEG: Final[dict[str, object]] = {
     "litellm_params": {"model": "bedrock/openai.gpt-oss-120b-1:0"},
     "model_info": {"id": "declared-text", "supports_vision": False},
 }
 
 
-def _pre_call_router(*deployments: dict, routing_strategy: str = "latency-based-routing") -> litellm.Router:
+def _pre_call_router(*deployments: dict[str, object], routing_strategy: str = "latency-based-routing") -> litellm.Router:
     return litellm.Router(
         model_list=[{"model_name": "mixed", **deployment} for deployment in deployments],
         routing_strategy=routing_strategy,
@@ -29899,7 +29899,7 @@ def _pre_call_router(*deployments: dict, routing_strategy: str = "latency-based-
     )
 
 
-def _pre_call_ids(router: litellm.Router, deployments: tuple[dict, ...], **request) -> list[str]:
+def _pre_call_ids(router: litellm.Router, deployments: tuple[dict[str, object], ...], **request: object) -> list[str]:
     return [d["model_info"]["id"] for d in router._pre_call_checks(model="mixed", healthy_deployments=list(deployments), **request)]
 
 
@@ -29962,7 +29962,7 @@ def test_pre_call_checks_resolve_vision_through_the_cost_map_and_base_model():
     ],
     ids=["override-false", "override-true", "cost-map-false", "base-model-false", "undeclared"],
 )
-def test_deployment_declares_no_vision_reads_the_override_then_the_cost_map(deployment, expected):
+def test_deployment_declares_no_vision_reads_the_override_then_the_cost_map(deployment: dict[str, object], expected: bool):
     assert litellm.Router._deployment_declares_no_vision(deployment, "mixed") is expected
 
 
