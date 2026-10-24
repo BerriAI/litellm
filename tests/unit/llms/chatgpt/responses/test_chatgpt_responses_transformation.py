@@ -189,6 +189,68 @@ class TestChatGPTResponsesAPITransformation:
         assert "reasoning.encrypted_content" in request["include"]
         assert request["instructions"].startswith("You are Codex, based on GPT-5.")
 
+    def test_chatgpt_normalizes_foreign_function_call_item_id(self):
+        config = ChatGPTResponsesAPIConfig()
+        input_items = [
+            {
+                "type": "function_call",
+                "id": "toolu_fixture_123",
+                "call_id": "call_fixture_123",
+                "name": "read_file",
+                "arguments": '{"path":"README.md"}',
+            }
+        ]
+
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input=input_items,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [
+            {
+                "type": "function_call",
+                "id": "fc_064009edc4c975f0fa4b447f8ea388e0",
+                "call_id": "call_fixture_123",
+                "name": "read_file",
+                "arguments": '{"path":"README.md"}',
+            }
+        ]
+
+    def test_chatgpt_omits_replayed_private_output_items(self):
+        config = ChatGPTResponsesAPIConfig()
+        input_items = [
+            {"type": "reasoning", "id": "rs_fixture", "encrypted_content": "opaque"},
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "continue"}],
+            },
+            {"type": "web_search_call", "id": "ws_fixture", "status": "completed"},
+            {
+                "type": "function_call",
+                "id": "fc_fixture",
+                "call_id": "call_fixture",
+                "name": "read_file",
+                "arguments": '{"path":"README.md"}',
+            },
+        ]
+
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input=input_items,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert [item["type"] for item in request["input"]] == [
+            "message",
+            "function_call",
+        ]
+
     @pytest.mark.parametrize(
         "model_name",
         [
