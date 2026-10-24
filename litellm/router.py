@@ -14188,16 +14188,19 @@ class Router:
 
     @staticmethod
     def _deployment_declares_no_vision(deployment: DeploymentTypedDict, group: str) -> bool:
-        deployment_model_info: Final = deployment.get("model_info") or {}
-        declared: Final = deployment_model_info.get("supports_vision")
+        plain_deployment: Final = cast(Mapping[str, object], deployment)  # cast-ok: router deployments are plain dicts
+        model_info: Final = cast(Mapping[str, object], plain_deployment.get("model_info") or {})  # cast-ok: plain dict
+        declared: Final = model_info.get("supports_vision")
         if declared is not None:
             return declared is False
-        deployment_params: Final = deployment.get("litellm_params")
-        if not deployment_params:
+        plain_params: Final = cast(
+            Mapping[str, object], plain_deployment.get("litellm_params") or {}
+        )  # cast-ok: plain dict
+        if not plain_params:
             return False
-        base_model: Final = deployment_model_info.get("base_model") or deployment_params.get("base_model")
+        base_model: Final = model_info.get("base_model") or plain_params.get("base_model")
         try:
-            model, custom_llm_provider = Router._capability_model_and_provider(deployment_params, group)
+            model, custom_llm_provider = Router._capability_model_and_provider(deployment["litellm_params"], group)
             return litellm.utils.is_vision_explicitly_disabled(
                 base_model if isinstance(base_model, str) else model, custom_llm_provider
             )
@@ -14210,14 +14213,14 @@ class Router:
     @staticmethod
     def _request_carries_image(
         messages: list[dict[str, str]] | None,  # mutable-ok: handed to resolve_structured_messages as-is
-        request_kwargs: dict | None,  # mutable-ok: handed to resolve_structured_messages as-is
+        request_kwargs: Mapping[str, object],
     ) -> bool:
         from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
         from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 
         structured: Final = resolve_structured_messages(
             messages=cast(list[dict[str, object]] | None, messages),  # cast-ok: chat messages are plain dicts
-            request_kwargs=request_kwargs if request_kwargs is not None else {},
+            request_kwargs=cast(dict[str, object], request_kwargs),  # cast-ok: the resolver only reads the mapping
         )
         return bool(structured) and request_contains_image_content(structured)
 
@@ -14257,7 +14260,7 @@ class Router:
         # We only pop from the list, not modify deployment dicts - 100x+ faster on hot path (every request)
         _returned_deployments = list(healthy_deployments)
 
-        invalid_model_indices: Final = set()  # Use set for O(1) membership checks
+        invalid_model_indices: Final[set[int]] = set()  # Use set for O(1) membership checks
 
         _context_window_error = False
         _potential_error_str = ""
@@ -14410,12 +14413,12 @@ class Router:
         remaining: Final = tuple(
             (idx, deployment) for idx, deployment in param_candidates if idx not in excluded_indices
         )
-        text_only_indices: Final = (
+        text_only_indices: Final[frozenset[int]] = (
             frozenset(idx for idx, deployment in remaining if self._deployment_declares_no_vision(deployment, model))
-            if remaining and self._request_carries_image(messages, request_kwargs)
+            if remaining and self._request_carries_image(messages, request_settings)
             else frozenset()
         )
-        dropped_indices: Final = excluded_indices | (
+        dropped_indices: Final[frozenset[int]] = excluded_indices | (
             text_only_indices if len(text_only_indices) < len(remaining) else frozenset()
         )
         if len(dropped_indices) > 0:
