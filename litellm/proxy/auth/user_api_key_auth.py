@@ -1240,9 +1240,6 @@ async def user_api_key_auth_websocket_for_model(
                 if protocol.startswith("openai-insecure-api-key."):
                     api_key = protocol[len("openai-insecure-api-key.") :]
                     break
-        if not api_key:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            raise HTTPException(status_code=403, detail="No API key provided")
     else:
         # Extract the API key from the Bearer token
         if not authorization.startswith("Bearer "):
@@ -1254,7 +1251,10 @@ async def user_api_key_auth_websocket_for_model(
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed
     try:
-        authorized: Final = await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
+        authorized: Final = await user_api_key_auth(
+            request=request,
+            api_key=f"Bearer {api_key}" if api_key else None,  # pyright: ignore[reportArgumentType]  # None = no key
+        )
         if _has_required_baggage_tag_mapping():
             raise HTTPException(
                 403, "Required baggage tag mappings need HTTP inference, WebSocket inference is disabled"
