@@ -2110,13 +2110,13 @@ def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_na
     ("model", "model_info", "expected"),
     [
         ("us.anthropic.claude-opus-4-8", None, True),
-        ("global.anthropic.claude-sonnet-5", None, True),
+        ("eu.anthropic.claude-opus-4-8", None, True),
         ("us-gov.anthropic.claude-opus-4-8", None, False),
         ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False),
-        ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True}, True),
+        ("us-gov.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": True}, True),
         ("us.anthropic.claude-sonnet-4-6", {"supports_bedrock_native_structured_output": True}, False),
     ],
-    ids=["opus_4_8", "sonnet_5", "govcloud_opus_4_8", "deployment_opt_out", "deployment_opt_in", "native_model"],
+    ids=["opus_4_8", "eu_opus_4_8", "govcloud_opus_4_8", "deployment_opt_out", "deployment_opt_in", "native_model"],
 )
 def test_bedrock_native_output_is_opt_in_only_where_the_opt_in_key_turns_native_output_on(
     local_model_cost_map, model, model_info, expected

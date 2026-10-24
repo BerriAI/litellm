@@ -4090,7 +4090,7 @@ _OPT_IN_DEPLOYMENTS: Final = pytest.mark.parametrize(
     ("model", "model_info"),
     [
         ("us.anthropic.claude-opus-4-8", None),
-        ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True}),
+        ("us-gov.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": True}),
     ],
     ids=["mapped_opt_in", "deployment_opt_in"],
 )
