@@ -19,14 +19,16 @@ import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 from opentelemetry import trace
+from opentelemetry._logs import LogRecord
 from opentelemetry._logs.severity import SeverityNumber
-from opentelemetry.sdk._logs import LogData, LogRecord
+from opentelemetry.sdk._logs import ReadableLogRecord
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
-from opentelemetry.sdk._logs.export import InMemoryLogExporter, LogExportResult, SimpleLogRecordProcessor
+from opentelemetry.sdk._logs.export import InMemoryLogExporter, LogRecordExportResult, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from parameterized import parameterized
@@ -48,10 +50,11 @@ from litellm.integrations.opentelemetry import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy import proxy_server
-from litellm.proxy._types import SpanAttributes
+from litellm.proxy._types import ManagementEndpointLoggingPayload, ProxyException, SpanAttributes
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-from collections.abc import AsyncIterator
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from collections.abc import AsyncIterator, Callable, Mapping
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import ChatCompletionMessageToolCall, Function
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -361,6 +364,33 @@ def test_v1_routing_diagnostics_add_scalar_attributes_and_preserve_legacy_metada
     }
     assert actual == {f"litellm.routing.{key}": value for key, value in decision.items()}
     assert finished.attributes["metadata.routing_decision"] == str(decision)
+
+
+def test_v1_pod_routing_none_matches_other_none_metadata_attributes() -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(
+            span,
+            {
+                "model": "answer",
+                "standard_logging_object": {
+                    "id": "routing-call",
+                    "call_type": "acompletion",
+                    "metadata": {
+                        KUBERNETES_POD_ROUTING_KEY: None,
+                        "other_none": None,
+                    },
+                },
+            },
+            {"model": "answer", "choices": [], "usage": {}},
+        )
+    (finished,) = exporter.get_finished_spans()
+    routing_attribute: Final = finished.attributes["metadata.kubernetes_pod_routing"]
+    assert routing_attribute == finished.attributes["metadata.other_none"]
+    assert routing_attribute != "null"
 
 
 @pytest.mark.parametrize("decision", ["custom", 42, ["custom"]])
@@ -2293,9 +2323,13 @@ def test_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPat
             severity_number=SeverityNumber.INFO,
             body="tls-export-test",
         )
-        log_data: Final = LogData(log_record=record, instrumentation_scope=InstrumentationScope("tls-export-test"))
+        log_data: Final = ReadableLogRecord(
+            log_record=record,
+            resource=Resource({}),
+            instrumentation_scope=InstrumentationScope("tls-export-test"),
+        )
         result: Final = exporter.export([log_data])
-        assert result is LogExportResult.SUCCESS, f"log export failed: {result}"
+        assert result is LogRecordExportResult.SUCCESS, f"log export failed: {result}"
         assert tls_sink.received.get(timeout=5) == "/v1/logs"
     finally:
         exporter.shutdown()
@@ -3187,6 +3221,9 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
         )
 
 
+_FIXED_START: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
 class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
     """
     Test suite for OpenTelemetry 1.38 Semantic Conventions compliance.
@@ -3703,6 +3740,91 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
         error_spans = [s for s in spans if s.status.status_code == StatusCode.ERROR]
         self.assertTrue(error_spans, "Expected at least one span with ERROR status")
+
+    @parameterized.expand(
+        [
+            (
+                "own_span_error_information",
+                False,
+                {
+                    "error_str": "litellm.ServiceUnavailableError: upstream returned 503",
+                    "error_information": {
+                        "error_class": "ServiceUnavailableError",
+                        "error_message": "upstream returned 503",
+                    },
+                },
+                "upstream returned 503",
+            ),
+            (
+                "own_span_error_str_only",
+                False,
+                {"error_str": "litellm.ServiceUnavailableError: upstream returned 503"},
+                "litellm.ServiceUnavailableError: upstream returned 503",
+            ),
+            (
+                "own_span_error_str_only_cut_to_the_attribute_length_limit",
+                False,
+                {"error_str": "litellm.ServiceUnavailableError: upstream returned 503"},
+                "litellm.Serv",
+                12,
+            ),
+            (
+                "own_span_empty_error_message",
+                False,
+                {"error_information": {"error_class": "ServiceUnavailableError", "error_message": ""}},
+                "ServiceUnavailableError",
+            ),
+            (
+                "parent_span_error_information",
+                True,
+                {
+                    "error_information": {
+                        "error_class": "ServiceUnavailableError",
+                        "error_message": "upstream returned 503",
+                    }
+                },
+                "upstream returned 503",
+            ),
+        ]
+    )
+    def test_handle_failure_error_status_carries_the_error_message(
+        self,
+        _name: str,
+        has_parent_span: bool,
+        error_fields: Mapping[str, object],
+        expected_description: str,
+        max_attribute_length: int | None = None,
+    ) -> None:
+        span_exporter: Final = InMemorySpanExporter()
+        tracer_provider: Final = TracerProvider(span_limits=SpanLimits(max_attribute_length=max_attribute_length))
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+        otel: Final = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer("litellm")
+        active_parent_span: Final = (
+            trace.use_span(tracer_provider.get_tracer("proxy").start_span("parent_span"), end_on_exit=True)
+            if has_parent_span
+            else contextlib.nullcontext()
+        )
+        start: Final = _FIXED_START
+        end: Final = start + timedelta(seconds=1)
+        kwargs: Final = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {"id": "test-id", "call_type": "completion", "metadata": {}, **error_fields},
+            "exception": Exception("upstream returned 503"),
+        }
+
+        with patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}), active_parent_span:
+            otel._handle_failure(kwargs, None, start, end)
+
+        error_spans: Final = [
+            s for s in span_exporter.get_finished_spans() if s.status.status_code == trace.StatusCode.ERROR
+        ]
+        self.assertEqual(len(error_spans), 1)
+        self.assertEqual(error_spans[0].name, "parent_span" if has_parent_span else "litellm_request")
+        self.assertEqual(error_spans[0].status.description, expected_description)
 
 
 class TestRawSpanAttributeIsolation(unittest.TestCase):
@@ -5412,6 +5534,95 @@ class TestOpenTelemetryFailureHookStampsServerSpan(unittest.TestCase):
         )
 
 
+_PROXY_KEY_ERROR: Final = "Authentication Error, invalid proxy key"
+
+
+def _proxy_key_exception() -> ProxyException:
+    return ProxyException(message=_PROXY_KEY_ERROR, type="auth_error", param="None", code=401)
+
+
+def _fail_proxy_request(provider: TracerProvider) -> None:
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    asyncio.run(
+        otel.async_post_call_failure_hook(
+            request_data={},
+            original_exception=_proxy_key_exception(),
+            user_api_key_dict=UserAPIKeyAuth(parent_otel_span=otel.tracer.start_span("Received Proxy Server Request")),
+        )
+    )
+
+
+def _fail_management_request(provider: TracerProvider) -> None:
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    now: Final = _FIXED_START
+    asyncio.run(
+        otel.async_management_endpoint_failure_hook(
+            logging_payload=ManagementEndpointLoggingPayload(
+                route="/key/generate", request_data={}, exception=_proxy_key_exception(), start_time=now, end_time=now
+            ),
+            parent_otel_span=otel.tracer.start_span("Received Proxy Server Request"),
+        )
+    )
+
+
+def _fail_service_call(provider: TracerProvider) -> None:
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    now: Final = _FIXED_START
+    asyncio.run(
+        otel.async_service_failure_hook(
+            payload=ServiceLoggerPayload(
+                is_error=True,
+                error="redis connection refused",
+                service=ServiceTypes.REDIS,
+                duration=0.1,
+                call_type="async_get_cache",
+                event_metadata=None,
+            ),
+            error="redis connection refused",
+            parent_otel_span=otel.tracer.start_span("Received Proxy Server Request"),
+            start_time=now,
+            end_time=now,
+        )
+    )
+
+
+_FAILED_SPANS: Final = pytest.mark.parametrize(
+    ("fail", "expected_description"),
+    [
+        (_fail_proxy_request, _PROXY_KEY_ERROR),
+        (_fail_management_request, _PROXY_KEY_ERROR),
+        (_fail_service_call, "redis connection refused"),
+    ],
+    ids=["proxy_request", "management_request", "service_call"],
+)
+
+
+def _error_status_descriptions(fail: Callable[[TracerProvider], None], provider: TracerProvider) -> set[str | None]:
+    exporter: Final = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    fail(provider)
+    error_spans: Final = [s for s in exporter.get_finished_spans() if s.status.status_code == trace.StatusCode.ERROR]
+    assert error_spans
+    return {s.status.description for s in error_spans}
+
+
+@_FAILED_SPANS
+def test_every_error_span_carries_the_error_message_in_its_status(
+    fail: Callable[[TracerProvider], None], expected_description: str
+) -> None:
+    assert _error_status_descriptions(fail, TracerProvider()) == {expected_description}
+
+
+@_FAILED_SPANS
+def test_error_status_is_cut_to_the_span_attribute_length_limit(
+    fail: Callable[[TracerProvider], None], expected_description: str
+) -> None:
+    limit: Final = 12
+    provider: Final = TracerProvider(span_limits=SpanLimits(max_attribute_length=limit))
+
+    assert _error_status_descriptions(fail, provider) == {expected_description[:limit]}
+
+
 class TestOpenTelemetrySetProxyRequestRouteAttributes(unittest.TestCase):
     """http.route (template) + url.path (literal) must land on the SERVER
     span. The logging handlers write the litellm_request child span, so
@@ -6434,7 +6645,7 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
             time.sleep(self.POLL_INTERVAL)
         return None
 
-    def _emitted_log_records(self, semconv_opt_in: str) -> tuple[LogData, ...]:
+    def _emitted_log_records(self, semconv_opt_in: str) -> tuple[ReadableLogRecord, ...]:
         log_exporter = InMemoryLogExporter()
         logger_provider = OTLoggerProvider()
         logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
@@ -6508,7 +6719,12 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
     must be bounded and must shut down whatever it drops (LIT-5437: threads accumulated
     until pods were OOMKilled)."""
 
-    BSP_THREAD_NAME = "OtelBatchSpanProcessor"
+    def setUp(self) -> None:
+        processor: Final = BatchSpanProcessor(InMemorySpanExporter())
+        try:
+            self.bsp_thread_name = processor._batch_processor._worker_thread.name
+        finally:
+            processor.shutdown()
 
     def _logger(self, cap=3, exporter="console"):
         logger = OpenTelemetry(
@@ -6525,7 +6741,7 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
         logger._tracer_provider_cache.clear()
 
     def _live_exporter_threads(self):
-        return [t for t in threading.enumerate() if t.name == self.BSP_THREAD_NAME]
+        return [t for t in threading.enumerate() if t.name == self.bsp_thread_name]
 
     def _wait_for_exporter_threads(self, expected, timeout=10.0):
         """Dropped providers are shut down off-thread, so poll instead of sleeping."""
@@ -6546,8 +6762,6 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
             logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
 
         self.assertEqual(len(logger._tracer_provider_cache), 3)
-        # Guards the thread-name constant: a rename upstream would make this read 0 and the
-        # bound assertion below would pass while measuring nothing.
         self.assertGreaterEqual(len(self._live_exporter_threads()), 1)
         self.assertLessEqual(self._wait_for_exporter_threads(before + 3) - before, 3)
 

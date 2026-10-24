@@ -21,7 +21,6 @@ from integration.authorization._guardrail_opt_out import (
     guardrail_config,
     non_admin_caller,
     stored_metadata,
-    upstream_hits,
     upstream_observations,
 )
 
@@ -226,9 +225,14 @@ def test_exempt_burst_survives_guardrail_sink_outage(gateway: Gateway, tmp_path:
                 "synthetic policy denial" in response.text or response.status_code == 500
                 for response in non_exempt_outage
             ), [response.text for response in non_exempt_outage if response.status_code not in {400, 500}]
-            assert all(upstream_hits(gateway, f"outage-{index}-") == 0 for index in range(1, 20, 2)), (
-                upstream_observations(gateway)
-            )
+            control_marker: Final = "control-" + uuid.uuid4().hex
+            control: Final = chat(candidate, model, exempt, control_marker)
+            assert control.status_code == 200, control.text
+            observed: Final = upstream_observations(gateway)
+            bodies: Final = tuple(json.dumps(entry.get("body")) for entry in observed)
+            assert any(control_marker in body for body in bodies), observed
+            assert all(any(f"outage-{index}-" in body for body in bodies) for index in range(0, 20, 2)), observed
+            assert not any(any(f"outage-{index}-" in body for body in bodies) for index in range(1, 20, 2)), observed
 
             sink.start()
             recovered: Final = chat(candidate, model, plain, "recovered-" + uuid.uuid4().hex)

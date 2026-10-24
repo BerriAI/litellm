@@ -8,12 +8,15 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
+from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret_reference
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+from litellm.litellm_core_utils.litellm_logging import Logging, same_attempt_marker
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -26,6 +29,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_advisor_orchestration_failure,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
+    is_stream_stall,
     set_cooldown_deployments,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
@@ -49,6 +53,7 @@ else:
 # (e.g. a nonexistent file/batch/thread id), independent of the selected deployment's health.
 _REQUEST_SCOPED_STATUS_CODES: Final = frozenset((404,))
 _NO_MODEL_CALL_DETAILS: Final[Mapping[str, object]] = MappingProxyType({})
+_FALLBACK_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 def _trigger_cooldown_for_failed_deployment(
@@ -70,6 +75,13 @@ def _trigger_cooldown_for_failed_deployment(
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment: failure originated "
                 "from advisor orchestration, not the selected deployment."
+            )
+            return
+
+        if is_stream_stall(exception):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: its stream stalled on a read timeout, "
+                "which stays out of cooldown as it does for the primary deployment."
             )
             return
 
@@ -436,6 +448,24 @@ def mid_stream_retry_kwargs(
     the controls carrier the snapshot still holds restores the overrides into the retry's own hop.
     """
     return {key: value for key, value in hop_kwargs.items() if key not in _MID_STREAM_RETRY_STRIPPED_KEYS}
+
+
+def carry_superseded_attempt_usage(kwargs: Mapping[str, object]) -> None:
+    """Carry the superseded stream's partial usage into billing if the request ultimately fails."""
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+        logging_obj.carry_failed_attempt_usage()
+
+
+def _failure_callbacks_blocked_logging_object(kwargs: Mapping[str, object]) -> Logging | None:
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if not isinstance(logging_obj, Logging):
+        return None
+    if logging_obj.model_call_details.get("has_logged_async_failure", False) is not True:
+        return None
+    current_marker: Final = logging_obj.model_call_details.get("current_attempt_api_call_start_time")
+    logged_marker: Final = logging_obj.model_call_details.get("async_failure_logged_attempt")
+    return logging_obj if not same_attempt_marker(current_marker, logged_marker) else None
 
 
 def _request_metadata_bucket(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -808,6 +838,7 @@ async def run_async_fallback(
     for target in fallback_model_group:
         if isinstance(target, dict):
             reject_server_owned_wif_params(target)
+            reject_api_key_secret_reference(target)
 
     for mg in fallback_model_group:
         if mg == failed_model_group:
@@ -859,6 +890,7 @@ async def run_async_fallback(
             kwargs["attempted_targets"] = attempted
             if include_fallback_errors:
                 kwargs["include_fallback_errors"] = include_fallback_errors
+            carry_superseded_attempt_usage(_FALLBACK_KWARGS_ADAPTER.validate_python(kwargs))
             response = await litellm_router.async_function_with_fallbacks(*args, **kwargs)
             verbose_router_logger.info("Successful fallback b/w models.")
             response = add_fallback_headers_to_response(
@@ -881,13 +913,16 @@ async def run_async_fallback(
                 kwargs=kwargs,
                 original_exception=original_exception,
             )
-            logging_obj = kwargs.get("litellm_logging_obj")
-            if logging_obj is not None and logging_obj.model_call_details.get("has_logged_async_failure", False):
+            if (
+                failure_callbacks_blocked_logging_obj := _failure_callbacks_blocked_logging_object(
+                    _FALLBACK_KWARGS_ADAPTER.validate_python(kwargs)
+                )
+            ) is not None:
                 _trigger_cooldown_for_failed_deployment(
                     litellm_router=litellm_router,
                     kwargs=kwargs,
                     exception=e,
-                    model_call_details=logging_obj.model_call_details,
+                    model_call_details=failure_callbacks_blocked_logging_obj.model_call_details,
                 )
     raise error_from_fallbacks
 

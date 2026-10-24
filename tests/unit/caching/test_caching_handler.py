@@ -41,7 +41,7 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Embedding,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ChatCompletionTextObject, ResponsesAPIResponse
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta, datetime
@@ -3092,6 +3092,78 @@ async def test_async_get_cache_forgets_the_worker_copy_of_a_stored_response_with
 
     assert lookup.cached_result is None
     assert await handler.dual_cache.async_get_cache(key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("copilot_response_cache")
+async def test_embedding_cache_preserves_text_blocks_and_separates_them_from_media_strings() -> None:
+    fixed_start: Final = datetime(2026, 1, 1)
+    caching_handler: Final = LLMCachingHandler(original_function=aembedding, request_kwargs={}, start_time=fixed_start)
+    model: Final = "gemini/gemini-embedding-2"
+    media: Final = "data:image/png;base64,AAAA"
+    text_block: Final[ChatCompletionTextObject] = {"type": "text", "text": media}
+    logging_obj: Final = LiteLLMLogging(
+        litellm_call_id="explicit-text-cache",
+        call_type=CallTypes.aembedding.value,
+        model=model,
+        messages=[],
+        function_id="explicit-text-cache",
+        stream=False,
+        start_time=fixed_start,
+    )
+    await caching_handler.async_set_cache(
+        result=EmbeddingResponse(model=model, data=[Embedding(embedding=[0.1], index=0, object="embedding")]),
+        original_function=aembedding,
+        kwargs={"model": model, "input": [media], "caching": True},
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    partial_hit: Final = await caching_handler.async_get_cache(
+        model=model,
+        original_function=aembedding,
+        logging_obj=logging_obj,
+        start_time=fixed_start,
+        call_type=CallTypes.aembedding.value,
+        kwargs={"model": model, "input": [text_block, media], "caching": True},
+    )
+
+    assert partial_hit is not None
+    assert partial_hit.embedding_all_elements_cache_hit is False
+    assert partial_hit.embedding_uncached_input == [text_block]
+    assert partial_hit.final_embedding_cached_response is not None
+    assert partial_hit.final_embedding_cached_response.data[0] is None
+    assert partial_hit.final_embedding_cached_response.data[1].embedding == [0.1]
+
+    await caching_handler.async_set_cache(
+        result=EmbeddingResponse(model=model, data=[Embedding(embedding=[0.2], index=0, object="embedding")]),
+        original_function=aembedding,
+        kwargs={
+            "model": model,
+            "input": partial_hit.embedding_uncached_input,
+            "caching": True,
+        },
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    full_hit: Final = await caching_handler.async_get_cache(
+        model=model,
+        original_function=aembedding,
+        logging_obj=logging_obj,
+        start_time=fixed_start,
+        call_type=CallTypes.aembedding.value,
+        kwargs={"model": model, "input": [text_block, media], "caching": True},
+    )
+
+    assert full_hit is not None
+    assert full_hit.embedding_all_elements_cache_hit is True
+    assert full_hit.embedding_uncached_input == []
+    assert full_hit.final_embedding_cached_response is not None
+    assert [item.embedding for item in full_hit.final_embedding_cached_response.data] == [[0.2], [0.1]]
+    assert [item.index for item in full_hit.final_embedding_cached_response.data] == [
+        0,
+        1,
+    ]
+
 
 
 @pytest.mark.asyncio

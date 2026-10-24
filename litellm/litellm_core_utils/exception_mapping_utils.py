@@ -102,6 +102,7 @@ class ExceptionCheckers:
             "`inputs` tokens + `max_new_tokens` must be",
             "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
+            '"code": "context_length_exceeded"',
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
@@ -2551,7 +2552,8 @@ def exception_type(
             ################################################################################
 
             if (
-                "Request Timeout Error" in error_str
+                isinstance(original_exception, httpx.TimeoutException)
+                or "Request Timeout Error" in error_str
                 or "Request timed out" in error_str
                 or "Timed out generating response" in error_str
                 or "The read operation timed out" in error_str
@@ -2559,7 +2561,7 @@ def exception_type(
                 exception_mapping_worked = True
 
                 raise Timeout(
-                    message=f"APITimeoutError - Request timed out. Error_str: {error_str}",
+                    message=f"APITimeoutError - Request timed out. Error_str: {error_str or type(mappable_exception).__name__}",
                     model=model,
                     llm_provider=custom_llm_provider,
                     litellm_debug_info=extra_information,

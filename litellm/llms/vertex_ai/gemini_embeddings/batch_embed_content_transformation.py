@@ -167,7 +167,7 @@ class _EmbeddingFileBlock(LiteLLMBaseModel):
 
 
 class _EmbeddingTextBlock(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     type: Literal["text"]
     text: str
@@ -221,11 +221,6 @@ def _dropping_unsupported_keys(block: Mapping[str, object]) -> dict[str, object]
 
 
 def _is_text_block(element: object) -> bool:
-    """A typed text content block: a mapping with type=text and a text string.
-
-    A text block is embedded as text, verbatim: no media prefix detection
-    runs on it, no matter that its text starts with data:, gs:// or files/.
-    """
     return (
         isinstance(element, Mapping)
         and cast(Mapping[str, object], element).get("type") == "text"  # cast-ok: isinstance leaves value type unknown
@@ -364,25 +359,18 @@ def _elements(input: GeminiEmbeddingInput) -> Iterator[GeminiEmbeddingElement]:
             yield element
 
 
-def _element_source(element: GeminiEmbeddingElement) -> str | None:
-    """The media source of an element: the string itself, or a file content block's source.
-
-    Typed text blocks are not media sources: their text is declared text, so it
-    must never be resolved as a file reference or parsed as an inline/GCS media part.
-    """
+def _element_source(element: GeminiEmbeddingElement, drop_params: bool) -> str | None:
     if isinstance(element, str):
         return element
     if _is_text_block(element):
+        _parse_text_block(element, drop_params)
         return None
-    return _file_block_source(_parse_file_block(element, drop_params=True))
+    return _file_block_source(_parse_file_block(element, drop_params))
 
 
-def flatten_media_sources(input: GeminiEmbeddingInput) -> tuple[str, ...]:
-    """Every string element plus every file content block's source, in input order.
-
-    Typed text blocks contribute nothing: their text is declared text, never media.
-    """
-    return tuple(source for source in (_element_source(element) for element in _elements(input)) if source is not None)
+def flatten_media_sources(input: GeminiEmbeddingInput, drop_params: bool = False) -> tuple[str, ...]:
+    sources: Final = (_element_source(element, drop_params) for element in _elements(input))
+    return tuple(source for source in sources if source is not None)
 
 
 def _is_multimodal_input(input: GeminiEmbeddingInput) -> bool:
@@ -582,7 +570,6 @@ def _is_image_only_input(
 
 
 def _plain_text(element: GeminiEmbeddingElement) -> str | None:
-    """The text of an element that is text, not media: a plain string, or a typed text block."""
     if isinstance(element, str):
         return None if _is_multimodal_element(element) else element
     if _is_text_block(element):
@@ -590,39 +577,13 @@ def _plain_text(element: GeminiEmbeddingElement) -> str | None:
     return None
 
 
-def _text_substituted_input(input: GeminiEmbeddingInput) -> GeminiEmbeddingInput:
-    """Input with typed text blocks replaced by their text, so token counting sees plain strings.
-
-    Inputs without text blocks keep their shape and contents unchanged. The
-    walk is iterative on purpose (an explicit stack instead of a recursive
-    helper) to stay within the repo's recursive-function policy.
-    """
-    if not isinstance(input, list):
-        return input
-
-    result: Final[list[object]] = []  # mutable-ok: the walker accumulates into it; the name is never rebound
-    stack: Final[list[tuple[list[object], list[object]]]] = [  # mutable-ok: pop/append walker state; never rebound
-        (list(cast(list[object], input)), result)  # cast-ok: read-only widening; the walker never writes into input
-    ]
-    while stack:
-        source, sink = stack[-1]
-        if not source:
-            stack.pop()
-            if stack:
-                stack[-1][1].append(sink)
-            continue
-        item: object = source.pop(0)
-        if isinstance(item, list):
-            stack.append(
-                (list(cast(list[object], item)), [])  # cast-ok: isinstance leaves the list element type unknown
-            )
-        elif _is_text_block(item):
-            sink.append(_parse_text_block(item, drop_params=True).text)
-        else:
-            sink.append(item)
-    # Shape-preserving substitution: a valid GeminiEmbeddingInput with its text
-    # blocks read as their text is still a valid GeminiEmbeddingInput.
-    return cast(GeminiEmbeddingInput, result)  # cast-ok: shape-preserving substitution; see the note above
+def _text_prompt_tokens(input: GeminiEmbeddingInput, model: str) -> int:
+    texts: Final = (_plain_text(element) for element in _elements(input))
+    text_elements: Final = [text for text in texts if text is not None]
+    if not text_elements:
+        return 0
+    input_text: Final = get_formatted_prompt(data={"input": text_elements}, call_type="embedding")
+    return token_counter(model=model, text=input_text)
 
 
 def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) -> int:
@@ -632,8 +593,7 @@ def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) 
 def _fallback_usage(input: GeminiEmbeddingInput, model: str) -> Usage:
     if _is_multimodal_input(input):
         return Usage(prompt_tokens=0, total_tokens=0)
-    input_text: Final = get_formatted_prompt(data={"input": _text_substituted_input(input)}, call_type="embedding")
-    prompt_tokens: Final = token_counter(model=model, text=input_text)
+    prompt_tokens: Final = _text_prompt_tokens(input, model)
     return Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
 
 
@@ -739,25 +699,7 @@ def process_response(
     model_response.data = openai_embeddings
     model_response.model = model
 
-    has_nested: Final = isinstance(input, list) and any(isinstance(e, list) for e in input)
-    if _is_multimodal_input(input) or has_nested:
-        input_list: Final = input if isinstance(input, list) else [input]
-        text_elements: Final[list[str]] = []
-        for e in input_list:
-            if isinstance(e, list):
-                text_elements.extend(text for text in (_plain_text(sub) for sub in e) if text is not None)
-            else:
-                plain: str | None = _plain_text(e)
-                if plain is not None:
-                    text_elements.append(plain)
-        if text_elements:
-            input_text = get_formatted_prompt(data={"input": text_elements}, call_type="embedding")
-            prompt_tokens = token_counter(model=model, text=input_text)
-        else:
-            prompt_tokens = 0
-    else:
-        input_text = get_formatted_prompt(data={"input": _text_substituted_input(input)}, call_type="embedding")
-        prompt_tokens = token_counter(model=model, text=input_text)
+    prompt_tokens: Final = _text_prompt_tokens(input, model)
     model_response.usage = Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
 
     return model_response

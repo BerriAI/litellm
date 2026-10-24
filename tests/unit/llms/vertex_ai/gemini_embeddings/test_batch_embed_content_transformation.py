@@ -797,7 +797,7 @@ class TestTextBlockTokenAccounting:
     """A text block must count its text exactly like the same text as a bare string."""
 
     def _predictions(self) -> VertexAIBatchEmbeddingsResponseObject:
-        return VertexAIBatchEmbeddingsResponseObject(embeddings=[{"values": [0.1, 0.2]}])
+        return VertexAIBatchEmbeddingsResponseObject(embeddings=[{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}])
 
     def test_text_block_counts_like_the_same_bare_string(self) -> None:
         chunk: Final = "the quick brown fox starts a chunk"

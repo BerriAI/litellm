@@ -74,6 +74,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _optional_params: &MessagesOptionalParams,
         _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -887,6 +888,7 @@ mod tests {
             headers(forwarded),
             api_key,
             "claude",
+            &MessagesOptionalParams::default(),
             &LitellmParams::default(),
             &env(vars),
         )
@@ -1206,6 +1208,7 @@ mod tests {
             Vec::new(),
             None,
             "claude",
+            &MessagesOptionalParams::default(),
             &LitellmParams::default(),
             &record,
         );

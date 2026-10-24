@@ -641,7 +641,7 @@ class _Observations:
             )
         requests: Final = payload.get("requests")
         assert isinstance(requests, list)
-        self.items = (*self.items, *(object_value(item) for item in requests if isinstance(item, dict)))
+        self.items = tuple(object_value(item) for item in requests if isinstance(item, dict))
         return self.items
 
     def for_scenario(self, identity: str) -> tuple[dict[str, JsonValue], ...]:
