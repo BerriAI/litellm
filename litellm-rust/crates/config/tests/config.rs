@@ -206,6 +206,7 @@ router_settings:
   allowed_fails: 2
   redis_host: cache.internal
 litellm_settings:
+  model_cost_map_url: https://cost-map.example.test/prices.json
   drop_params: true
   cache: true
   custom_callback_name: audit
@@ -251,6 +252,10 @@ future_section:
             .litellm_settings
             .additional_fields
             .contains_key("custom_callback_name")
+    );
+    assert_eq!(
+        config.litellm_settings.model_cost_map_url.as_deref(),
+        Some("https://cost-map.example.test/prices.json")
     );
     assert!(config.additional_fields.contains_key("future_section"));
 }

@@ -14,7 +14,8 @@ mod responses;
 
 use std::sync::Arc;
 
-use axum::{Router, routing::post};
+use axum::{Router, extract::FromRef, routing::post};
+use litellm_gateway_model_catalog::CatalogReader;
 use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
 use litellm_inference::resources::CoreResources;
 use litellm_inference_chat::ChatCompletionsRoute;
@@ -38,9 +39,12 @@ pub struct Gateway {
     pub responses: ResponsesRoute,
     pub models: ModelRouter,
     pub secrets: Arc<dyn SecretSource>,
-    pub resources: CoreResources,
+    pub resources: CoreResources<CatalogReader>,
     pub http: HttpClientConfig,
 }
+
+#[derive(Clone)]
+pub struct GatewayState(Arc<Gateway>);
 
 impl Gateway {
     pub fn with_cache(self, cache: Arc<dyn litellm_cache_response::ResponseCacheService>) -> Self {
@@ -51,7 +55,7 @@ impl Gateway {
     }
 
     pub fn new(
-        resources: CoreResources,
+        resources: CoreResources<CatalogReader>,
         http: HttpClientConfig,
         secrets: Arc<dyn SecretSource>,
         models: ModelRouter,
@@ -88,8 +92,22 @@ impl Gateway {
     }
 }
 
+impl FromRef<GatewayState> for CatalogReader {
+    fn from_ref(state: &GatewayState) -> Self {
+        state.0.resources.catalog.clone()
+    }
+}
+
+impl FromRef<GatewayState> for Arc<Gateway> {
+    fn from_ref(state: &GatewayState) -> Self {
+        state.0.clone()
+    }
+}
+
 pub fn router(gateway: Arc<Gateway>) -> Router {
+    let state = GatewayState(gateway);
     Router::new()
+        .merge(litellm_gateway_model_catalog::router::<GatewayState>())
         .route("/v1/messages", post(messages::create))
         .route("/ocr", post(ocr::create))
         .route("/v1/ocr", post(ocr::create))
@@ -111,10 +129,10 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(
             request::MAX_BODY_BYTES,
         ))
-        .with_state(gateway)
+        .with_state(state)
 }
 
-fn model_routes() -> Router<Arc<Gateway>> {
+fn model_routes() -> Router<GatewayState> {
     Router::new()
         .route(
             "/chat/completions",
