@@ -376,7 +376,7 @@ class GenericAPILogger(CustomBatchLogger):
         batch: Final = tuple(self.log_queue)
         if not batch:
             return
-        failed_events: list[Mapping[str, object] | StandardLoggingPayload] = []
+        failed_events: Final = []
         try:
             verbose_logger.debug(
                 "Generic API Logger - about to flush %s events in '%s' format", len(batch), self.log_format
@@ -430,7 +430,7 @@ class GenericAPILogger(CustomBatchLogger):
             # Transient failures (timeouts, transport errors, 5xx) are re-queued so the next
             # flush retries them; permanent failures (4xx, payload errors) are dropped.
             if self._should_retry_exception(e):
-                failed_events = list(batch)
+                failed_events.extend(batch)
         finally:
             del self.log_queue[: len(batch)]
             if failed_events:
