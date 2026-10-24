@@ -6,6 +6,7 @@ touched on the per-user path.
 
 import asyncio
 import hmac
+import shlex
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -244,7 +245,8 @@ def _reject_connection(credential_name: str) -> CallerCredentialAuthenticationEr
     return CallerCredentialAuthenticationError(
         message=(
             f"GitHub rejected the GitHub Copilot connection for credential '{credential_name}'. "
-            f"Reconnect GitHub Copilot for credential '{credential_name}' in the LiteLLM UI (LLM Credentials)"
+            f"Reconnect GitHub Copilot for credential '{credential_name}' in the LiteLLM UI (LLM Credentials) "
+            f"or run `lite credentials connect {shlex.quote(credential_name)}`"
         ),
         llm_provider=_LLM_PROVIDER,
         model="",
@@ -601,7 +603,10 @@ def github_copilot_auth_mode(litellm_credential_name: object, auth_type_value: o
 
 def _connect_error(credential_name: str) -> CallerCredentialAuthenticationError:
     return CallerCredentialAuthenticationError(
-        message=(f"Connect GitHub Copilot for credential '{credential_name}' in the LiteLLM UI (LLM Credentials)"),
+        message=(
+            f"Connect GitHub Copilot for credential '{credential_name}' in the LiteLLM UI (LLM Credentials) "
+            f"or run `lite credentials connect {shlex.quote(credential_name)}`"
+        ),
         llm_provider=_LLM_PROVIDER,
         model="",
     )
