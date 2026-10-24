@@ -64,6 +64,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
     ...(skill.namespace ? [{ property: "Namespace", value: skill.namespace }] : []),
     ...(skill.version ? [{ property: "Version", value: skill.version }] : []),
     ...(skill.author?.name ? [{ property: "Author", value: skill.author.name }] : []),
+    { property: "Hosted for Claude Desktop", value: skill.serve_archive ? "Yes" : "No" },
     ...(skill.created_at ? [{ property: "Added", value: new Date(skill.created_at).toLocaleDateString() }] : []),
   ];
 

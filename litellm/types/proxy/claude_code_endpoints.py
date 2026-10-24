@@ -60,6 +60,16 @@ class PluginSpec(LiteLLMBaseModel):
         ),
     )
 
+    serve_archive: bool | None = Field(
+        None,
+        description=(
+            "Have LiteLLM build and host this plugin as a same-origin ZIP (served at "
+            "/claude-code/plugins/{name}/archive.zip) and advertise it as an 'archive' source with its sha256, "
+            "which is what Claude Desktop installs from. Defaults to true for 'archive' sources and false for "
+            "git sources. Git sources must be hosted on GitHub. Claude Code entries are unchanged when false"
+        ),
+    )
+
     @model_validator(mode="before")
     @classmethod
     def reject_both_preference_spellings(cls, data: object) -> object:
@@ -112,6 +122,7 @@ class PluginResponse(LiteLLMBaseModel):
     description: str | None = Field(None, description="Plugin description")
     source: dict[str, str] = Field(..., description="Plugin source reference")
     installation_preference: InstallationPreference | None = Field(None, description="Plugin installation preference")
+    serve_archive: bool = Field(False, description="Whether LiteLLM hosts this plugin's ZIP archive")
     enabled: bool = Field(..., description="Whether plugin is enabled")
 
 
@@ -138,6 +149,7 @@ class PluginListItem(LiteLLMBaseModel):
     domain: str | None = None
     namespace: str | None = None
     installation_preference: InstallationPreference | None = None
+    serve_archive: bool = False
     enabled: bool
     created_at: str | None
     updated_at: str | None

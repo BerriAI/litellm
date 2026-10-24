@@ -338,6 +338,70 @@ describe("AddPluginForm", () => {
     expect(mockRegister).not.toHaveBeenCalled();
   });
 
+  const HOST_SWITCH = { name: "Host for Claude Desktop" };
+
+  it("hides the Claude Desktop switch until a source URL is entered", () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    expect(screen.queryByRole("switch", HOST_SWITCH)).not.toBeInTheDocument();
+  });
+
+  it("hosts a zip archive by default and omits serve_archive so the backend default applies", async () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl(S3_ZIP_URL);
+
+    expect(await screen.findByRole("switch", HOST_SWITCH)).toBeChecked();
+    await submit();
+    await waitFor(() => expect(mockRegister).toHaveBeenCalled());
+    expect(mockRegister.mock.calls[0][1]).not.toHaveProperty("serve_archive");
+  });
+
+  it("sends serve_archive false when a zip archive opts out of hosting", async () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl(S3_ZIP_URL);
+    fireEvent.click(await screen.findByRole("switch", HOST_SWITCH));
+    await submit();
+
+    await waitFor(() => {
+      expect(mockRegister).toHaveBeenCalledWith("sk-test", expect.objectContaining({ serve_archive: false }));
+    });
+  });
+
+  it("leaves a git source unhosted by default and omits serve_archive", async () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl("https://github.com/anthropics/claude-code");
+
+    expect(await screen.findByRole("switch", HOST_SWITCH)).not.toBeChecked();
+    await submit();
+    await waitFor(() => expect(mockRegister).toHaveBeenCalled());
+    expect(mockRegister.mock.calls[0][1]).not.toHaveProperty("serve_archive");
+  });
+
+  it("sends serve_archive true when a git source opts in to hosting", async () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl("https://github.com/anthropics/claude-code");
+    fireEvent.click(await screen.findByRole("switch", HOST_SWITCH));
+    await submit();
+
+    await waitFor(() => {
+      expect(mockRegister).toHaveBeenCalledWith("sk-test", expect.objectContaining({ serve_archive: true }));
+    });
+  });
+
+  it("resets the switch to the new source type's default when the URL changes kind", async () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl("https://github.com/anthropics/claude-code");
+    fireEvent.click(await screen.findByRole("switch", HOST_SWITCH));
+    await typeUrl(S3_ZIP_URL);
+
+    expect(await screen.findByRole("switch", HOST_SWITCH)).toBeChecked();
+  });
+
   it("surfaces the backend error message when registration fails", async () => {
     mockRegister.mockRejectedValueOnce(new Error("Plugin 'claude-code' already exists"));
     renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
