@@ -105,6 +105,44 @@ async def test_read_request_body_marks_body_received_for_binary_and_form_bodies(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"maximum": 12345678901234567890123}',
+        b'{"minimum": -9223372036854775809}',
+        b'{"maximum": 18446744073709551616}',
+        b'{"maximum": 18446744073709551615}',
+        b'{"const": 9007199254740993}',
+        b'{"nested": {"list": [12345678901234567890123, {"deep": -9223372036854775809}]}}',
+    ],
+)
+async def test_read_request_body_keeps_large_integers_exact(body: bytes):
+    parsed = await read_request_body(_starlette_request(body, "application/json"))
+
+    assert parsed == json.loads(body)
+    assert json.dumps(parsed).encode() == json.dumps(json.loads(body)).encode()
+
+
+@pytest.mark.asyncio
+async def test_read_request_body_does_not_turn_floats_or_digit_strings_into_integers():
+    body = (
+        b'{"model": "glm-5.3", "content": "id 12345678901234567890123", '
+        b'"score": 1.234567890123456789, "rate": 12345678901234567890e0, "count": 42}'
+    )
+    parsed = await read_request_body(_starlette_request(body, "application/json"))
+
+    assert parsed == {
+        "model": "glm-5.3",
+        "content": "id 12345678901234567890123",
+        "score": 1.234567890123456789,
+        "rate": 12345678901234567890e0,
+        "count": 42,
+    }
+    assert isinstance(parsed["score"], float)
+    assert isinstance(parsed["rate"], float)
+
+
+@pytest.mark.asyncio
 async def test_read_raw_json_body_returns_the_bytes_the_parsed_body_came_from():
     body = b'{"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}]}'
     request = _starlette_request(body, "application/json")
