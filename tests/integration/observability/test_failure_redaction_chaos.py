@@ -11,7 +11,7 @@ import httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, JsonValue, eventually, gateway_from_environment, object_value
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, OwnedState, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 
 BURST: Final = 30
@@ -190,6 +190,7 @@ def test_g2_slow_sink_no_deadlock_no_duplicates(tmp_path: Path) -> None:
 @pytest.mark.timeout(280)
 def test_g3_proxy_restart_mid_burst(tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
+    model: Final = f"restart-model-{uuid.uuid4().hex}"
     with wire_server(_provider) as provider, wire_server(lambda _: Reply()) as endpoint:
         config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
         config["litellm_settings"].update(
@@ -199,12 +200,14 @@ def test_g3_proxy_restart_mid_burst(tmp_path: Path) -> None:
         path.write_text(yaml.safe_dump(config))
         overrides: Final = {"GENERIC_LOGGER_ENDPOINT": endpoint.url}
         with gateway_from_environment() as gateway:
-            bodies: Final = _bodies("restart-model", marker)
-            with owned_proxy_process(gateway, tmp_path, overrides, config=path, workers=2) as owned_one:
+            bodies: Final = _bodies(model, marker)
+            with owned_proxy_process(
+                gateway, tmp_path, overrides, config=path, workers=2, state=OwnedState.SHARED_WITH_WORKER
+            ) as owned_one:
                 owned_one.gateway.post(
                     "/model/new",
                     {
-                        "model_name": "restart-model",
+                        "model_name": model,
                         "litellm_params": {
                             "model": "openai/gpt-4o-mini",
                             "api_base": provider.url + "/v1",
@@ -218,20 +221,22 @@ def test_g3_proxy_restart_mid_burst(tmp_path: Path) -> None:
                         owned_one,
                         provider,
                         endpoint,
-                        "restart-model",
+                        model,
                         threading.Event(),
                         threading.Event(),
                         [],
                     ),
                     bodies[: BURST // 2],
                 )
-            with owned_proxy_process(gateway, tmp_path, overrides, config=path, workers=2) as owned_two:
+            with owned_proxy_process(
+                gateway, tmp_path, overrides, config=path, workers=2, state=OwnedState.SHARED_WITH_WORKER
+            ) as owned_two:
                 rig_two: Final = Rig(
                     owned_two.gateway,
                     owned_two,
                     provider,
                     endpoint,
-                    "restart-model",
+                    model,
                     threading.Event(),
                     threading.Event(),
                     [],
@@ -249,33 +254,35 @@ def test_g3_proxy_restart_mid_burst(tmp_path: Path) -> None:
 
                 eventually(served, lambda statuses: statuses[0] == 400, seconds=60)
                 second: Final = _fire(rig_two, bodies[BURST // 2 :])
-            answered: Final = first + second + tuple(probes)
-            assert all(status in (400, 500) for status, _ in answered), answered
-            post_restart_ids: Final = frozenset(cid for status, cid in second + tuple(probes) if status == 400 and cid)
-            assert post_restart_ids, answered
-            assert any(marker.encode() in request.body for request in provider.drain())
-            collected: list[Request] = []  # mutable-ok: drain consumes batches, later polls keep earlier ones
+                answered: Final = first + second + tuple(probes)
+                assert all(status in (400, 500) for status, _ in answered), answered
+                post_restart_ids: Final = frozenset(
+                    cid for status, cid in second + tuple(probes) if status == 400 and cid
+                )
+                assert post_restart_ids, answered
+                assert any(marker.encode() in request.body for request in provider.drain())
+                collected: list[Request] = []  # mutable-ok: drain consumes batches, later polls keep earlier ones
 
-            def landed() -> tuple[str, ...]:
-                collected.extend(endpoint.drain())
-                return tuple(
-                    str(event.get("litellm_call_id"))
+                def landed() -> tuple[str, ...]:
+                    collected.extend(endpoint.drain())
+                    return tuple(
+                        str(event.get("litellm_call_id"))
+                        for batch in collected
+                        if _json_body_ok(batch.body)
+                        for event in json.loads(batch.body)
+                    )
+
+                landed_ids: Final = eventually(landed, lambda ids: post_restart_ids <= set(ids), seconds=60)
+                assert all(not batch.body.strip() for batch in collected if not _json_body_ok(batch.body)), collected
+                assert len(landed_ids) == len(set(landed_ids)), ("duplicate events after restart", landed_ids)
+                events: Final = tuple(
+                    object_value(event)
                     for batch in collected
                     if _json_body_ok(batch.body)
                     for event in json.loads(batch.body)
                 )
-
-            landed_ids: Final = eventually(landed, lambda ids: post_restart_ids <= set(ids), seconds=60)
-            assert all(not batch.body.strip() for batch in collected if not _json_body_ok(batch.body)), collected
-            assert len(landed_ids) == len(set(landed_ids)), ("duplicate events after restart", landed_ids)
-            events: Final = tuple(
-                object_value(event)
-                for batch in collected
-                if _json_body_ok(batch.body)
-                for event in json.loads(batch.body)
-            )
-            for event in events:
-                assert marker not in json.dumps(event), json.dumps(event)[:400]
+                for event in events:
+                    assert marker not in json.dumps(event), json.dumps(event)[:400]
 
 
 @pytest.mark.timeout(280)

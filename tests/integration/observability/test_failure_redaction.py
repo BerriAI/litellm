@@ -15,7 +15,6 @@ import openai
 import pytest
 import yaml
 from integration._support.client import Gateway, JsonValue, eventually, gateway_from_environment, object_value
-from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 
@@ -227,9 +226,9 @@ def _single_failure_event(rig: Rig, model: str) -> dict[str, JsonValue]:
     return events[0]
 
 
-def _spend_row(call_id: str) -> dict[str, JsonValue]:
+def _spend_row(proxy: Gateway, call_id: str) -> dict[str, JsonValue]:
     rows: Final = eventually(
-        lambda: read_rows(
+        lambda: proxy.rows(
             'SELECT status, messages, response, proxy_server_request, metadata FROM "LiteLLM_SpendLogs" '
             "WHERE request_id=%s",
             (call_id,),
@@ -264,7 +263,7 @@ def test_provider_error_echoing_the_prompt_is_redacted_in_callbacks_and_spend_lo
         assert error_information["error_code"] == "400", error_information
         assert error_information["llm_provider"] == "openai", error_information
         assert "hidden_params" not in event, sorted(event)
-        row: Final = _spend_row(response.headers["x-litellm-call-id"])
+        row: Final = _spend_row(rig.proxy, response.headers["x-litellm-call-id"])
         assert row["status"] == "failure", row
         assert secret not in json.dumps(row, default=str), row
         persisted: Final = object_value(
@@ -361,7 +360,7 @@ def _assert_failure_redacted(rig: Rig, model: str, secret: str, call_id: str) ->
     error_information: Final = _error_information(event)
     assert error_information["error_class"], error_information
     assert error_information["llm_provider"], error_information
-    row: Final = _spend_row(call_id)
+    row: Final = _spend_row(rig.proxy, call_id)
     assert row["status"] == "failure", row
     assert secret not in json.dumps(row, default=str), row
     return event
@@ -371,7 +370,7 @@ def _assert_failure_raw(rig: Rig, model: str, secret: str, call_id: str | None =
     event: Final = _single_failure_event(rig, model)
     assert secret in json.dumps(event), json.dumps(event)
     if call_id is not None:
-        row: Final = _spend_row(call_id)
+        row: Final = _spend_row(rig.proxy, call_id)
         assert secret in json.dumps(row, default=str), row
     return event
 
@@ -601,7 +600,7 @@ def test_a9_unknown_model_failure_redacted(rig: Rig) -> None:
     assert rig.provider.drain() == ()
     event: Final = eventually(lambda: rig.failure_events(model), lambda values: len(values) >= 1, seconds=20)[0]
     assert secret not in json.dumps(event), json.dumps(event)
-    row: Final = _spend_row(_call_id(response))
+    row: Final = _spend_row(rig.proxy, _call_id(response))
     assert secret not in json.dumps(row, default=str), row
 
 
@@ -904,7 +903,7 @@ def test_e4_header_only_unknown_model_spend_row_never_carries_marker(rig_off: Ri
         headers={"x-litellm-enable-message-redaction": "true"},
     )
     assert response.status_code == 400, response.text
-    row: Final = _spend_row(_call_id(response))
+    row: Final = _spend_row(rig_off.proxy, _call_id(response))
     assert secret not in json.dumps(row, default=str), row
 
 
@@ -1107,4 +1106,4 @@ def test_f4_five_identical_failures_log_once_each(rig: Rig) -> None:
                 lambda values: len(values) == 1,
                 seconds=30,
             )
-            assert _spend_row(call_id)["status"] == "failure", call_id
+            assert _spend_row(rig.proxy, call_id)["status"] == "failure", call_id
