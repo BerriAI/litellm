@@ -2706,7 +2706,12 @@ class TestStreamingClientDisconnectScan:
 
         assert [call.function.name for call in released[0].choices[0].delta.tool_calls] == ["get_weather"]
         assert guardrail.received_texts == [["BLOCKME"]], guardrail.received_texts
-        assert guardrail.received_tool_calls == [], guardrail.received_tool_calls
+        assert guardrail.received_tool_calls == [[{
+            "id": "call_1",
+            "type": "function",
+            "index": 0,
+            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        }]]
 
     @pytest.mark.asyncio
     async def test_closing_after_a_released_tool_call_under_incremental_diff_scans_no_held_back_text(self):
