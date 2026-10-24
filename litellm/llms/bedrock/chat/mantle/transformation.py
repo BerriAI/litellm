@@ -146,6 +146,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         sync_stream: bool,
         json_mode: bool | None,
         optional_params: Mapping[str, object],
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> "ModelResponseIterator":
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 

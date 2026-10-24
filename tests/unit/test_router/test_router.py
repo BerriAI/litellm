@@ -30022,64 +30022,109 @@ _DECLARED_TEXT_LEG: Final[dict[str, object]] = {
 }
 
 
-def _pre_call_router(*deployments: dict[str, object], routing_strategy: str = "latency-based-routing") -> litellm.Router:
+def _mixed_router(*deployments: dict[str, object], routing_strategy: str = "latency-based-routing") -> litellm.Router:
     return litellm.Router(
         model_list=[{"model_name": "mixed", **deployment} for deployment in deployments],
         routing_strategy=routing_strategy,
-        enable_pre_call_checks=True,
     )
 
 
-def _pre_call_ids(router: litellm.Router, deployments: tuple[dict[str, object], ...], **request: object) -> list[str]:
-    return [d["model_info"]["id"] for d in router._pre_call_checks(model="mixed", healthy_deployments=list(deployments), **request)]
+def _candidate_ids(
+    router: litellm.Router,
+    messages: list[dict[str, object]] | None = None,
+    request_kwargs: dict[str, object] | None = None,
+) -> list[str]:
+    candidates: Final = router._without_declared_text_only_deployments(
+        router.get_model_list(model_name="mixed"), "mixed", messages, request_kwargs
+    )
+    return [d["model_info"]["id"] for d in candidates]
 
 
-def test_pre_call_checks_drop_declared_text_only_legs_for_image_requests():
-    router = _pre_call_router(_VISION_LEG, _DECLARED_TEXT_LEG)
-    assert _pre_call_ids(router, (_VISION_LEG, _DECLARED_TEXT_LEG), messages=_IMAGE_CHAT) == ["vision"]
+def test_router_picks_the_vision_leg_for_image_requests_without_enable_pre_call_checks():
+    router: Final = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    assert router.enable_pre_call_checks is False
+    for _ in range(5):
+        assert router.get_available_deployment(model="mixed", messages=_IMAGE_CHAT)["model_info"]["id"] == "vision"
 
 
-def test_pre_call_checks_keep_declared_text_only_legs_for_text_requests():
-    router = _pre_call_router(_VISION_LEG, _DECLARED_TEXT_LEG)
-    assert _pre_call_ids(router, (_VISION_LEG, _DECLARED_TEXT_LEG), messages=[{"role": "user", "content": "Say hi"}]) == [
+@pytest.mark.asyncio
+async def test_async_router_picks_the_vision_leg_for_responses_images_without_enable_pre_call_checks():
+    router: Final = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    for _ in range(5):
+        deployment: Final = await router.async_get_available_deployment(
+            model="mixed", request_kwargs={"input": _IMAGE_RESPONSES_INPUT}
+        )
+        assert deployment["model_info"]["id"] == "vision"
+
+
+def test_router_sends_an_image_to_the_text_only_leg_when_pre_call_checks_drop_the_vision_leg():
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "mixed", **_VISION_LEG, "model_info": {"id": "vision", "max_input_tokens": 1}},
+            {"model_name": "mixed", **_DECLARED_TEXT_LEG},
+        ],
+        routing_strategy="latency-based-routing",
+        enable_pre_call_checks=True,
+    )
+    assert router.get_available_deployment(model="mixed", messages=_IMAGE_CHAT)["model_info"]["id"] == "declared-text"
+
+
+def test_router_sends_an_image_to_the_text_only_leg_when_the_vision_leg_is_cooling_down():
+    router: Final = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="vision", original_exception=Exception("bad key"), exception_status=401, cooldown_time=60
+    )
+    assert router.get_available_deployment(model="mixed", messages=_IMAGE_CHAT)["model_info"]["id"] == "declared-text"
+
+
+def test_without_declared_text_only_deployments_passes_a_chosen_deployment_through():
+    assert litellm.Router._without_declared_text_only_deployments(_DECLARED_TEXT_LEG, "mixed", _IMAGE_CHAT, None) is _DECLARED_TEXT_LEG
+
+
+def test_image_routing_drop_declared_text_only_legs_for_image_requests():
+    router: Final = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    assert _candidate_ids(router, messages=_IMAGE_CHAT) == ["vision"]
+
+
+def test_image_routing_keep_declared_text_only_legs_for_text_requests():
+    router: Final = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    assert _candidate_ids(router, messages=[{"role": "user", "content": "Say hi"}]) == [
         "vision",
         "declared-text",
     ]
 
 
-def test_pre_call_checks_drop_declared_text_only_legs_for_responses_input_image():
-    router = _pre_call_router(_VISION_LEG, _DECLARED_TEXT_LEG)
-    assert _pre_call_ids(
-        router, (_VISION_LEG, _DECLARED_TEXT_LEG), messages=None, request_kwargs={"input": _IMAGE_RESPONSES_INPUT}
-    ) == ["vision"]
+def test_image_routing_drop_declared_text_only_legs_for_responses_input_image():
+    router: Final = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    assert _candidate_ids(router, request_kwargs={"input": _IMAGE_RESPONSES_INPUT}) == ["vision"]
 
 
-def test_pre_call_checks_send_image_to_the_group_when_every_leg_is_declared_text_only():
+def test_image_routing_send_image_to_the_group_when_every_leg_is_declared_text_only():
     other_text_leg = {**_DECLARED_TEXT_LEG, "model_info": {"id": "declared-text-2", "supports_vision": False}}
-    router = _pre_call_router(_DECLARED_TEXT_LEG, other_text_leg)
-    assert _pre_call_ids(router, (_DECLARED_TEXT_LEG, other_text_leg), messages=_IMAGE_CHAT) == [
+    router: Final = _mixed_router(_DECLARED_TEXT_LEG, other_text_leg)
+    assert _candidate_ids(router, messages=_IMAGE_CHAT) == [
         "declared-text",
         "declared-text-2",
     ]
 
 
-def test_pre_call_checks_keep_undeclared_custom_legs_for_image_requests():
+def test_image_routing_keep_undeclared_custom_legs_for_image_requests():
     custom_leg = {
         "litellm_params": {"model": "hosted_vllm/Qwen2.5-VL-7B-Instruct", "api_base": "http://localhost:8000"},
         "model_info": {"id": "custom"},
     }
-    router = _pre_call_router(_VISION_LEG, custom_leg)
-    assert _pre_call_ids(router, (_VISION_LEG, custom_leg), messages=_IMAGE_CHAT) == ["vision", "custom"]
+    router: Final = _mixed_router(_VISION_LEG, custom_leg)
+    assert _candidate_ids(router, messages=_IMAGE_CHAT) == ["vision", "custom"]
 
 
-def test_pre_call_checks_resolve_vision_through_the_cost_map_and_base_model():
+def test_image_routing_resolve_vision_through_the_cost_map_and_base_model():
     catalog_text_leg = {"litellm_params": {"model": "bedrock/deepseek.v3.2"}, "model_info": {"id": "catalog-text"}}
     azure_text_leg = {
         "litellm_params": {"model": "azure/my-audio-deployment", "api_base": "https://x.openai.azure.com"},
         "model_info": {"id": "azure-text", "base_model": "azure/gpt-audio"},
     }
-    router = _pre_call_router(_VISION_LEG, catalog_text_leg, azure_text_leg)
-    assert _pre_call_ids(router, (_VISION_LEG, catalog_text_leg, azure_text_leg), messages=_IMAGE_CHAT) == ["vision"]
+    router: Final = _mixed_router(_VISION_LEG, catalog_text_leg, azure_text_leg)
+    assert _candidate_ids(router, messages=_IMAGE_CHAT) == ["vision"]
 
 
 @pytest.mark.parametrize(

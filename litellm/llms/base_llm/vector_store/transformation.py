@@ -221,6 +221,11 @@ class BaseVectorStoreConfig:
             raise ValueError("api_base is required")
         return api_base
 
+    def get_vector_store_url(self, api_base: str, encoded_vector_store_id: str) -> str:
+        """Url of one vector store for retrieve, update and delete. Providers whose
+        ``get_complete_url`` adds a query string, like Azure, override this."""
+        return f"{api_base}/{encoded_vector_store_id}"
+
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
 

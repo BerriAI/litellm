@@ -184,6 +184,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db import tool_registry_writer
 from litellm.proxy.db.create_views import (
     create_missing_views,
     create_view_tolerating_race,
@@ -191,6 +192,7 @@ from litellm.proxy.db.create_views import (
 )
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_url_settings import (
     DatabaseURLSettings,
     add_missing_query_params,
@@ -1473,6 +1475,13 @@ def _call_type_for_route(route: str | None) -> str | None:
     operations: Final = frozenset(call_type.value.removeprefix("a") for call_type in call_types)
     return call_types[0].value if len(operations) == 1 else None
 
+
+REJECTED_BEFORE_REQUEST_SETUP_KEY: Final = "litellm_rejected_before_request_setup"
+REJECTED_BEFORE_REQUEST_SETUP: Final = object()
+"""Stored under ``REJECTED_BEFORE_REQUEST_SETUP_KEY`` on ``request_data`` when the failure handler finds no logging
+object, meaning the request died (auth, body parsing, model resolution) before the pipeline set one up. A sentinel
+object rather than ``True`` because ``request_data`` is the client body: JSON cannot forge this identity, so a
+client can neither hide a guardrail block nor force a row by sending the key or a ``litellm_call_id`` itself."""
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
@@ -3886,6 +3895,7 @@ class ProxyLogging:
                 **request_data,
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
+            request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
             if "metadata" not in request_data:
                 request_data["metadata"] = {}
             request_data["metadata"].update(user_api_key_logged_metadata)
@@ -8180,6 +8190,18 @@ class ProxyUpdateSpend:
         if general_settings.get("disable_spend_updates") is True:
             return True
         return False
+
+
+async def commit_tool_discoveries(prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging) -> None:
+    """Scheduler job writing discovered tools to LiteLLM_ToolTable, on its own lock, next to update_spend."""
+    writer: Final = proxy_logging_obj.db_spend_update_writer
+    await tool_registry_writer.commit_tool_discoveries(
+        prisma_client=prisma_client,
+        tool_discovery_queue=writer.tool_discovery_queue,
+        redis_update_buffer=writer.redis_update_buffer,
+        pod_lock_manager=writer.pod_lock_manager,
+        use_redis_buffer=RedisUpdateBuffer.should_commit_spend_updates_to_redis(),
+    )
 
 
 async def update_spend(
