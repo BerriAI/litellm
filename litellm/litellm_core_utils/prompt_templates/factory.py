@@ -8,6 +8,8 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
+from functools import lru_cache
+from logging import Logger
 from types import MappingProxyType
 from typing import Annotated, Any, Final, TypeAlias, TypedDict, TypeVar, cast, overload
 
@@ -20,7 +22,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE, REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
@@ -309,11 +311,40 @@ def _ollama_user_turn(model: str, messages: Sequence[AllMessageValues], msg_i: i
     return user_content_str, image_urls, len(user_run)
 
 
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _emit_ollama_default_template_warning(model: str, logger: Logger) -> None:
+    display_model: Final = re.sub(r"[\x00-\x1f\x7f]", " ", model)
+    logger.warning(
+        "ollama/%s: the chat messages were flattened into a single text prompt with "
+        "'### System:' / '### User:' / '### Assistant:' markers and sent to /api/generate. This is "
+        "litellm's default template for the 'ollama/' provider, and it replaces the model's own "
+        "chat template, which Ollama applies on /api/chat. A model that was never trained on those "
+        "markers can echo them back as response content. Use 'ollama_chat/%s' to let Ollama apply "
+        "the model's template, or register a template for this model with "
+        "litellm.register_prompt_template() to keep using 'ollama/'. "
+        "Docs: https://docs.litellm.ai/docs/providers/ollama",
+        display_model,
+        display_model,
+    )
+
+
+def warn_once_if_ollama_default_template_used(
+    model: str,
+    messages: Sequence[AllMessageValues],
+    logger: Logger = verbose_logger,
+) -> None:
+    roles: Final = frozenset(message.get("role") for message in messages)
+    if len(roles) < 2:
+        return
+    _emit_ollama_default_template_warning(model, logger)
+
+
 def ollama_pt(
     model: str, messages: list
 ) -> (
     str | OllamaVisionModelObject
 ):  # https://github.com/ollama/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
+    warn_once_if_ollama_default_template_used(model=model, messages=messages)
     msg_i = 0
     images: Final = []
     prompt = ""
