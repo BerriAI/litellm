@@ -386,6 +386,8 @@ class OllamaChatConfig(BaseConfig):
             "eval_count",
             litellm.token_counter(text=response_json["message"]["content"]),
         )
+        raw_cached: Final = response_json.get("prompt_eval_cached_count")
+        cached_tokens: Final = raw_cached if isinstance(raw_cached, int) else 0
         setattr(
             model_response,
             "usage",
@@ -393,6 +395,7 @@ class OllamaChatConfig(BaseConfig):
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
+                prompt_tokens_details={"cached_tokens": cached_tokens},
             ),
         )
         return model_response
@@ -418,10 +421,13 @@ def _done_chunk_usage(chunk: Mapping[str, object]) -> ChatCompletionUsageBlock |
     eval_count: Final = chunk.get("eval_count")
     if chunk.get("done") is not True or not isinstance(prompt_eval_count, int) or not isinstance(eval_count, int):
         return None
+    raw_cached: Final = chunk.get("prompt_eval_cached_count")
+    cached_tokens: Final = raw_cached if isinstance(raw_cached, int) else 0
     return ChatCompletionUsageBlock(
         prompt_tokens=prompt_eval_count,
         completion_tokens=eval_count,
         total_tokens=prompt_eval_count + eval_count,
+        prompt_tokens_details={"cached_tokens": cached_tokens},
     )
 
 

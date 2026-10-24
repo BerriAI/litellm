@@ -1,8 +1,8 @@
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # untyped stream chunk
 
 from httpx._models import Headers, Response
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
@@ -94,6 +94,7 @@ class _OllamaGenerateMessage(TypedDict):
 class _OllamaGenerateResponse(TypedDict):
     message: ReadOnly[NotRequired[_OllamaGenerateMessage]]
     prompt_eval_count: ReadOnly[NotRequired[int]]
+    prompt_eval_cached_count: ReadOnly[NotRequired[int]]
     eval_count: ReadOnly[NotRequired[int]]
 
 
@@ -393,6 +394,8 @@ class OllamaConfig(BaseConfig):
         completion_tokens: Final = response_json.get(
             "eval_count", len((response_json.get("message") or {}).get("content", ""))
         )
+        raw_cached: Final = response_json.get("prompt_eval_cached_count")
+        cached_tokens: Final = raw_cached if isinstance(raw_cached, int) else 0
         setattr(
             model_response,
             "usage",
@@ -400,6 +403,7 @@ class OllamaConfig(BaseConfig):
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
+                prompt_tokens_details={"cached_tokens": cached_tokens},
             ),
         )
         return model_response
@@ -587,10 +591,13 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
 
                 usage: ChatCompletionUsageBlock | None = None
                 if prompt_eval_count is not None and eval_count is not None:
+                    raw_cached: Final = cast(Mapping[str, object], chunk).get("prompt_eval_cached_count")
+                    cached_tokens: Final = raw_cached if isinstance(raw_cached, int) else 0
                     usage = ChatCompletionUsageBlock(
                         prompt_tokens=prompt_eval_count,
                         completion_tokens=eval_count,
                         total_tokens=prompt_eval_count + eval_count,
+                        prompt_tokens_details={"cached_tokens": cached_tokens},
                     )
                 if self.held_content:
                     return self._flush_held_content(usage)

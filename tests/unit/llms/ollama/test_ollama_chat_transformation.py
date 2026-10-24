@@ -969,6 +969,24 @@ class TestOllamaStreamingUsage:
         assert result.usage is not None
         assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (100, 50, 150)
 
+    def test_done_chunk_reports_cached_tokens_ollama_sent(self):
+        result: Final = self._parse(
+            {
+                "model": "qwen3:0.6b",
+                "message": {"role": "assistant", "content": ""},
+                "done": True,
+                "done_reason": "stop",
+                "prompt_eval_count": 6024,
+                "prompt_eval_cached_count": 6016,
+                "eval_count": 50,
+            }
+        )
+
+        assert result.usage is not None
+        assert result.usage.prompt_tokens == 6024
+        assert result.usage.prompt_tokens_details is not None
+        assert result.usage.prompt_tokens_details.cached_tokens == 6016
+
     def test_done_chunk_without_counts_reports_no_usage_instead_of_zeros(self):
         result = self._parse(
             {
@@ -991,6 +1009,42 @@ class TestOllamaStreamingUsage:
         )
 
         assert result.usage is None
+
+
+def test_non_streaming_reports_cached_tokens_ollama_sent() -> None:
+    config: Final = OllamaChatConfig()
+
+    mock_response: Final = MagicMock()
+    mock_response.json.return_value = {
+        "model": "qwen3:0.6b",
+        "message": {"role": "assistant", "content": "Hi"},
+        "done": True,
+        "prompt_eval_count": 6024,
+        "prompt_eval_cached_count": 6016,
+        "eval_count": 50,
+    }
+
+    model_response: Final = ModelResponse()
+    model_response.choices = [Choices(message=Message(content=""), index=0)]
+
+    result: Final = config.transform_response(
+        model="qwen3:0.6b",
+        raw_response=mock_response,
+        model_response=model_response,
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        api_key=None,
+        json_mode=False,
+    )
+
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 6024
+    assert result.usage.prompt_tokens_details is not None
+    assert result.usage.prompt_tokens_details.cached_tokens == 6016
 
 
 def test_get_ollama_params():
