@@ -472,15 +472,23 @@ def redeem_passthrough_authorization_code(
     return sealed
 
 
-def _session_cookie_user_id(request: Request) -> str | None:
+async def _session_cookie_user_id(request: Request) -> str | None:
     """The signed-in litellm user for a browser request, or ``None``. Thin wrapper so the
     aggregate DCR flow's verbs receive the identity as a plain value instead of parsing
-    cookies themselves."""
+    cookies themselves. Checks that the embedded session key is still live in the database."""
     from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # circular import at module load
+        _session_identity_from_cookie,
+        _session_key_is_live,
         user_id_from_session_cookie,
     )
 
-    return user_id_from_session_cookie(request)
+    user_id = user_id_from_session_cookie(request)
+    if not user_id:
+        return None
+    _, session_key = _session_identity_from_cookie(request)
+    if not await _session_key_is_live(session_key):
+        return None
+    return user_id
 
 
 def _redirect_to_litellm_login(request: Request) -> RedirectResponse:
@@ -996,17 +1004,13 @@ async def _resolve_oauth_authorization_user(
     enforce_binding: bool,
 ) -> str | RedirectResponse:
     """Resolve the authorization subject without replacing denied credentials with cookie grants."""
-    from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # proxy import cycle
-        user_id_from_session_cookie,
-    )
-
     use_gateway_credential: Final = enforce_binding and await oauth_authorization_uses_gateway_credential(request)
     request_user_id: Final = (
         await authorize_oauth_credential_request(request, mcp_server.server_id) if use_gateway_credential else None
     )
     if use_gateway_credential and request_user_id is None:
         return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
-    user_id: Final = request_user_id or user_id_from_session_cookie(request)
+    user_id: Final = request_user_id or await _session_cookie_user_id(request)
     if user_id is None:
         return _redirect_to_litellm_login(request)
     if not await _user_can_reach_mcp_server(user_id, mcp_server.server_id):
@@ -1024,7 +1028,7 @@ async def _managed_authorization_scope(
         request
     )
     session_user: Final = (
-        _session_cookie_user_id(request) if authorized_user_id is None and not gateway_credential else None
+        await _session_cookie_user_id(request) if authorized_user_id is None and not gateway_credential else None
     )
     scope_user_id: Final = authorized_user_id or (
         await authorize_oauth_credential_request(request, server.server_id)
@@ -2359,7 +2363,7 @@ async def authorize_mcp_session(
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method,
         response_type=response_type,
-        session_user_id=_session_cookie_user_id(request),
+        session_user_id=await _session_cookie_user_id(request),
         resource=resource,
         scope=scope,
     )
@@ -2382,6 +2386,7 @@ async def authorize(
 ):
     # Redirect to real OAuth provider with PKCE support
     if mcp_server_name is None and client_id and is_gateway_dcr_client_id(client_id):
+        session_user_id: Final = await _session_cookie_user_id(request)
         if is_proxy_api_resource(request, resource):
             return await native_client_authorize(
                 request=request,
@@ -2391,7 +2396,7 @@ async def authorize(
                 code_challenge=code_challenge,
                 code_challenge_method=code_challenge_method,
                 response_type=response_type,
-                session_user_id=_session_cookie_user_id(request),
+                session_user_id=session_user_id,
                 lookup_consent_teams=lookup_consent_teams,
             )
         return aggregate_authorize(
@@ -2402,7 +2407,7 @@ async def authorize(
             code_challenge=code_challenge,
             code_challenge_method=code_challenge_method,
             response_type=response_type,
-            session_user_id=_session_cookie_user_id(request),
+            session_user_id=session_user_id,
             resource=resource,
             scope=scope,
         )
@@ -2560,7 +2565,7 @@ async def authorize_flow(request: Request, flow: str) -> Response:
     return await describe_connect_flow(
         request=request,
         flow_handle=flow,
-        session_user_id=_session_cookie_user_id(request),
+        session_user_id=await _session_cookie_user_id(request),
         lookup_vendor_credential=_vendor_credential_state,
         lookup_server_reachability=_user_can_reach_mcp_server,
     )
@@ -2586,7 +2591,7 @@ async def authorize_complete(
     return await complete_connect_flow(
         request=request,
         flow_handle=flow,
-        session_user_id=_session_cookie_user_id(request),
+        session_user_id=await _session_cookie_user_id(request),
         cache=user_api_key_cache,
         delivery=delivery,
         team_id=team_id,
