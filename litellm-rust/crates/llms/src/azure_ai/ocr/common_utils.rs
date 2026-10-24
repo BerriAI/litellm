@@ -43,14 +43,12 @@ pub(super) fn validate_destination(
     connection: &OcrConnection,
     credential_source: InputSource,
 ) -> Result<(), Error> {
-    if connection.api_base.is_some()
-        && connection.api_base_source == InputSource::Request
-        && credential_source != InputSource::Request
-    {
-        return Err(litellm_auth::Error::InvalidConfiguration(
-            "host credentials cannot be sent to a request-controlled Azure endpoint".into(),
-        )
-        .into());
-    }
-    Ok(())
+    crate::azure_ai::common_utils::validate_destination(
+        connection
+            .api_base
+            .as_ref()
+            .map(|_| connection.api_base_source),
+        credential_source,
+    )
+    .map_err(Error::from)
 }
