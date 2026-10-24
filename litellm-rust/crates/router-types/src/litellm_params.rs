@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_with::{OneOrMany, formats::PreferMany, serde_as};
 
-use crate::Spelled;
+use litellm_python_compat::read::Spelled;
 
 /// Python's `LiteLLM_Params`: a deployment's `litellm_params`, as a config spells them and as
 /// a caller passes them. Each credential family is one flattened group owned by its auth
@@ -30,11 +30,11 @@ pub struct LitellmParams {
     pub custom_llm_provider: Option<String>,
     pub timeout: Option<Spelled<f64>>,
     pub stream_timeout: Option<Spelled<f64>>,
-    pub max_retries: Option<Spelled<f64>>,
-    pub tpm: Option<Spelled<f64>>,
-    pub rpm: Option<Spelled<f64>>,
-    pub itpm: Option<Spelled<f64>>,
-    pub otpm: Option<Spelled<f64>>,
+    pub max_retries: Option<Spelled<u64>>,
+    pub tpm: Option<Spelled<u64>>,
+    pub rpm: Option<Spelled<u64>>,
+    pub itpm: Option<Spelled<u64>>,
+    pub otpm: Option<Spelled<u64>>,
     pub max_parallel_requests: Option<u64>,
     #[serde_as(as = "Option<OneOrMany<_, PreferMany>>")]
     pub organization: Option<Vec<String>>,

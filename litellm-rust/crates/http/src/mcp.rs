@@ -66,9 +66,7 @@ fn build(config: &HttpClientConfig) -> Result<reqwest_mcp::Client, Error> {
         Some(value) => protocol.user_agent(value),
         None => protocol,
     };
-    config
-        .proxies
-        .mcp_proxies()
+    crate::proxy::mcp_proxies(&config.proxies)
         .into_iter()
         .fold(agent.no_proxy(), reqwest_mcp::ClientBuilder::proxy)
         .build()

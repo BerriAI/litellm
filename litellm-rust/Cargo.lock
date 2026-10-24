@@ -3647,12 +3647,26 @@ name = "litellm-config"
 version = "0.1.0"
 dependencies = [
  "litellm-auth-types",
+ "litellm-python-compat",
  "litellm-router-types",
+ "macro_rules_attribute",
  "rstest",
  "serde",
  "serde_json",
  "serde_yaml_ng",
  "strum",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-config-load"
+version = "0.1.0"
+dependencies = [
+ "litellm-config",
+ "litellm-core-utils",
+ "litellm-http-types",
+ "rstest",
+ "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.19",
 ]
@@ -3737,6 +3751,7 @@ dependencies = [
  "http-body-util",
  "litellm-auth-types",
  "litellm-config",
+ "litellm-config-load",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
@@ -3837,6 +3852,7 @@ dependencies = [
  "http 1.4.2",
  "litellm-auth-types",
  "litellm-config",
+ "litellm-gateway-auth",
  "litellm-secrets",
  "moka",
  "rmcp",
@@ -3944,23 +3960,33 @@ dependencies = [
  "http 1.4.2",
  "hyper-util",
  "litellm-core-utils",
+ "litellm-http-types",
  "rcgen",
  "reqwest 0.12.28",
  "reqwest 0.13.5",
  "rmcp",
  "rstest",
  "rustls 0.23.42",
- "rustls-native-certs",
  "serde",
  "serde_json",
  "strum",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-rustls 0.26.4",
  "tokio-tungstenite",
  "tracing",
  "veil",
  "webpki-roots",
+]
+
+[[package]]
+name = "litellm-http-types"
+version = "0.1.0"
+dependencies = [
+ "litellm-core-utils",
+ "rstest",
+ "veil",
 ]
 
 [[package]]
@@ -4291,6 +4317,7 @@ name = "litellm-router-types"
 version = "0.1.0"
 dependencies = [
  "litellm-auth-types",
+ "litellm-python-compat",
  "rstest",
  "serde",
  "serde_json",
@@ -7403,11 +7430,7 @@ checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
 dependencies = [
  "futures-util",
  "log",
- "rustls 0.23.42",
- "rustls-native-certs",
- "rustls-pki-types",
  "tokio",
- "tokio-rustls 0.26.4",
  "tungstenite",
 ]
 
@@ -7752,8 +7775,6 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.8.7",
- "rustls 0.23.42",
- "rustls-pki-types",
  "sha1 0.10.7",
  "thiserror 1.0.69",
  "utf-8",

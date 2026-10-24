@@ -1,3 +1,4 @@
+mod auth;
 mod configured;
 mod error;
 mod legacy;
@@ -12,6 +13,7 @@ use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
 use http::request::Parts;
 use rmcp::{RoleServer, model::*, service::RequestContext};
 
+pub use auth::bind_caller;
 pub use configured::ConfiguredGateway;
 pub use error::{ConnectError, Error};
 pub use native::{Limits, NativeGateway, Registry, Server, ServerResolver};

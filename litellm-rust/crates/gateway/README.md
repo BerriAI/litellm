@@ -32,7 +32,7 @@ MCP clients can connect to `/mcp` or the scoped `/math/mcp` endpoint with the sa
 
 ## Configuration behavior
 
-`Config::load` resolves nested `include` files once in breadth-first order. Included lists append and other top-level values replace earlier values. Paths resolve relative to the declaring file, with the root config directory as a fallback
+`litellm_config_load::load` resolves nested `include` files once in breadth-first order. Included lists append and other top-level values replace earlier values. Paths resolve relative to the declaring file, with the root config directory as a fallback
 
 `environment_variables` provides scalar overrides to the injected secret source and HTTP settings without changing process globals. Credentials, static headers, URLs, and stdio environment values can reference `os.environ/NAME`. Model providers and MCP share the host's HTTP settings, including TLS certificates and environment proxies. Explicit environment HTTP settings take precedence over `litellm_settings`
 

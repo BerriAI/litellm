@@ -1,6 +1,5 @@
-use std::ffi::OsString;
-
 use litellm_auth_types::SecretValue;
+use litellm_config_load::Environment;
 use litellm_tracing::Level;
 use serde::{Deserialize, de::DeserializeOwned};
 
@@ -50,14 +49,8 @@ fn default_secure_cookies() -> bool {
     true
 }
 
-pub(super) fn from_iter<T: DeserializeOwned>(
-    variables: impl IntoIterator<Item = (OsString, OsString)>,
-) -> envy::Result<T> {
-    envy::from_iter(
-        variables
-            .into_iter()
-            .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?))),
-    )
+pub(super) fn from_environment<T: DeserializeOwned>(environment: &Environment) -> envy::Result<T> {
+    envy::from_iter(environment.variables())
 }
 
 #[cfg(test)]
@@ -67,10 +60,11 @@ mod tests {
     use super::*;
 
     fn parse<T: DeserializeOwned>(variables: &[(&str, &str)]) -> envy::Result<T> {
-        from_iter(
-            variables
+        from_environment(
+            &variables
                 .iter()
-                .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
         )
     }
 
@@ -156,13 +150,13 @@ mod tests {
     #[case::unrelated_variable("UNRELATED")]
     #[case::host_fallback("HOST")]
     fn non_unicode_environment_values_are_ignored(#[case] key: &str) {
-        use std::os::unix::ffi::OsStringExt;
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
-        let settings: Settings = from_iter([
+        let settings: Settings = from_environment(&Environment::from_os([
             (OsString::from(key), OsString::from_vec(vec![0xff])),
             (OsString::from_vec(vec![0xff]), OsString::from("value")),
             (OsString::from("PORT"), OsString::from("8080")),
-        ])
+        ]))
         .unwrap();
 
         assert_eq!(settings.host, "0.0.0.0");

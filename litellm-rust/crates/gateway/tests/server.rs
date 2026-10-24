@@ -5,14 +5,16 @@ use std::{
 
 use axum::{body::Body, http::Request};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use litellm_config::Config;
-use litellm_gateway_inference::{Error, Gateway};
-use litellm_http::ClientVariant;
-use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 use tokio::{net::TcpListener, sync::oneshot, time::timeout};
 use tower::ServiceExt;
+
+use litellm_config::Config;
+use litellm_config_load::Environment;
+use litellm_gateway_inference::{Error, Gateway};
+use litellm_http::ClientVariant;
+use litellm_tracing::{Logger, Metadata, Record, Sink};
 
 struct LogSink(mpsc::Sender<Value>);
 
@@ -30,7 +32,11 @@ impl Sink for LogSink {
 
 #[fixture]
 fn inference() -> Arc<Gateway> {
-    litellm_gateway::build_inference(&Config::from_yaml("model_list: []").unwrap()).unwrap()
+    litellm_gateway::build_inference(
+        &Config::from_yaml("model_list: []").unwrap(),
+        &Environment::default(),
+    )
+    .unwrap()
 }
 
 #[rstest]

@@ -6,7 +6,9 @@ use std::{
 
 use reqwest::dns::Resolve;
 
-use crate::{client::Client, config::HttpClientConfig, error::Error, proxy::EnvironmentProxies};
+use litellm_http_types::EnvironmentProxies;
+
+use crate::{client::Client, config::HttpClientConfig, error::Error};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
@@ -14,6 +16,7 @@ pub enum ClientVariant {
     NoRedirect,
     Media,
     UnpinnedMedia,
+    WebSocket,
 }
 
 const CLIENT_TTL: Duration = Duration::from_secs(3600);
@@ -71,6 +74,10 @@ impl HttpClientPool {
                 client_certificate: None,
                 ..config.clone()
             },
+            ClientVariant::WebSocket => HttpClientConfig {
+                http2: false,
+                ..config.clone()
+            },
             ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
         };
         let key = (effective, variant);
@@ -103,7 +110,7 @@ impl HttpClientPool {
     ) -> reqwest::ClientBuilder {
         match variant {
             ClientVariant::Provider => builder,
-            ClientVariant::NoRedirect | ClientVariant::UnpinnedMedia => {
+            ClientVariant::NoRedirect | ClientVariant::UnpinnedMedia | ClientVariant::WebSocket => {
                 builder.redirect(reqwest::redirect::Policy::none())
             }
             ClientVariant::Media => builder
@@ -128,7 +135,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::{ClientIdentity, HttpSettings, Resolution, Verify};
+    use litellm_http_types::HttpSettings;
+
+    use crate::{ClientIdentity, Resolution, Verify};
 
     struct FixedResolver(SocketAddr);
 

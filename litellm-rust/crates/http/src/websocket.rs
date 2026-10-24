@@ -1,62 +1,86 @@
-use std::{
-    io,
-    sync::{Arc, OnceLock},
+use http::{
+    HeaderMap, HeaderValue, StatusCode,
+    header::{CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, UPGRADE},
 };
-
-use rustls::{ClientConfig, RootCertStore};
-use tokio::net::TcpStream;
+use reqwest::Url;
 use tokio_tungstenite::{
-    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
-    tungstenite::{client::IntoClientRequest, error::TlsError, handshake::client::Response},
+    WebSocketStream,
+    tungstenite::{
+        handshake::{client::generate_key, derive_accept_key},
+        protocol::Role,
+    },
 };
 
-pub type UpstreamWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+use crate::{client::Client, transport::Error};
 
-static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
-
-fn build_tls_config() -> Result<ClientConfig, Box<tokio_tungstenite::tungstenite::Error>> {
-    let native = rustls_native_certs::load_native_certs();
-    let mut store = RootCertStore::empty();
-    let (added, _ignored) = store.add_parsable_certificates(native.certs);
-    if added == 0 {
-        return Err(Box::new(tokio_tungstenite::tungstenite::Error::Io(
-            io::Error::other(format!(
-                "no usable native root certificates: {:?}",
-                native.errors
-            )),
-        )));
-    }
-    ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-        .with_safe_default_protocol_versions()
-        .map(|builder| builder.with_root_certificates(store).with_no_client_auth())
-        .map_err(|error| {
-            Box::new(tokio_tungstenite::tungstenite::Error::Tls(
-                TlsError::Rustls(error),
-            ))
-        })
-}
-
-fn tls_config() -> Result<Arc<ClientConfig>, Box<tokio_tungstenite::tungstenite::Error>> {
-    if let Some(config) = TLS_CONFIG.get() {
-        return Ok(Arc::clone(config));
-    }
-    let built = Arc::new(build_tls_config()?);
-    Ok(Arc::clone(TLS_CONFIG.get_or_init(|| built)))
-}
+pub type UpstreamWebSocket = WebSocketStream<reqwest::Upgraded>;
 
 #[tracing::instrument(name = "litellm.websocket.handshake", level = "debug", skip_all)]
-pub async fn connect_upstream<R>(
-    request: R,
-) -> Result<(UpstreamWebSocket, Response), Box<tokio_tungstenite::tungstenite::Error>>
-where
-    R: IntoClientRequest + Unpin,
-{
-    let request = request.into_client_request().map_err(Box::new)?;
-    let connector = match request.uri().scheme_str() {
-        Some("wss") => Some(Connector::Rustls(tls_config()?)),
-        _ => None,
-    };
-    connect_async_tls_with_config(request, None, false, connector)
+pub async fn connect(
+    client: &Client,
+    url: &str,
+    headers: HeaderMap,
+) -> Result<UpstreamWebSocket, Error> {
+    let key = generate_key();
+    let response = client
+        .get(http_url(url)?)
+        .headers(handshake_headers(headers, &key)?)
+        .send()
         .await
-        .map_err(Box::new)
+        .map_err(Error::from_reqwest_before_dispatch)?;
+    let status = response.status();
+    if status != StatusCode::SWITCHING_PROTOCOLS {
+        return Err(Error::Http {
+            status: status.as_u16(),
+            body: response.text().await.unwrap_or_default(),
+        });
+    }
+    let expected = derive_accept_key(key.as_bytes());
+    if response
+        .headers()
+        .get(SEC_WEBSOCKET_ACCEPT)
+        .map(HeaderValue::as_bytes)
+        != Some(expected.as_bytes())
+    {
+        return Err(Error::Network(
+            "WebSocket handshake returned a wrong Sec-WebSocket-Accept".into(),
+        ));
+    }
+    let upgraded = response.upgrade().await?;
+    Ok(WebSocketStream::from_raw_socket(upgraded, Role::Client, None).await)
+}
+
+fn http_url(url: &str) -> Result<Url, Error> {
+    let mut url = Url::parse(url).map_err(not_dispatched)?;
+    let scheme = match url.scheme() {
+        "ws" | "http" => "http",
+        "wss" | "https" => "https",
+        other => {
+            return Err(not_dispatched(format!(
+                "unsupported WebSocket URL scheme {other:?}"
+            )));
+        }
+    };
+    url.set_scheme(scheme)
+        .map_err(|()| not_dispatched("WebSocket URL cannot be sent over HTTP"))?;
+    Ok(url)
+}
+
+fn handshake_headers(headers: HeaderMap, key: &str) -> Result<HeaderMap, Error> {
+    let key = HeaderValue::from_str(key).map_err(not_dispatched)?;
+    Ok([
+        (CONNECTION, HeaderValue::from_static("Upgrade")),
+        (UPGRADE, HeaderValue::from_static("websocket")),
+        (SEC_WEBSOCKET_VERSION, HeaderValue::from_static("13")),
+        (SEC_WEBSOCKET_KEY, key),
+    ]
+    .into_iter()
+    .fold(headers, |mut headers, (name, value)| {
+        headers.insert(name, value);
+        headers
+    }))
+}
+
+fn not_dispatched(error: impl std::fmt::Display) -> Error {
+    Error::Connect(error.to_string())
 }

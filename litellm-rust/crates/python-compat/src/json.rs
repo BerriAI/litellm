@@ -166,3 +166,36 @@ fn write_string(out: &mut String, text: &str) {
     }
     out.push('"');
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::{dumps, to_json};
+    use crate::Value;
+
+    #[rstest]
+    #[case::bytes(Value::Bytes(b"x".to_vec()), "Object of type bytes is not JSON serializable")]
+    #[case::set(Value::Set(vec![Value::from(1)]), "Object of type set is not JSON serializable")]
+    #[case::complex(Value::Complex { re: 1.0, im: 2.0 }, "Object of type complex is not JSON serializable")]
+    #[case::nan(
+        Value::Float(f64::NAN),
+        "Out of range float values are not JSON compliant"
+    )]
+    fn to_json_reports_what_python_json_dumps_would_reject(
+        #[case] value: Value,
+        #[case] message: &str,
+    ) {
+        let error = to_json(&value).expect_err("value has no serde_json form");
+        assert_eq!(error.to_string(), message);
+    }
+
+    /// `json.dumps` writes the non-finite floats that `to_json` cannot represent.
+    #[rstest]
+    #[case::nan(f64::NAN, "NaN")]
+    #[case::infinity(f64::INFINITY, "Infinity")]
+    #[case::negative_infinity(f64::NEG_INFINITY, "-Infinity")]
+    fn dumps_writes_non_finite_floats(#[case] value: f64, #[case] text: &str) {
+        assert_eq!(dumps(&Value::Float(value)).unwrap(), text);
+    }
+}

@@ -22,7 +22,7 @@ pub use identity::{
     AuthenticatedCaller, Authentication, AuthenticationMethod, Principal, PrincipalKind,
     ResolvedIdentity, SharedCaller, VerifiedIdentity,
 };
-pub use ui::{UI_CSRF_KEY, UiAuthSession, UiBackend, UiCredentials, UiSession, UiUser};
+pub use ui::{UI_CSRF_KEY, UiAuthSession, UiBackend, UiSession, UiUser};
 
 pub fn hash_token(token: &str) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))

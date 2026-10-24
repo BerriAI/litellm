@@ -4,12 +4,14 @@ use std::{
     time::Duration,
 };
 
+use litellm_http_types::{EnvironmentProxies, HttpSettings, SslVerify, TcpKeepalive};
+
 use crate::{
     error::Error,
-    proxy::EnvironmentProxies,
-    settings::{HttpSettings, SslVerify, TcpKeepalive},
     tls::{CipherSelection, KeyExchangeGroup, Tls12CipherSuite, Unsupported},
 };
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Verify {
@@ -84,7 +86,7 @@ impl From<&HttpSettings> for Resolution {
                 } else {
                     EnvironmentProxies::default()
                 },
-                connect_timeout: settings.connect_timeout,
+                connect_timeout: CONNECT_TIMEOUT,
                 tcp_keepalive: settings.tcp_keepalive,
                 pool_idle_timeout: settings.pool_idle_timeout,
             },
@@ -122,9 +124,7 @@ impl TryFrom<&HttpClientConfig> for reqwest::ClientBuilder {
             Some(agent) => with_protocol.user_agent(agent),
             None => with_protocol,
         };
-        Ok(config
-            .proxies
-            .reqwest_proxies()
+        Ok(crate::proxy::reqwest_proxies(&config.proxies)
             .into_iter()
             .fold(with_agent.no_proxy(), reqwest::ClientBuilder::proxy))
     }
@@ -272,7 +272,6 @@ mod tests {
             user_agent: Some("litellm/1.0".into()),
             trust_proxy_env: true,
             proxies: proxies(),
-            connect_timeout: Duration::from_secs(7),
             tcp_keepalive: Some(keepalive),
             pool_idle_timeout: Duration::from_secs(45),
             ..HttpSettings::default()
@@ -289,7 +288,7 @@ mod tests {
                 http2: true,
                 user_agent: Some("litellm/1.0".into()),
                 proxies: proxies(),
-                connect_timeout: Duration::from_secs(7),
+                connect_timeout: Duration::from_secs(5),
                 tcp_keepalive: Some(keepalive),
                 pool_idle_timeout: Duration::from_secs(45),
             }

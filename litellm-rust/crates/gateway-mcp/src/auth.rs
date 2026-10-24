@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use axum::{extract::Request, middleware::Next, response::Response};
-use litellm_gateway_auth::{AccessRequest, AuthenticatedRequest, Error, McpAction};
-use litellm_gateway_mcp::{
-    Authorization, GatewayFuture, OperationAuthorizer, ServerInfo, SessionOwner,
-    rmcp::model::ClientRequest,
-};
+use rmcp::model::ClientRequest;
 
-pub(crate) async fn bind_session_owner(
+use litellm_gateway_auth::{AccessRequest, AuthenticatedRequest, McpAction};
+
+use crate::{Authorization, GatewayFuture, OperationAuthorizer, ServerInfo, SessionOwner};
+
+pub async fn bind_caller(
     identity: AuthenticatedRequest,
     mut request: Request,
     next: Next,
@@ -47,7 +47,7 @@ impl OperationAuthorizer for McpPolicy {
                 Some(ClientRequest::ReadResourceRequest(request)) => {
                     McpAction::ReadResource(request.params.uri.clone())
                 }
-                Some(_) => return Err(litellm_gateway_mcp::Error::Forbidden),
+                Some(_) => return Err(crate::Error::Forbidden),
             };
             let access = AccessRequest::Mcp {
                 server: server.server_id.clone(),
@@ -55,19 +55,9 @@ impl OperationAuthorizer for McpPolicy {
             };
             self.0
                 .authorize(access.clone())
-                .await
-                .map_err(mcp_error)?
-                .consume(self.0.caller(), &access)
-                .map_err(mcp_error)
+                .await?
+                .consume(self.0.caller(), &access)?;
+            Ok(())
         })
-    }
-}
-
-fn mcp_error(error: Error) -> litellm_gateway_mcp::Error {
-    match error {
-        Error::InvalidToken | Error::Expired | Error::Forbidden => {
-            litellm_gateway_mcp::Error::Forbidden
-        }
-        _ => litellm_gateway_mcp::Error::Configuration("MCP authorization unavailable".into()),
     }
 }

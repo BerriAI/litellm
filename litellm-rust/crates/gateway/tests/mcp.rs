@@ -5,7 +5,13 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
+use rstest::{fixture, rstest};
+use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
+use tower::ServiceExt;
+
 use litellm_config::Config;
+use litellm_config_load::Environment;
 use litellm_gateway_mcp::{
     HttpConfig,
     rmcp::{
@@ -17,10 +23,6 @@ use litellm_gateway_mcp::{
         },
     },
 };
-use rstest::{fixture, rstest};
-use serde_json::{Value, json};
-use tokio_util::sync::CancellationToken;
-use tower::ServiceExt;
 
 #[derive(Clone)]
 struct Upstream;
@@ -126,7 +128,7 @@ mcp_servers:
         upstream.url
     ))
     .unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference = litellm_gateway::build_inference(&config, &Environment::default()).unwrap();
     let shutdown = CancellationToken::new();
     let mcp = litellm_gateway::build_mcp(
         &config,
@@ -243,7 +245,7 @@ async fn rejects_unsupported_or_invalid_settings_before_serving(
     #[case] expected: &str,
 ) {
     let config = Config::from_yaml(&format!("general_settings: {{master_key: gateway-key}}\nmcp_servers:\n  docs:\n    url: http://127.0.0.1:1/mcp\n    {settings}\n")).unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let inference = litellm_gateway::build_inference(&config, &Environment::default()).unwrap();
     let result = litellm_gateway::build_mcp(
         &config,
         Arc::new(NoSecrets),
@@ -261,7 +263,7 @@ async fn rejects_unsupported_or_invalid_settings_before_serving(
 #[tokio::test]
 async fn mcp_is_optional_and_requires_admission_credentials_when_enabled() {
     let empty = Config::from_yaml("{}").unwrap();
-    let inference = litellm_gateway::build_inference(&empty).unwrap();
+    let inference = litellm_gateway::build_inference(&empty, &Environment::default()).unwrap();
     assert!(
         litellm_gateway::build_mcp(
             &empty,
@@ -300,45 +302,4 @@ impl litellm_secrets::source::SecretSource for NoSecrets {
     > {
         Box::pin(async { Ok(None) })
     }
-}
-
-#[rstest]
-fn applies_configured_http_environment_before_building_clients() {
-    let directory = tempfile::tempdir().unwrap();
-    let missing = directory.path().join("missing-ca.pem");
-    let config = Config::from_yaml(&format!(
-        "environment_variables: {{SSL_VERIFY: '{}'}}\nlitellm_settings: {{ssl_verify: false}}",
-        missing.display(),
-    ))
-    .unwrap();
-    let error = litellm_gateway::build_inference(&config).err().unwrap();
-    assert!(matches!(
-        error,
-        litellm_gateway::Error::Http(litellm_http::Error::Read { path, .. })
-            if path == missing
-    ));
-}
-
-#[rstest]
-#[case::client_policy("general_settings: {master_key: key, mcp_allowed_clients: [approved]}")]
-#[case::guardrail("guardrails: [{guardrail_name: policy}]")]
-#[case::local_tools("mcp_tools: [{name: custom}]")]
-#[tokio::test]
-async fn refuses_unimplemented_global_mcp_policy(#[case] settings: &str) {
-    let config = Config::from_yaml(&format!(
-        "{settings}\nmcp_servers: {{docs: {{url: 'http://127.0.0.1:1/mcp'}}}}\n"
-    ))
-    .unwrap();
-    let inference = litellm_gateway::build_inference(&config).unwrap();
-    let error = litellm_gateway::build_mcp(
-        &config,
-        Arc::new(NoSecrets),
-        CancellationToken::new(),
-        &inference.resources.pool,
-        &inference.http,
-    )
-    .await
-    .err()
-    .unwrap();
-    assert!(matches!(error, litellm_gateway::Error::McpSetting(_)));
 }

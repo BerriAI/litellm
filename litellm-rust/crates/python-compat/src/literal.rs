@@ -743,3 +743,52 @@ impl UniqueValues {
         self.keys.into_iter().zip(self.values).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use rstest::rstest;
+
+    use super::literal_eval;
+    use crate::{Error, MAX_DEPTH, Value};
+
+    fn nested_text(open: &str, close: &str, depth: usize) -> String {
+        format!("{}1{}", open.repeat(depth), close.repeat(depth))
+    }
+
+    #[rstest]
+    #[case::list("[", "]")]
+    #[case::dict("{'a': ", "}")]
+    #[case::tuple("(", ",)")]
+    fn literal_eval_accepts_the_limit_and_rejects_past_it(#[case] open: &str, #[case] close: &str) {
+        assert!(literal_eval(&nested_text(open, close, MAX_DEPTH)).is_ok());
+        assert!(matches!(
+            literal_eval(&nested_text(open, close, MAX_DEPTH + 1)),
+            Err(Error::TooDeep)
+        ));
+    }
+
+    /// A backtracking parser (the `py_literal` grammar this replaced) doubles per nested level
+    /// and takes minutes here; the bound is loose enough to survive a slow debug build.
+    #[rstest]
+    #[case::list("[", "]")]
+    #[case::dict("{'a': ", "}")]
+    #[case::tuple("(", ",)")]
+    fn literal_eval_stays_linear_in_depth(#[case] open: &str, #[case] close: &str) {
+        let text = nested_text(open, close, MAX_DEPTH);
+        let start = Instant::now();
+        assert!(literal_eval(&text).is_ok());
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(50),
+            "{open} nested {MAX_DEPTH} deep took {elapsed:?}"
+        );
+    }
+
+    #[rstest]
+    fn literal_eval_ignores_brackets_inside_strings() {
+        let text = format!("'{}'", "[".repeat(MAX_DEPTH + 1));
+        assert!(matches!(literal_eval(&text), Ok(Value::Str(_))));
+    }
+}

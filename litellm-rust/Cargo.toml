@@ -10,6 +10,7 @@ repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
 litellm-config = { path = "crates/config" }
+litellm-config-load = { path = "crates/config-load" }
 litellm-router = { path = "crates/router" }
 litellm-router-types = { path = "crates/router-types" }
 litellm-tracing = { path = "crates/tracing" }
@@ -47,6 +48,7 @@ litellm-secrets-hashicorp = { path = "crates/secrets-hashicorp" }
 litellm-secrets-azure = { path = "crates/secrets-azure" }
 litellm-secrets-cyberark = { path = "crates/secrets-cyberark" }
 litellm-http = { path = "crates/http" }
+litellm-http-types = { path = "crates/http-types" }
 litellm-llms = { path = "crates/llms" }
 litellm-llms-types = { path = "crates/llms-types" }
 litellm-core-utils = { path = "crates/core-utils" }
@@ -97,7 +99,6 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustify = "=0.7.0"
 rustify_derive = "=0.5.5"
 vaultrs = { version = "=0.8.0", default-features = false, features = ["rustls"] }
-rustls-native-certs = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 serde_with = { version = "=3.21.0", default-features = false, features = ["std", "macros"] }
@@ -111,7 +112,7 @@ thiserror = "2.0"
 tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }
 tiktoken-rs = "0.12.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 base64 = "0.22"
 flate2 = "1"

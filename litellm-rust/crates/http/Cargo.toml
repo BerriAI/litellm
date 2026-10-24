@@ -14,10 +14,10 @@ rmcp = { version = "=3.4.1", default-features = false, features = ["client", "tr
 reqwest-mcp = { package = "reqwest", version = "0.13.2", default-features = false, features = ["rustls-no-provider", "json", "stream", "http2"], optional = true }
 http.workspace = true
 litellm-core-utils.workspace = true
+litellm-http-types.workspace = true
 hyper-util.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
-rustls-native-certs.workspace = true
 tokio-tungstenite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -32,5 +32,6 @@ webpki-roots.workspace = true
 futures-util.workspace = true
 rcgen = "0.14.10"
 tempfile.workspace = true
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 rstest.workspace = true
 tokio.workspace = true

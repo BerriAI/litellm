@@ -1,7 +1,9 @@
-use litellm_auth_types::{AwsParams, SecretValue, VertexParams};
-use litellm_router_types::{LitellmParams, Spelled};
 use rstest::rstest;
 use serde_json::{Map, Value, json};
+
+use litellm_auth_types::{AwsParams, SecretValue, VertexParams};
+use litellm_python_compat::read::Spelled;
+use litellm_router_types::LitellmParams;
 
 fn params(value: Value) -> LitellmParams {
     serde_json::from_value(value).unwrap()
@@ -55,7 +57,7 @@ fn params(value: Value) -> LitellmParams {
     LitellmParams {
         model: "m".into(),
         timeout: Some(Spelled::Text("os.environ/T".into())),
-        rpm: Some(Spelled::Value(5.0)),
+        rpm: Some(Spelled::Value(5)),
         drop_params: Some(Spelled::Text("true".into())),
         tags: Some(Box::from(["a".to_string()])),
         max_budget: Some(1.5),
@@ -116,6 +118,9 @@ fn keys_no_field_names_land_in_extra_and_nothing_else_does() {
 #[case::vertex(json!({"model": "m", "vertex_project": ["p"]}))]
 #[case::vertex_credentials(json!({"model": "m", "vertex_credentials": 7}))]
 #[case::rate_limit(json!({"model": "m", "max_parallel_requests": "many"}))]
+#[case::fractional_rpm(json!({"model": "m", "rpm": 1.5}))]
+#[case::fractional_max_retries(json!({"model": "m", "max_retries": 2.5}))]
+#[case::negative_tpm(json!({"model": "m", "tpm": -1}))]
 #[case::tags(json!({"model": "m", "tags": "not-a-list"}))]
 fn a_param_of_the_wrong_type_is_rejected(#[case] value: Value) {
     assert!(serde_json::from_value::<LitellmParams>(value).is_err());

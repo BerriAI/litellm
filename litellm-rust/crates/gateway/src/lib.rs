@@ -1,7 +1,5 @@
-mod auth;
 mod error;
 mod secrets;
-pub use error::Error;
 
 use std::{sync::Arc, time::Instant};
 
@@ -13,49 +11,33 @@ use axum::{
     response::Response,
 };
 use http_body_util::BodyExt;
+use uuid::Uuid;
 
 use litellm_config::Config;
+use litellm_config_load::Environment;
 use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::{Gateway, ModelRouter};
-use litellm_http::{
-    ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
-    media::PublicDnsResolver,
-};
+use litellm_http::{ClientVariant, HttpClientPool, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
-use uuid::Uuid;
 
-pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
+pub use error::Error;
+
+pub fn build_inference(config: &Config, process: &Environment) -> Result<Arc<Gateway>, Error> {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let environment = secrets::environment_values(&config.environment_variables)?;
-    let lookup = |name: &str| {
+    let lookup = process.clone().overlaid(
         environment
-            .get(name)
-            .map(|value| value.expose().to_owned())
-            .or_else(|| std::env::var(name).ok())
-    };
-    let settings = &config.litellm_settings;
-    let http_settings = HttpSettings::from_layers([
-        HttpSettingsLayer::from_environment(&lookup),
-        HttpSettingsLayer {
-            ssl_verify: settings.ssl_verify.as_ref().map(|value| match value {
-                litellm_config::Spelled::Value(true) => SslVerify::Enabled,
-                litellm_config::Spelled::Value(false) => SslVerify::Disabled,
-                litellm_config::Spelled::Text(value) => SslVerify::parse(value),
-            }),
-            ssl_certificate: settings.ssl_certificate.as_ref().map(Into::into),
-            ssl_security_level: settings.ssl_security_level.clone(),
-            ssl_ecdh_curve: settings.ssl_ecdh_curve.clone(),
-            force_ipv4: settings.force_ipv4,
-            http2: settings.http2,
-            aiohttp_trust_env: settings.aiohttp_trust_env,
-            disable_aiohttp_trust_env: settings.disable_aiohttp_trust_env,
-            disable_aiohttp_transport: settings.disable_aiohttp_transport,
-            ..Default::default()
-        },
-    ]);
-    let http = Resolution::from(&http_settings).config;
+            .iter()
+            .map(|(name, value)| (name.clone(), value.expose().to_owned())),
+    );
+    let http_settings = litellm_config_load::http_settings(&config.litellm_settings, &lookup);
+    let resolution = Resolution::from(&http_settings);
+    for unsupported in &resolution.unsupported {
+        litellm_tracing::warn!("{unsupported}");
+    }
+    let http = resolution.config;
     let client = pool.client(&http, ClientVariant::Provider)?;
     let secrets = Arc::new(secrets::ConfigSecrets::new(
         environment,
@@ -77,26 +59,8 @@ pub async fn build_mcp(
     pool: &HttpClientPool,
     http: &litellm_http::HttpClientConfig,
 ) -> Result<Option<litellm_gateway_mcp::ConfiguredGateway>, Error> {
-    if !config.mcp_tools.is_empty() {
-        return Err(Error::McpSetting("mcp_tools".into()));
-    }
     if config.mcp_servers.is_empty() {
         return Ok(None);
-    }
-    if let Some(setting) = config
-        .general_settings
-        .additional_fields
-        .keys()
-        .chain(config.litellm_settings.additional_fields.keys())
-        .find(|key| key.starts_with("mcp_"))
-    {
-        return Err(Error::McpSetting(setting.clone()));
-    }
-    if !config.guardrails.is_empty()
-        || !config.policies.is_empty()
-        || !config.policy_attachments.is_empty()
-    {
-        return Err(Error::McpSetting("guardrails or policies".into()));
     }
     Auth::from_config(config, secrets.clone())
         .validate()
@@ -121,8 +85,12 @@ pub fn router(
 ) -> Router {
     let auth = Auth::from_config(config, inference.secrets.clone());
     let inference = litellm_gateway_inference::router(inference)
-        .merge(mcp.unwrap_or_default())
-        .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
+        .merge(
+            mcp.map(|mcp| {
+                mcp.route_layer(axum::middleware::from_fn(litellm_gateway_mcp::bind_caller))
+            })
+            .unwrap_or_default(),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             auth,
             litellm_gateway_auth::authenticate,
