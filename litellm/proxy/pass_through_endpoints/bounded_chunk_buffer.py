@@ -108,7 +108,10 @@ class BoundedChunkBuffer(Sequence[bytes]):
         return len(self._frames())
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, Sequence) and list(self) == list(other)
+        if not isinstance(other, Sequence):
+            return False
+        other_items: Final[Sequence[object]] = other
+        return list(self) == list(other_items)
 
     def __bool__(self) -> bool:
         return self.total_bytes > 0
