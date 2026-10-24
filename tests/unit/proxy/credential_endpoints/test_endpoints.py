@@ -3014,3 +3014,20 @@ class TestCredentialDisplayName:
         assert (by_name["display_name"], by_name["source"]) == ("Prod OpenAI", "db")
         assert config_by_name["source"] == "config"
         assert listed["openai-prod"]["credential_values"]["api_key"] != "sk-old"
+
+
+def test_looking_up_a_missing_credential_is_labelled_a_client_error_not_a_gateway_failure(
+    restore_credential_list: None,
+):
+    """Naming a credential that does not exist is the caller's own mistake, and the shared
+    handler used to label every one of these internal_server_error, so an SDK branching on
+    the type read a 404 it can never retry past as a gateway outage and backed off forever."""
+    response: Final = _call_as("GET", "/credentials/by_name/definitely-not-there")
+
+    assert response.status_code == 404, f"lookup answered {response.status_code}: {response.text}"
+    assert response.json()["error"] == {
+        "message": "Credential not found. Got credential name: definitely-not-there",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "404",
+    }

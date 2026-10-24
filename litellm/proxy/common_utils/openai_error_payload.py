@@ -45,6 +45,12 @@ def openai_error_type(exc: object, status_code: int) -> str:
     return openai_error_type_for_status(status_code)
 
 
+def caller_error_type(exc: object, status_code: int) -> str:
+    if status_code == status.HTTP_408_REQUEST_TIMEOUT or status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+        return "internal_server_error"
+    return openai_error_type(exc, status_code)
+
+
 def openai_error_type_for_status(status_code: int) -> str:
     mapped: Final = _OPENAI_ERROR_TYPE_BY_STATUS.get(status_code)
     if mapped is not None:

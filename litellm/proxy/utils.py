@@ -84,6 +84,8 @@ from litellm.proxy._types import (
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
+    caller_error_type,
+    error_status_code,
     litellm_call_id_headers,
     openai_error_param,
     with_litellm_call_id,
@@ -132,7 +134,7 @@ from litellm import (
     Router,
 )
 from litellm._internal_context import service_target
-from litellm._logging import redact_string, verbose_proxy_logger
+from litellm._logging import redact_internal_details_from_client_message, redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
@@ -9048,21 +9050,22 @@ def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) 
 
     headers: Final = litellm_call_id_headers(litellm_call_id)
     if isinstance(e, HTTPException):
+        http_status_code: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
         return ProxyException(
             message=getattr(e, "detail", f"error({e})"),
-            type=ProxyErrorTypes.internal_server_error,
+            type=caller_error_type(e, http_status_code),
             param=openai_error_param(e),
             headers=headers,
-            code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            code=http_status_code,
         )
     elif isinstance(e, ProxyException):
         return with_litellm_call_id(e, litellm_call_id)
-    _status_code: Final = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    _status_code: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
     if should_report_bug(e):
         verbose_proxy_logger.error(bug_report_notice(build_proxy_bug_report(e)))
     return ProxyException(
-        message=strip_bug_report_notice(str(e)),
-        type=ProxyErrorTypes.internal_server_error,
+        message=redact_internal_details_from_client_message(strip_bug_report_notice(str(e))),
+        type=caller_error_type(e, _status_code),
         param=openai_error_param(e),
         headers=headers,
         code=_status_code,

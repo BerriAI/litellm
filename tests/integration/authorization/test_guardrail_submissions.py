@@ -432,7 +432,7 @@ def test_team_guardrail_submissions_require_admin_approval(
                     f"Guardrail '{first_name}' not found. "
                     "Please ensure the guardrail is configured in your LiteLLM proxy."
                 ),
-                "type": "internal_server_error",
+                "type": "invalid_request_error",
                 "param": None,
                 "code": "404",
             }
@@ -481,7 +481,7 @@ def test_team_guardrail_submissions_require_admin_approval(
                     f"Guardrail '{second_name}' not found. "
                     "Please ensure the guardrail is configured in your LiteLLM proxy."
                 ),
-                "type": "internal_server_error",
+                "type": "invalid_request_error",
                 "param": None,
                 "code": "404",
             }

@@ -1,11 +1,15 @@
 import asyncio
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
+import openai
 import pytest
 from fastapi import HTTPException
 from prisma.errors import DataError
 
+import litellm
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.utils import get_error_message_str, handle_exception_on_proxy
 
@@ -96,7 +100,7 @@ def test_handle_exception_on_proxy_happy_path_http_exception():
     assert snapshot == {
         "is_proxy_exception": True,
         "message": "forbidden",
-        "type": ProxyErrorTypes.internal_server_error.value,
+        "type": "permission_error",
         "code": "403",
     }
 
@@ -156,7 +160,7 @@ def test_handle_exception_on_proxy_uses_attached_status_code_when_present():
     assert snapshot == {
         "code": "418",
         "message": "teapot",
-        "type": ProxyErrorTypes.internal_server_error.value,
+        "type": "invalid_request_error",
     }
 
 
@@ -174,6 +178,112 @@ def test_handle_exception_on_proxy_error_path_none_input_wraps_as_500():
         "code": "500",
         "type": ProxyErrorTypes.internal_server_error.value,
     }
+
+
+@pytest.mark.parametrize(
+    "status_code, expected_type",
+    [
+        (400, "invalid_request_error"),
+        (401, "authentication_error"),
+        (403, "permission_error"),
+        (404, "invalid_request_error"),
+        (408, ProxyErrorTypes.internal_server_error.value),
+        (409, "invalid_request_error"),
+        (422, "invalid_request_error"),
+        (429, "rate_limit_error"),
+        (500, ProxyErrorTypes.internal_server_error.value),
+        (503, ProxyErrorTypes.internal_server_error.value),
+    ],
+)
+def test_handle_exception_on_proxy_labels_an_http_exception_by_the_status_it_answers(
+    status_code: int, expected_type: str
+):
+    """A management route that rejects a caller's own argument answers 400, and calling that
+    internal_server_error tells the caller's retry loop the gateway is down when nothing but
+    their request is wrong."""
+    result: Final = handle_exception_on_proxy(HTTPException(status_code=status_code, detail="boom"))
+
+    assert (result.code, result.type) == (str(status_code), expected_type)
+
+
+def _exception_carrying_status(carried: int | None) -> Exception:
+    class _CarriedStatus(Exception):
+        status_code = carried
+
+    return _CarriedStatus("boom")
+
+
+@pytest.mark.parametrize(
+    "status_code, expected_type",
+    [
+        (400, "invalid_request_error"),
+        (404, "invalid_request_error"),
+        (408, ProxyErrorTypes.internal_server_error.value),
+        (429, "rate_limit_error"),
+        (500, ProxyErrorTypes.internal_server_error.value),
+    ],
+)
+def test_handle_exception_on_proxy_labels_a_carried_status_the_same_way(status_code: int, expected_type: str):
+    """Routes also reach this handler with plain exceptions carrying their own status, and
+    those must be named by that status rather than all landing on the 500 label."""
+    result: Final = handle_exception_on_proxy(_exception_carrying_status(status_code))
+
+    assert (result.code, result.type) == (str(status_code), expected_type)
+
+
+def test_handle_exception_on_proxy_keeps_the_type_the_exception_already_names():
+    """A rate limit litellm raised already names itself, and overwriting that with the status
+    map's guess would drop what the client branches on."""
+    result: Final = handle_exception_on_proxy(
+        litellm.RateLimitError(message="slow down", llm_provider="openai", model="gpt-4o")
+    )
+
+    assert (result.code, result.type) == ("429", "throttling_error")
+
+
+@pytest.mark.parametrize(
+    "exc, expected_code",
+    [
+        (
+            openai.InternalServerError(
+                message="upstream down",
+                response=httpx.Response(500, request=httpx.Request("GET", "https://api.openai.com/v1/batches/b")),
+                body={"type": "server_error"},
+            ),
+            "500",
+        ),
+        (litellm.Timeout(message="took too long", model="gpt-6.1-sol", llm_provider="openai"), "408"),
+    ],
+    ids=["provider_5xx_naming_its_own_type", "provider_timeout"],
+)
+def test_handle_exception_on_proxy_keeps_internal_server_error_for_failures_the_caller_cannot_fix(
+    exc: Exception, expected_code: str
+):
+    """Batch and fine-tuning routes pass provider errors straight through, and a retry loop
+    that treats internal_server_error as transient must keep retrying a provider outage or a
+    timeout instead of reading the provider's own type or a fix-your-request label."""
+    result: Final = handle_exception_on_proxy(exc)
+
+    assert (result.code, result.type) == (expected_code, ProxyErrorTypes.internal_server_error.value)
+
+
+def test_handle_exception_on_proxy_redacts_the_internal_host_an_unreachable_upstream_names():
+    """A guardrail or provider the gateway cannot reach names its private address in the
+    error, and any virtual key can call those routes, so the host must not reach the caller."""
+    result: Final = handle_exception_on_proxy(ConnectionError("Cannot connect to host 10.12.4.7:8443"))
+
+    assert result.code == "500"
+    assert "Cannot connect to host" in result.message
+    assert "10.12.4.7" not in result.message
+
+
+def test_handle_exception_on_proxy_answers_500_for_an_exception_whose_status_is_none():
+    """A guardrail whose upstream refuses the connection raises with status_code=None, and
+    passing that through as the code crashed the proxy's error handler, which then blamed the
+    auth database with a 503 instead of naming the unreachable guardrail."""
+    result: Final = handle_exception_on_proxy(_exception_carrying_status(None))
+
+    assert (result.code, result.type, result.message) == ("500", ProxyErrorTypes.internal_server_error.value, "boom")
 
 
 @pytest.mark.parametrize(

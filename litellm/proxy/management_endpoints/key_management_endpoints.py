@@ -7225,12 +7225,7 @@ async def list_keys(
     except Exception as e:
         verbose_proxy_logger.exception("Error in list_keys: %s", e)
         if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"error({e})"),
-                type=ProxyErrorTypes.internal_server_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
+            raise handle_exception_on_proxy(e)
         elif isinstance(e, ProxyException):
             raise e
         raise ProxyException(
