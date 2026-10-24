@@ -10,7 +10,7 @@ use litellm_host::{
 use litellm_http::transport::Error as TransportError;
 use litellm_inference::{context::CallContext, provider::ResolvedProvider};
 use litellm_llms::base_llm::{
-    auth::resolve_auth,
+    auth::{AuthScheme, resolve_auth},
     tokenize::transformation::{BaseTokenizeConfig, TokenizeContext},
 };
 use litellm_llms_types::formats::tokenize::{TokenizeOutput, TokenizeResponse};
@@ -59,6 +59,11 @@ pub(crate) async fn execute(
     )?;
     let body =
         config.transform_tokenize_request(provider.model, &call.prompt, &params, &env_lookup)?;
+    let callback_api_key = match &environment.auth {
+        AuthScheme::Credential { secret, .. } => Some(secret.clone()),
+        AuthScheme::Forwarded => None,
+        _ => call.api_key.as_ref().map(|api_key| api_key.value().clone()),
+    };
     let mut authenticated =
         resolve_auth(&route.auth, &route.credential, environment, &env_lookup).await?;
     let wire = interceptors
@@ -77,7 +82,7 @@ pub(crate) async fn execute(
                     .iter()
                     .map(|name| (*name).into())
                     .collect(),
-                api_key: call.api_key.as_ref().map(|api_key| api_key.value().clone()),
+                api_key: callback_api_key,
             },
         )
         .await?;

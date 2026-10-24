@@ -213,6 +213,98 @@ impl Interceptors<Error> for Hooks {
     }
 }
 
+struct CallbackCredentialCase {
+    environment_key: Option<&'static str>,
+    request_key: Option<&'static str>,
+    forwarded_authorization: Option<&'static str>,
+    expected_callback_key: Option<&'static str>,
+    expected_authorization: &'static str,
+}
+
+#[rstest]
+#[case::environment_credential(CallbackCredentialCase {
+    environment_key: Some("environment-key"),
+    request_key: None,
+    forwarded_authorization: None,
+    expected_callback_key: Some("environment-key"),
+    expected_authorization: "Bearer environment-key",
+})]
+#[case::explicit_credential(CallbackCredentialCase {
+    environment_key: None,
+    request_key: Some("request-key"),
+    forwarded_authorization: None,
+    expected_callback_key: Some("request-key"),
+    expected_authorization: "Bearer request-key",
+})]
+#[case::forwarded_authorization_ignores_unused_request_key(CallbackCredentialCase {
+    environment_key: None,
+    request_key: Some("unused-request-key"),
+    forwarded_authorization: Some("Bearer forwarded-key"),
+    expected_callback_key: None,
+    expected_authorization: "Bearer forwarded-key",
+})]
+#[tokio::test]
+async fn callback_key_matches_the_credential_used_on_the_wire(
+    #[case] case: CallbackCredentialCase,
+) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/tokenize"))
+        .and(header("authorization", case.expected_authorization))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"count":1,"tokens":[7],"token_strs":["hello"]})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let secrets = Arc::new(match case.environment_key {
+        Some(environment_key) => RecordingSecrets::new([("HOSTED_VLLM_API_KEY", environment_key)]),
+        None => RecordingSecrets::empty(),
+    });
+    let route = route_with_credentials(
+        Client::plain_for_test(),
+        Arc::new(AuthServices::default()),
+        secrets,
+    );
+    let extra_headers = case
+        .forwarded_authorization
+        .map(|authorization| {
+            sourced_map_at(
+                &json!({"authorization": authorization}),
+                InputSource::Request,
+            )
+        })
+        .unwrap_or_default();
+    let hooks = Hooks::default();
+
+    route
+        .execute(
+            TokenizeRequest {
+                model: "hosted_vllm/org/model".into(),
+                prompt: "hello".into(),
+                api_key: case.request_key.map(|key| sourced(SecretValue::new(key))),
+                api_base: Some(sourced_at(server.uri(), InputSource::Deployment)),
+                extra_headers,
+                ..Default::default()
+            },
+            &hooks,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let context = hooks.context.lock().unwrap();
+    let callback_key = context
+        .as_ref()
+        .unwrap()
+        .api_key
+        .as_ref()
+        .map(SecretValue::expose);
+    assert_eq!(callback_key, case.expected_callback_key);
+}
+
 #[rstest]
 #[tokio::test]
 async fn hosted_execution_is_lazy_and_applies_hooks_before_dispatch() {
