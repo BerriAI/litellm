@@ -5,7 +5,7 @@ import json
 import os
 import re
 from collections.abc import AsyncIterator, Generator, Iterator, Mapping, Sequence
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from copy import copy
 from functools import partial
 from importlib.metadata import version
@@ -23,6 +23,7 @@ from tests.integration._support.client import Gateway, Scenario, eventually, gat
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
 from tests.integration._support.ordering import collected_case, fixture_groups, scheduling_groups
+from tests.integration._support.process import OWNED_STATE_VARIABLE, OwnedState
 from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
 from tests.integration._support.sdk_models import build_sdk_models
@@ -69,6 +70,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: owned real-service integration contracts")
     config.addinivalue_line("markers", "covers(*ids): legacy contract IDs kept for existing tests, not enforced")
+    config.addinivalue_line("markers", "shares_worker_state: owned proxies here share the worker DB and Redis")
     config.stash[REPORTS] = []
     config.stash[SHARD_FILES] = _shard_files(SHARD_PATH.validate_python(config.getoption("integration_shard_files")))
     config.pluginmanager.register(IntegrationReportPlugin(config))
@@ -295,10 +297,42 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         session.exitstatus = pytest.ExitCode.OK
 
 
+@contextmanager
+def _owned_state(item: pytest.Item) -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as environment:
+        if item.get_closest_marker("shares_worker_state") is not None:
+            environment.setenv(OWNED_STATE_VARIABLE, OwnedState.SHARED_WITH_WORKER.value)
+        yield
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item: pytest.Item) -> Generator[None, None, None]:
+    with _owned_state(item):
+        return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item: pytest.Item) -> Generator[None, None, None]:
+    with _owned_state(item):
+        return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> Generator[None, None, None]:
+    with _owned_state(item):
+        return (yield)
+
+
+@pytest.fixture(autouse=True)
+def _reset_upstream_observations() -> None:
+    upstream: Final = os.environ.get("INTEGRATION_UPSTREAM_URL")
+    if upstream is not None:
+        httpx.delete(f"{upstream}/__observations", timeout=5, trust_env=False).raise_for_status()
+
+
 @pytest.fixture
 def gateway() -> Iterator[Gateway]:
     with gateway_from_environment() as value:
-        httpx.get(f"{value.upstream_url}/__observations", timeout=5, trust_env=False).raise_for_status()
         yield value
 
 

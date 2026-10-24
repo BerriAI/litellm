@@ -19,6 +19,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 INPUT_PRICE: Final = 0.001
 OUTPUT_PRICE: Final = 0.002
 PROMPT_TOKENS: Final = 7

@@ -16,7 +16,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
     should_report_bug,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
 from litellm.types.utils import LlmProviders
 
@@ -102,6 +102,7 @@ class ExceptionCheckers:
             "`inputs` tokens + `max_new_tokens` must be",
             "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
+            '"code": "context_length_exceeded"',
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
@@ -168,7 +169,7 @@ def get_error_message(error_obj) -> str | None:
             return None
 
         if hasattr(error_obj, "body"):
-            _error_obj_body: Final = getattr(error_obj, "body")
+            _error_obj_body: Final = attribute_or_none(error_obj, "body")
             if isinstance(_error_obj_body, dict):
                 # OpenAI-style: {"message": "...", "type": "...", ...}
                 if _error_obj_body.get("message"):
@@ -2551,7 +2552,8 @@ def exception_type(
             ################################################################################
 
             if (
-                "Request Timeout Error" in error_str
+                isinstance(original_exception, httpx.TimeoutException)
+                or "Request Timeout Error" in error_str
                 or "Request timed out" in error_str
                 or "Timed out generating response" in error_str
                 or "The read operation timed out" in error_str
@@ -2559,7 +2561,7 @@ def exception_type(
                 exception_mapping_worked = True
 
                 raise Timeout(
-                    message=f"APITimeoutError - Request timed out. Error_str: {error_str}",
+                    message=f"APITimeoutError - Request timed out. Error_str: {error_str or type(mappable_exception).__name__}",
                     model=model,
                     llm_provider=custom_llm_provider,
                     litellm_debug_info=extra_information,

@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -98,6 +98,9 @@ class AmazonAnthropicClaudeMessagesConfig(
     def beta_headers_provider(self) -> str:
         return self.custom_llm_provider or "bedrock"
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
 
@@ -142,7 +145,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         self,
         headers: dict,
         model: str,
-        messages: list[object],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

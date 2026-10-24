@@ -13,6 +13,8 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 SCIM_HEADERS: Final = {"Content-Type": "application/scim+json"}
 SCIM_CORE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:User"
 SCIM_CORE_GROUP_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:Group"

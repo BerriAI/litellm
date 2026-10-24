@@ -139,6 +139,7 @@ jobs:
             test-path: |-
               tests/unit/batch_completion
               tests/unit/decisions
+              tests/unit/extraction
               tests/unit/litellm_core_utils
               tests/unit/systemone
             python-version: "3.12"
@@ -215,10 +216,12 @@ jobs:
 
           - shard: llms-providers
             test-path: |-
+              tests/unit/llms/test_api_base_trailing_slash_routes.py
               tests/unit/llms/test_cache_control_and_reasoning.py
               tests/unit/llms/test_custom_llm.py
               tests/unit/llms/test_file_content_block.py
               tests/unit/llms/test_file_search_responses.py
+              tests/unit/llms/test_get_complete_url_trailing_slash.py
               tests/unit/llms/test_lifecycle_fix.py
               tests/unit/llms/test_oss_decision.py
               tests/unit/llms/test_polling_url_origin_match.py
@@ -266,6 +269,7 @@ jobs:
               tests/unit/llms/featherless_ai
               tests/unit/llms/firecrawl
               tests/unit/llms/fireworks_ai
+              tests/unit/llms/friendliai
               tests/unit/llms/gdc
               tests/unit/llms/gemini
               tests/unit/llms/gigachat
@@ -321,6 +325,7 @@ jobs:
               tests/unit/llms/pass_through
               tests/unit/llms/perplexity
               tests/unit/llms/pg_vector
+              tests/unit/llms/pi
               tests/unit/llms/publicai
               tests/unit/llms/ragflow
               tests/unit/llms/recraft
@@ -410,6 +415,7 @@ jobs:
               tests/unit/embeddings
               tests/unit/endpoints
               tests/unit/files
+              tests/unit/fine_tuning
               tests/unit/images
               tests/unit/interactions
               tests/unit/messages
@@ -419,6 +425,7 @@ jobs:
               tests/unit/realtime_api
               tests/unit/rerank_api
               tests/unit/search
+              tests/unit/text_completions
               tests/unit/vector_stores
               tests/unit/videos
             python-version: "3.12"
@@ -430,6 +437,13 @@ jobs:
 
           - shard: rust-bridge-harness
             test-path: >-
+              tests/test_litellm_rust/test_dispatch.py
+              tests/test_litellm_rust/test_public_entries.py
+              tests/test_litellm_rust/chat_completions/test_dispatch.py
+              tests/test_litellm_rust/embeddings/test_dispatch.py
+              tests/test_litellm_rust/messages/test_dispatch.py
+              tests/test_litellm_rust/ocr/test_dispatch.py
+              tests/test_litellm_rust/responses/test_dispatch.py
               tests/unit/compression
               tests/unit/harness
               tests/unit/rust_bridge

@@ -91,6 +91,21 @@ _SELF_SCOPED_CREDENTIAL_ROUTES: Final = (
 )
 
 
+_UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
+    {
+        "/models",
+        "/v1/models",
+        "/utils/token_counter",
+        "/utils/transform_request",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
+    }
+)
+_TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
+_TOKEN_COUNTING_ACTION: Final = "countTokens"
+
+
 class RouteChecks:
     @staticmethod
     def should_call_route(
@@ -145,7 +160,7 @@ class RouteChecks:
                 if allowed_route in LiteLLMRoutes._member_names_:
                     if RouteChecks.check_route_access(
                         route=route,
-                        allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
+                        allowed_routes=LiteLLMRoutes[allowed_route].value,
                     ):
                         if (
                             allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
@@ -411,6 +426,11 @@ class RouteChecks:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"user not allowed to access this route. Route={route} is an admin only route",
                 )
+
+    @staticmethod
+    def is_unbilled_route(route: str) -> bool:
+        resource, _, action = route.rsplit("/", 1)[-1].partition(":")
+        return route in _UNBILLED_ROUTES or resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
 
     @staticmethod
     def is_llm_api_route(route: str) -> bool:

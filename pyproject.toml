@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.107.0"
+version = "1.108.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -29,12 +29,14 @@ dependencies = [
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
     "aiohttp>=3.14.2,<4.0",
+    "anyio>=4.14.0,<5.0",
     "async-timeout>=4.0.3,<6.0; python_version < '3.11'",
     "pydantic>=2.11.0,<3.0.0; python_version < '3.14'",
     "pydantic>=2.12.0,<3.0.0; python_version >= '3.14'",
     "pydantic-settings>=2.14.1,<3.0",
     "jsonschema>=4.0.0,<5.0",
-    "boto3>=1.43.1,<2.0",
+    "boto3>=1.43.117,<2.0",
+    "certifi>=2026.10.19",
     "typing-extensions>=4.13.0,<5.0",
 ]
 
@@ -71,14 +73,14 @@ proxy = [
     "cryptography>=49.0.0,<51.0",
     "pynacl>=1.6.2,<2.0",
     "websockets>=15.0.1,<16.0",
-    "boto3>=1.43.1,<2.0",
+    "boto3>=1.43.117,<2.0",
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
-    "mcp>=2.2.0,<3",
-    "httpx2>=2.5.0,<3",
+    "mcp>=2.3.0,<3",
+    "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.109",
-    "litellm-enterprise==0.1.77",
+    "litellm-proxy-extras==0.4.111",
+    "litellm-enterprise==0.1.79",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -87,6 +89,7 @@ proxy = [
     "soundfile>=0.12.1,<1.0",
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
     "expression>=5.6.0,<6.0",
+    "backports-zstd>=1.0.0,<2.0; python_version < '3.14'",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
 # imports are all guarded, so it runs on the base SDK plus these packages, and
@@ -123,7 +126,7 @@ utils = [
     "numpydoc>=1.8.0,<2.0",
 ]
 caching = ["diskcache>=5.6.3,<6.0"]
-mcp = ["mcp>=2.2.0,<3", "httpx2>=2.5.0,<3", "pydantic>=2.12.0,<3"]
+mcp = ["mcp>=2.3.0,<3", "httpx2>=2.10.0,<3", "pydantic>=2.12.0,<3"]
 # Driver for the MongoDB Atlas vector store; Atlas Vector Search has no HTTP query API.
 # The floor is 4.9 because that is the release AsyncMongoClient landed in.
 # SAML SSO for the admin UI. python3-saml pulls in xmlsec/lxml, whose wheels
@@ -134,10 +137,10 @@ semantic-router = [
     "semantic-router>=0.1.15,<1.0; python_version < '3.14'",
     "aurelio-sdk>=0.0.19,<1.0; python_version < '3.14'",
 ]
-mlflow = ["mlflow>=3.11.1,<4.0"]
+mlflow = ["mlflow>=3.17.2,<4.0"]
 grpc = [
-    # Newest non-yanked release older than the 30-day cutoff.
-    "grpcio==1.78.0",
+    # First release whose bundled roots.pem drops the compromised eMudhra roots, ahead of the 30-day cutoff
+    "grpcio==1.84.1",
 ]
 stt-vertex-chirp = [
     # Google Cloud Speech-to-Text v2 streaming (gRPC) for Chirp models on
@@ -171,19 +174,19 @@ proxy-runtime = [
     "google-cloud-speech>=2.40.0,<3.0",
     "google-genai>=1.37.0,<2.0",
     "anthropic[vertex]>=0.84.0,<1.0",
-    "grpcio==1.78.0",
+    "grpcio==1.84.1",
     "prometheus-client>=0.20.0,<1.0",
     "langfuse>=4.7,<5.0",
-    "opentelemetry-api==1.33.1",
-    "opentelemetry-sdk==1.33.1",
-    "opentelemetry-exporter-otlp==1.33.1",
-    "opentelemetry-instrumentation-fastapi==0.54b1",
+    "opentelemetry-api==1.45.1",
+    "opentelemetry-sdk==1.45.1",
+    "opentelemetry-exporter-otlp==1.45.1",
+    "opentelemetry-instrumentation-fastapi==0.66b1",
     "ddtrace>=4.8.2,<5.0",
     "sentry-sdk>=2.21.0,<3.0",
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
     "azure-storage-file-datalake>=12.20.0,<13.0",
-    "pypdf>=6.16.1,<7.0",
+    "pypdf>=6.21.2,<7.0",
     "llm-sandbox>=0.3.39,<1.0",
     "detect-secrets>=1.5.0,<2.0",
 ]
@@ -220,10 +223,10 @@ dev = [
     "types-PyYAML==6.0.12.20250915",
     "botocore-stubs==1.43.14",
     "types-boto3[bedrock,bedrock-agent,bedrock-runtime,kms,s3,sagemaker-runtime,sts]==1.43.30",
-    "opentelemetry-api==1.33.1",
-    "opentelemetry-sdk==1.33.1",
-    "opentelemetry-exporter-otlp==1.33.1",
-    "opentelemetry-instrumentation-fastapi==0.54b1",
+    "opentelemetry-api==1.45.1",
+    "opentelemetry-sdk==1.45.1",
+    "opentelemetry-exporter-otlp==1.45.1",
+    "opentelemetry-instrumentation-fastapi==0.66b1",
     "langfuse>=4.7,<5.0",
     "fastapi-offline==1.7.6",
     "fakeredis==2.34.1",
@@ -241,7 +244,7 @@ e2e-dev = [
     "locust==2.45.0",
     "anthropic==0.84.0",
     "psutil==7.2.2",
-    "mcp>=2.2.0,<3",
+    "mcp>=2.3.0,<3",
 ]
 admin-mcp = [
     "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz#sha256=86b930f6706fb2da10d53d1798ee7fd14e44fb0afdef0da122cf0e6bb88fa2c3 ; python_version >= '3.12'",
@@ -252,12 +255,13 @@ proxy-dev = [
     "hypercorn==0.17.3",
     "prometheus-client==0.20.0",
     "sentry-sdk==2.21.0",
-    "opentelemetry-api==1.33.1",
-    "opentelemetry-sdk==1.33.1",
-    "opentelemetry-exporter-otlp==1.33.1",
-    "opentelemetry-instrumentation-fastapi==0.54b1",
+    "opentelemetry-api==1.45.1",
+    "opentelemetry-sdk==1.45.1",
+    "opentelemetry-exporter-otlp==1.45.1",
+    "opentelemetry-instrumentation-fastapi==0.66b1",
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
+    "backports-zstd==1.8.0; python_version < '3.14'",
 ]
 ci = [
     "psutil==7.2.2",
@@ -266,7 +270,8 @@ ci = [
     # protobuf, Pillow is a compiled C extension).
     "tenacity==8.5.0",
     "google-generativeai==0.8.6",
-    "Pillow==12.3.0",
+    "Pillow==12.3.0; python_version == '3.10'",
+    "Pillow==13.0.0; python_version >= '3.11'",
     # Azure batch E2E tests still import psycopg2 directly.
     "psycopg2-binary==2.9.11",
     "pytest-codspeed==4.3.0",
@@ -275,7 +280,7 @@ ci = [
     "langchain==1.3.9",
     "lunary==1.4.36; python_version == '3.10'",
     "lunary==1.4.37; python_version >= '3.11'",
-    "logfire==4.6.0",
+    "logfire==5.2.0",
     "traceloop-sdk==0.34.0",
     "detect-secrets==1.5.0",
     "PyGithub==2.8.1",
@@ -300,7 +305,7 @@ healthcheck = [
 benchmarks = [
     "pytest==9.0.3",
     "pytest-codspeed==4.3.0",
-    "mcp>=2.2.0,<3",
+    "mcp>=2.3.0,<3",
     "a2a-sdk==1.1.0",
 ]
 
@@ -354,16 +359,34 @@ constraint-dependencies = [
     "packaging>=24.0",
     "soupsieve>=2.8.4",
     "httplib2>=0.32.0",
-    "setuptools>=83.0.0",
+    "setuptools>=84.1.0",
 ]
 override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
     "packaging>=24.0",
     "cryptography>=50.0.0,<51.0",
+    "mcp>=2.3.0,<3",
 ]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
 exclude-newer = "3 days"
+
+[tool.uv.exclude-newer-package]
+# TODO: ryan, remove after 2026-10-23, once certifi 2026.10.19 (drops the compromised eMudhra root) clears the 3-day window
+certifi = "2026-10-20T03:00:00Z"
+# TODO(shrey): remove after 2026-10-25, once grpcio 1.84.1 (drops the compromised eMudhra roots from roots.pem) clears the 3-day window
+grpcio = "2026-10-22T15:00:00Z"
+# TODO(shrey): remove after 2026-10-24, once boto3/botocore 1.43.117 (drops the compromised eMudhra roots from cacert.pem) clear the 3-day window
+boto3 = "2026-10-21T19:31:00Z"
+botocore = "2026-10-21T19:31:00Z"
+# TODO: remove after 2026-10-25, once brotli 1.2.1 (CVE-2026-111497) clears the 3-day window
+brotli = "2026-10-22T14:01:00Z"
+# TODO: ryan, remove after 2026-10-24, once mlflow 3.17.2 (GHSA-wqmh-qccw-pqwf) clears the 3-day window
+mlflow = "2026-10-21T03:00:00Z"
+mlflow-skinny = "2026-10-21T03:00:00Z"
+mlflow-tracing = "2026-10-21T03:00:00Z"
+# TODO: ryan, remove after 2026-10-25, once pypdf 6.21.2 (GHSA-6c7f-9265-g8fw) clears the 3-day window
+pypdf = "2026-10-21T17:00:00Z"
 
 [tool.uv.sources]
 litellm-proxy-extras = { workspace = true }
@@ -373,7 +396,7 @@ litellm-enterprise = { workspace = true }
 members = ["enterprise", "litellm-proxy-extras"]
 
 [tool.commitizen]
-version = "1.107.0"
+version = "1.108.0"
 version_files = [
     "pyproject.toml:^version",
 ]

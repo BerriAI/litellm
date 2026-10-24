@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import time
+import anyio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +38,8 @@ from mcp.types import (
     CallToolRequestParams as MCPCallToolRequestParams,
     CallToolResult,
     GetPromptResult,
+    ListToolsResult,
+    PaginatedRequestParams,
     Prompt,
     ResourceTemplate,
     TextResourceContents,
@@ -44,7 +47,7 @@ from mcp.types import (
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, TypeAdapter
 
-from litellm.constants import MCP_METADATA_TIMEOUT
+from litellm.constants import MCP_METADATA_TIMEOUT, MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES
 from litellm.proxy._experimental.mcp_server import discoverable_endpoints
 from litellm.proxy._experimental.mcp_server.legacy_callbacks import ElicitationCallback
 from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
@@ -53,6 +56,7 @@ from litellm.experimental_mcp_client.client import MCPClient, PersistentMCPSessi
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     ListedToolsCaller,
     MCPServerManager,
+    global_mcp_server_manager,
     _deserialize_json_dict,
     _flow_endpoints_missing,
     _mcp_oauth_discovery_on_startup_enabled,
@@ -64,9 +68,13 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     should_strip_caller_authorization,
     listed_tools_caller_for,
 )
+from litellm.proxy import proxy_server
+from litellm.proxy.auth import auth_checks
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
     LitellmUserRoles,
     MCPApprovalStatus,
     MCPEnvVar,
@@ -164,7 +172,13 @@ async def test_elicitation_callback_keeps_initiating_session():
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_elicitation_callback
 
     from types import SimpleNamespace
-    from mcp.types import ClientCapabilities, ElicitationCapability, FormElicitationCapability, ElicitRequestFormParams, ElicitResult
+    from mcp.types import (
+        ClientCapabilities,
+        ElicitationCapability,
+        FormElicitationCapability,
+        ElicitRequestFormParams,
+        ElicitResult,
+    )
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
 
     capabilities = ClientCapabilities(elicitation=ElicitationCapability(form=FormElicitationCapability()))
@@ -180,7 +194,7 @@ async def test_elicitation_callback_keeps_initiating_session():
         legacy_server.active_mcp_session_var.set(SimpleNamespace())
         active_mcp_request_ctx_var.set(None)
         capabilities.elicitation = None
-        result = await callback(None, ElicitRequestFormParams(message="Confirm", requested_schema={"type":"object"}))
+        result = await callback(None, ElicitRequestFormParams(message="Confirm", requested_schema={"type": "object"}))
         assert result is accepted
         assert request.await_args.kwargs["related_request_id"] == "initiating-call"
     finally:
@@ -301,6 +315,204 @@ def test_validated_admission_jwt_is_not_forwarded_as_an_extra_header(auth_type: 
     )
     assert upstream_headers == expected
     assert _openapi_forwarded_extra_headers(server, raw, user) == expected
+
+
+@pytest.mark.parametrize(
+    "auth_type",
+    [MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic, MCPAuth.true_passthrough],
+)
+def test_admission_authorization_is_not_forwarded_for_any_auth_type(
+    auth_type: MCPAuth, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _openapi_forwarded_extra_headers
+    from litellm.proxy._experimental.mcp_server.operations import _prepare_mcp_server_headers
+
+    monkeypatch.setattr(proxy_server, "master_key", "test-master-key")
+    server: Final = MCPServer(
+        server_id="admission-header-boundary",
+        name="admission-header-boundary",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        extra_headers=["Authorization", "x-tenant"],
+    )
+    user: Final = UserAPIKeyAuth(api_key="hashed-key")
+    admitted_raw: Final = {
+        "Authorization": "Bearer sk-" + "1234",
+        "x-tenant": "tenant-control",
+    }
+    expected_without_admission_key: Final = {"x-tenant": "tenant-control"}
+    admission_upstream_headers: Final = _prepare_mcp_server_headers(
+        server,
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers={"Authorization": "Bearer sk-" + "1234"},
+        raw_headers=admitted_raw,
+        user_api_key_auth=user,
+    )[1]
+    assert admission_upstream_headers == expected_without_admission_key
+    assert _openapi_forwarded_extra_headers(server, admitted_raw, user) == expected_without_admission_key
+
+    separate_upstream_raw: Final = {
+        "x-litellm-api-key": "Bearer another-sk",
+        "Authorization": "Bearer upstream",
+        "x-tenant": "tenant-control",
+    }
+    expected_with_upstream_authorization: Final = {
+        "x-tenant": "tenant-control",
+        "Authorization": "Bearer upstream",
+    }
+    distinct_upstream_headers: Final = _prepare_mcp_server_headers(
+        server,
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers={"Authorization": "Bearer upstream"},
+        raw_headers=separate_upstream_raw,
+        user_api_key_auth=user,
+    )[1]
+    assert distinct_upstream_headers == expected_with_upstream_authorization
+    assert _openapi_forwarded_extra_headers(server, separate_upstream_raw, user) == expected_with_upstream_authorization
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.true_passthrough])
+def test_no_master_key_preserves_caller_authorization_unless_auth_is_enabled(
+    auth_type: MCPAuth, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _openapi_forwarded_extra_headers
+    from litellm.proxy._experimental.mcp_server.operations import _prepare_mcp_server_headers
+
+    monkeypatch.setattr(proxy_server, "master_key", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    server: Final = MCPServer(
+        server_id="no-master-key",
+        name="no-master-key",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        extra_headers=["Authorization", "x-tenant"],
+    )
+    raw_headers: Final = {"Authorization": "Bearer upstream", "x-tenant": "t"}
+    user: Final = UserAPIKeyAuth(api_key="upstream", authenticated_by_custom_auth=False)
+    expected_forwarded: Final = {"x-tenant": "t", "Authorization": "Bearer upstream"}
+    forwarded_headers: Final = _prepare_mcp_server_headers(
+        server,
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers={"Authorization": "Bearer upstream"},
+        raw_headers=raw_headers,
+        user_api_key_auth=user,
+    )[1]
+    assert forwarded_headers == expected_forwarded
+    assert _openapi_forwarded_extra_headers(server, raw_headers, user) == expected_forwarded
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_oauth2_auth": True})
+    auth_enabled_headers: Final = _prepare_mcp_server_headers(
+        server,
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers={"Authorization": "Bearer upstream"},
+        raw_headers=raw_headers,
+        user_api_key_auth=user,
+    )[1]
+    assert auth_enabled_headers == {"x-tenant": "t"}
+    assert _openapi_forwarded_extra_headers(server, raw_headers, user) == {"x-tenant": "t"}
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.true_passthrough])
+def test_custom_auth_is_stripped_in_no_auth_dev_mode(
+    auth_type: MCPAuth, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _openapi_forwarded_extra_headers
+    from litellm.proxy._experimental.mcp_server.operations import _prepare_mcp_server_headers
+
+    monkeypatch.setattr(proxy_server, "master_key", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    server: Final = MCPServer(
+        server_id="custom-auth-no-master-key",
+        name="custom-auth-no-master-key",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        extra_headers=["Authorization", "x-tenant"],
+    )
+    raw_headers: Final = {"Authorization": "Bearer custom-tok", "x-tenant": "t"}
+    user: Final = UserAPIKeyAuth(api_key="custom-tok")
+    user.authenticated_by_custom_auth = True
+    expected_headers: Final = {"x-tenant": "t"}
+    forwarded_headers: Final = _prepare_mcp_server_headers(
+        server,
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers={"Authorization": "Bearer custom-tok"},
+        raw_headers=raw_headers,
+        user_api_key_auth=user,
+    )[1]
+
+    assert forwarded_headers == expected_headers
+    assert _openapi_forwarded_extra_headers(server, raw_headers, user) == expected_headers
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.true_passthrough])
+@pytest.mark.parametrize(
+    "raw_headers,oauth2_headers,expected",
+    [
+        (
+            {
+                "X-Company-Key": "sk-" + "1234",
+                "Authorization": "Bearer upstream",
+                "x-tenant": "t",
+            },
+            {"Authorization": "Bearer upstream"},
+            {"x-tenant": "t", "Authorization": "Bearer upstream"},
+        ),
+        (
+            {
+                "X-Company-Key": "sk-" + "1234",
+                "Authorization": "Bearer sk-" + "1234",
+                "x-tenant": "t",
+            },
+            {"Authorization": "Bearer sk-" + "1234"},
+            {"x-tenant": "t"},
+        ),
+        (
+            {"Authorization": "Bearer sk-" + "1234", "x-tenant": "t"},
+            {"Authorization": "Bearer sk-" + "1234"},
+            {"x-tenant": "t"},
+        ),
+    ],
+)
+def test_custom_admission_header_controls_authorization_forwarding(
+    auth_type: MCPAuth,
+    raw_headers: dict[str, str],
+    oauth2_headers: dict[str, str],
+    expected: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _openapi_forwarded_extra_headers
+    from litellm.proxy._experimental.mcp_server.operations import _prepare_mcp_server_headers
+
+    monkeypatch.setattr(proxy_server, "master_key", "test-master-key")
+    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "x-company-key"})
+    server: Final = MCPServer(
+        server_id="custom-admission-header",
+        name="custom-admission-header",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        extra_headers=["Authorization", "x-tenant"],
+    )
+    user: Final = UserAPIKeyAuth(api_key="hashed-key")
+
+    upstream_headers: Final = _prepare_mcp_server_headers(
+        server,
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
+        user_api_key_auth=user,
+    )[1]
+    assert upstream_headers == expected
+    assert _openapi_forwarded_extra_headers(server, raw_headers, user) == expected
 
 
 class TestMCPServerManager:
@@ -1286,7 +1498,9 @@ class TestMCPServerManager:
         raw_row = MagicMock()
         raw_row.model_dump.return_value = row.model_dump()
         repository = MagicMock()
-        other_row: Final = row.model_copy(update={"server_id": "changed-other", "server_name": "changed_other", "auth_type": MCPAuth.none})
+        other_row: Final = row.model_copy(
+            update={"server_id": "changed-other", "server_name": "changed_other", "auth_type": MCPAuth.none}
+        )
         repository.table.find_many = AsyncMock(return_value=[raw_row, other_row])
 
         async def publish_while_staged(*_args, **_kwargs):
@@ -1364,7 +1578,11 @@ class TestMCPServerManager:
         table = SimpleNamespace(
             find_many=AsyncMock(return_value=[_row(cached.server_id, corrupted), _row("healthy-sibling", stored)])
         )
-        prisma = SimpleNamespace(db=SimpleNamespace(litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)), litellm_mcpservertable=table))
+        prisma = SimpleNamespace(
+            db=SimpleNamespace(
+                litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)), litellm_mcpservertable=table
+            )
+        )
         prisma.writer_db = prisma.db
         monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
@@ -2298,12 +2516,17 @@ class TestMCPServerManager:
     @pytest.mark.asyncio
     async def test_managed_scope_challenge_requires_reauthorization_without_retry(self):
         server = MCPServer(
-            server_id="managed-scope", name="managed-scope", alias="managed-scope",
-            url="https://up.example.com/mcp", transport=MCPTransport.http,
-            auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code",
+            server_id="managed-scope",
+            name="managed-scope",
+            alias="managed-scope",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
         )
         upstream_error = self._upstream_status_error(
-            403, 'Bearer error="insufficient_scope", scope="tools.write", resource_metadata="https://untrusted.test/metadata"'
+            403,
+            'Bearer error="insufficient_scope", scope="tools.write", resource_metadata="https://untrusted.test/metadata"',
         )
         manager = MCPServerManager()
         client = AsyncMock()
@@ -3534,14 +3757,14 @@ class TestMCPServerManager:
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
         self,
-    ):
+    ) -> None:
         """OAuth pass-through must not forward the caller's Authorization to upstream
         when LiteLLM admission consumed the bearer as its API key — otherwise the
         LiteLLM key the caller used for admission would leak upstream."""
         from litellm.proxy._types import UserAPIKeyAuth
 
-        manager = MCPServerManager()
-        server = MCPServer(
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
             server_id="server-passthrough-call",
             name="passthrough-server",
             url="https://example.com",
@@ -3551,20 +3774,19 @@ class TestMCPServerManager:
             oauth_passthrough=True,
         )
 
-        mock_client = AsyncMock()
+        mock_client: Final = AsyncMock()
         mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
-        captured_extra_headers = None
+        capture_extra_headers: Final = AsyncMock()
 
         async def capture_create_mcp_client(
-            server,
-            mcp_auth_header,
-            extra_headers,
-            stdio_env,
-            subject_token=None,
-            **kwargs,
-        ):  # pragma: no cover - helper
-            nonlocal captured_extra_headers
-            captured_extra_headers = extra_headers
+            server: MCPServer,
+            mcp_auth_header: str | dict[str, str] | None,
+            extra_headers: dict[str, str] | None,
+            stdio_env: dict[str, str] | None,
+            subject_token: str | None = None,
+            **kwargs: object,
+        ) -> AsyncMock:
+            await capture_extra_headers(extra_headers)
             return mock_client
 
         manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
@@ -3585,7 +3807,63 @@ class TestMCPServerManager:
             user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
         )
 
+        assert capture_extra_headers.await_args is not None
+        captured_extra_headers: Final = capture_extra_headers.await_args.args[0]
         assert captured_extra_headers == {"x-request-id": "req-123"}
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_never_forwards_admission_key_for_none_auth(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(proxy_server, "master_key", "test-master-key")
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="server-none-admission-call",
+            name="none-auth-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            extra_headers=["Authorization", "x-tenant"],
+        )
+
+        mock_client: Final = AsyncMock()
+        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        capture_extra_headers: Final = AsyncMock()
+
+        async def capture_create_mcp_client(
+            server: MCPServer,
+            mcp_auth_header: str | dict[str, str] | None,
+            extra_headers: dict[str, str] | None,
+            stdio_env: dict[str, str] | None,
+            subject_token: str | None = None,
+            **kwargs: object,
+        ) -> AsyncMock:
+            await capture_extra_headers(extra_headers)
+            return mock_client
+
+        manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={
+                "Authorization": "Bearer sk-" + "1234",
+                "x-tenant": "tenant-control",
+            },
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key"),
+        )
+
+        assert capture_extra_headers.await_args is not None
+        captured_extra_headers: Final = capture_extra_headers.await_args.args[0]
+        assert captured_extra_headers == {"x-tenant": "tenant-control"}
 
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_v2_authz_code_drops_caller_authorization(
@@ -7387,12 +7665,21 @@ class TestMCPServerManager:
             caller=ListedToolsCaller(user_api_key_auth=auth),
         )
         if managed:
-            manager.registry["test-server"] = manager.registry["test-server"].model_copy(update={
-                "auth_type": MCPAuth.oauth2, "oauth2_flow": "authorization_code",
-            })
+            manager.registry["test-server"] = manager.registry["test-server"].model_copy(
+                update={
+                    "auth_type": MCPAuth.oauth2,
+                    "oauth2_flow": "authorization_code",
+                }
+            )
         send = AsyncMock()
         gate = OAuthScopeResponse(send, "https://gateway.example", "/mcp/test-server")
-        context = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}))
+        context = ServerRequestContext(
+            session=MagicMock(),
+            lifespan_context={},
+            protocol_version="2025-11-25",
+            method="tools/call",
+            request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}),
+        )
         token = active_mcp_request_ctx_var.set(context)
         await gate({"type": "http.response.start", "status": 200, "headers": []})
         progress = asyncio.create_task(gate({"type": "http.response.body", "body": b"progress", "more_body": True}))
@@ -7404,7 +7691,13 @@ class TestMCPServerManager:
 
         manager.create_mcp_client.return_value.call_tool.side_effect = upstream_call
         try:
-            result = await manager.call_tool(server_name="test-server", name="test_tool", arguments={}, user_api_key_auth=auth, proxy_logging_obj=logging)
+            result = await manager.call_tool(
+                server_name="test-server",
+                name="test_tool",
+                arguments={},
+                user_api_key_auth=auth,
+                proxy_logging_obj=logging,
+            )
             assert not result.is_error
         finally:
             gate.allow()
@@ -8037,9 +8330,7 @@ class TestMCPServerManager:
             "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.get_mcp_jwt_signer",
             return_value=signer,
         ):
-            manager.record_listed_tools(
-                server, [MCPTool(name="turn", description="alice view", inputSchema={})], alice
-            )
+            manager.record_listed_tools(server, [MCPTool(name="turn", description="alice view", inputSchema={})], alice)
             assert manager.get_listed_tool(server, "turn", bob) is None
 
         for_alice = manager.get_listed_tool(server, "turn", alice)
@@ -9138,9 +9429,7 @@ class TestMCPServerTimestamps:
             registration_url=None,
         )
         assert oauth_endpoints_unresolved(relay_arm) is True
-        assert (
-            oauth_endpoints_unresolved(relay_arm.model_copy(update={"registration_url": "https://idp/reg"})) is False
-        )
+        assert oauth_endpoints_unresolved(relay_arm.model_copy(update={"registration_url": "https://idp/reg"})) is False
         assert oauth_endpoints_unresolved(relay_arm.model_copy(update={"client_id": "admin-client"})) is False
 
     def test_entra_obo_without_scopes_is_unresolved(self):
@@ -9402,11 +9691,13 @@ class TestMCPServerTimestamps:
         assert blipped.issuer == "https://idp.example.com"
         assert blipped.authorization_response_iss_parameter_supported is True
         fallback = MCPServerManager._merge_discovered_oauth_metadata(
-            blipped, MCPOAuthMetadata(from_origin_fallback=True),
+            blipped,
+            MCPOAuthMetadata(from_origin_fallback=True),
         )
         assert fallback.authorization_response_iss_parameter_supported is True
         refreshed = MCPServerManager._merge_discovered_oauth_metadata(
-            fallback, MCPOAuthMetadata(discovered_issuer="https://idp.example.com"),
+            fallback,
+            MCPOAuthMetadata(discovered_issuer="https://idp.example.com"),
         )
         assert refreshed.authorization_response_iss_parameter_supported is False
 
@@ -9761,7 +10052,7 @@ class TestMCPServerTimestamps:
             "unlimited_server": {
                 "url": "https://example.com/other-mcp",
                 "transport": MCPTransport.http,
-            }
+            },
         }
         await manager.load_servers_from_config(config)
         servers = list(manager.config_mcp_servers.values())
@@ -15211,6 +15502,457 @@ async def test_pre_call_tool_check_honors_guardrail_attached_to_key(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_pre_call_tool_check_stamps_personal_key_team_rpm_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="srv-b",
+        name="srv-b",
+        server_name="srv-b",
+        transport=MCPTransport.stdio,
+    )
+    user_api_key_auth: Final = UserAPIKeyAuth(api_key="sk-personal", user_id="alice")
+    expected: Final = {"team-b": {"srv-b": 3}}
+    proxy_logging_obj: Final = _permissive_proxy_logging()
+
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setattr(manager, "check_tool_permission_for_key_team", AsyncMock(return_value=None))
+    monkeypatch.setattr(MCPRequestHandler, "personal_key_team_rpm_limits", AsyncMock(return_value=expected))
+    await manager.pre_call_tool_check(
+        name="multiply",
+        arguments={},
+        server_name=server.name,
+        user_api_key_auth=user_api_key_auth,
+        proxy_logging_obj=proxy_logging_obj,
+        server=server,
+    )
+
+    hook_auth: Final = proxy_logging_obj.pre_call_hook.await_args.kwargs["user_api_key_dict"]
+    assert hook_auth is not user_api_key_auth
+    assert hook_auth.mcp_source_team_rpm_limits == expected
+    assert user_api_key_auth.mcp_source_team_rpm_limits is None
+    assert proxy_logging_obj.enforce_mcp_server_rate_limits.await_args.args[0] is hook_auth
+    assert MCPRequestHandler.personal_key_team_rpm_limits.await_args.args == (
+        user_api_key_auth,
+        server,
+        "multiply",
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_call_tool_check_uses_inherited_team_auth_for_guardrails(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    server: Final = MCPServer(
+        server_id="srv-guardrails",
+        name="math_a",
+        server_name="math_a",
+        transport=MCPTransport.stdio,
+    )
+    team: Final = LiteLLM_TeamTable(
+        team_id="team-a",
+        object_permission_id="perm-team-a",
+        metadata={"guardrails": ["team-guardrail"]},
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-team-a",
+            mcp_servers=[server.server_id],
+            mcp_tool_permissions={server.server_id: ["multiply"]},
+        ),
+    )
+    user_api_key_auth: Final = UserAPIKeyAuth(api_key="sk-personal", user_id="alice")
+    manager: Final = MCPServerManager()
+    proxy_logging_obj: Final = _permissive_proxy_logging()
+    user_api_key_cache: Final = MagicMock()
+    user_api_key_cache.async_get_cache = AsyncMock(return_value=None)
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    async def get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        assert team_id == team.team_id
+        return team
+
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _: False)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+    monkeypatch.setattr(
+        auth_checks,
+        "get_user_object",
+        AsyncMock(return_value=LiteLLM_UserTable(user_id="alice", teams=["team-a"])),
+    )
+    monkeypatch.setattr(auth_checks, "get_team_object", get_team_object)
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_checks, "_personal_key_team_within_budget", AsyncMock(return_value=True))
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    monkeypatch.setattr(manager, "check_tool_permission_for_key_team", AsyncMock(return_value=None))
+
+    team_grants: Final = await MCPRequestHandler.personal_key_team_server_grants(user_api_key_auth)
+    assert team_grants[0][0].team_id == "team-a"
+    assert server.server_id in team_grants[0][1].server_ids
+
+    await manager.pre_call_tool_check(
+        name="multiply",
+        arguments={},
+        server_name=server.name,
+        user_api_key_auth=user_api_key_auth,
+        proxy_logging_obj=proxy_logging_obj,
+        server=server,
+        guardrail_auth=None,
+    )
+
+    hook_auth: Final = proxy_logging_obj.pre_call_hook.await_args.kwargs["user_api_key_dict"]
+    assert hook_auth.team_id == "team-a"
+    assert hook_auth.team_metadata == {"guardrails": ["team-guardrail"]}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_tool_check_keeps_native_name_for_team_attribution(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    server: Final = MCPServer(
+        server_id="math-a",
+        name="math_a",
+        alias="math_a",
+        server_name="math_a",
+        transport=MCPTransport.stdio,
+    )
+    team_a: Final = LiteLLM_TeamTable(
+        team_id="team-a",
+        object_permission_id="perm-team-a",
+        metadata={"mcp_rpm_limit": {"math-a": 7}},
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-team-a",
+            mcp_servers=["math-a"],
+            mcp_tool_permissions={"math-a": ["math_a-foo"]},
+        ),
+    )
+    team_b: Final = LiteLLM_TeamTable(
+        team_id="team-b",
+        object_permission_id="perm-team-b",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-team-b",
+            mcp_servers=["math-a"],
+            mcp_tool_permissions={"math-a": ["foo"]},
+        ),
+    )
+    user_api_key_auth: Final = UserAPIKeyAuth(api_key="sk-personal", user_id="alice")
+    manager: Final = MCPServerManager()
+    proxy_logging_obj: Final = _permissive_proxy_logging()
+    user_api_key_cache: Final = MagicMock()
+    user_api_key_cache.async_get_cache = AsyncMock(return_value=None)
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    async def get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return team_a if team_id == team_a.team_id else team_b
+
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _: False)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+    monkeypatch.setattr(
+        auth_checks,
+        "get_user_object",
+        AsyncMock(return_value=LiteLLM_UserTable(user_id="alice", teams=["team-a", "team-b"])),
+    )
+    monkeypatch.setattr(auth_checks, "get_team_object", get_team_object)
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_checks, "_personal_key_team_within_budget", AsyncMock(return_value=True))
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+
+    await manager.pre_call_tool_check(
+        name="math_a-foo",
+        arguments={},
+        server_name=server.name,
+        user_api_key_auth=user_api_key_auth,
+        proxy_logging_obj=proxy_logging_obj,
+        server=server,
+        guardrail_auth=None,
+    )
+
+    hook_auth: Final = proxy_logging_obj.pre_call_hook.await_args.kwargs["user_api_key_dict"]
+    assert hook_auth.team_id == "team-a"
+    assert hook_auth.mcp_source_team_rpm_limits == {"team-a": {"math-a": 7}}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_tool_check_keeps_original_auth_for_team_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    server: Final = MCPServer(
+        server_id="srv-team-key",
+        name="team-server",
+        server_name="team-server",
+        transport=MCPTransport.stdio,
+    )
+    user_api_key_auth: Final = UserAPIKeyAuth(
+        api_key="sk-team",
+        team_id="team-a",
+        team_metadata={"guardrails": ["team-guardrail"]},
+    )
+    manager: Final = MCPServerManager()
+    proxy_logging_obj: Final = _permissive_proxy_logging()
+    monkeypatch.setattr(manager, "check_tool_permission_for_key_team", AsyncMock(return_value=None))
+
+    await manager.pre_call_tool_check(
+        name="multiply",
+        arguments={},
+        server_name=server.name,
+        user_api_key_auth=user_api_key_auth,
+        proxy_logging_obj=proxy_logging_obj,
+        server=server,
+        guardrail_auth=None,
+    )
+
+    assert proxy_logging_obj.pre_call_hook.await_args.kwargs["user_api_key_dict"] is user_api_key_auth
+
+
+@pytest.mark.asyncio
+async def test_call_tool_passes_attributed_auth_to_guardrail_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.operations import _run_post_mcp_call_guardrails
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, LiteLLM_UserTable
+
+    original_auth: Final = UserAPIKeyAuth(api_key="sk-personal", user_id="alice")
+    team: Final = LiteLLM_TeamTable(
+        team_id="team-b",
+        organization_id="org-team-b",
+        object_permission_id="perm-team-b",
+        metadata={"guardrails": ["team-guardrail"]},
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-team-b",
+            mcp_servers=["test-server"],
+            mcp_tool_permissions={"test-server": ["test_tool"]},
+        ),
+    )
+    manager: Final = TestMCPServerManager._manager_ready_for_call_tool(
+        [MCPTool(name="test_tool", inputSchema={"type": "object"})],
+        caller=ListedToolsCaller(user_api_key_auth=original_auth),
+    )[0]
+    server: Final = manager.registry["test-server"]
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+    proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_mcp_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["response"])
+    proxy_logging_obj.enforce_mcp_server_rate_limits = AsyncMock()
+
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setattr("litellm.proxy.utils.premium_user_check", MagicMock())
+    monkeypatch.setattr(manager, "check_tool_permission_for_key_team", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging_obj)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _: False)
+    monkeypatch.setattr(
+        auth_checks,
+        "get_user_object",
+        AsyncMock(return_value=LiteLLM_UserTable(user_id="alice", teams=["team-b"])),
+    )
+    monkeypatch.setattr(auth_checks, "get_team_object", AsyncMock(return_value=team))
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_checks, "_personal_key_team_within_budget", AsyncMock(return_value=True))
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+
+    await manager.call_tool(
+        server_name="test-server",
+        name="test_tool",
+        arguments={},
+        user_api_key_auth=original_auth,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    pre_auth: Final = proxy_logging_obj.pre_call_hook.await_args.kwargs["user_api_key_dict"]
+    during_auth: Final = proxy_logging_obj.during_call_hook.await_args.kwargs["user_api_key_dict"]
+    assert pre_auth.team_id == "team-b"
+    assert pre_auth.team_metadata == {"guardrails": ["team-guardrail"]}
+    assert during_auth.team_id == "team-b"
+    assert during_auth.team_metadata == {"guardrails": ["team-guardrail"]}
+    assert proxy_logging_obj.pre_call_hook.await_args.kwargs["data"]["metadata"]["guardrails"] == ["team-guardrail"]
+    assert proxy_logging_obj.during_call_hook.await_args.kwargs["data"]["metadata"]["guardrails"] == ["team-guardrail"]
+    assert original_auth.team_id is None
+    assert original_auth.team_metadata is None
+
+    non_inherited_auth: Final = UserAPIKeyAuth(
+        api_key="sk-team",
+        team_id="team-a",
+        team_metadata={"guardrails": ["team-guardrail"]},
+    )
+    await manager.call_tool(
+        server_name="test-server",
+        name="test_tool",
+        arguments={},
+        user_api_key_auth=non_inherited_auth,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    assert proxy_logging_obj.pre_call_hook.await_args_list[-1].kwargs["user_api_key_dict"] is non_inherited_auth
+    assert proxy_logging_obj.during_call_hook.await_args_list[-1].kwargs["user_api_key_dict"] is non_inherited_auth
+
+    from mcp.types import CallToolResult
+
+    result: Final = CallToolResult(content=[])
+    non_inherited_metadata: Final = {"existing": "value"}
+    model_call_details: Final = {"metadata": non_inherited_metadata}
+    post_guardrail_auth: Final = original_auth.model_copy(update={"team_metadata": {"guardrails": ["g1"]}})
+    inherited_request_data: Final = {"metadata": {"guardrails": [{"req-g": {"x": 1}}]}}
+    await _run_post_mcp_call_guardrails(
+        result=result,
+        litellm_logging_obj=None,
+        original_auth=original_auth,
+        guardrail_auth=post_guardrail_auth,
+        request_data=inherited_request_data,
+    )
+    post_kwargs: Final = proxy_logging_obj.post_mcp_call_hook.await_args.kwargs
+    assert post_kwargs["user_api_key_dict"] is post_guardrail_auth
+    assert post_kwargs["request_data"]["metadata"]["guardrails"] == [{"req-g": {"x": 1}}, "g1"]
+    assert inherited_request_data["metadata"]["guardrails"] == [{"req-g": {"x": 1}}]
+    await _run_post_mcp_call_guardrails(
+        result=result,
+        litellm_logging_obj=MagicMock(model_call_details=model_call_details),
+        original_auth=non_inherited_auth,
+        guardrail_auth=non_inherited_auth,
+        request_data={"metadata": {}},
+    )
+    non_inherited_post_kwargs: Final = proxy_logging_obj.post_mcp_call_hook.await_args.kwargs
+    assert non_inherited_post_kwargs["user_api_key_dict"] is non_inherited_auth
+    assert non_inherited_post_kwargs["request_data"] is model_call_details
+    assert non_inherited_post_kwargs["request_data"]["metadata"] == {"existing": "value"}
+    assert model_call_details["metadata"] is non_inherited_metadata
+
+
+@pytest.mark.asyncio
+async def test_virtual_mcp_calls_use_attributed_auth_for_logging_and_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcp.types import CallToolResult, Tool
+
+    from litellm.proxy._experimental.mcp_server import operations, tool_search
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable
+    from litellm.types.mcp_server.tool_registry import MCPTool
+
+    original_auth: Final = UserAPIKeyAuth(
+        api_key="sk-personal",
+        user_id="owner",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="virtual-tools",
+            mcp_tool_search_enabled=True,
+        ),
+    )
+    team: Final = LiteLLM_TeamTable(
+        team_id="team-a",
+        organization_id="org-team-a",
+        object_permission_id="perm-team-a",
+        metadata={"guardrails": ["g1"]},
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-team-a",
+            mcp_servers=["math-a"],
+            mcp_tool_permissions={"math-a": ["foo"]},
+        ),
+    )
+    server: Final = MCPServer(
+        server_id="math-a",
+        name="math_a",
+        server_name="math_a",
+        transport=MCPTransport.http,
+    )
+    registered_tool: Final = MCPTool(
+        name="math_a-foo",
+        description="Foo",
+        input_schema={"type": "object"},
+        handler=AsyncMock(return_value=None),
+        server_id="math-a",
+    )
+    result: Final = CallToolResult(content=[])
+    target_tool: Final = Tool(name="math_a-foo", inputSchema={"type": "object"})
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+    proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_mcp_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["response"])
+    proxy_logging_obj.enforce_mcp_server_rate_limits = AsyncMock()
+
+    async def build_logging(
+        name: str,
+        arguments: dict[str, object],
+        user_api_key_auth: UserAPIKeyAuth,
+        logging_auth: UserAPIKeyAuth | None = None,
+        raw_headers: dict[str, str] | None = None,
+        client_ip: str | None = None,
+    ) -> MagicMock:
+        logger_auth: Final = logging_auth or user_api_key_auth
+        return MagicMock(model_call_details={"metadata": {"user_api_key_team_id": logger_auth.team_id}})
+
+    logging_builder: Final = AsyncMock(side_effect=build_logging)
+    tool_call_handler: Final = AsyncMock(return_value=result)
+    proxy_handler: Final = AsyncMock(return_value=result)
+
+    async def get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        assert team_id == "team-a"
+        return team
+
+    async def get_user_object(user_id: str, **_: object) -> LiteLLM_UserTable:
+        return LiteLLM_UserTable(user_id=user_id, teams=["team-a"])
+
+    monkeypatch.setattr(auth_checks, "get_team_object", get_team_object)
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_checks, "get_user_object", get_user_object)
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_checks, "_check_team_member_budget", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _: False)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging_obj)
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setitem(global_mcp_server_manager.registry, "math-a", server)
+    monkeypatch.setitem(global_mcp_tool_registry.tools, "math_a-foo", registered_tool)
+    monkeypatch.setattr(operations, "_build_virtual_call_logging_obj", logging_builder)
+    monkeypatch.setattr(tool_search, "handle_mcp_tool_call", tool_call_handler)
+    monkeypatch.setattr(tool_search, "handle_mcp_proxy_tool", proxy_handler)
+    monkeypatch.setattr(operations, "find_mcp_proxy_tool", AsyncMock(return_value=target_tool))
+    monkeypatch.setattr(operations, "_fire_mcp_tool_call_logging", AsyncMock(return_value=result))
+
+    await operations._dispatch_virtual_mcp_tool(
+        name="mcp_tool_call",
+        arguments={"tool_name": "math_a-foo", "arguments": {}},
+        user_api_key_auth=original_auth,
+        client_ip=None,
+    )
+
+    assert logging_builder.await_args.kwargs["user_api_key_auth"] is original_auth
+    assert logging_builder.await_args.kwargs["logging_auth"].team_id == "team-a"
+    assert logging_builder.await_args.kwargs["logging_auth"].team_metadata == {"guardrails": ["g1"]}
+    assert tool_call_handler.await_args.kwargs["user_api_key_dict"] is original_auth
+    assert tool_call_handler.await_args.kwargs["guardrail_auth"].team_id == "team-a"
+    assert tool_call_handler.await_args.kwargs["guardrail_auth"].team_metadata == {"guardrails": ["g1"]}
+    direct_logger: Final = tool_call_handler.await_args.kwargs["litellm_logging_obj"]
+    assert direct_logger.model_call_details["metadata"]["user_api_key_team_id"] == "team-a"
+
+    await operations._dispatch_virtual_mcp_tool(
+        name="call_tool",
+        arguments={"tool_id": "opaque-tool-id", "arguments": {}},
+        user_api_key_auth=original_auth,
+        client_ip=None,
+        mcp_proxy_mode=True,
+    )
+
+    assert logging_builder.await_args_list[1].kwargs["user_api_key_auth"] is original_auth
+    assert logging_builder.await_args_list[1].kwargs["logging_auth"].team_id == "team-a"
+    assert logging_builder.await_args_list[1].kwargs["logging_auth"].team_metadata == {"guardrails": ["g1"]}
+    assert proxy_handler.await_args.kwargs["user_api_key_dict"] is original_auth
+    assert proxy_handler.await_args.kwargs["guardrail_auth"].team_id == "team-a"
+    assert proxy_handler.await_args.kwargs["guardrail_auth"].team_metadata == {"guardrails": ["g1"]}
+    assert proxy_handler.await_args.kwargs["resolved_tool"] is target_tool
+    proxy_logger: Final = operations._fire_mcp_tool_call_logging.await_args.kwargs["logging_obj"]
+    assert proxy_logger.model_call_details["metadata"]["user_api_key_team_id"] == "team-a"
+    assert original_auth.team_id is None
+    assert original_auth.team_metadata is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("config", "extra_headers", "expected_source", "expected_authorization"),
     [
@@ -15704,6 +16446,7 @@ async def test_health_check_logs_upstream_exchange_only_for_http_failures(
 class _DiscoveryUpstream:
     def __init__(self) -> None:
         self.requests: tuple[tuple[str, str], ...] = ()
+        self.tools: tuple[dict[str, object], ...] = ()
         self.outcome = "supported"
         self.ttl_ms = 60000
         self.entered = asyncio.Event()
@@ -15765,7 +16508,7 @@ class _DiscoveryUpstream:
             "resources/templates/list": {
                 "resourceTemplates": [{"name": "example", "uriTemplate": "test://{name}", "description": "original"}]
             },
-            "tools/list": {"tools": []},
+            "tools/list": {"tools": list(self.tools)},
         }[payload.method]
         continuation: Final = (
             {"nextCursor": "last-page"}
@@ -15800,6 +16543,64 @@ def _discovery_server() -> MCPServer:
         transport=MCPTransport.http,
         protocol_version="2026-07-28",
     )
+
+
+@pytest.mark.asyncio
+async def test_per_user_authorization_server_lists_without_static_credential() -> None:
+    upstream: Final = _DiscoveryUpstream()
+    upstream.tools = ({"name": "search", "inputSchema": {"type": "object"}},)
+    server: Final = MCPServer(
+        server_id="per-user-auth",
+        name="per-user-auth",
+        url="https://discovery.example/mcp",
+        transport=MCPTransport.http,
+        protocol_version="2026-07-28",
+        auth_type=MCPAuth.authorization,
+    )
+    manager: Final = MCPServerManager()
+    manager.registry[server.server_id] = server
+
+    with _mcp_upstream(upstream.respond):
+        tools: Final = await manager.get_tools_from_server(server, add_prefix=False)
+
+    assert [tool.name for tool in tools] == ["search"]
+    assert ("tools/list", "") in upstream.requests
+    with pytest.raises(HTTPException, match="requires a usable upstream credential"):
+        await manager.create_mcp_client(server)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth_type", "credential", "upstream_token_header"),
+    (
+        (MCPAuth.authorization, "Bearer", None),
+        (MCPAuth.authorization, "Bearer", "X-Token"),
+        (MCPAuth.authorization, "   ", None),
+        (MCPAuth.authorization, "   ", "X-Token"),
+        (MCPAuth.bearer_token, None, None),
+    ),
+)
+async def test_tool_listing_rejects_malformed_or_other_missing_static_credentials(
+    auth_type: MCPAuth, credential: str | None, upstream_token_header: str | None
+) -> None:
+    upstream: Final = _DiscoveryUpstream()
+    server: Final = MCPServer(
+        server_id="invalid-static-auth",
+        name="invalid-static-auth",
+        url="https://discovery.example/mcp",
+        transport=MCPTransport.http,
+        protocol_version="2026-07-28",
+        auth_type=auth_type,
+        authentication_token=credential,
+        upstream_token_header=upstream_token_header,
+    )
+    manager: Final = MCPServerManager()
+    manager.registry[server.server_id] = server
+
+    with _mcp_upstream(upstream.respond), pytest.raises(MCPServerListError):
+        await manager.get_tools_from_server(server)
+
+    assert upstream.requests == ()
 
 
 @pytest.mark.asyncio
@@ -15914,9 +16715,7 @@ async def test_discovery_cache_isolates_forwarded_credentials_and_static_auth_ca
 @pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
 @pytest.mark.parametrize("header", ("Authorization", "X-LiteLLM-API-Key"))
 @pytest.mark.parametrize("identified", (False, True))
-async def test_discovery_cache_isolates_keyless_admission_credentials(
-    kind: str, header: str, identified: bool
-) -> None:
+async def test_discovery_cache_isolates_keyless_admission_credentials(kind: str, header: str, identified: bool) -> None:
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
     server: Final = _discovery_server().model_copy(update={"static_headers": {"Authorization": "Bearer upstream"}})
@@ -17280,6 +18079,7 @@ async def test_catalog_config_only_snapshot_cleans_up_after_error(monkeypatch):
     manager = MCPServerManager()
     configured = MCPServer(server_id="configured", name="configured", transport="stdio", command="echo")
     manager.config_mcp_servers = {configured.server_id: configured}
+
     async def fail_operation():
         async with manager.catalog.operation():
             assert await manager.catalog.resolve("configured") == configured
@@ -17328,14 +18128,26 @@ async def test_catalog_publishes_rediscovered_routes_despite_concurrent_owner_ch
 @pytest.mark.parametrize("anchored", [False, True])
 async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(anchored):
     manager: Final = MCPServerManager()
-    server: Final = MCPServer(server_id="config-race", name="config_race", transport=MCPTransport.http,
-        url="https://upstream.example/mcp", auth_type=MCPAuth.oauth2,
-        issuer="https://issuer.example" if anchored else None, issuer_is_anchored=anchored)
+    server: Final = MCPServer(
+        server_id="config-race",
+        name="config_race",
+        transport=MCPTransport.http,
+        url="https://upstream.example/mcp",
+        auth_type=MCPAuth.oauth2,
+        issuer="https://issuer.example" if anchored else None,
+        issuer_is_anchored=anchored,
+    )
     manager.config_mcp_servers = {server.server_id: server}
     manager._set_oauth_discovery_deferred(server.server_id, True)
     generation: Final = manager.oauth_discovery_slot(server.server_id).generation
-    resolved: Final = server.model_copy(update={"authorization_url": "https://issuer.example/authorize",
-        "token_url": "https://issuer.example/token", "scopes": ["read"], "issuer": "https://issuer.example"})
+    resolved: Final = server.model_copy(
+        update={
+            "authorization_url": "https://issuer.example/authorize",
+            "token_url": "https://issuer.example/token",
+            "scopes": ["read"],
+            "issuer": "https://issuer.example",
+        }
+    )
 
     async def hydrate(target: MCPServer) -> bool:
         target.client_id = "persisted-client"
@@ -17352,7 +18164,10 @@ async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(a
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
-        patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client", side_effect=hydrate),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client",
+            side_effect=hydrate,
+        ),
     ):
         await manager.reload_servers_from_database()
     current: Final = manager.get_mcp_server_by_id(server.server_id)
@@ -17369,14 +18184,16 @@ async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(a
 @pytest.mark.parametrize("change", ["credentials", "delete"])
 async def test_catalog_reload_does_not_restore_replaced_config_credentials_or_routes(change):
     manager: Final = MCPServerManager()
-    server: Final = MCPServer(server_id="config-replaced", name="config_replaced", transport=MCPTransport.http,
-        client_id="previous-client")
+    server: Final = MCPServer(
+        server_id="config-replaced", name="config_replaced", transport=MCPTransport.http, client_id="previous-client"
+    )
     manager.config_mcp_servers = {server.server_id: server}
     manager.published_tool_routes["config_replaced-search"] = "config_replaced"
 
     async def read_rows(**_kwargs):
-        manager.config_mcp_servers = {} if change == "delete" else {
-            server.server_id: server.model_copy(update={"client_id": "new-client"})}
+        manager.config_mcp_servers = (
+            {} if change == "delete" else {server.server_id: server.model_copy(update={"client_id": "new-client"})}
+        )
         return []
 
     prisma: Final = MagicMock()
@@ -17399,8 +18216,13 @@ async def test_catalog_operation_retains_routes_only_for_same_configured_target(
     from mcp.types import Tool
 
     manager: Final = MCPServerManager()
-    server: Final = MCPServer(server_id="route-race", name="route_race", transport=MCPTransport.http,
-        url="https://upstream.example/mcp", auth_type=MCPAuth.oauth2)
+    server: Final = MCPServer(
+        server_id="route-race",
+        name="route_race",
+        transport=MCPTransport.http,
+        url="https://upstream.example/mcp",
+        auth_type=MCPAuth.oauth2,
+    )
     manager.registry = {server.server_id: server}
     with patch("litellm.proxy.proxy_server.prisma_client", None):
         async with manager.catalog.operation():
@@ -17408,9 +18230,16 @@ async def test_catalog_operation_retains_routes_only_for_same_configured_target(
             if change == "delete":
                 manager.registry = {}
             else:
-                manager.registry[server.server_id] = server.model_copy(update=(
-                    {"authorization_url": "https://issuer.example/authorize", "token_url": "https://issuer.example/token"}
-                    if change == "discovery" else {"url": "https://changed.example/mcp"}))
+                manager.registry[server.server_id] = server.model_copy(
+                    update=(
+                        {
+                            "authorization_url": "https://issuer.example/authorize",
+                            "token_url": "https://issuer.example/token",
+                        }
+                        if change == "discovery"
+                        else {"url": "https://changed.example/mcp"}
+                    )
+                )
     assert (tools[0].name in manager.published_tool_routes) is (change == "discovery")
 
 
@@ -17423,8 +18252,10 @@ async def test_catalog_reload_keeps_new_route_owner_over_earlier_route(change, m
     manager: Final = MCPServerManager()
     registry: Final = tool_registry.MCPToolRegistry()
     monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
-    servers: Final = {name: MCPServer(server_id=name, name=name, transport=MCPTransport.http,
-        client_id="configured-client") for name in ("old_owner", "new_owner", "concurrent_owner")}
+    servers: Final = {
+        name: MCPServer(server_id=name, name=name, transport=MCPTransport.http, client_id="configured-client")
+        for name in ("old_owner", "new_owner", "concurrent_owner")
+    }
     manager.config_mcp_servers = servers
     manager.published_tool_routes = {"shared-search": "old_owner"} if mapped else {}
 
@@ -17450,7 +18281,9 @@ async def test_catalog_reload_keeps_new_route_owner_over_earlier_route(change, m
                 registry.published_tools.clear()
             elif change == "staged_with_concurrent":
                 manager.published_tool_routes["shared-search"] = "concurrent_owner"
-                registry.published_tools["shared-search"] = original_tool.model_copy(update={"handler": concurrent_handler})
+                registry.published_tools["shared-search"] = original_tool.model_copy(
+                    update={"handler": concurrent_handler}
+                )
             manager.tool_name_to_mcp_server_name_mapping["shared-search"] = "new_owner"
             registry.register_tool("shared-search", "Search", {}, new_handler)
         else:
@@ -17483,10 +18316,16 @@ async def test_catalog_observes_committed_update_and_delete_without_background_r
 
     timestamp: Final = datetime.now()
     row: Final = LiteLLM_MCPServerTable(
-        server_id="catalog-server", server_name="catalog_server", alias="catalog_server",
-        transport=MCPTransport.http, url="https://first.example.com/mcp", updated_at=timestamp,
+        server_id="catalog-server",
+        server_name="catalog_server",
+        alias="catalog_server",
+        transport=MCPTransport.http,
+        url="https://first.example.com/mcp",
+        updated_at=timestamp,
     )
-    updated: Final = row.model_copy(update={"url": "https://second.example.com/mcp", "updated_at": timestamp + timedelta(seconds=1)})
+    updated: Final = row.model_copy(
+        update={"url": "https://second.example.com/mcp", "updated_at": timestamp + timedelta(seconds=1)}
+    )
     prisma: Final = MagicMock()
     prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=([row], [updated], []))
@@ -17512,8 +18351,12 @@ async def test_catalog_observes_committed_update_and_delete_without_background_r
 async def test_catalog_rebuilt_unchanged_server_keeps_discovered_tool_routes():
     from mcp.types import Tool
 
-    row: Final = LiteLLM_MCPServerTable(server_id="unchanged-routes", alias="unchanged_routes",
-        url="https://upstream.example/mcp", transport=MCPTransport.http)
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="unchanged-routes",
+        alias="unchanged_routes",
+        url="https://upstream.example/mcp",
+        transport=MCPTransport.http,
+    )
     manager: Final = MCPServerManager()
     prisma: Final = MagicMock()
     prisma.writer_db = prisma.db
@@ -17536,9 +18379,14 @@ async def test_catalog_reload_retains_routes_discovered_for_a_late_server(change
     from mcp.types import Tool
     from litellm.proxy._experimental.mcp_server import tool_registry
 
-    row: Final = LiteLLM_MCPServerTable(server_id="late-routes", alias="late_routes",
-        url="https://upstream.example/mcp", transport=MCPTransport.http, updated_at=datetime.now(),
-        spec_path="late-openapi.json" if openapi else None)
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="late-routes",
+        alias="late_routes",
+        url="https://upstream.example/mcp",
+        transport=MCPTransport.http,
+        updated_at=datetime.now(),
+        spec_path="late-openapi.json" if openapi else None,
+    )
     manager: Final = MCPServerManager()
     registry: Final = tool_registry.MCPToolRegistry()
     monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
@@ -17562,9 +18410,17 @@ async def test_catalog_reload_retains_routes_discovered_for_a_late_server(change
         await published.wait()
         if change == "deleted":
             return []
-        return [row if change == "same" else row.model_copy(update={
-            "url": "https://updated.example/mcp", "spec_path": None,
-            "updated_at": row.updated_at + timedelta(seconds=1)})]
+        return [
+            row
+            if change == "same"
+            else row.model_copy(
+                update={
+                    "url": "https://updated.example/mcp",
+                    "spec_path": None,
+                    "updated_at": row.updated_at + timedelta(seconds=1),
+                }
+            )
+        ]
 
     prisma: Final = MagicMock()
     prisma.writer_db = prisma.db
@@ -17581,7 +18437,9 @@ async def test_catalog_reload_retains_routes_discovered_for_a_late_server(change
         assert manager.get_mcp_server_by_id(row.server_id) is None
         assert "late_routes-search" not in manager.published_tool_routes
     else:
-        assert manager.server_exposes_tool(manager.get_mcp_server_by_id(row.server_id), "late_routes-search") is (change == "same")
+        assert manager.server_exposes_tool(manager.get_mcp_server_by_id(row.server_id), "late_routes-search") is (
+            change == "same"
+        )
     tool: Final = registry.get_tool("late_routes-search")
     if openapi and change == "same":
         assert tool is not None
@@ -17592,7 +18450,9 @@ async def test_catalog_reload_retains_routes_discovered_for_a_late_server(change
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retain_operation", [False, True])
-async def test_catalog_openapi_refresh_does_not_restore_removed_operations(tmp_path, monkeypatch, respx_mock, retain_operation):
+async def test_catalog_openapi_refresh_does_not_restore_removed_operations(
+    tmp_path, monkeypatch, respx_mock, retain_operation
+):
     from litellm.proxy._experimental.mcp_server import tool_registry
 
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
@@ -17603,8 +18463,13 @@ async def test_catalog_openapi_refresh_does_not_restore_removed_operations(tmp_p
     paths: Final = {"/removed": {"get": {"operationId": "removed"}}, "/retained": {"get": {"operationId": "retained"}}}
     spec: Final = {"openapi": "3.0.0", "info": {"title": "Refresh", "version": "1"}, "paths": paths}
     spec_path.write_text(json.dumps(spec))
-    row: Final = LiteLLM_MCPServerTable(server_id="spec-refresh", alias="spec_refresh",
-        url="https://upstream.example", transport=MCPTransport.http, spec_path=str(spec_path))
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="spec-refresh",
+        alias="spec_refresh",
+        url="https://upstream.example",
+        transport=MCPTransport.http,
+        spec_path=str(spec_path),
+    )
     prisma: Final = MagicMock()
     prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
@@ -17644,10 +18509,15 @@ async def test_catalog_lookup_uses_one_snapshot_until_operation_finishes():
     from datetime import timedelta
 
     row: Final = LiteLLM_MCPServerTable(
-        server_id="snapshot-server", alias="snapshot_server", transport=MCPTransport.http,
-        url="https://first.example.com/mcp", updated_at=datetime.now(),
+        server_id="snapshot-server",
+        alias="snapshot_server",
+        transport=MCPTransport.http,
+        url="https://first.example.com/mcp",
+        updated_at=datetime.now(),
     )
-    updated: Final = row.model_copy(update={"url": "https://second.example.com/mcp", "updated_at": row.updated_at + timedelta(seconds=1)})
+    updated: Final = row.model_copy(
+        update={"url": "https://second.example.com/mcp", "updated_at": row.updated_at + timedelta(seconds=1)}
+    )
     prisma: Final = MagicMock()
     prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=([row], [updated], [updated]))
@@ -17743,8 +18613,15 @@ async def test_catalog_cancelled_openapi_refresh_retains_tools_and_discovery(mon
 
     manager: Final = MCPServerManager()
     stamp: Final = datetime.now()
-    server: Final = MCPServer(server_id="staged", name="staged", transport=MCPTransport.http,
-        url="https://before.example/mcp", spec_path="before.json", updated_at=stamp, auth_type=MCPAuth.oauth2)
+    server: Final = MCPServer(
+        server_id="staged",
+        name="staged",
+        transport=MCPTransport.http,
+        url="https://before.example/mcp",
+        spec_path="before.json",
+        updated_at=stamp,
+        auth_type=MCPAuth.oauth2,
+    )
     manager.registry = {server.server_id: server}
     manager._set_oauth_discovery_deferred(server.server_id, True)
     original_slot: Final = manager.oauth_discovery_slot(server.server_id)
@@ -17753,8 +18630,15 @@ async def test_catalog_cancelled_openapi_refresh_retains_tools_and_discovery(mon
     registry: Final = tool_registry.MCPToolRegistry()
     registry.register_tool("staged-existing", "existing", {}, lambda: "existing")
     monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
-    row: Final = LiteLLM_MCPServerTable(server_id=server.server_id, alias="staged", transport=MCPTransport.http,
-        url="https://after.example/mcp", spec_path="after.json", updated_at=stamp + timedelta(seconds=1), auth_type=MCPAuth.oauth2)
+    row: Final = LiteLLM_MCPServerTable(
+        server_id=server.server_id,
+        alias="staged",
+        transport=MCPTransport.http,
+        url="https://after.example/mcp",
+        spec_path="after.json",
+        updated_at=stamp + timedelta(seconds=1),
+        auth_type=MCPAuth.oauth2,
+    )
     prisma: Final = MagicMock()
     prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
@@ -17782,8 +18666,14 @@ async def test_catalog_cancelled_openapi_refresh_retains_tools_and_discovery(mon
 
 @pytest.mark.asyncio
 async def test_catalog_snapshot_identity_is_independent_of_worker_oauth_discovery():
-    row: Final = LiteLLM_MCPServerTable(server_id="identity-server", alias="identity_server", transport=MCPTransport.http,
-        url="https://upstream.example/mcp", auth_type=MCPAuth.oauth2, updated_at=datetime.now())
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="identity-server",
+        alias="identity_server",
+        transport=MCPTransport.http,
+        url="https://upstream.example/mcp",
+        auth_type=MCPAuth.oauth2,
+        updated_at=datetime.now(),
+    )
     prisma: Final = MagicMock()
     prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
@@ -17796,8 +18686,9 @@ async def test_catalog_snapshot_identity_is_independent_of_worker_oauth_discover
     ):
         async with manager.catalog.operation() as unresolved:
             assert manager.get_mcp_server_by_id(row.server_id).authorization_url is None
-        resolved: Final = manager.registry[row.server_id].model_copy(update={
-            "authorization_url": "https://idp.example/authorize", "token_url": "https://idp.example/token"})
+        resolved: Final = manager.registry[row.server_id].model_copy(
+            update={"authorization_url": "https://idp.example/authorize", "token_url": "https://idp.example/token"}
+        )
         manager.registry[row.server_id] = resolved
         async with manager.catalog.operation() as discovered:
             assert manager.get_mcp_server_by_id(row.server_id).authorization_url == resolved.authorization_url
@@ -17811,8 +18702,13 @@ async def test_catalog_failed_openapi_row_does_not_publish_partial_handlers(monk
     manager: Final = MCPServerManager()
     registry: Final = tool_registry.MCPToolRegistry()
     monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
-    row: Final = LiteLLM_MCPServerTable(server_id="broken", alias="broken", transport=MCPTransport.http,
-        url="https://upstream.example/mcp", spec_path="broken.json")
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="broken",
+        alias="broken",
+        transport=MCPTransport.http,
+        url="https://upstream.example/mcp",
+        spec_path="broken.json",
+    )
     prisma: Final = MagicMock()
     prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
@@ -17853,16 +18749,22 @@ async def test_catalog_reuses_openapi_tools_until_configuration_or_background_re
     registry = tool_registry.MCPToolRegistry()
     monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
     spec_path = tmp_path / "catalog.json"
-    spec_path.write_text(json.dumps({
-        "openapi": "3.0.0", "info": {"title": "Catalog", "version": "1"},
-        "paths": {"/echo": {"get": {"operationId": "echo"}}},
-    }))
+    spec_path.write_text(
+        json.dumps(
+            {
+                "openapi": "3.0.0",
+                "info": {"title": "Catalog", "version": "1"},
+                "paths": {"/echo": {"get": {"operationId": "echo"}}},
+            }
+        )
+    )
     row = _catalog_row().model_copy(update={"spec_path": str(spec_path)})
     read_rows = AsyncMock(return_value=[row])
     _catalog_database(monkeypatch, read_rows)
     manager = MCPServerManager()
     with patch.object(
-        openapi_to_mcp_generator, "load_openapi_spec_async",
+        openapi_to_mcp_generator,
+        "load_openapi_spec_async",
         wraps=openapi_to_mcp_generator.load_openapi_spec_async,
     ) as load_spec:
         await manager.catalog.list()
@@ -17909,10 +18811,15 @@ async def test_catalog_changed_openapi_handler_never_dispatches(monkeypatch, tmp
     monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
     monkeypatch.setattr(operations, "global_mcp_tool_registry", registry)
     spec_path = tmp_path / "catalog-race.json"
-    spec_path.write_text(json.dumps({
-        "openapi": "3.0.0", "info": {"title": "Catalog", "version": "1"},
-        "paths": {"/echo": {"get": {"operationId": "echo"}}},
-    }))
+    spec_path.write_text(
+        json.dumps(
+            {
+                "openapi": "3.0.0",
+                "info": {"title": "Catalog", "version": "1"},
+                "paths": {"/echo": {"get": {"operationId": "echo"}}},
+            }
+        )
+    )
     row = _catalog_row().model_copy(update={"spec_path": str(spec_path)})
     read_rows = AsyncMock(return_value=[row])
     _catalog_database(monkeypatch, read_rows)
@@ -17921,9 +18828,14 @@ async def test_catalog_changed_openapi_handler_never_dispatches(monkeypatch, tmp
     destination = respx_mock.get("https://changed.example/echo").respond(200, text="must not execute")
     async with manager.catalog.operation():
         admitted = manager.get_mcp_server_by_id("catalog-server")
-        read_rows.return_value = [row.model_copy(update={
-            "url": "https://changed.example", "updated_at": datetime(2026, 1, 2),
-        })]
+        read_rows.return_value = [
+            row.model_copy(
+                update={
+                    "url": "https://changed.example",
+                    "updated_at": datetime(2026, 1, 2),
+                }
+            )
+        ]
         await asyncio.create_task(manager.reload_servers_from_database())
         with pytest.raises(HTTPException) as exc:
             if dispatch == "managed":
@@ -17959,7 +18871,8 @@ async def test_catalog_deferred_discovery_preserves_admitted_configuration(monke
     entered = asyncio.Event()
     release = asyncio.Event()
     metadata = MCPOAuthMetadata(
-        authorization_url="https://issuer.example/authorize", token_url="https://issuer.example/token",
+        authorization_url="https://issuer.example/authorize",
+        token_url="https://issuer.example/token",
     )
 
     async def discover(server):
@@ -17989,15 +18902,19 @@ async def test_catalog_deferred_discovery_preserves_admitted_configuration(monke
 
 async def test_catalog_cancelled_config_hydration_preserves_published_credentials():
     manager: Final = MCPServerManager()
-    server: Final = MCPServer(server_id="config-hydration", name="config_hydration", transport=MCPTransport.http,
-        client_id="previous-client")
+    server: Final = MCPServer(
+        server_id="config-hydration", name="config_hydration", transport=MCPTransport.http, client_id="previous-client"
+    )
     manager.config_mcp_servers = {server.server_id: server}
 
     async def cancelled_hydration(target: MCPServer) -> bool:
         target.client_id = "unpublished-client"
         raise asyncio.CancelledError()
 
-    with patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client", side_effect=cancelled_hydration):
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client",
+        side_effect=cancelled_hydration,
+    ):
         with pytest.raises(asyncio.CancelledError):
             await manager.reload_servers_from_database()
     assert manager.get_mcp_server_by_id(server.server_id).client_id == "previous-client"
@@ -18006,15 +18923,22 @@ async def test_catalog_cancelled_config_hydration_preserves_published_credential
 @pytest.mark.asyncio
 async def test_catalog_oauth_resolution_cannot_replace_an_operation_target_after_update():
     manager: Final = MCPServerManager()
-    server: Final = MCPServer(server_id="pinned-oauth", name="pinned_oauth", transport=MCPTransport.http,
-        url="https://before.example/mcp", auth_type=MCPAuth.oauth2,
-        authorization_url="https://before.example/authorize", token_url="https://before.example/token")
+    server: Final = MCPServer(
+        server_id="pinned-oauth",
+        name="pinned_oauth",
+        transport=MCPTransport.http,
+        url="https://before.example/mcp",
+        auth_type=MCPAuth.oauth2,
+        authorization_url="https://before.example/authorize",
+        token_url="https://before.example/token",
+    )
     manager.registry = {server.server_id: server}
     with patch("litellm.proxy.proxy_server.prisma_client", None):
         async with manager.catalog.operation():
             selected: Final = manager.get_mcp_server_by_id(server.server_id)
-            manager.registry[server.server_id] = server.model_copy(update={
-                "url": "https://after.example/mcp", "authorization_url": "https://after.example/authorize"})
+            manager.registry[server.server_id] = server.model_copy(
+                update={"url": "https://after.example/mcp", "authorization_url": "https://after.example/authorize"}
+            )
             resolved: Final = await manager.ensure_oauth_metadata_discovered(selected)
     assert resolved.url == "https://before.example/mcp"
     assert resolved.authorization_url == "https://before.example/authorize"
@@ -18024,8 +18948,13 @@ async def test_catalog_oauth_resolution_cannot_replace_an_operation_target_after
 @pytest.mark.asyncio
 async def test_catalog_unresolved_oauth_snapshot_fails_closed_if_target_was_replaced():
     manager: Final = MCPServerManager()
-    server: Final = MCPServer(server_id="replaced-oauth", name="replaced_oauth", transport=MCPTransport.http,
-        url="https://before.example/mcp", auth_type=MCPAuth.oauth2)
+    server: Final = MCPServer(
+        server_id="replaced-oauth",
+        name="replaced_oauth",
+        transport=MCPTransport.http,
+        url="https://before.example/mcp",
+        auth_type=MCPAuth.oauth2,
+    )
     manager.registry = {server.server_id: server}
     with (
         patch("litellm.proxy.proxy_server.prisma_client", None),
@@ -18033,9 +18962,13 @@ async def test_catalog_unresolved_oauth_snapshot_fails_closed_if_target_was_repl
     ):
         async with manager.catalog.operation():
             selected: Final = manager.get_mcp_server_by_id(server.server_id)
-            manager.registry[server.server_id] = server.model_copy(update={
-                "url": "https://after.example/mcp", "authorization_url": "https://after.example/authorize",
-                "token_url": "https://after.example/token"})
+            manager.registry[server.server_id] = server.model_copy(
+                update={
+                    "url": "https://after.example/mcp",
+                    "authorization_url": "https://after.example/authorize",
+                    "token_url": "https://after.example/token",
+                }
+            )
             with pytest.raises(HTTPException) as exc:
                 await manager.ensure_oauth_metadata_discovered(selected)
     assert exc.value.status_code == 503
@@ -18045,11 +18978,21 @@ async def test_catalog_unresolved_oauth_snapshot_fails_closed_if_target_was_repl
 @pytest.mark.asyncio
 async def test_catalog_unresolved_oauth_snapshot_accepts_discovery_for_the_same_target():
     manager: Final = MCPServerManager()
-    server: Final = MCPServer(server_id="same-oauth", name="same_oauth", transport=MCPTransport.http,
-        url="https://upstream.example/mcp", auth_type=MCPAuth.oauth2)
+    server: Final = MCPServer(
+        server_id="same-oauth",
+        name="same_oauth",
+        transport=MCPTransport.http,
+        url="https://upstream.example/mcp",
+        auth_type=MCPAuth.oauth2,
+    )
     manager.registry = {server.server_id: server}
-    discovered: Final = server.model_copy(update={"authorization_url": "https://issuer.example/authorize",
-        "token_url": "https://issuer.example/token", "scopes": ["read"]})
+    discovered: Final = server.model_copy(
+        update={
+            "authorization_url": "https://issuer.example/authorize",
+            "token_url": "https://issuer.example/token",
+            "scopes": ["read"],
+        }
+    )
     with (
         patch("litellm.proxy.proxy_server.prisma_client", None),
         patch.object(manager, "_ensure_oauth_metadata_discovered", return_value=discovered) as discovery,
@@ -18065,8 +19008,9 @@ async def test_catalog_unresolved_oauth_snapshot_accepts_discovery_for_the_same_
 @pytest.mark.asyncio
 async def test_catalog_fresh_lookup_does_not_fall_back_to_stale_grants_when_database_fails():
     manager: Final = MCPServerManager()
-    server: Final = MCPServer(server_id="stale-grant", name="stale_grant", transport=MCPTransport.http,
-        allow_all_keys=True)
+    server: Final = MCPServer(
+        server_id="stale-grant", name="stale_grant", transport=MCPTransport.http, allow_all_keys=True
+    )
     manager.registry = {server.server_id: server}
     prisma: Final = MagicMock()
     prisma.writer_db = prisma.db
@@ -18102,7 +19046,6 @@ async def test_catalog_cancelled_registration_does_not_publish_partial_handlers(
         await manager.reload_servers_from_database()
     assert [tool.name for tool in registry.list_tools()] == ["existing"]
     assert manager.registry == {}
-
 
 
 def _revision_row(revision):
@@ -18385,9 +19328,7 @@ async def test_release_during_auth_fingerprinting_does_not_open_upstream_session
         _RetiringSessionStub(),
     )
     manager.track_gateway_session(gateway_session_id)
-    request_task: Final = asyncio.create_task(
-        manager._upstream_session_for(client, server, gateway_session_headers)
-    )
+    request_task: Final = asyncio.create_task(manager._upstream_session_for(client, server, gateway_session_headers))
 
     try:
         await asyncio.wait_for(fingerprint_started.wait(), 5)
@@ -18425,7 +19366,9 @@ async def test_upstream_session_is_shared_per_gateway_session_and_released_with_
         first: Final = await manager._upstream_session_for(client, server, {"Mcp-Session-Id": "gw-1"})
         second: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-1"})
         other: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-2"})
-        assert first is not None and first is second, "every call of one gateway session must share one upstream session"
+        assert first is not None and first is second, (
+            "every call of one gateway session must share one upstream session"
+        )
         assert other is not None and other is not first, "distinct gateway sessions must not share upstream state"
 
         manager.release_upstream_sessions("gw-1")
@@ -18485,9 +19428,7 @@ async def test_upstream_sessions_are_partitioned_by_discovery_auth_fingerprint(
         assert first_session.closed
         assert len(manager._upstream_sessions) == 1
         assert tuple(manager._upstream_sessions.values()) == (second_session,)
-        first_session_again: Final = await manager._upstream_session_for(
-            first_client, server, gateway_session_headers
-        )
+        first_session_again: Final = await manager._upstream_session_for(first_client, server, gateway_session_headers)
         assert first_session_again is not None
         assert first_session_again is not first_session
         assert first_session_again is not second_session
@@ -18538,9 +19479,7 @@ async def test_upstream_sessions_are_partitioned_by_connection_settings(
         assert first_session.closed
         assert len(manager._upstream_sessions) == 1
         assert tuple(manager._upstream_sessions.values()) == (changed_session,)
-        first_session_again: Final = await manager._upstream_session_for(
-            third_client, server, gateway_session_headers
-        )
+        first_session_again: Final = await manager._upstream_session_for(third_client, server, gateway_session_headers)
 
         assert first_session_again is not None
         assert first_session_again is not first_session
@@ -18777,9 +19716,7 @@ async def test_upstream_session_is_not_reused_outside_an_mcp_protocol_request() 
 
     manager.track_gateway_session("gw-rest")
     try:
-        session: Final = await manager._upstream_session_for(
-            client, server, {"mcp-session-id": "gw-rest"}
-        )
+        session: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-rest"})
         assert session is None
     finally:
         manager.release_upstream_sessions("gw-rest")
@@ -19563,8 +20500,11 @@ async def test_upstream_preparation_honors_case_sensitive_extra_command(monkeypa
     monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
     monkeypatch.setattr(upstream, "MCP_STDIO_ALLOWED_COMMANDS", frozenset({"CustomRunner"}))
     server: Final = MCPServer(
-        server_id="custom-stdio", name="custom-stdio", transport=MCPTransport.stdio,
-        command="/opt/tools/CustomRunner", args=[],
+        server_id="custom-stdio",
+        name="custom-stdio",
+        transport=MCPTransport.stdio,
+        command="/opt/tools/CustomRunner",
+        args=[],
     )
     client: Final = await MCPServerManager()._create_mcp_client(server)
     assert client.stdio_config is not None
@@ -19756,10 +20696,12 @@ async def test_catalog_observes_writer_changes_while_read_replica_lags(monkeypat
         litellm_mcpservertable=SimpleNamespace(find_many=AsyncMock(return_value=[original])),
         litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=_revision_row(7))),
     )
-    routed: Final = SimpleNamespace(**{
-        name: _RoutedActions(getattr(writer, name), getattr(reader, name), lambda: True)
-        for name in ("litellm_mcpservertable", "litellm_config")
-    })
+    routed: Final = SimpleNamespace(
+        **{
+            name: _RoutedActions(getattr(writer, name), getattr(reader, name), lambda: True)
+            for name in ("litellm_mcpservertable", "litellm_config")
+        }
+    )
     monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=routed, writer_db=writer))
     manager: Final = MCPServerManager()
     assert (await manager.catalog.resolve(original.server_id)).name == "initial"
@@ -19776,7 +20718,9 @@ async def test_catalog_observes_writer_changes_while_read_replica_lags(monkeypat
 @pytest.mark.asyncio
 async def test_catalog_revision_failure_preserves_state_and_recovers(monkeypatch):
     reader: Final = AsyncMock(side_effect=([_catalog_row()], [_catalog_row("updated")]))
-    revisions: Final = AsyncMock(side_effect=[_revision_row(7), RuntimeError("private database detail"), _revision_row(8)])
+    revisions: Final = AsyncMock(
+        side_effect=[_revision_row(7), RuntimeError("private database detail"), _revision_row(8)]
+    )
     _catalog_database(monkeypatch, reader, revisions)
     manager: Final = MCPServerManager()
     assert (await manager.catalog.resolve("catalog-server")).name == "initial"
@@ -19902,15 +20846,20 @@ async def test_catalog_accepts_discovered_issuer_response_support(
 
     manager: Final = MCPServerManager()
     server: Final = MCPServer(
-        server_id="discovered-issuer", name="discovered_issuer", transport=MCPTransport.http,
-        url="https://resource.example/mcp", auth_type=MCPAuth.oauth2,
-        issuer="https://issuer.example" if anchored else None, issuer_is_anchored=anchored,
+        server_id="discovered-issuer",
+        name="discovered_issuer",
+        transport=MCPTransport.http,
+        url="https://resource.example/mcp",
+        auth_type=MCPAuth.oauth2,
+        issuer="https://issuer.example" if anchored else None,
+        issuer_is_anchored=anchored,
     )
     manager.registry = {server.server_id: server}
     manager._set_oauth_discovery_deferred(server.server_id, True)
     metadata: Final = MCPOAuthMetadata(
         discovered_issuer="https://issuer.example",
-        authorization_url="https://issuer.example/authorize", token_url="https://issuer.example/token",
+        authorization_url="https://issuer.example/authorize",
+        token_url="https://issuer.example/token",
         authorization_response_iss_parameter_supported=issuer_parameter_supported,
     )
     discovery: Final = AsyncMock(return_value=metadata)
@@ -19932,9 +20881,13 @@ async def test_catalog_rejects_a_changed_anchored_issuer_during_discovery(monkey
 
     manager: Final = MCPServerManager()
     server: Final = MCPServer(
-        server_id="anchored-issuer", name="anchored_issuer", transport=MCPTransport.http,
-        url="https://resource.example/mcp", auth_type=MCPAuth.oauth2,
-        issuer="https://original.example", issuer_is_anchored=True,
+        server_id="anchored-issuer",
+        name="anchored_issuer",
+        transport=MCPTransport.http,
+        url="https://resource.example/mcp",
+        auth_type=MCPAuth.oauth2,
+        issuer="https://original.example",
+        issuer_is_anchored=True,
     )
     manager.registry = {server.server_id: server}
     discovery: Final = AsyncMock()
@@ -20020,13 +20973,24 @@ async def test_paginated_listing_keeps_earlier_tool_metadata_and_caller_isolatio
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("request_name,result_field", [("ListPromptsRequest", "prompts"), ("ListResourcesRequest", "resources"), ("ListResourceTemplatesRequest", "resource_templates")])
+@pytest.mark.parametrize(
+    "request_name,result_field",
+    [
+        ("ListPromptsRequest", "prompts"),
+        ("ListResourcesRequest", "resources"),
+        ("ListResourceTemplatesRequest", "resource_templates"),
+    ],
+)
 @pytest.mark.parametrize("cursor", [None, "next"])
-async def test_disabled_stdio_catalog_is_empty_initially_and_rejects_continuation(monkeypatch, request_name, result_field, cursor):
+async def test_disabled_stdio_catalog_is_empty_initially_and_rejects_continuation(
+    monkeypatch, request_name, result_field, cursor
+):
     from mcp import types
 
     monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
-    server = MCPServer(server_id="disabled", name="disabled", transport=MCPTransport.stdio, command="blocked-executable", args=[])
+    server = MCPServer(
+        server_id="disabled", name="disabled", transport=MCPTransport.stdio, command="blocked-executable", args=[]
+    )
     request = getattr(types, request_name)(params=types.PaginatedRequestParams(cursor=cursor))
     manager = MCPServerManager()
     if cursor is not None:
@@ -20036,7 +21000,6 @@ async def test_disabled_stdio_catalog_is_empty_initially_and_rejects_continuatio
         page = await manager.get_optional_catalog_page(server, request, None)
         assert getattr(page, result_field) == []
         assert page.next_cursor is None
-
 
 
 @pytest.mark.asyncio
@@ -20146,8 +21109,10 @@ async def test_failed_aggregate_continuation_preserves_only_delivered_tool_metad
             ListToolsResult(tools=[first], next_cursor="next"),
             ListToolsResult(tools=[unseen], next_cursor="next" if client is clients["beta"] else None),
         ]
+
     async def create_client(server, **kwargs):
         return clients[server.server_id]
+
     manager.create_mcp_client = create_client
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     caller = UserAPIKeyAuth(api_key="owned-caller", user_id="alice")
@@ -20184,7 +21149,9 @@ async def test_aggregate_publishes_complete_bare_routes_only_after_delivering_a_
     clients = {server.server_id: AsyncMock() for server in servers}
     for name, client in clients.items():
         client._last_initialize_instructions = None
-        client.list_tools_page.return_value = ListToolsResult(tools=[tool], next_cursor="next" if name == "beta" else None)
+        client.list_tools_page.return_value = ListToolsResult(
+            tools=[tool], next_cursor="next" if name == "beta" else None
+        )
 
     async def create_client(server, **kwargs):
         return clients[server.server_id]
@@ -20275,27 +21242,55 @@ async def test_manual_oauth_endpoints_discover_client_metadata_once(
     monkeypatch.setattr(manager_module, "global_mcp_server_manager", manager)
     configured: Final[MCPServer]
     if source == "config":
-        await manager.load_servers_from_config({"manual": {
-            "url": "https://up.example.com/mcp", "transport": "http", "auth_type": "oauth2",
-            "oauth2_flow": "authorization_code", "authorization_url": "https://up.example.com/authorize",
-            "token_url": "https://up.example.com/token", "scopes": ["read"],
-        }})
+        await manager.load_servers_from_config(
+            {
+                "manual": {
+                    "url": "https://up.example.com/mcp",
+                    "transport": "http",
+                    "auth_type": "oauth2",
+                    "oauth2_flow": "authorization_code",
+                    "authorization_url": "https://up.example.com/authorize",
+                    "token_url": "https://up.example.com/token",
+                    "scopes": ["read"],
+                }
+            }
+        )
         configured = next(iter(manager.config_mcp_servers.values()))
     else:
         row: Final = LiteLLM_MCPServerTable(
-            server_id="manual", alias="manual", url="https://up.example.com/mcp", transport=MCPTransport.http,
-            auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code",
-            authorization_url="https://up.example.com/authorize", token_url="https://up.example.com/token",
-            credentials={"scopes": ["read"]}, created_at=datetime.now(), updated_at=datetime.now(),
+            server_id="manual",
+            alias="manual",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+            authorization_url="https://up.example.com/authorize",
+            token_url="https://up.example.com/token",
+            credentials={"scopes": ["read"]},
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
         )
         built: Final = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
         manager.registry[built.server_id] = built
         configured = built
     async with manager.catalog.operation():
         response: Final = await discoverable_endpoints.register_client_with_server(
-            Request({"type": "http", "scheme": "https", "server": ("gateway.example.com", 443),
-                     "path": "/register", "root_path": "", "headers": [], "query_string": b""}),
-            configured, "Gateway", None, None, None,
+            Request(
+                {
+                    "type": "http",
+                    "scheme": "https",
+                    "server": ("gateway.example.com", 443),
+                    "path": "/register",
+                    "root_path": "",
+                    "headers": [],
+                    "query_string": b"",
+                }
+            ),
+            configured,
+            "Gateway",
+            None,
+            None,
+            None,
         )
         body: Final = json.loads(response.body) if hasattr(response, "body") else response
         assert body["client_id"] == (
@@ -20323,11 +21318,19 @@ async def test_optional_client_metadata_discovery_failure_preserves_manual_endpo
     respx_mock.get("https://up.example.com/.well-known/oauth-authorization-server").respond(503)
     respx_mock.route().respond(404)
     manager: Final = MCPServerManager()
-    await manager.load_servers_from_config({"manual": {
-        "url": "https://up.example.com/mcp", "transport": "http", "auth_type": "oauth2",
-        "oauth2_flow": "authorization_code", "authorization_url": "https://up.example.com/authorize",
-        "token_url": "https://up.example.com/token", "scopes": ["read"],
-    }})
+    await manager.load_servers_from_config(
+        {
+            "manual": {
+                "url": "https://up.example.com/mcp",
+                "transport": "http",
+                "auth_type": "oauth2",
+                "oauth2_flow": "authorization_code",
+                "authorization_url": "https://up.example.com/authorize",
+                "token_url": "https://up.example.com/token",
+                "scopes": ["read"],
+            }
+        }
+    )
     configured: Final = next(iter(manager.config_mcp_servers.values()))
     resolved: Final = await manager.ensure_oauth_metadata_discovered(configured)
     attempts: Final = len(respx_mock.calls)
@@ -20347,26 +21350,43 @@ def test_oauth_rebuild_retains_only_corroborated_cimd_capability(capability: boo
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import carry_forward_resolved_oauth_endpoints
 
     previous: Final = MCPServer(
-        server_id="cimd-rebuild", name="cimd_rebuild", url="https://mcp.example.com/mcp",
-        transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
-        authorization_url="https://idp.example.com/authorize", token_url="https://idp.example.com/token",
+        server_id="cimd-rebuild",
+        name="cimd_rebuild",
+        url="https://mcp.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/token",
         client_id_metadata_document_supported=capability,
-        authorization_server_metadata={"issuer": "https://idp.example.com", "response_types_supported": ["code"], "scopes_supported": ["offline_access"]},
+        authorization_server_metadata={
+            "issuer": "https://idp.example.com",
+            "response_types_supported": ["code"],
+            "scopes_supported": ["offline_access"],
+        },
     )
-    rebuilt: Final = previous.model_copy(update={
-        "client_id_metadata_document_supported": not capability if rebuild == "fresh_discovery" else None,
-        "authorization_url": "https://changed.example.com/authorize" if rebuild == "repointed" else previous.authorization_url,
-        "token_url": None,
-        "authorization_server_metadata": {"scopes_supported": []} if rebuild == "fresh_discovery" else None,
-        "issuer": "https://idp.example.com" if rebuild == "anchored" else None,
-        "issuer_is_anchored": rebuild == "anchored",
-    })
+    rebuilt: Final = previous.model_copy(
+        update={
+            "client_id_metadata_document_supported": not capability if rebuild == "fresh_discovery" else None,
+            "authorization_url": "https://changed.example.com/authorize"
+            if rebuild == "repointed"
+            else previous.authorization_url,
+            "token_url": None,
+            "authorization_server_metadata": {"scopes_supported": []} if rebuild == "fresh_discovery" else None,
+            "issuer": "https://idp.example.com" if rebuild == "anchored" else None,
+            "issuer_is_anchored": rebuild == "anchored",
+        }
+    )
     carry_forward_resolved_oauth_endpoints(rebuilt, previous)
-    expected: Final = not capability if rebuild == "fresh_discovery" else None if rebuild in ("repointed", "anchored") else capability
+    expected: Final = (
+        not capability if rebuild == "fresh_discovery" else None if rebuild in ("repointed", "anchored") else capability
+    )
     assert rebuilt.client_id_metadata_document_supported is expected
     assert rebuilt.authorization_server_metadata == (
-        {"scopes_supported": []} if rebuild == "fresh_discovery"
-        else previous.authorization_server_metadata if rebuild == "same" else None
+        {"scopes_supported": []}
+        if rebuild == "fresh_discovery"
+        else previous.authorization_server_metadata
+        if rebuild == "same"
+        else None
     )
 
 
@@ -20375,13 +21395,19 @@ def test_oauth_rebuild_retains_only_corroborated_cimd_capability(capability: boo
 async def test_repeated_stale_discovery_uses_current_callers_endpoint(endpoint: str) -> None:
     manager: Final = MCPServerManager()
     original: Final = MCPServer(
-        server_id="partial-replacement", name="replacement", url="https://old.example.com/mcp",
-        transport=MCPTransport.http, auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code",
+        server_id="partial-replacement",
+        name="replacement",
+        url="https://old.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
     )
     replacement: Final = original.model_copy(update={endpoint: "https://new.example.com/oauth"})
     manager.registry[original.server_id] = replacement
     resolved: Final = await manager._rejoin_oauth_metadata_discovery(
-        original, needed_endpoint=lambda server: getattr(server, endpoint), retry_stale=False,
+        original,
+        needed_endpoint=lambda server: getattr(server, endpoint),
+        retry_stale=False,
     )
     assert resolved is replacement
 
@@ -20391,11 +21417,19 @@ def test_openapi_extra_headers_exclude_gateway_admission_key(header_name: str) -
     caller_key: Final = "Bearer sk-admission-only"
     raw_headers: Final = {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
     server: Final = MCPServer(
-        server_id="header-boundary", name="header-boundary", transport=MCPTransport.http,
-        spec_path="/spec.yaml", auth_type=MCPAuth.none, extra_headers=[header_name, "X-Tenant"],
+        server_id="header-boundary",
+        name="header-boundary",
+        transport=MCPTransport.http,
+        spec_path="/spec.yaml",
+        auth_type=MCPAuth.none,
+        extra_headers=[header_name, "X-Tenant"],
     )
     assert resolve_openapi_tool_auth(
-        server, None, None, raw_headers, UserAPIKeyAuth(api_key="sk-admission-only"),
+        server,
+        None,
+        None,
+        raw_headers,
+        UserAPIKeyAuth(api_key="sk-admission-only"),
     ) == (None, {"X-Tenant": "tenant-control"}, None)
     assert raw_headers == {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
 
@@ -20427,3 +21461,148 @@ async def test_legacy_upstream_elicitation_rejects_modern_downstream_without_con
     finally:
         active_mcp_request_ctx_var.reset(request_token)
         legacy_server.active_mcp_session_var.reset(session_token)
+
+
+def _upstream_http_status_error(status_code: int, headers: dict[str, str] | None = None) -> httpx.HTTPStatusError:
+    request: Final = httpx.Request("POST", "https://upstream.example/mcp")
+    return httpx.HTTPStatusError(
+        "upstream rejected",
+        request=request,
+        response=httpx.Response(status_code, headers=headers or {}, request=request),
+    )
+
+
+class TestMCPUpstreamRateLimitRetry:
+    """An upstream 429 on tools/list is retried inside the listing deadline instead of folding
+    into a silent empty outcome on the first attempt."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_retries_429_then_returns_tools(self) -> None:
+        manager: Final = MCPServerManager()
+        tool: Final = MCPTool(name="ping", inputSchema={"type": "object"})
+        client: Final = MagicMock()
+        client.list_tools = AsyncMock(
+            side_effect=[
+                _upstream_http_status_error(429, {"Retry-After": "0"}),
+                _upstream_http_status_error(429, {"Retry-After": "0"}),
+                [tool],
+            ]
+        )
+
+        tools: Final = await manager._fetch_tools_with_timeout(client, "flaky-server")
+
+        assert tools == [tool]
+        assert client.list_tools.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_gives_up_after_max_retries(self) -> None:
+        manager: Final = MCPServerManager()
+        client: Final = MagicMock()
+        client.list_tools = AsyncMock(side_effect=_upstream_http_status_error(429, {"Retry-After": "0"}))
+
+        expected_error: Final = pytest.raises(MCPServerListError)
+        with expected_error as exc_info:
+            await manager._fetch_tools_with_timeout(client, "saturated-server")
+
+        assert exc_info.value.fault == ServerListFault(tag="upstream_error", status_code=429)
+        assert client.list_tools.await_count == 1 + MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_does_not_retry_auth_error(self) -> None:
+        manager: Final = MCPServerManager()
+        client: Final = MagicMock()
+        client.list_tools = AsyncMock(side_effect=_upstream_http_status_error(401))
+
+        with pytest.raises(MCPUpstreamAuthError):
+            await manager._fetch_tools_with_timeout(client, "srv")
+
+        assert client.list_tools.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_does_not_retry_server_error(self) -> None:
+        manager: Final = MCPServerManager()
+        client: Final = MagicMock()
+        client.list_tools = AsyncMock(side_effect=_upstream_http_status_error(500))
+
+        expected_error: Final = pytest.raises(MCPServerListError)
+        with expected_error as exc_info:
+            await manager._fetch_tools_with_timeout(client, "srv")
+
+        assert exc_info.value.fault == ServerListFault(tag="upstream_error", status_code=500)
+        assert client.list_tools.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_reports_429_when_backoff_would_pass_listing_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.5
+        )
+        manager: Final = MCPServerManager()
+        client: Final = MagicMock()
+        client.list_tools = AsyncMock(side_effect=_upstream_http_status_error(429, {"Retry-After": "5"}))
+
+        with anyio.fail_after(3):
+            expected_error: Final = pytest.raises(MCPServerListError)
+            with expected_error as exc_info:
+                await manager._fetch_tools_with_timeout(client, "srv")
+
+        assert exc_info.value.fault == ServerListFault(tag="upstream_error", status_code=429)
+        assert client.list_tools.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_tools_page_retries_429_then_returns_page(self) -> None:
+        tool: Final = MCPTool(name="list_notes", inputSchema={"type": "object"})
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(server_id="notes", name="notes", transport=MCPTransport.http)
+        manager.registry = {server.server_id: server}
+        manager.create_mcp_client = AsyncMock(
+            return_value=SimpleNamespace(
+                _last_initialize_instructions=None,
+                list_tools_page=AsyncMock(
+                    side_effect=[
+                        _upstream_http_status_error(429, {"Retry-After": "0"}),
+                        ListToolsResult(tools=[tool]),
+                    ]
+                ),
+            )
+        )
+
+        result: Final = await manager.get_tools_page(server, params=PaginatedRequestParams())
+
+        assert [t.name for t in result.tools] == ["notes-list_notes"]
+        client: Final = manager.create_mcp_client.return_value
+        assert client.list_tools_page.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_get_tools_page_retry_attempt_is_bounded_by_listing_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.05
+        )
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(server_id="notes", name="notes", transport=MCPTransport.http)
+        manager.registry = {server.server_id: server}
+        first_seen: Final = anyio.Event()
+        never: Final = anyio.Event()
+        error: Final = _upstream_http_status_error(429, {"Retry-After": "0"})
+
+        async def _list_tools_page(params: PaginatedRequestParams) -> ListToolsResult:
+            if not first_seen.is_set():
+                first_seen.set()
+                raise error
+            await never.wait()
+            raise AssertionError("unreachable")
+
+        list_tools_page: Final = AsyncMock(side_effect=_list_tools_page)
+        client: Final = SimpleNamespace(_last_initialize_instructions=None, list_tools_page=list_tools_page)
+        manager.create_mcp_client = AsyncMock(return_value=client)
+
+        with anyio.fail_after(5):
+            expected_error: Final = pytest.raises(MCPServerListError)
+            with expected_error as exc_info:
+                await manager.get_tools_page(server, params=PaginatedRequestParams())
+
+        assert exc_info.value.fault == ServerListFault(tag="upstream_error", status_code=429)
+        assert list_tools_page.await_count == 2

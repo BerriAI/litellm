@@ -12,12 +12,13 @@ import pytest
 from fastapi import HTTPException, Request
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
     abbreviate_api_key,
     check_complete_credentials,
+    check_if_request_size_is_safe,
     custom_auth_common_checks_warning,
     get_customer_user_header_from_mapping,
     log_once_if_budget_reservation_disabled,
@@ -363,6 +364,227 @@ def test_configuring_a_deployment_still_cannot_carry_federation_fields_inline(ro
         )
 
 
+_SERVICE_ACCOUNT_TOKEN_REFERENCE: Final = "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"
+
+
+def _user_config_with(litellm_params: dict[str, str]) -> dict[str, object]:
+    return {"model_list": [{"model_name": "devstral", "litellm_params": {"model": "mistral/devstral-latest", **litellm_params}}]}
+
+
+def _user_config_defaulting_to(litellm_params: dict[str, str]) -> dict[str, object]:
+    return {
+        "model_list": [
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_base": "https://attacker.example"},
+            }
+        ],
+        "default_litellm_params": litellm_params,
+    }
+
+
+def _user_config_search_tool_with(litellm_params: dict[str, str]) -> dict[str, object]:
+    return {
+        "search_tools": [
+            {
+                "search_tool_name": "web",
+                "litellm_params": {"search_provider": "tavily", "api_base": "https://attacker.example", **litellm_params},
+            }
+        ]
+    }
+
+
+@pytest.fixture
+def oidc_api_key_credential(monkeypatch):
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="admin-oidc",
+                credential_values={"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE},
+                credential_info={"custom_llm_provider": "mistral"},
+            )
+        ],
+    )
+
+
+def _vector_store_embedding_config_with(embedding_config: dict[str, str]) -> dict[str, object]:
+    return {
+        "vector_store_id": "docs",
+        "custom_llm_provider": "milvus",
+        "litellm_params": {
+            "api_base": "https://milvus.example",
+            "litellm_embedding_config": {"api_base": "https://attacker.example", **embedding_config},
+        },
+    }
+
+
+def test_a_vector_store_embedding_config_may_carry_a_plain_api_key():
+    assert is_request_body_safe(
+        request_body=_vector_store_embedding_config_with({"api_key": "sk-embedding"}),
+        general_settings={},
+        llm_router=None,
+        model="",
+        route="/vector_store/new",
+    )
+
+
+@pytest.mark.parametrize("route", [None, "/model/new", "/health/test_connection"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"model": "devstral", "api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE},
+        {"model": "devstral", "extra_body": {"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}},
+        {"model": "devstral", "fallbacks": [{"model": "other", "api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}]},
+        {
+            "model": "devstral",
+            "user_config": _user_config_with(
+                {"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE, "api_base": "https://attacker.example"}
+            ),
+        },
+        {"model": "devstral", "user_config": _user_config_defaulting_to({"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE})},
+        {"model": "web", "user_config": _user_config_search_tool_with({"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE})},
+        _vector_store_embedding_config_with({"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}),
+    ],
+    ids=[
+        "top_level",
+        "extra_body",
+        "fallback_target",
+        "user_config",
+        "user_config_defaults",
+        "user_config_search_tool",
+        "vector_store_embedding_config",
+    ],
+)
+def test_a_request_body_cannot_carry_an_oidc_api_key_reference(route: str | None, body: dict):
+    """The call path reads an oidc/ api_key from the proxy's own filesystem or environment, so a body that set one
+    could send the proxy's service account token to a host the caller picks. No opt-in or route relaxes it."""
+    with pytest.raises(ValueError, match="api_key holds an oidc/ secret reference"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="devstral",
+            route=route,
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"model": "devstral", "litellm_credential_name": "admin-oidc"},
+        {
+            "model": "devstral",
+            "user_config": _user_config_with(
+                {"litellm_credential_name": "admin-oidc", "api_base": "https://attacker.example"}
+            ),
+        },
+        {"model": "devstral", "user_config": _user_config_defaulting_to({"litellm_credential_name": "admin-oidc"})},
+        _vector_store_embedding_config_with({"litellm_credential_name": "admin-oidc"}),
+    ],
+    ids=["top_level", "user_config", "user_config_defaults", "vector_store_embedding_config"],
+)
+def test_a_request_body_cannot_name_a_credential_holding_an_oidc_api_key(oidc_api_key_credential, body: dict):
+    with pytest.raises(ValueError, match=r"names a credential .* oidc/ api_key secret reference"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="devstral",
+        )
+
+
+@pytest.mark.parametrize("route", [None, "/chat/completions"])
+def test_a_call_cannot_carry_an_oidc_api_key_in_litellm_params(route: str | None):
+    with pytest.raises(ValueError, match="api_key holds an oidc/ secret reference"):
+        is_request_body_safe(
+            request_body={"model": "devstral", "litellm_params": {"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="devstral",
+            route=route,
+        )
+
+
+@pytest.mark.parametrize("route", ["/model/new", "/model/update", "/model/deployment-1/update", "/health/test_connection"])
+def test_a_deployment_write_may_carry_an_oidc_api_key_in_litellm_params(route: str):
+    """A proxy admin configures an oidc/ api_key on a deployment through these routes, and the model management role
+    gate refuses anyone else with a 403."""
+    assert (
+        is_request_body_safe(
+            request_body={
+                "model": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE},
+            },
+            general_settings={},
+            llm_router=None,
+            model="devstral",
+            route=route,
+        )
+        is True
+    )
+
+
+_OIDC_DEPLOYMENT_PARAMS: Final = (
+    pytest.param({"model": "mistral/devstral-latest", "api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}, id="inline"),
+    pytest.param({"model": "mistral/devstral-latest", "litellm_credential_name": "admin-oidc"}, id="named_credential"),
+)
+
+
+@pytest.mark.parametrize("override", ["api_base", "base_url"])
+@pytest.mark.parametrize("deployment_params", _OIDC_DEPLOYMENT_PARAMS)
+def test_a_base_override_cannot_send_the_deployments_oidc_api_key(
+    oidc_api_key_credential, deployment_params: dict, override: str
+):
+    from litellm.exceptions import BadRequestError
+    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+    with pytest.raises(BadRequestError, match="api_key is an oidc/ secret reference"):
+        get_dynamic_litellm_params(
+            litellm_params=dict(deployment_params), request_kwargs={override: "https://caller.example/v1"}
+        )
+
+
+@pytest.mark.parametrize("deployment_params", _OIDC_DEPLOYMENT_PARAMS)
+def test_a_base_override_with_the_callers_own_api_key_is_allowed(oidc_api_key_credential, deployment_params: dict):
+    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+    out: Final = get_dynamic_litellm_params(
+        litellm_params=dict(deployment_params),
+        request_kwargs={"api_base": "https://caller.example/v1", "api_key": "sk-caller"},
+    )
+    assert (out["api_base"], out["api_key"]) == ("https://caller.example/v1", "sk-caller")
+
+
+def test_test_connection_may_name_a_credential_holding_an_oidc_api_key(oidc_api_key_credential):
+    """The admin UI tests a stored credential by name, which is how a proxy admin checks an oidc/ api_key works."""
+    assert (
+        is_request_body_safe(
+            request_body={"model": "devstral", "litellm_params": {"litellm_credential_name": "admin-oidc"}},
+            general_settings={},
+            llm_router=None,
+            model="devstral",
+            route="/health/test_connection",
+        )
+        is True
+    )
+
+
+def test_a_user_config_with_its_own_api_key_is_still_allowed():
+    assert (
+        is_request_body_safe(
+            request_body={"model": "devstral", "user_config": _user_config_with({"api_key": "sk-client-owned"})},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="devstral",
+        )
+        is True
+    )
+
+
 class TestCustomAuthCommonChecksWarning:
     """custom_auth_common_checks_warning only warns when custom auth is configured
     and the common-checks opt-in is off, since that is the only state where
@@ -446,18 +668,11 @@ class TestLogOnceIfBudgetReservationDisabled:
     def test_logs_info_only_once_when_enabled(self, caplog):
         with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
             log_once_if_budget_reservation_disabled(disabled=False)
-            assert not any(
-                "disable_budget_reservation is enabled" in record.message
-                for record in caplog.records
-            )
+            assert not any("disable_budget_reservation is enabled" in record.message for record in caplog.records)
             for _ in range(3):
                 log_once_if_budget_reservation_disabled(disabled=True)
 
-        records = [
-            record
-            for record in caplog.records
-            if "disable_budget_reservation is enabled" in record.message
-        ]
+        records = [record for record in caplog.records if "disable_budget_reservation is enabled" in record.message]
         assert len(records) == 1
         assert records[0].levelno == logging.INFO
 
@@ -785,19 +1000,28 @@ def test_get_model_from_request_no_request_extracts_model():
     )
 
 
-@pytest.mark.parametrize("provider,model", [
-    ("laya", "english"), ("laya", "multilingual"), ("laya", "typed-decisions"),
-    ("bespoke", "nimble-latest"), ("bespoke", "bespokelabs/Bespoke-Nimble-9B"),
-])
+@pytest.mark.parametrize(
+    "provider,model",
+    [
+        ("laya", "english"),
+        ("laya", "multilingual"),
+        ("laya", "typed-decisions"),
+        ("bespoke", "nimble-latest"),
+        ("bespoke", "bespokelabs/Bespoke-Nimble-9B"),
+    ],
+)
 @pytest.mark.parametrize("suffix", ["", "/"])
 def test_oss_native_model_uses_the_classifier_permission_identity(provider: str, model: str, suffix: str) -> None:
-    assert get_model_from_request(
-        request_data={"model": model}, route=f"/{provider}/v1/systemone{suffix}"
-    ) == f"{provider}/{model}"
+    assert (
+        get_model_from_request(request_data={"model": model}, route=f"/{provider}/v1/systemone{suffix}")
+        == f"{provider}/{model}"
+    )
 
 
 @pytest.mark.parametrize("provider", ["laya", "bespoke"])
-@pytest.mark.parametrize("model", [None, "", "auto", "laya/english", "bespoke/nimble-latest", "unknown", ["english"], 7])
+@pytest.mark.parametrize(
+    "model", [None, "", "auto", "laya/english", "bespoke/nimble-latest", "unknown", ["english"], 7]
+)
 def test_oss_native_model_cannot_implicitly_select_an_unauthorized_checkpoint(provider: str, model: object) -> None:
     with pytest.raises(HTTPException) as denied:
         get_model_from_request(request_data={"model": model}, route=f"/{provider}/v1/systemone")
@@ -812,38 +1036,49 @@ def test_laya_model_normalization_does_not_change_other_provider_routes() -> Non
 def _cache_prediction_router():
     from litellm.router import Router
 
-    return Router(model_list=[
-        {
-            "model_name": group,
-            "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "test-provider-key"},
-            "model_info": {"id": deployment_id, "team_id": team_id},
-        }
-        for group, deployment_id, team_id in (
-            ("current-group", "current-id", None), ("candidate-group", "candidate-id", None),
-            ("own-group", "own-id", "prediction-team"), ("foreign-group", "foreign-id", "foreign-team"),
-        )
-    ])
+    return Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "test-provider-key"},
+                "model_info": {"id": deployment_id, "team_id": team_id},
+            }
+            for group, deployment_id, team_id in (
+                ("current-group", "current-id", None),
+                ("candidate-group", "candidate-id", None),
+                ("own-group", "own-id", "prediction-team"),
+                ("foreign-group", "foreign-id", "foreign-team"),
+            )
+        ]
+    )
 
 
-@pytest.mark.parametrize("candidate,team_id,expected", [
-    ("candidate-id", None, ["current-group", "candidate-group"]),
-    ("current-id", None, "current-group"),
-    ("missing-id", None, None),
-    ("candidate-group", None, None),
-    ("own-id", None, None),
-    ("own-id", "prediction-team", ["current-group", "own-group"]),
-    ("foreign-id", "prediction-team", None),
-])
+@pytest.mark.parametrize(
+    "candidate,team_id,expected",
+    [
+        ("candidate-id", None, ["current-group", "candidate-group"]),
+        ("current-id", None, "current-group"),
+        ("missing-id", None, None),
+        ("candidate-group", None, None),
+        ("own-id", None, None),
+        ("own-id", "prediction-team", ["current-group", "own-group"]),
+        ("foreign-id", "prediction-team", None),
+    ],
+)
 def test_cache_prediction_auth_resolves_only_exact_deployment_ids(candidate, team_id, expected):
-    assert get_model_from_request(
-        request_data={
-            "current_deployment_id": "current-id", "candidate_deployment_id": candidate,
-            "request": {"model": "caller-controlled-provider-model"},
-        },
-        route="/cost/predict-cache",
-        llm_router=_cache_prediction_router(),
-        team_id=team_id,
-    ) == expected
+    assert (
+        get_model_from_request(
+            request_data={
+                "current_deployment_id": "current-id",
+                "candidate_deployment_id": candidate,
+                "request": {"model": "caller-controlled-provider-model"},
+            },
+            route="/cost/predict-cache",
+            llm_router=_cache_prediction_router(),
+            team_id=team_id,
+        )
+        == expected
+    )
 
 
 def _cache_prediction_auth_app(
@@ -866,18 +1101,29 @@ def _cache_prediction_auth_app(
     router = _cache_prediction_router()
     allowed_models = ["current-group", "candidate-group", "own-group"]
     token = UserAPIKeyAuth(
-        api_key="test-proxy-key-hash", user_id="prediction-user", user_role=LitellmUserRoles.INTERNAL_USER,
-        models=allowed_models if key_models is None else key_models, team_id=team_id,
+        api_key="test-proxy-key-hash",
+        user_id="prediction-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=allowed_models if key_models is None else key_models,
+        team_id=team_id,
         team_models=allowed_models if team_models is None else team_models,
-        allowed_routes=allowed_routes, metadata=metadata or {},
+        allowed_routes=allowed_routes,
+        metadata=metadata or {},
     )
     user = LiteLLM_UserTable(
-        user_id=token.user_id, user_role=LitellmUserRoles.INTERNAL_USER.value, models=user_models,
+        user_id=token.user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=user_models,
     )
+
     async def authenticate(request, request_data, **_headers):
         await auth._enforce_key_and_fallback_model_access(
-            valid_token=token, request_data=request_data, route=request.url.path, request=request,
-            llm_model_list=router.get_model_list(), llm_router=router,
+            valid_token=token,
+            request_data=request_data,
+            route=request.url.path,
+            request=request,
+            llm_model_list=router.get_model_list(),
+            llm_router=router,
         )
         return token
 
@@ -910,22 +1156,36 @@ def _cache_prediction_auth_app(
 
 def _cache_prediction_payload(candidate="candidate-id", current="current-id"):
     return {
-        "current_deployment_id": current, "candidate_deployment_id": candidate,
-        "request": {"messages": [{"role": "user", "content": [{
-            "type": "text", "text": "Stable cached context",
-            "cache_control": {"type": "ephemeral"},
-        }]}]},
+        "current_deployment_id": current,
+        "candidate_deployment_id": candidate,
+        "request": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Stable cached context",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ]
+        },
     }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("allowed_routes,user_models,candidate,status_code", [
-    (["/chat/completions"], ["current-group", "candidate-group"], "candidate-id", 403),
-    (["/cost/predict-cache"], ["current-group"], "candidate-id", 403),
-    (["/cost/*"], ["current-group", "candidate-group"], "candidate-id", 200),
-    (["/cost/predict-cache"], ["current-group"], "current-id", 200),
-    (["/cost/predict-cache"], ["current-group"], "missing-id", 404),
-])
+@pytest.mark.parametrize(
+    "allowed_routes,user_models,candidate,status_code",
+    [
+        (["/chat/completions"], ["current-group", "candidate-group"], "candidate-id", 403),
+        (["/cost/predict-cache"], ["current-group"], "candidate-id", 403),
+        (["/cost/*"], ["current-group", "candidate-group"], "candidate-id", 200),
+        (["/cost/predict-cache"], ["current-group"], "current-id", 200),
+        (["/cost/predict-cache"], ["current-group"], "missing-id", 404),
+    ],
+)
 async def test_cache_prediction_authorizes_route_and_personal_models_before_provider_counts(
     monkeypatch, allowed_routes, user_models, candidate, status_code
 ):
@@ -944,20 +1204,27 @@ async def test_cache_prediction_authorizes_route_and_personal_models_before_prov
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arm", ["current_deployment_id", "candidate_deployment_id"])
-@pytest.mark.parametrize("team_id,key_models,user_models,team_models", [
-    (None, ["*"], ["*"], None),
-    (None, ["current-group", "candidate-group"], ["*"], None),
-    (None, ["*"], ["current-group", "candidate-group"], None),
-    ("prediction-team", ["*"], ["*"], ["current-group", "candidate-group"]),
-])
+@pytest.mark.parametrize(
+    "team_id,key_models,user_models,team_models",
+    [
+        (None, ["*"], ["*"], None),
+        (None, ["current-group", "candidate-group"], ["*"], None),
+        (None, ["*"], ["current-group", "candidate-group"], None),
+        ("prediction-team", ["*"], ["*"], ["current-group", "candidate-group"]),
+    ],
+)
 async def test_cache_prediction_hides_foreign_and_missing_ids_before_model_authorization(
     monkeypatch, arm, team_id, key_models, user_models, team_models
 ):
     import httpx
 
     app, counts = _cache_prediction_auth_app(
-        monkeypatch, ["/cost/predict-cache"], user_models,
-        team_id=team_id, key_models=key_models, team_models=team_models,
+        monkeypatch,
+        ["/cost/predict-cache"],
+        user_models,
+        team_id=team_id,
+        key_models=key_models,
+        team_models=team_models,
     )
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         missing = await client.post("/cost/predict-cache", json={**_cache_prediction_payload(), arm: "missing-id"})
@@ -970,19 +1237,26 @@ async def test_cache_prediction_hides_foreign_and_missing_ids_before_model_autho
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arm", ["current_deployment_id", "candidate_deployment_id"])
-@pytest.mark.parametrize("key_models,team_models,status_code", [
-    (["*"], ["*"], 200),
-    (["current-group", "candidate-group"], ["*"], 403),
-    (["*"], ["current-group", "candidate-group"], 403),
-])
+@pytest.mark.parametrize(
+    "key_models,team_models,status_code",
+    [
+        (["*"], ["*"], 200),
+        (["current-group", "candidate-group"], ["*"], 403),
+        (["*"], ["current-group", "candidate-group"], 403),
+    ],
+)
 async def test_cache_prediction_checks_each_visible_team_deployment_model(
     monkeypatch, arm, key_models, team_models, status_code
 ):
     import httpx
 
     app, counts = _cache_prediction_auth_app(
-        monkeypatch, ["/cost/predict-cache"], ["*"],
-        team_id="prediction-team", key_models=key_models, team_models=team_models,
+        monkeypatch,
+        ["/cost/predict-cache"],
+        ["*"],
+        team_id="prediction-team",
+        key_models=key_models,
+        team_models=team_models,
     )
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/cost/predict-cache", json={**_cache_prediction_payload(), arm: "own-id"})
@@ -1008,19 +1282,24 @@ async def test_cache_prediction_checks_each_visible_personal_deployment_model(mo
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("header_tag,key_tags,limit,status_code,provider_calls", [
-    ("limited", [], 1, 429, 1),
-    (None, ["limited"], 1, 429, 1),
-    ("limited", ["limited"], 4, 200, 4),
-    ("unlimited", [], 1, 200, 4),
-])
+@pytest.mark.parametrize(
+    "header_tag,key_tags,limit,status_code,provider_calls",
+    [
+        ("limited", [], 1, 429, 1),
+        (None, ["limited"], 1, 429, 1),
+        ("limited", ["limited"], 4, 200, 4),
+        ("unlimited", [], 1, 200, 4),
+    ],
+)
 async def test_cache_prediction_preserves_authenticated_header_and_key_tag_rpm(
     monkeypatch, header_tag, key_tags, limit, status_code, provider_calls
 ):
     import httpx
 
     app, counts = _cache_prediction_auth_app(
-        monkeypatch, ["/cost/predict-cache"], ["current-group", "candidate-group"],
+        monkeypatch,
+        ["/cost/predict-cache"],
+        ["current-group", "candidate-group"],
         metadata={"tag_rpm_limit": {"limited": limit}, "tags": key_tags},
     )
     headers = {"x-litellm-tags": header_tag} if header_tag else {}
@@ -1174,7 +1453,11 @@ def _azure_relay_router():
         model_list=[
             {
                 "model_name": "gpt",
-                "litellm_params": {"model": "azure_ai/gpt-5.4-mini", "api_base": "https://a.services.ai.azure.com", "api_key": "k"},
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.4-mini",
+                    "api_base": "https://a.services.ai.azure.com",
+                    "api_key": "k",
+                },
             },
             {
                 "model_name": "other-group",
@@ -1396,8 +1679,14 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
         provider="vertex_ai",
         model_id="veo-3.1-generate-001",
     )
-    llm_router = MagicMock()
-    llm_router.resolve_model_name_from_model_id.return_value = "gcp/google/veo-3.1-generate-001"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gcp/google/veo-3.1-generate-001",
+                "litellm_params": {"model": "vertex_ai/veo-3.1-generate-001"},
+            }
+        ]
+    )
 
     assert (
         get_model_from_request(
@@ -1407,7 +1696,148 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
         )
         == "gcp/google/veo-3.1-generate-001"
     )
-    llm_router.resolve_model_name_from_model_id.assert_called_once_with("veo-3.1-generate-001")
+
+
+def test_get_model_from_request_checks_the_group_of_the_deployment_that_created_the_video() -> None:
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "azure/sora-2", "api_base": f"https://{name}.example.com", "api_key": name},
+                "model_info": {"id": f"dep-{name}"},
+            }
+            for name in ("sora-team", "sora-shared")
+        ]
+    )
+    video_id: Final = encode_video_id_with_provider(
+        video_id="video_raw", provider="azure", model_id="sora-2", deployment_id="dep-sora-shared"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=llm_router,
+        )
+        == "sora-shared"
+    )
+
+
+def test_get_model_from_request_checks_a_video_created_through_a_provider_wildcard_by_its_own_name() -> None:
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "wildcard-key"},
+                "model_info": {"id": "dep-wildcard"},
+            }
+        ]
+    )
+    video_id: Final = encode_video_id_with_provider(
+        video_id="video_raw", provider="openai", model_id="sora-2", deployment_id="dep-wildcard"
+    )
+    routed_ids: Final = [
+        deployment["model_info"]["id"] for deployment in llm_router.pattern_router.get_deployments_by_pattern("sora-2")
+    ]
+
+    assert routed_ids == ["dep-wildcard"]
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=llm_router,
+        )
+        == "sora-2"
+    )
+
+
+def test_get_model_from_request_checks_a_wildcard_video_whose_bare_name_does_not_route_by_its_prefixed_name() -> None:
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*", "api_key": "wildcard-key"},
+                "model_info": {"id": "dep-wildcard"},
+            }
+        ]
+    )
+    video_id: Final = encode_video_id_with_provider(
+        video_id="operations/op_1", provider="gemini", model_id="unlisted-video-model", deployment_id="dep-wildcard"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=llm_router,
+        )
+        == "gemini/unlisted-video-model"
+    )
+
+
+def _sora_fallback_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": "azure/sora-2", "api_base": f"https://{name}.example.com", "api_key": name},
+                "model_info": {"id": f"dep-{name}"},
+            }
+            for name in ("sora-pair", "sora-backup", "sora-last", "sora-other")
+        ],
+        fallbacks=[{"sora-pair": ["sora-backup"]}, {"sora-backup": ["sora-last"]}],
+    )
+
+
+@pytest.mark.parametrize(
+    ("general_settings", "requested_model", "creating_group", "expected"),
+    [
+        ({"enforce_fallback_model_access": False}, "sora-pair", "sora-backup", "sora-pair"),
+        ({"enforce_fallback_model_access": False}, "sora-pair", "sora-last", "sora-pair"),
+        ({}, "sora-pair", "sora-backup", "sora-backup"),
+        ({"enforce_fallback_model_access": False}, "sora-other", "sora-backup", "sora-backup"),
+        ({"enforce_fallback_model_access": False}, None, "sora-backup", "sora-backup"),
+    ],
+    ids=[
+        "opt-out-fallback",
+        "opt-out-chained-fallback",
+        "enforced",
+        "opt-out-no-fallback-relation",
+        "opt-out-no-requested-model",
+    ],
+)
+def test_get_model_from_request_checks_a_fallback_served_video_by_the_requested_group_only_under_the_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: dict[str, object],
+    requested_model: str | None,
+    creating_group: str,
+    expected: str,
+) -> None:
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+    video_id: Final = encode_video_id_with_provider(
+        video_id="video_raw",
+        provider="azure",
+        model_id="sora-2",
+        deployment_id=f"dep-{creating_group}",
+        requested_model=requested_model,
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=_sora_fallback_router(),
+        )
+        == expected
+    )
 
 
 _BATCH_DEPLOYMENT_ID = "8d0eaa7e6c6f54a425dfd0062cb6b0dc"
@@ -1503,6 +1933,124 @@ async def test_managed_batch_routes_pass_team_model_access_check(route, request_
             team_object=LiteLLM_TeamTable(team_id="team-other", models=["some-other-model"]),
             llm_router=llm_router,
         )
+
+
+_TEAM_DEPLOYMENT_ID: Final = "team-a-deployment-id"
+_TEAM_INTERNAL_MODEL_NAME: Final = "model_name_team-a_6d1f3c2e-0000-4000-8000-000000000000"
+_TEAM_PUBLIC_MODEL_NAME: Final = "team-batch-model"
+_TEAM_MANAGED_BATCH_ID: Final = _encode_managed_id(
+    f"litellm_proxy;model_id:{_TEAM_DEPLOYMENT_ID};llm_batch_id:provider-batch-789"
+)
+
+
+def _team_scoped_router(public_model_name: str | None = _TEAM_PUBLIC_MODEL_NAME) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": _TEAM_INTERNAL_MODEL_NAME,
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {
+                    "id": _TEAM_DEPLOYMENT_ID,
+                    "team_id": "team-a",
+                    **({"team_public_model_name": public_model_name} if public_model_name else {}),
+                },
+            },
+        ]
+    )
+
+
+def _team_scoped_character_id() -> str:
+    from litellm.types.videos.utils import encode_character_id_with_provider
+
+    return encode_character_id_with_provider(character_id="char_team", provider="openai", model_id=_TEAM_DEPLOYMENT_ID)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, request_data",
+    [
+        pytest.param("/v1/batches/{batch_id}", {"batch_id": _TEAM_MANAGED_BATCH_ID}, id="batch-retrieve"),
+        pytest.param("/v1/batches/{batch_id}/cancel", {"batch_id": _TEAM_MANAGED_BATCH_ID}, id="batch-cancel"),
+        pytest.param(
+            "/v1/fine_tuning/jobs/{fine_tuning_job_id}",
+            {
+                "fine_tuning_job_id": _encode_managed_id(
+                    f"litellm_proxy;model_id:{_TEAM_DEPLOYMENT_ID};generic_response_id:ftjob-1"
+                )
+            },
+            id="fine-tuning-job",
+        ),
+        pytest.param(
+            "/v1/vector_stores/{vector_store_id}",
+            {
+                "vector_store_id": _encode_managed_id(
+                    "litellm_proxy:vector_store;unified_id,vs-unified;"
+                    f"target_model_names,{_TEAM_PUBLIC_MODEL_NAME};resource_id,vs_1;model_id,{_TEAM_DEPLOYMENT_ID}"
+                )
+            },
+            id="vector-store",
+        ),
+        pytest.param(
+            "/v1/videos/characters/{character_id}",
+            {"character_id": _team_scoped_character_id()},
+            id="character",
+        ),
+    ],
+)
+async def test_team_scoped_managed_ids_authorize_only_the_owning_team_by_public_name(
+    route: str, request_data: dict[str, str]
+) -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    llm_router: Final = _team_scoped_router()
+
+    async def check(team_id: str) -> None:
+        await can_key_call_resolved_model(
+            model=get_model_from_request(
+                request_data=request_data, route=route, llm_router=llm_router, team_id=team_id
+            ),
+            llm_model_list=None,
+            valid_token=UserAPIKeyAuth(api_key="sk-team", team_id=team_id, team_models=[_TEAM_PUBLIC_MODEL_NAME]),
+            llm_router=llm_router,
+        )
+
+    await check("team-a")
+    with pytest.raises(ProxyException) as exc_info:
+        await check("team-b")
+    assert exc_info.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_legacy_team_alias_authorizes_a_team_batch_only_for_keys_granted_the_alias() -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    llm_router: Final = _team_scoped_router(public_model_name=None)
+
+    async def check(key_models: list[str]) -> None:
+        await can_key_call_resolved_model(
+            model=get_model_from_request(
+                request_data={"batch_id": _TEAM_MANAGED_BATCH_ID},
+                route="/v1/batches/{batch_id}",
+                llm_router=llm_router,
+                team_id="team-a",
+            ),
+            llm_model_list=None,
+            valid_token=UserAPIKeyAuth(
+                api_key="sk-team",
+                team_id="team-a",
+                models=key_models,
+                team_models=["legacy-team-model"],
+                team_model_aliases={"legacy-team-model": _TEAM_INTERNAL_MODEL_NAME},
+            ),
+            llm_router=llm_router,
+        )
+
+    await check(["legacy-team-model"])
+    with pytest.raises(ProxyException) as exc_info:
+        await check(["some-other-model"])
+    assert exc_info.value.code == "403"
 
 
 def test_get_model_from_request_resolves_character_id_model_with_router():
@@ -3018,6 +3566,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         "field",
         [
             "aws_bedrock_runtime_endpoint",
+            "aws_bedrock_control_plane_endpoint",
             "langsmith_base_url",
             "langfuse_host",
             "posthog_host",
@@ -3351,6 +3900,38 @@ class TestIsRequestBodySafeBlocksNVCFFunctionOverride:
             )
             is True
         )
+
+
+def test_riva_offline_in_request_body_is_rejected() -> None:
+    with pytest.raises(ValueError, match="riva_offline"):
+        is_request_body_safe(
+            request_body={"model": "nvidia_riva/parakeet", "riva_offline": True},
+            general_settings={},
+            llm_router=None,
+            model="nvidia_riva/parakeet",
+        )
+
+
+def test_admin_opt_in_proxy_wide_allows_riva_offline() -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "nvidia_riva/parakeet", "riva_offline": True},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="nvidia_riva/parakeet",
+        )
+        is True
+    )
+
+
+def test_api_base_override_keeps_the_deployments_riva_offline_mode() -> None:
+    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+    out: Final = get_dynamic_litellm_params(
+        litellm_params={"model": "nvidia_riva/nvidia/parakeet-0.6b-tdt", "riva_offline": True},
+        request_kwargs={"api_base": "caller-riva:50051"},
+    )
+    assert (out["api_base"], out["riva_offline"]) == ("caller-riva:50051", True)
 
 
 class TestIsRequestBodySafeBlocksRivaUseSsl:
@@ -4377,9 +4958,7 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
         ),
     ],
 )
-def test_configurable_clientside_parameters(
-    allowed_param, input_value, should_return_true
-):
+def test_configurable_clientside_parameters(allowed_param, input_value, should_return_true):
     router = Router(
         model_list=[
             {
@@ -4413,9 +4992,7 @@ def test_get_customer_user_header_from_mapping_returns_customer_header_with_mixe
 def test_get_customer_user_header_from_mapping_no_customer_returns_none():
     from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
 
-    mappings = [
-        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
-    ]
+    mappings = [{"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}]
     result = get_customer_user_header_from_mapping(mappings)
     assert result is None
 
@@ -4443,17 +5020,13 @@ def test_get_internal_user_header_from_mapping_returns_internal_header():
 def test_get_internal_user_header_from_mapping_no_internal_returns_none():
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-    mappings = [
-        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}
-    ]
+    mappings = [{"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}]
     result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
     assert result is None
 
     # Also support single mapping dict
     single_mapping = {"header_name": "X-Only-Customer", "litellm_user_role": "customer"}
-    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(
-        single_mapping
-    )
+    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(single_mapping)
     assert result is None
 
 
@@ -4475,9 +5048,7 @@ def test_get_internal_user_header_from_mapping_no_internal_returns_none():
 def test_get_model_from_request(request_data, expected_model):
     from litellm.proxy.auth.auth_utils import get_model_from_request
 
-    request_data = {
-        "target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"
-    }
+    request_data = {"target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"}
     route = "/openai/deployments/gpt-3.5-turbo"
     model = get_model_from_request(request_data, "/v1/files")
     assert model == ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"]
@@ -4539,9 +5110,7 @@ def test_get_model_from_request(request_data, expected_model):
         ),
     ],
 )
-def test_get_model_from_request_vertex_ai_passthrough(
-    request_data, route, expected_model
-):
+def test_get_model_from_request_vertex_ai_passthrough(request_data, route, expected_model):
     """Test that get_model_from_request correctly extracts Vertex AI model from URL"""
     from litellm.proxy.auth.auth_utils import get_model_from_request
 
@@ -4551,7 +5120,7 @@ def test_get_model_from_request_vertex_ai_passthrough(
 
 @pytest.mark.parametrize(
     "field",
-    ["github_copilot_auth_type", "user_provider_credentials", "github_copilot_user_session"],
+    ["github_copilot_auth_type", "github_copilot_host", "user_provider_credentials", "github_copilot_user_session"],
 )
 def test_per_user_credential_slots_in_request_body_are_rejected(field: str) -> None:
     """The per-user Copilot mode is decided by the stored credential's values and the caller's
@@ -4694,3 +5263,44 @@ def test_get_end_user_id_from_request_body_backwards_compatibility():
     )
     for request_body, expected_end_user_id in cases:
         assert get_end_user_id_from_request_body(request_body) == expected_end_user_id
+
+
+def _request_with_content_length(content_length: int) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [(b"content-length", str(content_length).encode("latin-1"))],
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_quoted_max_request_size_mb_lets_a_smaller_keyed_request_through():
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {"max_request_size_mb": "10"}),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+    ):
+        assert await check_if_request_size_is_safe(request=_request_with_content_length(1024)) is True
+
+
+@pytest.mark.asyncio
+async def test_a_quoted_max_request_size_mb_rejects_a_larger_keyed_request_with_400():
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {"max_request_size_mb": "10"}),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        pytest.raises(ProxyException) as raised,
+    ):
+        await check_if_request_size_is_safe(request=_request_with_content_length(11 * 1024 * 1024))
+    assert raised.value.code == "400"
+    assert "Max size is 10 MB" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_a_non_numeric_max_request_size_mb_is_ignored_without_premium():
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {"max_request_size_mb": "10MB"}),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+    ):
+        assert await check_if_request_size_is_safe(request=_request_with_content_length(1024)) is True
