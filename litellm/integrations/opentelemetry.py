@@ -13,7 +13,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY, REDACTED_BY_LITELLM
 from litellm.integrations._types.open_inference import (
     OpenInferenceSpanKindValues,
 )
@@ -420,6 +420,23 @@ class OpenTelemetryConfig:
             deployment_environment=deployment_environment,
             model_id=model_id,
         )
+
+
+def _server_span_failure_redact(span: "Span") -> bool:
+    """Redaction decision for re-stamping a SERVER span the failure hook may
+    have already marked: an existing error message/stack-trace attribute keeps
+    its request-aware value, so a restamp with the global-only probe can't leak
+    an opt-in's raw text or clobber a valid opt-out."""
+    from litellm.integrations._types.open_inference import ErrorAttributes
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    attributes: Final[Mapping[str, object]] = getattr(span, "attributes", None) or {}
+    if ErrorAttributes.ERROR_MESSAGE in attributes or ErrorAttributes.ERROR_STACK_TRACE in attributes:
+        return (
+            attributes.get(ErrorAttributes.ERROR_MESSAGE) == REDACTED_BY_LITELLM
+            or attributes.get(ErrorAttributes.ERROR_STACK_TRACE) == REDACTED_BY_LITELLM
+        )
+    return should_redact_message_logging({})
 
 
 class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
@@ -976,10 +993,18 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             from litellm.litellm_core_utils.litellm_logging import (
                 StandardLoggingPayloadSetup,
             )
+            from litellm.litellm_core_utils.redact_messages import (
+                redact_error_information,
+                should_redact_failed_request,
+            )
 
-            error_information: Final = StandardLoggingPayloadSetup.get_error_information(
+            redact: Final = should_redact_failed_request(request_data)
+            _error_information_raw: Final = StandardLoggingPayloadSetup.get_error_information(
                 original_exception=original_exception,
                 traceback_str=traceback_str,
+            )
+            error_information: Final = (
+                redact_error_information(_error_information_raw) if redact else _error_information_raw
             )
             server_error_message: Final = self._record_exception_on_span(
                 span=parent_otel_span,
@@ -987,6 +1012,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     "exception": original_exception,
                     "standard_logging_object": {"error_information": error_information},
                 },
+                redact_content=redact,
             )
             parent_otel_span.set_status(Status(StatusCode.ERROR, server_error_message))
 
@@ -1010,7 +1036,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             self.safe_set_attribute(
                 span=exception_logging_span,
                 key="exception",
-                value=str(original_exception),
+                value=REDACTED_BY_LITELLM if redact else str(original_exception),
             )
             self._set_team_attributes_on_span(
                 span=exception_logging_span,
@@ -2254,7 +2280,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         ):
             parent_otel_span.end(end_time=self._to_ns(end_time))
 
-    def _record_exception_on_span(self, span: Span, kwargs: _FailureKwargsView) -> str | None:
+    def _record_exception_on_span(
+        self, span: Span, kwargs: _FailureKwargsView, redact_content: bool | None = None
+    ) -> str | None:
         """
         Record exception information on the span using OTEL standard methods.
 
@@ -2263,18 +2291,32 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         2. Sets structured error attributes from StandardLoggingPayloadErrorInformation
 
         Returns the error message it recorded, if any, for the span status description.
+        ``redact_content`` overrides the message-redaction decision; when unset it is
+        resolved from kwargs via ``should_redact_message_logging``.
         """
         try:
             from litellm.integrations._types.open_inference import (
                 ErrorAttributes,
             )
+            from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+            redact: Final = should_redact_message_logging(kwargs) if redact_content is None else redact_content
 
             # Get the exception object if available
             exception: Final = kwargs.get("exception")
 
             # Record the exception using OTEL's standard method
             if exception is not None:
-                span.record_exception(exception)
+                if redact:
+                    span.record_exception(
+                        exception,
+                        attributes={
+                            "exception.message": REDACTED_BY_LITELLM,
+                            "exception.stacktrace": REDACTED_BY_LITELLM,
+                        },
+                    )
+                else:
+                    span.record_exception(exception)
 
             # Get StandardLoggingPayload for structured error information
             standard_logging_payload: Final = kwargs.get("standard_logging_object")
@@ -3638,12 +3680,19 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
         )
+        from litellm.litellm_core_utils.redact_messages import redact_error_information
 
+        redact: Final = _server_span_failure_redact(span)
         error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=exception)
         error_information["error_code"] = str(status_code)
         return self._record_exception_on_span(
             span=span,
-            kwargs={"standard_logging_object": {"error_information": error_information}},
+            kwargs={
+                "standard_logging_object": {
+                    "error_information": redact_error_information(error_information) if redact else error_information
+                }
+            },
+            redact_content=redact,
         )
 
     def set_preprocessing_duration_attribute(self, span: Span | None, container: object) -> None:
