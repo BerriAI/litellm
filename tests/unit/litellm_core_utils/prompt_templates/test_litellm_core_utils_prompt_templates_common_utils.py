@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, cast
 
 import pytest
@@ -2463,3 +2464,20 @@ def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, u
 def test_schema_size_counts_every_written_object_once(schema, properties, branches):
     assert schema_property_count(schema) == properties
     assert schema_grammar_branch_count(schema) == branches
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{"already": "parsed"}, MappingProxyType({"already": "parsed"})],
+    ids=["dict", "mapping_proxy"],
+)
+def test_parse_tool_call_arguments_returns_already_parsed_mapping(arguments):
+    parsed = parse_tool_call_arguments(arguments, tool_name="dict_tool", context="test")
+
+    assert parsed == {"already": "parsed"}
+    assert json.loads(json.dumps(parsed)) == {"already": "parsed"}
+
+
+def test_parse_tool_call_arguments_rejects_unrepairable_json():
+    with pytest.raises(ValueError, match="broken_tool"):
+        parse_tool_call_arguments("not valid json{{{", tool_name="broken_tool", context="test")

@@ -41,16 +41,24 @@ _PLAIN_MESSAGE_KEYS: Final = frozenset({"role", "content"})
 def _count_image(block: JsonValue) -> JsonValue:
     if not isinstance(block, dict) or block.get("type") != "image_url":
         return block
-    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_image_obj
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_document_block_from_data_uri,
+        anthropic_document_media_type_for_data_uri,
+        convert_to_anthropic_image_obj,
+    )
 
     image_block: Final = _IMAGE_BLOCK.validate_python(block)
     image_url: Final = image_block["image_url"]
-    source: Final = convert_to_anthropic_image_obj(
-        openai_image_url=image_url if isinstance(image_url, str) else image_url["url"],
-        format=image_url.get("format") if isinstance(image_url, dict) else None,
-    )
+    url: Final = image_url if isinstance(image_url, str) else image_url["url"]
+    format_override: Final = image_url.get("format") if isinstance(image_url, dict) else None
+    other_fields: Final = {key: value for key, value in block.items() if key not in {"type", "image_url"}}
+    document_media_type: Final = anthropic_document_media_type_for_data_uri(url, format_override)
+    if document_media_type is not None:
+        document: Final = anthropic_document_block_from_data_uri(url, image_block, document_media_type)
+        return {**other_fields, **_COUNT_REQUEST.validate_python(document)}
+    source: Final = convert_to_anthropic_image_obj(openai_image_url=url, format=format_override)
     image: Final = _COUNT_REQUEST.validate_python({"type": "image", "source": source})
-    return {**{key: value for key, value in block.items() if key not in {"type", "image_url"}}, **image}
+    return {**other_fields, **image}
 
 
 def _count_block(block: JsonValue) -> JsonValue:

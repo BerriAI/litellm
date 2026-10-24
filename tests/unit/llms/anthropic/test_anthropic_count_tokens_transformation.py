@@ -74,6 +74,26 @@ def test_count_translates_openai_images_without_mutating_input(
 @pytest.mark.parametrize(
     "config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig)
 )
+def test_count_sends_a_pdf_image_url_as_the_document_the_chat_request_sends(
+    config_type: type[AnthropicCountTokensConfig],
+) -> None:
+    pdf_url: Final = "data:application/pdf;base64," + b64encode(b"%PDF-1.4 count fixture").decode()
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_url}}]}
+    ]
+
+    counted: Final = config_type().transform_request_to_count_tokens(model="claude-opus-5-5", messages=messages)
+    sent: Final = AnthropicConfig().transform_request(
+        model="claude-opus-5-5", messages=deepcopy(messages), optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert counted["messages"] == sent["messages"]
+    assert counted["messages"][0]["content"][0]["type"] == "document"
+
+
+@pytest.mark.parametrize(
+    "config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig)
+)
 def test_count_normalizes_nested_tool_images_and_preserves_native_fields(
     config_type: type[AnthropicCountTokensConfig],
 ) -> None:

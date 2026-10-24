@@ -2672,6 +2672,19 @@ def merge_consecutive_system_messages(
     ]
 
 
+_TOOL_USE_ID_FALLBACK: Final = "tool_use_id"
+_ANTHROPIC_TOOL_USE_ID_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def replace_invalid_tool_use_id_chars(tool_use_id: str, invalid_chars: re.Pattern[str]) -> str:
+    return invalid_chars.sub("_", tool_use_id) or _TOOL_USE_ID_FALLBACK
+
+
+def sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
+    """Anthropic requires tool_use_id to match ^[a-zA-Z0-9_-]+$."""
+    return replace_invalid_tool_use_id_chars(tool_use_id, _ANTHROPIC_TOOL_USE_ID_INVALID_CHARS)
+
+
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -2734,7 +2747,7 @@ def _attempt_json_repair(s: str) -> object | None:
 
 
 def parse_tool_call_arguments(
-    arguments: str | None,
+    arguments: str | Mapping[str, object] | None,
     tool_name: str | None = None,
     context: str | None = None,
 ) -> Any:
@@ -2747,7 +2760,7 @@ def parse_tool_call_arguments(
     callers are aware the arguments were not perfectly formed.
 
     Args:
-        arguments: The JSON string containing tool arguments, or None.
+        arguments: The JSON string containing tool arguments, an already-parsed mapping, or None.
         tool_name: Optional name of the tool (for error messages).
         context: Optional context string (e.g., "Anthropic Messages API").
 
@@ -2761,6 +2774,8 @@ def parse_tool_call_arguments(
     """
     import json
 
+    if isinstance(arguments, Mapping):
+        return dict(arguments)
     if not arguments or not arguments.strip():
         return {}
 
