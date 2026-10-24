@@ -4,6 +4,7 @@ import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PaginationState } from "@tanstack/react-table";
 import { Plus } from "lucide-react";
+import { Button as DemoButton } from "antd";
 import React, { useCallback, useMemo, useState } from "react";
 
 import { MemoryRow, createMemory, deleteMemory, fetchMemoryList, updateMemory } from "@/components/networking";
@@ -11,6 +12,7 @@ import DeleteResourceModal from "@/components/common_components/DeleteResourceMo
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { uiHref } from "@/utils/uiHref";
 
 import { MemoryDetailDrawer } from "./MemoryDetailDrawer";
 import { MemoryEditModal } from "./MemoryEditModal";
@@ -176,7 +178,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   return (
     <div className="w-full p-6">
       <div className="flex flex-col gap-6">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col items-start justify-between gap-4 md:flex-row">
           <div>
             <h1 className="text-2xl font-semibold text-foreground">Memory</h1>
             <p className="mt-1 text-sm text-muted-foreground">
@@ -187,10 +189,13 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
               . Scoped to memories visible to your user / team (admins see all).
             </p>
           </div>
-          <Button onClick={() => setIsCreateOpen(true)}>
-            <Plus />
-            New memory
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <DemoButton href={uiHref("memory/demo")}>Shared knowledge demo</DemoButton>
+            <Button onClick={() => setIsCreateOpen(true)}>
+              <Plus />
+              New memory
+            </Button>
+          </div>
         </div>
 
         <MemoryTable
