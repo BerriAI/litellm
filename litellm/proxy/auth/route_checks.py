@@ -96,6 +96,8 @@ _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
         "/models",
         "/v1/models",
         "/utils/token_counter",
+        "/tokenize",
+        "/v1/tokenize",
         "/utils/transform_request",
         "/responses/input_tokens",
         "/v1/responses/input_tokens",

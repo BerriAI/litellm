@@ -39213,6 +39213,53 @@
           "title": "RegisterGuardrailResponse",
           "type": "object"
         },
+        "TokenizeResponse": {
+          "properties": {
+            "count": {
+              "minimum": 0.0,
+              "title": "Count",
+              "type": "integer"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "token_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Ids"
+            },
+            "tokens": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tokens"
+            }
+          },
+          "required": [
+            "model",
+            "count"
+          ],
+          "title": "TokenizeResponse",
+          "type": "object"
+        },
         "ValidationError": {
           "properties": {
             "ctx": {
@@ -40450,6 +40497,81 @@
             }
           },
           "summary": "Token Endpoint",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/tokenize": {
+        "post": {
+          "description": "Tokenize raw text and return its count with explicitly requested representations.",
+          "operationId": "tokenize_tokenize_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "tokenizer",
+                  "prompt": "Hello world"
+                },
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "add_special_tokens": {
+                      "title": "Add Special Tokens",
+                      "type": "boolean"
+                    },
+                    "include": {
+                      "default": [],
+                      "items": {
+                        "enum": [
+                          "token_ids",
+                          "tokens"
+                        ],
+                        "type": "string"
+                      },
+                      "title": "Include",
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    "model": {
+                      "minLength": 1,
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "prompt": {
+                      "title": "Prompt",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "model",
+                    "prompt"
+                  ],
+                  "title": "TokenizeRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TokenizeResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Tokenize",
           "tags": [
             "mcp_discoverable"
           ]

@@ -382,6 +382,8 @@ class LiteLLMRoutes(enum.Enum):
         # OCR
         "/ocr",
         "/v1/ocr",
+        "/tokenize",
+        "/v1/tokenize",
         # containers API
         "/containers",
         "/v1/containers",

@@ -66,12 +66,12 @@ if _REPO_ROOT not in sys.path:
 
 from backend.routes.allowlist import BACKEND_MOUNT_PATHS
 from gateway.routes.allowlist import GATEWAY_MOUNT_PATHS
+from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
-from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
@@ -289,6 +289,12 @@ def test_gateway_plus_backend_covers_full_app():
         f"Update gateway/routes/allowlist.py or backend/routes/allowlist.py to cover:\n  "
         + "\n  ".join(uncovered)
     )
+
+
+@pytest.mark.parametrize("path", ("/tokenize", "/v1/tokenize"))
+def test_gateway_keeps_tokenization_routes(path: str) -> None:
+    route: Final = next(route for route in app.router.routes if getattr(route, "path", None) == path)
+    assert _is_gateway_route(route)
 
 
 def test_backend_mount_paths_defined():
