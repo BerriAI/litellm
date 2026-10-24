@@ -16,6 +16,7 @@ from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable, Mappi
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
+from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, overload
 from urllib.parse import quote, unquote
@@ -104,6 +105,7 @@ else:
 
 RESPONSES_SESSION_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
 _SPEND_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CALL_KWARG_VALUE: Final = TypeAdapter(object)
 _JsonPayload: TypeAlias = Mapping[str, object] | Sequence[object] | str | int | float | bool | None
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[_JsonPayload]] = TypeAdapter(
     _JsonPayload, config=ConfigDict(strict=True, hide_input_in_errors=True)
@@ -311,6 +313,20 @@ def _spend_tables_left_to_send(
         name: (None if name in committed or name in dropped else txns) for name, txns in transactions.items()
     }
     return cast(DBSpendUpdateTransactions, remaining) if any(remaining.values()) else None
+
+
+class _SpendRestore(TypedDict, total=False):
+    db_spend_update_transactions: ReadOnly[DBSpendUpdateTransactions]
+    daily_spend_update_transactions: ReadOnly[Mapping[str, BaseDailySpendTransaction]]
+    daily_team_spend_update_transactions: ReadOnly[Mapping[str, BaseDailySpendTransaction]]
+    daily_org_spend_update_transactions: ReadOnly[Mapping[str, BaseDailySpendTransaction]]
+    daily_end_user_spend_update_transactions: ReadOnly[Mapping[str, BaseDailySpendTransaction]]
+    daily_agent_spend_update_transactions: ReadOnly[Mapping[str, BaseDailySpendTransaction]]
+    window_spend_update_transactions: ReadOnly[Sequence[WindowSpendTransaction]]
+
+
+def _merged_spend_restore(first: _SpendRestore, second: _SpendRestore) -> _SpendRestore:
+    return {**first, **second}
 
 
 def _report_spend_update_step_failure(step_name: str, *, payload: Mapping[str, object], exc: Exception) -> None:
@@ -845,7 +861,7 @@ class DBSpendUpdateWriter:
                 spend=payload["spend"],
                 total_tokens=payload["total_tokens"],
                 completion_response=completion_response,
-                realtime_tool_calls=(kwargs or {}).get("realtime_tool_calls"),
+                realtime_tool_calls=_CALL_KWARG_VALUE.validate_python((kwargs or {}).get("realtime_tool_calls")),
             )
             if transaction is None:
                 return
@@ -1627,7 +1643,7 @@ class DBSpendUpdateWriter:
         ):
             verbose_proxy_logger.debug("acquired lock for spend updates")
 
-            uncommitted: dict[str, Any] = {}  # mutable-ok: tracks popped categories still needing commit
+            uncommitted: dict[str, _SpendRestore] = {}  # mutable-ok: tracks popped categories still needing commit
             committed_spend_tables: Final[list[_SpendTableName]] = []  # mutable-ok: filled as each table lands
 
             try:
@@ -1642,13 +1658,41 @@ class DBSpendUpdateWriter:
                 ) = await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
 
                 uncommitted = {
-                    "db_spend_update_transactions": db_spend_update_transactions,
-                    "daily_spend_update_transactions": daily_spend_update_transactions,
-                    "daily_team_spend_update_transactions": daily_team_spend_update_transactions,
-                    "daily_org_spend_update_transactions": daily_org_spend_update_transactions,
-                    "daily_end_user_spend_update_transactions": daily_end_user_spend_update_transactions,
-                    "daily_agent_spend_update_transactions": daily_agent_spend_update_transactions,
-                    "window_spend_update_transactions": window_spend_update_transactions,
+                    "db_spend_update_transactions": (
+                        {}
+                        if db_spend_update_transactions is None
+                        else {"db_spend_update_transactions": db_spend_update_transactions}
+                    ),
+                    "daily_spend_update_transactions": (
+                        {}
+                        if daily_spend_update_transactions is None
+                        else {"daily_spend_update_transactions": daily_spend_update_transactions}
+                    ),
+                    "daily_team_spend_update_transactions": (
+                        {}
+                        if daily_team_spend_update_transactions is None
+                        else {"daily_team_spend_update_transactions": daily_team_spend_update_transactions}
+                    ),
+                    "daily_org_spend_update_transactions": (
+                        {}
+                        if daily_org_spend_update_transactions is None
+                        else {"daily_org_spend_update_transactions": daily_org_spend_update_transactions}
+                    ),
+                    "daily_end_user_spend_update_transactions": (
+                        {}
+                        if daily_end_user_spend_update_transactions is None
+                        else {"daily_end_user_spend_update_transactions": daily_end_user_spend_update_transactions}
+                    ),
+                    "daily_agent_spend_update_transactions": (
+                        {}
+                        if daily_agent_spend_update_transactions is None
+                        else {"daily_agent_spend_update_transactions": daily_agent_spend_update_transactions}
+                    ),
+                    "window_spend_update_transactions": (
+                        {}
+                        if window_spend_update_transactions is None
+                        else {"window_spend_update_transactions": window_spend_update_transactions}
+                    ),
                 }
 
                 if db_spend_update_transactions is not None:
@@ -1677,8 +1721,11 @@ class DBSpendUpdateWriter:
                             on_table_committed=committed_spend_tables.append,
                         )
                     except Exception as e:
-                        uncommitted["db_spend_update_transactions"] = _spend_tables_left_to_send(
+                        left_to_send: Final = _spend_tables_left_to_send(
                             db_spend_update_transactions, committed_spend_tables, e
+                        )
+                        uncommitted["db_spend_update_transactions"] = (
+                            {} if left_to_send is None else {"db_spend_update_transactions": left_to_send}
                         )
                         raise
                 uncommitted.pop("db_spend_update_transactions", None)
@@ -1753,7 +1800,7 @@ class DBSpendUpdateWriter:
                     exc=e,
                 )
             finally:
-                to_restore = {name: txns for name, txns in uncommitted.items() if txns is not None}
+                to_restore: Final = reduce(_merged_spend_restore, uncommitted.values(), _SpendRestore())
                 if to_restore:
                     await self.redis_update_buffer.restore_transactions_to_redis(**to_restore)
                 await self.pod_lock_manager.release_lock(
