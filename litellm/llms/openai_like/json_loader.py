@@ -79,12 +79,16 @@ class JSONProviderRegistry:
         return next((provider for provider in cls._providers.values() if provider.base_url == base_url), None)
 
     @classmethod
-    def supports_responses_api(cls, slug: str) -> bool:
-        """Check if a JSON provider supports the Responses API"""
+    def supports_endpoint(cls, slug: str, endpoint: str) -> bool:
         provider: Final = cls._providers.get(slug)
         if provider is None:
             return False
-        return "/v1/responses" in provider.supported_endpoints
+        return endpoint in provider.supported_endpoints
+
+    @classmethod
+    def supports_responses_api(cls, slug: str) -> bool:
+        """Check if a JSON provider supports the Responses API"""
+        return cls.supports_endpoint(slug, "/v1/responses")
 
     @classmethod
     def list_providers(cls) -> list:

@@ -1765,6 +1765,24 @@
         "a2a": false
       }
     },
+    "nearai": {
+      "display_name": "NEAR AI Cloud (`nearai`)",
+      "url": "https://docs.litellm.ai/docs/providers/nearai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "nebius": {
       "display_name": "Nebius AI Studio (`nebius`)",
       "url": "https://docs.litellm.ai/docs/providers/nebius",
