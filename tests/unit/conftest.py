@@ -45,17 +45,25 @@ import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at im
 import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
 import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
 from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
+from litellm.anthropic_beta_headers_manager import (
+    reload_beta_headers_config,  # noqa: E402  # same import-time dependency
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER  # noqa: E402  # same import-time dependency
-from litellm.anthropic_beta_headers_manager import reload_beta_headers_config  # noqa: E402  # same import-time dependency
-from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory_module  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils.prompt_templates import (
+    factory as prompt_factory_module,  # noqa: E402  # same import-time dependency
+)
 from litellm.litellm_core_utils.prompt_templates import (  # noqa: E402  # same import-time dependency
     image_handling as image_handling_module,
 )
-from litellm.llms.gemini.chat import transformation as gemini_chat_transformation_module  # noqa: E402  # same import-time dependency
 from litellm.llms.custom_httpx.async_client_cleanup import (  # noqa: E402  # same import-time dependency
     close_litellm_async_clients,
 )
-from litellm.proxy.db import tool_registry_writer as tool_registry_writer_module  # noqa: E402  # same import-time dependency
+from litellm.llms.gemini.chat import (
+    transformation as gemini_chat_transformation_module,  # noqa: E402  # same import-time dependency
+)
+from litellm.proxy.db import (
+    tool_registry_writer as tool_registry_writer_module,  # noqa: E402  # same import-time dependency
+)
 
 LOOPBACK_HOSTS: Final = ["127.0.0.1", "::1", "localhost"]
 AMBIENT_AZURE_CREDENTIAL_ENV_VARS: Final = (
@@ -293,20 +301,16 @@ def isolate_litellm_globals() -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def isolate_router_model_cost_state() -> Iterator[None]:
     original_live_routers: Final = frozenset(litellm_router_module._live_routers)
-    original_runtime_registered_model_cost: Final = {
-        model_key: dict(model_value)
-        for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
-    }
+    original_model_cost_layers: Final = litellm_utils_module._MODEL_COST_LAYERS.snapshot()
     litellm_utils_module._invalidate_model_cost_lowercase_map()
     litellm_router_module._live_routers.clear()
-    litellm_utils_module._runtime_registered_model_cost.clear()
+    litellm_utils_module._MODEL_COST_LAYERS.forget_writes()
     yield
     for router in tuple(litellm_router_module._live_routers):
         litellm_router_module._live_routers.discard(router)
     for router in original_live_routers:
         litellm_router_module._live_routers.add(router)
-    litellm_utils_module._runtime_registered_model_cost.clear()
-    litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
+    litellm_utils_module._MODEL_COST_LAYERS.restore(original_model_cost_layers)
     litellm_utils_module._invalidate_model_cost_lowercase_map()
     litellm.get_model_info.cache_clear()
 

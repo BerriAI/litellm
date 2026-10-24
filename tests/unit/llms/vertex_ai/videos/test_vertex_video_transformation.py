@@ -25,11 +25,6 @@ VEO_31_LITE_VERTEX_MODEL = "vertex_ai/veo-3.1-lite-generate-001"
 ROOT_MODEL_COST_PATH = (
     Path(__file__).parents[5] / "model_prices_and_context_window.json"
 )
-BACKUP_MODEL_COST_PATH = (
-    Path(__file__).parents[5]
-    / "litellm"
-    / "model_prices_and_context_window_backup.json"
-)
 ModelCostMap = Mapping[str, Mapping[str, object]]
 
 
@@ -126,7 +121,7 @@ class TestVertexAIVideoConfig:
     def test_veo_31_lite_provider_routing_from_local_model_map(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+        model_cost = _load_model_cost_map(ROOT_MODEL_COST_PATH)
         vertex_video_models = {
             model_name.removeprefix("vertex_ai/")
             for model_name, info in model_cost.items()
@@ -255,7 +250,7 @@ class TestVertexAIVideoConfig:
         expected_resolution: str,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+        model_cost = _load_model_cost_map(ROOT_MODEL_COST_PATH)
         monkeypatch.setitem(
             litellm.model_cost,
             VEO_31_LITE_VERTEX_MODEL,
@@ -286,7 +281,7 @@ class TestVertexAIVideoConfig:
     ):
         model = "veo-3.1-generate-001"
         model_key = f"vertex_ai/{model}"
-        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+        model_cost = _load_model_cost_map(ROOT_MODEL_COST_PATH)
         monkeypatch.setitem(litellm.model_cost, model_key, dict(model_cost[model_key]))
 
         mapped = self.config.map_openai_params(

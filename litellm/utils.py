@@ -91,13 +91,24 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from litellm.litellm_core_utils.get_model_cost_map import (
+    _MODEL_COST_LAYERS,  # pyright: ignore[reportPrivateUsage]  # registration writes into the installation-owned native layers
+    _MODEL_COST_REGISTRATION_LOCK,  # pyright: ignore[reportPrivateUsage]  # coordinates persistent writes with catalog installation
+    AliasedCostEntry,
+    GetModelCostMap,
+)
+from litellm.litellm_core_utils.model_cost_dict import (
+    ModelCostLayers,
+    RegistrationIdentity,
+    to_native_json_fields,
+)
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.litellm_core_utils.tool_fields import MalformedField, resolve_deployment_tool_fields
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
+from litellm.rust_bridge._native import ModelRegistry
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
 
@@ -305,7 +316,7 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
 
@@ -3521,12 +3532,15 @@ def _replace_cost_map_entry(
 
 
 def _without_synthesized_costs(
-    model_info: Mapping[str, object], key: str, value: Mapping[str, object]
+    model_info: Mapping[str, object],
+    key: str,
+    value: Mapping[str, object],
+    model_cost_view: Mapping[str, Mapping[str, object]] | None = None,
 ) -> Mapping[str, object]:
     """``_get_model_info_helper`` synthesizes ``input_cost_per_token`` / ``output_cost_per_token`` = 0 when the raw
     entry has neither (#30198). Persisting those zeros would turn a name-priced entry into a free one and make
     ``_is_cost_explicitly_configured`` disable budget enforcement on the next re-registration."""
-    builtin_cost_map: Final = _builtin_cost_map()
+    builtin_cost_map: Final = model_cost_view if model_cost_view is not None else _builtin_cost_map()
     raw_fields: Final = frozenset(builtin_cost_map.get(str(model_info["key"]), builtin_cost_map.get(key, {})))
     return MappingProxyType(
         {
@@ -3632,23 +3646,55 @@ class ModelInfoLookupMiss:
 @dataclass(frozen=True, slots=True)
 class _FallbackRegistration:
     entry: Mapping[str, object]
+    inherits_from: str | None
+    defaults: Mapping[str, object]
     matched_builtin: bool
+    fallback: bool
+    names_the_row: bool
 
 
-def _fallback_registration(key: str, provider: str, value: Mapping[str, object]) -> _FallbackRegistration:
-    """The key keeps its own entry, seeded from the capability rules an unregistered lookup resolves it to, with the
-    matched built-in entry on top. The matched row's provider stays behind, since the key's own lookup can reject it
-    (an ``azure_ai/`` key never resolves to an ``openai`` entry), and the key keeps the provider its caller gave."""
-    match: Final = _resolve_builtin_model_cost_entry(key=key, provider=provider)
-    generalized: Final[Mapping[str, object]] = match_capability_generalizations(key) or {}
+def _fallback_registration(
+    key: str,
+    provider: str,
+    model_cost_view: Mapping[str, Mapping[str, object]] | None = None,
+) -> _FallbackRegistration:
+    """Resolve a sparse fallback descriptor and an ephemeral compatibility row."""
+    match: Final = _resolve_builtin_model_cost_entry(key=key, provider=provider, model_cost_view=model_cost_view)
+    capability_fields: Final = match_capability_generalizations(key)
+    generalized_fields: Final[Mapping[str, object]] = (
+        capability_fields if capability_fields is not None else MappingProxyType({})
+    )
+    generalized: Final = MappingProxyType(
+        {name: field_value for name, field_value in generalized_fields.items() if name != "litellm_provider"}
+    )
     if match is None:
-        return _FallbackRegistration(entry=generalized, matched_builtin=False)
-    inherited: Final = match.entry if match.names_the_row else _without_overridden_price_variants(match.entry, value)
-    own_fields: Final = {name: field_value for name, field_value in inherited.items() if name != "litellm_provider"}
-    return _FallbackRegistration(entry={**generalized, **own_fields}, matched_builtin=True)
+        return _FallbackRegistration(
+            entry=generalized,
+            inherits_from=None,
+            defaults=generalized,
+            matched_builtin=False,
+            fallback=False,
+            names_the_row=False,
+        )
+    own_fields: Final = {name: field_value for name, field_value in match.entry.items() if name != "litellm_provider"}
+    compatibility_defaults: Final = {
+        name: field_value for name, field_value in generalized.items() if name not in match.entry
+    }
+    return _FallbackRegistration(
+        entry={**compatibility_defaults, **own_fields},
+        inherits_from=match.key,
+        defaults=generalized,
+        matched_builtin=True,
+        fallback=True,
+        names_the_row=match.names_the_row,
+    )
 
 
-def _resolve_builtin_model_cost_entry(key: str, provider: str) -> _BuiltinCostMatch | None:
+def _resolve_builtin_model_cost_entry(
+    key: str,
+    provider: str,
+    model_cost_view: Mapping[str, Mapping[str, object]] | None = None,
+) -> _BuiltinCostMatch | None:
     """Best-effort lookup of a built-in ``model_cost`` entry for a custom key
     whose shape ``get_model_info`` cannot resolve (repeated provider prefixes
     like ``bedrock/bedrock/bedrock/us.anthropic.claude-sonnet-4-6`` or region
@@ -3683,7 +3729,7 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> _BuiltinCostMa
     row_names: Final = (key, *prefix_stripped, base, stripped)
     candidates: Final = (key, *prefix_stripped, base, *region_stripped, stripped)
 
-    builtin_cost_map: Final = _builtin_cost_map()
+    builtin_cost_map: Final = model_cost_view if model_cost_view is not None else _builtin_cost_map()
     for candidate in candidates:
         entry = builtin_cost_map.get(candidate)
         if (
@@ -3723,7 +3769,9 @@ def lookup_model_info_for_registration(model: str, custom_llm_provider: str | No
 
 
 def _get_builtin_model_info_for_registration(
-    model: str, custom_llm_provider: str | None
+    model: str,
+    custom_llm_provider: str | None,
+    model_cost_view: Mapping[str, Mapping[str, object]] | None = None,
 ) -> ModelInfo | ModelInfoLookupMiss:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
@@ -3733,6 +3781,19 @@ def _get_builtin_model_info_for_registration(
     changing the map mid-walk, is retried, so a transient failure registers exactly
     where the untripped lookup would.
     """
+    if model_cost_view is not None:
+        try:
+            info: Final = _build_model_info(
+                model,
+                custom_llm_provider=custom_llm_provider,
+                model_cost_view=model_cost_view,
+            )
+        except Exception:  # noqa: BLE001  # view lookup failures are non-matches during replay
+            return ModelInfoLookupMiss(tripped=False)
+        key: Final = info.get("key")
+        if isinstance(key, str) and key not in model_cost_view and match_capability_generalizations(key) is not None:
+            return ModelInfoLookupMiss(tripped=False)
+        return info
     lookups: Final = (
         lookup_model_info_for_registration(model, custom_llm_provider) for _ in range(_REGISTRATION_ATTEMPTS)
     )
@@ -3752,6 +3813,11 @@ def _skips_builtin_registration_lookup(key: str, provider: object) -> bool:
 class _RegistrationWrite:
     key: str
     entry: Mapping[str, object]
+    inherits_from: str | None
+    defaults: Mapping[str, object] = MappingProxyType({})
+    cleanup_overrides: tuple[str, ...] = ()
+    fallback: bool = False
+    names_the_row: bool = False
 
 
 def model_cost_registration_row(key: str, provider: object) -> Mapping[str, object]:
@@ -3765,31 +3831,74 @@ def model_cost_registration_row(key: str, provider: object) -> Mapping[str, obje
 
 
 def _registration_base(
-    key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
+    key: str,
+    value: Mapping[str, object],
+    custom_llm_provider: str | None,
+    warning_display_name: str | None,
+    model_cost_view: Mapping[str, Mapping[str, object]] | None = None,
+    warn_missing_cache: bool = True,
 ) -> _RegistrationWrite:
     provider: Final = str(value.get("litellm_provider") or "")
     if _skips_builtin_registration_lookup(key, provider):
-        return _RegistrationWrite(key=key, entry=dict(_builtin_cost_map().get(key, {})))
+        cost_map: Final = model_cost_view if model_cost_view is not None else _builtin_cost_map()
+        return _RegistrationWrite(key=key, entry=dict(cost_map.get(key, {})), inherits_from=None)
     builtin_model_info: Final = _get_builtin_model_info_for_registration(
-        model=key, custom_llm_provider=custom_llm_provider
+        model=key,
+        custom_llm_provider=custom_llm_provider,
+        model_cost_view=model_cost_view,
     )
     if not isinstance(builtin_model_info, ModelInfoLookupMiss):
         return _RegistrationWrite(
             key=builtin_model_info["key"],
-            entry=dict(_without_synthesized_costs(builtin_model_info, key=key, value=value)),
+            entry=dict(
+                _without_synthesized_costs(
+                    builtin_model_info,
+                    key=key,
+                    value=value,
+                    model_cost_view=model_cost_view,
+                )
+            ),
+            inherits_from=str(builtin_model_info["key"]),
         )
-    fallback: Final = _fallback_registration(key=key, provider=provider, value=value)
-    if not fallback.matched_builtin and (
-        value.get("cache_creation_input_token_cost") is None
-        and value.get("cache_read_input_token_cost") is None
-        and value.get("tiered_pricing") is None
-        and (value.get("input_cost_per_token") is not None or value.get("output_cost_per_token") is not None)
+    fallback: Final = _fallback_registration(
+        key=key,
+        provider=provider,
+        model_cost_view=model_cost_view,
+    )
+    if (
+        warn_missing_cache
+        and not fallback.matched_builtin
+        and (
+            value.get("cache_creation_input_token_cost") is None
+            and value.get("cache_read_input_token_cost") is None
+            and value.get("tiered_pricing") is None
+            and (value.get("input_cost_per_token") is not None or value.get("output_cost_per_token") is not None)
+        )
     ):
         verbose_logger.warning(
             "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost and cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
             warning_display_name or key,
         )
-    return _RegistrationWrite(key=key, entry=dict(fallback.entry))
+    cleanup_overrides: Final = (
+        tuple(
+            itertools.chain.from_iterable(
+                _DIRECTION_RATE_FIELDS[cost_field]
+                for cost_field in _TOKEN_COST_FIELDS
+                if value.get(cost_field) is not None
+            )
+        )
+        if fallback.matched_builtin and not fallback.names_the_row
+        else ()
+    )
+    return _RegistrationWrite(
+        key=key,
+        entry=dict(fallback.entry),
+        inherits_from=fallback.inherits_from,
+        defaults=fallback.defaults,
+        cleanup_overrides=cleanup_overrides,
+        fallback=fallback.fallback,
+        names_the_row=fallback.names_the_row,
+    )
 
 
 def _base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
@@ -3802,9 +3911,21 @@ def _base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
 
 
 def _registration_write(
-    key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
+    key: str,
+    value: Mapping[str, object],
+    custom_llm_provider: str | None,
+    warning_display_name: str | None,
+    model_cost_view: Mapping[str, Mapping[str, object]] | None = None,
+    warn_missing_cache: bool = True,
 ) -> _RegistrationWrite:
-    base: Final = _registration_base(key, value, custom_llm_provider, warning_display_name)
+    base: Final = _registration_base(
+        key,
+        value,
+        custom_llm_provider,
+        warning_display_name,
+        model_cost_view=model_cost_view,
+        warn_missing_cache=warn_missing_cache,
+    )
     # ``get_model_info`` returns ``litellm_provider: None`` when the
     # provider is unknown (e.g. custom deployments registered via
     # ``Router.add_deployment``). Persisting that None into
@@ -3818,6 +3939,11 @@ def _registration_write(
     return _RegistrationWrite(
         key=base.key,
         entry={**update_dictionary(existing_model, value), **dict.fromkeys(_base_fields_replaced_by(value))},
+        inherits_from=base.inherits_from,
+        defaults=base.defaults,
+        cleanup_overrides=base.cleanup_overrides,
+        fallback=base.fallback,
+        names_the_row=base.names_the_row,
     )
 
 
@@ -3830,8 +3956,81 @@ def _registration_attempt(
 ) -> _RegistrationWrite | None:
     source: Final = _builtin_cost_map()
     write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
-    _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry, value)
+    target: Final = _builtin_cost_map() if final_attempt else source
+    entry: Final = _compose_initial_registration_entry(
+        target,
+        write,
+        value,
+        original_key=key,
+        custom_llm_provider=custom_llm_provider,
+    )
+    _replace_cost_map_entry(target, write.key, entry, value)
     return write if final_attempt or litellm.model_cost is source else None
+
+
+def _registration_sparse_fields(value: Mapping[str, object]) -> Mapping[str, object]:
+    validated_fields: Final = _RATE_TABLE.validate_python(value)
+    return MappingProxyType(
+        {
+            name: _convert_stringified_numbers(field_value) if isinstance(field_value, str) else field_value
+            for name, field_value in validated_fields.items()
+            if field_value is not None
+        }
+    )
+
+
+def _registration_reset_fields(value: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(_base_fields_replaced_by(value))
+
+
+def _registration_alias_keys(cost_map: Mapping[str, Mapping[str, object]], key: str) -> tuple[str, ...]:
+    row: Final = cost_map.get(key)
+    return (
+        tuple(name for name in row.names if name != key and cost_map.get(name) is row)
+        if isinstance(row, AliasedCostEntry)
+        else ()
+    )
+
+
+def _compose_initial_registration_entry(
+    cost_map: Mapping[str, Mapping[str, object]],
+    write: _RegistrationWrite,
+    value: Mapping[str, object],
+    *,
+    original_key: str,
+    custom_llm_provider: str | None,
+) -> Mapping[str, object]:
+    base_keys: Final = tuple(dict.fromkeys(key for key in (write.inherits_from, write.key) if key is not None))
+    native_base_rows: Final = MappingProxyType(
+        {key: to_native_json_fields(cost_map[key]) for key in base_keys if key in cost_map}
+    )
+    registry: Final = ModelRegistry.parse(json.dumps(dict(native_base_rows) or {write.key: {}}).encode())
+    layers: Final = ModelCostLayers()
+    layers.record_registration(
+        write.key,
+        write.inherits_from,
+        _registration_sparse_fields(value),
+        original_key=original_key,
+        custom_llm_provider=custom_llm_provider,
+        alias_keys=_registration_alias_keys(cost_map, write.key),
+        defaults=write.defaults,
+        reset_fields=_registration_reset_fields(value),
+        cleanup_overrides=write.cleanup_overrides,
+        fallback=write.fallback,
+        names_the_row=write.names_the_row,
+    )
+    native_entry: Final = next(
+        (fields for key, fields, _ in layers.compose(registry) if key == write.key),
+        MappingProxyType({}),
+    )
+    metadata: Final = MappingProxyType(
+        {
+            name: field_value
+            for name, field_value in write.entry.items()
+            if field_value is None or name in ("key", "supported_openai_params")
+        }
+    )
+    return MappingProxyType({**metadata, **native_entry})
 
 
 def _register_on_current_map(
@@ -3848,9 +4047,6 @@ def _register_on_current_map(
         for attempt in range(_REGISTRATION_ATTEMPTS)
     )
     return next(write for write in attempts if write is not None)
-
-
-_runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
 
 
 def runtime_model_cost_registrations(
@@ -3874,6 +4070,94 @@ def runtime_model_cost_registrations(
     )
 
 
+def _registered_row_with_compatibility_metadata(
+    key: str,
+    row: AliasedCostEntry,
+    model_cost_view: Mapping[str, Mapping[str, object]],
+    identity: RegistrationIdentity | None,
+) -> AliasedCostEntry:
+    if not row.registered_fields or not any(name in GetModelCostMap.loaded_model_cost_map() for name in row.names):
+        return row
+    lookup_key: Final = identity.original_key if identity is not None else key
+    provider: Final = identity.custom_llm_provider if identity is not None else None
+    if _skips_builtin_registration_lookup(lookup_key, provider):
+        return row
+    try:
+        info: Final = _build_model_info(
+            lookup_key,
+            custom_llm_provider=provider,
+            model_cost_view=model_cost_view,
+        )
+    except Exception:  # noqa: BLE001  # metadata enrichment must not break catalog installation
+        return row
+    defaults: Final = MappingProxyType(
+        {name: value for name, value in info.items() if value is None or name in ("key", "supported_openai_params")}
+    )
+    metadata: Final = _without_synthesized_costs(
+        defaults,
+        key=lookup_key,
+        value={},
+        model_cost_view=model_cost_view,
+    )
+    patch: Final = MappingProxyType({name: value for name, value in metadata.items() if name not in row})
+    restored: Final = AliasedCostEntry(row, row.names, row.registered_fields)
+    dict.update(restored, patch)
+    return restored
+
+
+def restore_model_cost_registration_metadata(
+    model_cost: Mapping[str, Mapping[str, object]] | None = None,
+) -> None:
+    if not _MODEL_COST_LAYERS.identities:
+        return
+    cost_map: Final = model_cost if model_cost is not None else _builtin_cost_map()
+    entries: Final = tuple(cost_map.items())
+    identities: Final = _MODEL_COST_LAYERS.identities
+    registered_rows: Final = MappingProxyType(
+        {
+            id(row): (row.names[0] if row.names else key, row)
+            for key, row in entries
+            if isinstance(row, AliasedCostEntry) and row.registered_fields
+        }
+    )
+    row_identities: Final = MappingProxyType(
+        {
+            row_id: next(
+                (
+                    identity
+                    for identity in reversed(identities)
+                    if identity.key in row.names or any(alias in row.names for alias in identity.alias_keys)
+                ),
+                None,
+            )
+            for row_id, (_, row) in registered_rows.items()
+        }
+    )
+    replacements: Final = MappingProxyType(
+        {
+            row_id: _registered_row_with_compatibility_metadata(
+                key,
+                row,
+                cost_map,
+                row_identities[row_id],
+            )
+            for row_id, (key, row) in registered_rows.items()
+        }
+    )
+    if model_cost is None and _builtin_cost_map() is not cost_map:
+        return
+    dict.update(
+        cost_map,
+        MappingProxyType(
+            {key: replacements[id(row)] for key, row in entries if id(row) in replacements and cost_map.get(key) is row}
+        ),
+    )
+
+
+class _DeploymentReplayCallback(Protocol):
+    def __call__(self) -> None: ...
+
+
 class _LiveDeploymentReplay:
     """Single-slot holder for the callback that rebuilds live router deployments.
 
@@ -3881,7 +4165,7 @@ class _LiveDeploymentReplay:
     reader, and neither needs a ``global`` statement.
     """
 
-    callback: Callable[[], None] | None = None
+    callback: ClassVar[_DeploymentReplayCallback | None] = None
 
 
 def set_live_deployment_replay(replay: Callable[[], None]) -> None:
@@ -3893,30 +4177,6 @@ def set_live_deployment_replay(replay: Callable[[], None]) -> None:
     the router here would be circular.
     """
     _LiveDeploymentReplay.callback = replay
-
-
-def reapply_runtime_model_cost_registrations() -> None:
-    """Re-apply runtime model metadata on top of a freshly adopted cost map.
-
-    Adopting a new catalog replaces ``litellm.model_cost`` wholesale, which on
-    its own discards everything registered at runtime: the deployment
-    ``model_info`` the Router registers from ``model_list``, and pricing
-    overrides passed to ``register_model``. Both are re-applied here so a price
-    data reload only updates pricing rather than erasing operator-supplied model
-    metadata.
-
-    The two are restored differently, and the difference is what keeps this
-    bounded. Deployment metadata is re-derived from the routers that are alive
-    right now, so a deployment that has been deleted or repointed, and a router
-    that has been discarded, are simply not part of the rebuild; nothing has to
-    withdraw them and nothing accumulates. Only ``register_model`` calls that
-    have no such owner are recorded and replayed, and a registration describing
-    a single request opts out of even that.
-    """
-    if _LiveDeploymentReplay.callback is not None:
-        _LiveDeploymentReplay.callback()
-    if _runtime_registered_model_cost:
-        register_model(model_cost=dict(_runtime_registered_model_cost))
 
 
 def cost_map_omits_token_price(*keys: object) -> bool:
@@ -3932,6 +4192,32 @@ def cost_map_omits_token_price(*keys: object) -> bool:
     )
     return len(entries) > 0 and not any(
         "input_cost_per_token" in entry or "output_cost_per_token" in entry for entry in entries
+    )
+
+
+def _record_model_cost_registration(
+    write: _RegistrationWrite,
+    value: Mapping[str, object],
+    original_key: str,
+    custom_llm_provider: str | None,
+) -> None:
+    sparse_fields: Final = _registration_sparse_fields(value)
+    alias_keys: Final = _registration_alias_keys(
+        _builtin_cost_map(),
+        write.key,
+    )
+    _MODEL_COST_LAYERS.record_registration(
+        write.key,
+        write.inherits_from,
+        sparse_fields,
+        original_key=original_key,
+        custom_llm_provider=custom_llm_provider,
+        alias_keys=alias_keys,
+        defaults=write.defaults,
+        reset_fields=_registration_reset_fields(value),
+        cleanup_overrides=write.cleanup_overrides,
+        fallback=write.fallback,
+        names_the_row=write.names_the_row,
     )
 
 
@@ -3983,19 +4269,13 @@ def register_model(
     elif isinstance(model_cost, str):
         loaded_model_cost = litellm.get_model_cost_map(url=model_cost, max_attempts=1)
 
-    if persist_across_reloads:
-        _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
-        for _registered_key, _registered_value in _registrations.items():
-            _runtime_registered_model_cost[_registered_key] = update_dictionary(
-                dict(_runtime_registered_model_cost.get(_registered_key, {})),
-                _RATE_TABLE.validate_python(_registered_value),
-            )
-
     for key, value in loaded_model_cost.items():
-        write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
+        with _MODEL_COST_REGISTRATION_LOCK:
+            write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
+            if persist_across_reloads:
+                _record_model_cost_registration(write, value, str(key), custom_llm_provider)
 
-        # Invalidate case-insensitive lookup map since model_cost was modified
-        _invalidate_model_cost_lowercase_map()
+            _invalidate_model_cost_lowercase_map()
 
         verbose_logger.debug("added/updated model=%s in litellm.model_cost: %s", write.key, write.key)
         if add_to_provider_model_sets and value.get("litellm_provider") == "openrouter":
@@ -6287,7 +6567,7 @@ def _get_model_info_from_model_cost(key: str) -> dict[str, object]:
     return litellm.model_cost[key]
 
 
-def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> bool:
+def _check_provider_match(model_info: Mapping[str, object], custom_llm_provider: str | None) -> bool:
     """
     Check if the model info provider matches the custom provider.
 
@@ -6353,24 +6633,45 @@ class PotentialModelNamesAndCustomLLMProvider(TypedDict):
     custom_llm_provider: str
 
 
-def _first_registered_match(
-    candidates: Sequence[str], custom_llm_provider: str | None
-) -> tuple[str | None, dict[str, Any] | None]:
-    registered_keys: Final = (key for key in map(get_model_cost_key, candidates) if key is not None)
-    entries: Final = ((key, _get_model_info_from_model_cost(key=key)) for key in registered_keys)
-    matches: Final = (
-        (key, info)
-        for key, info in entries
-        if _check_provider_match(model_info=info, custom_llm_provider=custom_llm_provider)
+def _first_provider_matched_entry(
+    entries: Iterable[tuple[str, Mapping[str, object]]],
+    custom_llm_provider: str | None,
+) -> tuple[str | None, Mapping[str, object] | None]:
+    return next(
+        (
+            (key, info)
+            for key, info in entries
+            if _check_provider_match(model_info=info, custom_llm_provider=custom_llm_provider)
+        ),
+        (None, None),
     )
-    return next(matches, (None, None))
+
+
+def _first_registered_match(
+    candidates: Sequence[str],
+    custom_llm_provider: str | None,
+    model_cost_view: Mapping[str, Mapping[str, object]] | None = None,
+) -> tuple[str | None, Mapping[str, object] | None]:
+    if model_cost_view is None:
+        registered_keys: Final = tuple(key for key in map(get_model_cost_key, candidates) if key is not None)
+        entries: Final = tuple((key, _get_model_info_from_model_cost(key=key)) for key in registered_keys)
+        return _first_provider_matched_entry(entries, custom_llm_provider)
+    casefolded: Final = {key.casefold(): key for key in model_cost_view}
+    view_registered_keys: Final = tuple(
+        key
+        for candidate in candidates
+        if (key := candidate if candidate in model_cost_view else casefolded.get(candidate.casefold())) is not None
+    )
+    view_entries: Final = tuple((key, model_cost_view[key]) for key in view_registered_keys)
+    return _first_provider_matched_entry(view_entries, custom_llm_provider)
 
 
 def _get_model_info_from_generalization(
     model: str,
     potential_model_names: PotentialModelNamesAndCustomLLMProvider,
     custom_llm_provider: str | None,
-) -> tuple[str, dict] | None:
+    model_cost_view: Mapping[str, Mapping[str, object]] | None = None,
+) -> tuple[str, Mapping[str, object]] | None:
     """Resolve an unmapped model via the declarative capability generalization rules.
 
     Tries the same name candidates as the exact lookups, in the same order, and
@@ -6393,7 +6694,15 @@ def _get_model_info_from_generalization(
         potential_model_names["stripped_model_name"],
         potential_model_names["provider_prefixed_model_name"],
     )
-    if any(get_model_cost_key(candidate) is not None for candidate in candidates):
+    known_keys: Final = (
+        (get_model_cost_key(candidate) is not None for candidate in candidates)
+        if model_cost_view is None
+        else (
+            candidate in model_cost_view or candidate.casefold() in {key.casefold() for key in model_cost_view}
+            for candidate in candidates
+        )
+    )
+    if any(known_keys):
         return None
     for candidate in candidates:
         generalized_info = match_capability_generalizations(candidate)
@@ -6420,60 +6729,127 @@ def _strip_mantle_region_prefix(model: str) -> str:
     return split_mantle_region_prefix(model)[1]
 
 
-def get_potential_model_names(model: str, custom_llm_provider: str | None) -> PotentialModelNamesAndCustomLLMProvider:
-    if custom_llm_provider is None:
-        # Get custom_llm_provider
-        try:
-            get_llm_provider: Final = litellm_utils.get_llm_provider
-            split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
-        except Exception:
-            split_model = model
-        combined_model_name = model
-        stripped_model_name = _strip_model_name(model=model, custom_llm_provider=custom_llm_provider)
-        combined_stripped_model_name = stripped_model_name
-        provider_prefixed_model_name = model
-    elif custom_llm_provider and model.startswith(
-        custom_llm_provider + "/"
-    ):  # handle case where custom_llm_provider is provided and model starts with custom_llm_provider
-        split_model = model.split("/", 1)[1]
-        combined_model_name = model
-        stripped_model_name = _strip_model_name(model=split_model, custom_llm_provider=custom_llm_provider)
-        combined_stripped_model_name = f"{custom_llm_provider}/{stripped_model_name}"
-        provider_prefixed_model_name = f"{custom_llm_provider}/{model}"
-    else:
-        split_model = model
-        combined_model_name = f"{custom_llm_provider}/{model}"
-        stripped_model_name = _strip_model_name(model=model, custom_llm_provider=custom_llm_provider)
-        combined_stripped_model_name = f"{custom_llm_provider}/{stripped_model_name}"
-        provider_prefixed_model_name = combined_model_name
-
-    if custom_llm_provider in ("bedrock", "bedrock_converse"):
-        from litellm.llms.bedrock.common_utils import (
-            extract_model_name_from_bedrock_arn,
-            split_bedrock_region_path,
-            strip_bedrock_routing_prefix,
-        )
-
-        region_free_bedrock_model: Final = split_bedrock_region_path(split_model)[1]
-        split_model = (
-            extract_model_name_from_bedrock_arn(region_free_bedrock_model)
-            if region_free_bedrock_model.startswith("arn:")
-            else strip_bedrock_routing_prefix(split_model)
-        )
-
-    region_free_split_model: Final = (
-        _strip_mantle_region_prefix(split_model) if custom_llm_provider == "bedrock_mantle" else split_model
+def _normalize_model_name(split_model: str, provider: str | None) -> str:
+    if provider not in ("bedrock", "bedrock_converse"):
+        return _strip_mantle_region_prefix(split_model) if provider == "bedrock_mantle" else split_model
+    from litellm.llms.bedrock.common_utils import (
+        extract_model_name_from_bedrock_arn,
+        split_bedrock_region_path,
+        strip_bedrock_routing_prefix,
     )
+
+    region_free: Final = split_bedrock_region_path(split_model)[1]
+    return (
+        extract_model_name_from_bedrock_arn(region_free)
+        if region_free.startswith("arn:")
+        else strip_bedrock_routing_prefix(split_model)
+    )
+
+
+def _provider_from_cost_view(model: str, model_cost_view: Mapping[str, Mapping[str, object]]) -> str | None:
+    prefix: Final = model.split("/", 1)[0]
+    if "/" in model and prefix in LlmProvidersSet:
+        return prefix
+    folded: Final = MappingProxyType({key.casefold(): key for key in model_cost_view})
+    row_key: Final = model if model in model_cost_view else folded.get(model.casefold())
+    row: Final = model_cost_view.get(row_key) if row_key is not None else None
+    provider: Final = row.get("litellm_provider") if row is not None else None
+    return provider if isinstance(provider, str) else None
+
+
+def _resolve_model_provider_and_split(
+    model: str,
+    custom_llm_provider: str | None,
+    model_cost_view: Mapping[str, Mapping[str, object]] | None,
+) -> tuple[str | None, str, bool]:
+    if custom_llm_provider is not None:
+        return (
+            custom_llm_provider,
+            model.split("/", 1)[1] if model.startswith(f"{custom_llm_provider}/") else model,
+            False,
+        )
+    if model_cost_view is not None:
+        view_provider: Final = _provider_from_cost_view(model, model_cost_view)
+        return (
+            view_provider,
+            model.split("/", 1)[1] if view_provider is not None and model.startswith(f"{view_provider}/") else model,
+            True,
+        )
+    try:
+        get_llm_provider: Final = litellm_utils.get_llm_provider
+        split_model, provider, _, _ = get_llm_provider(model=model)
+    except Exception:
+        return None, model, False
+    else:
+        return provider, split_model, False
+
+
+def _candidate_model_names(
+    model: str,
+    provider: str | None,
+    split_model: str,
+    is_prefixed: bool,
+    provider_was_inferred: bool,
+) -> tuple[str, str, str, str]:
+    if provider_was_inferred:
+        return (
+            model,
+            _strip_model_name(model=model, custom_llm_provider=provider),
+            _strip_model_name(model=model, custom_llm_provider=provider),
+            model,
+        )
+    if provider is None:
+        return (
+            model,
+            _strip_model_name(model=model, custom_llm_provider=provider),
+            _strip_model_name(model=model, custom_llm_provider=provider),
+            model,
+        )
+    if is_prefixed:
+        return (
+            model,
+            _strip_model_name(model=split_model, custom_llm_provider=provider),
+            f"{provider}/{_strip_model_name(model=split_model, custom_llm_provider=provider)}",
+            f"{provider}/{model}",
+        )
+    return (
+        f"{provider}/{model}",
+        _strip_model_name(model=model, custom_llm_provider=provider),
+        f"{provider}/{_strip_model_name(model=model, custom_llm_provider=provider)}",
+        f"{provider}/{model}",
+    )
+
+
+def get_potential_model_names(
+    model: str,
+    custom_llm_provider: str | None,
+    model_cost_view: Mapping[str, Mapping[str, object]] | None = None,
+) -> PotentialModelNamesAndCustomLLMProvider:
+    resolved_model: Final = _resolve_model_provider_and_split(model, custom_llm_provider, model_cost_view)
+    resolved_provider, split_model, inferred_from_view = resolved_model
+    is_prefixed: Final = resolved_provider is not None and model.startswith(f"{resolved_provider}/")
+    candidate_names: Final = _candidate_model_names(
+        model,
+        resolved_provider,
+        split_model,
+        is_prefixed,
+        custom_llm_provider is None,
+    )
+    combined_model_name, stripped_model_name, combined_stripped_model_name, provider_prefixed_model_name = (
+        candidate_names
+    )
+
+    region_free_split_model: Final = _normalize_model_name(split_model, resolved_provider)
     region_free_combined_stripped_model_name: Final = (
-        f"bedrock_mantle/{_strip_model_name(model=region_free_split_model, custom_llm_provider=custom_llm_provider)}"
-        if custom_llm_provider == "bedrock_mantle"
+        f"bedrock_mantle/{_strip_model_name(model=region_free_split_model, custom_llm_provider=resolved_provider)}"
+        if resolved_provider == "bedrock_mantle"
         else combined_stripped_model_name
     )
     provider_model_info: Final = (
         ProviderConfigManager.get_provider_model_info(
-            model=region_free_split_model, provider=LlmProviders(custom_llm_provider)
+            model=region_free_split_model, provider=LlmProviders(resolved_provider)
         )
-        if custom_llm_provider in LlmProvidersSet
+        if resolved_provider in LlmProvidersSet
         else None
     )
     provider_cost_key: Final = (
@@ -6485,13 +6861,13 @@ def get_potential_model_names(model: str, custom_llm_provider: str | None) -> Po
         combined_model_name=combined_model_name,
         region_free_combined_model_name=(
             f"bedrock_mantle/{region_free_split_model}"
-            if custom_llm_provider == "bedrock_mantle"
+            if resolved_provider == "bedrock_mantle"
             else combined_model_name
         ),
         stripped_model_name=stripped_model_name,
         combined_stripped_model_name=region_free_combined_stripped_model_name,
         provider_prefixed_model_name=provider_cost_key or provider_prefixed_model_name,
-        custom_llm_provider=cast(str, custom_llm_provider),
+        custom_llm_provider=resolved_provider or "" if inferred_from_view else cast(str, resolved_provider),
     )
 
 
@@ -6589,6 +6965,7 @@ def get_model_info_helper(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    model_cost_view: Mapping[str, Mapping[str, object]] | None = None,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
@@ -6610,7 +6987,9 @@ def get_model_info_helper(
                 model = model + "@latest"
         ##########################
         potential_model_names: Final = get_potential_model_names(
-            model=model, custom_llm_provider=custom_llm_provider or declared_authenticating_provider(model)
+            model=model,
+            custom_llm_provider=custom_llm_provider or declared_authenticating_provider(model),
+            model_cost_view=model_cost_view,
         )
 
         verbose_logger.debug("checking potential_model_names in litellm.model_cost: %s", potential_model_names)
@@ -6624,7 +7003,7 @@ def get_model_info_helper(
         model_cost_custom_llm_provider: Final = custom_llm_provider
         #########################
         provider_config: BaseLLMModelInfo | None = None
-        if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
+        if model_cost_view is None and custom_llm_provider and custom_llm_provider in LlmProvidersSet:
             provider_config = ProviderConfigManager.get_provider_model_info(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
@@ -6648,7 +7027,7 @@ def get_model_info_helper(
                         e,
                     )
 
-        if custom_llm_provider == "huggingface":
+        if model_cost_view is None and custom_llm_provider == "huggingface":
             max_tokens: Final = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
                 key=model,
@@ -6695,9 +7074,13 @@ def get_model_info_helper(
                 stripped_model_name,
                 provider_prefixed_model_name,
             )
-            lookup: Final = _first_registered_match(lookup_order, model_cost_custom_llm_provider)
+            lookup: Final = _first_registered_match(
+                lookup_order,
+                model_cost_custom_llm_provider,
+                model_cost_view=model_cost_view,
+            )
             key: str | None = lookup[0]
-            _model_info: dict[str, Any] | None = lookup[1]
+            _model_info: dict[str, Any] | None = dict(lookup[1]) if lookup[1] is not None else None
 
             if _model_info is not None and key is not None and _model_info.get("mode", "chat") in _BACKFILL_MODES:
                 fill_missing: Final = match_fill_missing_generalizations(key, _model_info.get("litellm_provider", ""))
@@ -6712,9 +7095,10 @@ def get_model_info_helper(
                     model=model,
                     potential_model_names=potential_model_names,
                     custom_llm_provider=custom_llm_provider,
+                    model_cost_view=model_cost_view,
                 )
                 if generalization is not None:
-                    key, _model_info = generalization
+                    key, _model_info = generalization[0], dict(generalization[1])
 
             if _model_info is None or key is None:
                 raise ModelNotMappedError(_model_not_mapped_message(model, custom_llm_provider))
@@ -7008,14 +7392,29 @@ def _build_model_info(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    model_cost_view: Mapping[str, Mapping[str, object]] | None = None,
 ) -> ModelInfo:
-    supported_openai_params = litellm.get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider)
+    supported_params_provider: Final = _supported_openai_params_provider(model, custom_llm_provider, model_cost_view)
+    supported_params_model: Final = _supported_openai_params_model(
+        model,
+        supported_params_provider,
+        model_cost_view,
+    )
+    supported_openai_params: Final = (
+        litellm.get_supported_openai_params(
+            model=supported_params_model,
+            custom_llm_provider=supported_params_provider,
+        )
+        if model_cost_view is None or supported_params_provider is not None
+        else None
+    )
 
     _model_info: Final = get_model_info_helper(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
+        model_cost_view=model_cost_view,
     )
 
     provider_info: Final = get_provider_info(model=model, custom_llm_provider=custom_llm_provider)
@@ -7028,6 +7427,36 @@ def _build_model_info(
     # verbose_logger.debug(f"model_info: {_model_info}")
 
     return ModelInfo(**_model_info, supported_openai_params=supported_openai_params)
+
+
+def _supported_openai_params_provider(
+    model: str,
+    custom_llm_provider: str | None,
+    model_cost_view: Mapping[str, Mapping[str, object]] | None,
+) -> str | None:
+    if model_cost_view is None:
+        return custom_llm_provider
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
+    return (
+        custom_llm_provider
+        or declared_authenticating_provider(model)
+        or _provider_from_cost_view(model, model_cost_view)
+    )
+
+
+def _supported_openai_params_model(
+    model: str,
+    custom_llm_provider: str | None,
+    model_cost_view: Mapping[str, Mapping[str, object]] | None,
+) -> str:
+    if model_cost_view is None or custom_llm_provider is None:
+        return model
+    potential_names: Final = get_potential_model_names(model, custom_llm_provider, model_cost_view)
+    split_model: Final = potential_names["split_model"]
+    model_has_view_key: Final = any(key.casefold() == model.casefold() for key in model_cost_view)
+    split_has_view_key: Final = any(key.casefold() == split_model.casefold() for key in model_cost_view)
+    return model if not model_has_view_key and split_has_view_key else split_model
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
@@ -9020,11 +9449,7 @@ def validate_openai_optional_params(stop: str | list[str] | None = None, **kwarg
 
 @lru_cache(maxsize=1)
 def get_bundled_model_cost_map() -> dict[str, Any]:
-    try:
-        model_cost_path: Final = resources.files("litellm").joinpath("model_prices_and_context_window_backup.json")
-        return json.loads(model_cost_path.read_text())
-    except Exception:
-        return {}
+    return ModelRegistry.bundled().to_dict()
 
 
 _get_bundled_model_cost_map = get_bundled_model_cost_map

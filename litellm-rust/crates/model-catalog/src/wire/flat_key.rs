@@ -61,6 +61,34 @@ impl FlatKey {
     }
 }
 
+pub fn matches_fallback_direction(key: &str, directions: &[&str]) -> bool {
+    FlatKey::parse(key).is_some_and(|flat_key| {
+        directions
+            .iter()
+            .any(|direction| flat_key.matches_direction(direction))
+    }) || directions.iter().any(|direction| {
+        key == *direction || (key.starts_with(&format!("{direction}_")) && !key.contains("_cache_"))
+    })
+}
+
+impl FlatKey {
+    fn matches_direction(&self, direction: &str) -> bool {
+        matches!(
+            (direction, &self.meter),
+            (
+                "input_cost_per_token",
+                Meter::Input(InputUnit::Token(TokenKind::Text))
+            ) | (
+                "output_cost_per_token",
+                Meter::Output(OutputUnit::Token(TokenKind::Text) | OutputUnit::ReasoningToken),
+            ) | (
+                "output_cost_per_reasoning_token",
+                Meter::Output(OutputUnit::ReasoningToken)
+            )
+        )
+    }
+}
+
 enum Above {
     None,
     PromptTokens(u64),
@@ -334,5 +362,20 @@ mod tests {
         #[case] expected: (Channel, When),
     ) {
         assert_eq!(FlatKey::parse(text).unwrap().channel_and_when(), expected);
+    }
+
+    #[rstest]
+    #[case::recognized_input_band("input_cost_per_token_above_8k_tokens_priority", &["input_cost_per_token"], true)]
+    #[case::reasoning_output("output_cost_per_reasoning_token", &["output_cost_per_token"], true)]
+    #[case::audio_input_is_not_text("input_cost_per_audio_token", &["input_cost_per_token"], false)]
+    #[case::audio_output_is_not_text("output_cost_per_audio_token", &["output_cost_per_token"], false)]
+    #[case::legacy_unknown_suffix("input_cost_per_token_legacy", &["input_cost_per_token"], true)]
+    #[case::legacy_cache_variant("input_cost_per_token_cache_read", &["input_cost_per_token"], false)]
+    fn fallback_direction_matches_legacy_cleanup(
+        #[case] key: &str,
+        #[case] directions: &[&str],
+        #[case] expected: bool,
+    ) {
+        assert_eq!(matches_fallback_direction(key, directions), expected);
     }
 }

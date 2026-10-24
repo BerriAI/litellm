@@ -113,7 +113,6 @@ def test_core_wheel_metadata_and_resources(distributions: tuple[Path, Path]) -> 
                 for requirement in (Requirement(item),)
                 if requirement.marker is None or requirement.marker.evaluate(environment)
             }
-        assert "litellm/model_prices_and_context_window_backup.json" in names
         assert "litellm/router_strategy/complexity_router/fuse_presets.json" in names
         assert "litellm/proxy/proxy_cli.py" in names
         assert any(n.startswith("litellm/rust_bridge/_native.") and n.endswith((".so", ".pyd")) for n in names)

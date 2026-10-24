@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
@@ -19,7 +20,6 @@ from litellm.types.utils import SearchFreeRequests
 
 REPO_ROOT = Path(__file__).parents[2]
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
-BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
 
 @pytest.fixture(scope="module")
@@ -61,11 +61,6 @@ def _thinking_capabilities(prices: Mapping[str, JsonValue], key: str) -> _Copilo
     return _CopilotThinkingCapabilities.model_validate(prices[key])
 
 
-def _github_copilot_catalog_rows(path: Path) -> Mapping[str, JsonValue]:
-    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
-    return MappingProxyType({key: value for key, value in prices.items() if key.startswith("github_copilot/")})
-
-
 _THINKING_KEYS: Final[tuple[str, ...]] = (
     "supports_reasoning",
     "supports_adaptive_thinking",
@@ -78,10 +73,9 @@ def _anthropic_counterpart(key: str) -> str:
     return key.removeprefix("github_copilot/").removesuffix("-fast").replace(".", "-")
 
 
-@pytest.mark.parametrize(("path",), [(PRICES_PATH,), (BACKUP_PRICES_PATH,)], ids=("main", "backup"))
-def test_github_copilot_rows_derive_mode_and_max_tokens_from_their_endpoints(path: Path) -> None:
-    rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(path)
-    assert rows, f"No GitHub Copilot endpoint rows found in {path}"
+def test_github_copilot_rows_derive_mode_and_max_tokens_from_their_endpoints() -> None:
+    rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(PRICES_PATH)
+    assert rows, f"No GitHub Copilot endpoint rows found in {PRICES_PATH}"
     assert {key: (row.mode, row.max_tokens) for key, row in rows.items()} == {
         key: (
             "chat" if "/v1/chat/completions" in row.supported_endpoints else "responses",
@@ -89,10 +83,6 @@ def test_github_copilot_rows_derive_mode_and_max_tokens_from_their_endpoints(pat
         )
         for key, row in rows.items()
     }
-
-
-def test_github_copilot_backup_rows_match_the_main_catalog() -> None:
-    assert _github_copilot_catalog_rows(PRICES_PATH) == _github_copilot_catalog_rows(BACKUP_PRICES_PATH)
 
 
 def test_github_copilot_rows_resolve_through_get_model_info() -> None:
@@ -163,10 +153,9 @@ def find_duplicate_keys(path: Path) -> list[str]:
     return duplicates
 
 
-@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-def test_price_map_has_no_duplicate_keys(path: Path):
-    assert find_duplicate_keys(path) == [], (
-        f"{path.name} defines the same key twice; JSON parsers keep only the last "
+def test_price_map_has_no_duplicate_keys():
+    assert find_duplicate_keys(PRICES_PATH) == [], (
+        f"{PRICES_PATH.name} defines the same key twice; JSON parsers keep only the last "
         "occurrence, so the earlier entry's fields are silently dropped. This is what "
         "a clean text merge of two branches that both added a model looks like: "
         "deduplicate the keys into one entry"
@@ -466,13 +455,12 @@ def cache_read_is_tenth_of_input(entry: Mapping[str, object]) -> bool:
     )
 
 
-@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-def test_active_mistral_chat_rows_price_cache_reads_below_input(path: Path):
+def test_active_mistral_chat_rows_price_cache_reads_below_input():
     """A Mistral chat row without a cache-read rate bills cached prompt tokens at zero, so every
     active priced row must carry one, and it must be cheaper than a fresh input token. Mistral
     bills cached tokens at 10% of the input price for every model (docs.mistral.ai/studio/
     conversations/advanced/prompt-caching, read 2026-09-18), so the ratio is checked as well."""
-    rows: Mapping[str, object] = json.loads(path.read_text())
+    rows: Mapping[str, object] = json.loads(PRICES_PATH.read_text())
     drifted: Final = [
         f"{name}: cache_read={entry.get('cache_read_input_token_cost')} input={entry.get('input_cost_per_token')}"
         for name, entry in rows.items()
@@ -529,12 +517,11 @@ def deepseek_off_peak_drift(entry: Mapping[str, object]) -> str | None:
     return f"off-peak rates {halved} are not half of the listed rates" if mismatched else None
 
 
-@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
+def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours():
     """DeepSeek charges half its listed rate outside 01:00-04:00 and 06:00-10:00 UTC Monday to
     Friday (api-docs.deepseek.com/quick_start/pricing, read 2026-09-19), so every row on that
     pricing page carries an off_peak_pricing block with those windows and the halved rates."""
-    rows: Mapping[str, object] = json.loads(path.read_text())
+    rows: Mapping[str, object] = json.loads(PRICES_PATH.read_text())
     drifted: Final = {
         name: deepseek_off_peak_drift(entry)
         for name in DEEPSEEK_PRICED_ROWS
@@ -544,11 +531,10 @@ def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
     assert all(name in rows for name in DEEPSEEK_PRICED_ROWS)
 
 
-@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-def test_tencent_tokenhub_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
+def test_tencent_tokenhub_deepseek_rows_bill_half_rate_outside_weekday_peak_hours():
     """Tencent TokenHub applies the DeepSeek weekday peak windows and half-rate off-peak prices
     to these models (tencentcloud.com/document/product/1300/78937, read 2026-10-13)."""
-    rows: Mapping[str, object] = json.loads(path.read_text())
+    rows: Mapping[str, object] = json.loads(PRICES_PATH.read_text())
     drifted: Final = {
         name: deepseek_off_peak_drift(entry)
         for name in TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS
@@ -566,11 +552,10 @@ def test_tencent_tokenhub_deepseek_rows_bill_half_rate_outside_weekday_peak_hour
     assert invalid_timezones == ()
 
 
-@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-def test_tencent_tokenhub_glm_rows_match_published_metadata(path: Path):
+def test_tencent_tokenhub_glm_rows_match_published_metadata():
     """TokenHub publishes these prices and capabilities in its official model catalog and rate card
     (tencentcloud.com/document/product/1300/78934 and /78937, read 2026-10-13)."""
-    rows: Mapping[str, object] = json.loads(path.read_text())
+    rows: Mapping[str, object] = json.loads(PRICES_PATH.read_text())
     actual: Final = MappingProxyType(
         {
             name: (
@@ -598,11 +583,10 @@ def test_tencent_tokenhub_glm_rows_match_published_metadata(path: Path):
     assert invalid_metadata == ()
 
 
-@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-def test_tencent_tokenhub_kimi_rows_match_published_metadata(path: Path):
+def test_tencent_tokenhub_kimi_rows_match_published_metadata():
     """TokenHub publishes these Kimi prices and capabilities in its official model catalog and rate card
     (tencentcloud.com/document/product/1300/78934 and /78937, read 2026-10-13)."""
-    rows: Mapping[str, object] = json.loads(path.read_text())
+    rows: Mapping[str, object] = json.loads(PRICES_PATH.read_text())
     actual: Final = MappingProxyType(
         {
             name: (
@@ -635,9 +619,8 @@ def test_tencent_tokenhub_kimi_rows_match_published_metadata(path: Path):
 
 
 class TestBedrockClaude35SonnetContextWindow:
-    @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-    def test_bare_model_ids_match_us_and_eu_siblings(self, path: Path):
-        rows = json.loads(path.read_text())
+    def test_bare_model_ids_match_us_and_eu_siblings(self):
+        rows = json.loads(PRICES_PATH.read_text())
         for model in (
             "anthropic.claude-3-5-sonnet-20240620-v1:0",
             "anthropic.claude-3-5-sonnet-20241022-v2:0",
@@ -645,9 +628,8 @@ class TestBedrockClaude35SonnetContextWindow:
             assert rows[model]["max_input_tokens"] == rows[f"us.{model}"]["max_input_tokens"]
             assert rows[model]["max_input_tokens"] == rows[f"eu.{model}"]["max_input_tokens"]
 
-    @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-    def test_bare_model_ids_have_200k_context_window(self, path: Path):
-        rows = json.loads(path.read_text())
+    def test_bare_model_ids_have_200k_context_window(self):
+        rows = json.loads(PRICES_PATH.read_text())
         # Claude 3.5 Sonnet context window is 200K tokens, https://www.anthropic.com/news/claude-3-5-sonnet (accessed 2026-10-13)
         for model in (
             "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -655,9 +637,8 @@ class TestBedrockClaude35SonnetContextWindow:
         ):
             assert rows[model]["max_input_tokens"] == 200000
 
-    @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-    def test_bare_model_ids_have_no_above_200k_pricing(self, path: Path):
-        rows = json.loads(path.read_text())
+    def test_bare_model_ids_have_no_above_200k_pricing(self):
+        rows = json.loads(PRICES_PATH.read_text())
         above_200k_fields = (
             "input_cost_per_token_above_200k_tokens",
             "output_cost_per_token_above_200k_tokens",
@@ -715,13 +696,12 @@ def unregistered_providers(rows: Mapping[str, object]) -> list[str]:
     )
 
 
-@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-def test_every_cost_map_provider_is_registered(path: Path):
-    assert unregistered_providers(json.loads(path.read_text())) == [], (
-        f"{path.name} carries a litellm_provider whose models a `<provider>/*` grant does not list. A new provider "
-        "needs a `<provider>_models` set in litellm/__init__.py, filled in _populate_provider_model_sets and listed "
-        "in _build_models_by_provider. A new `<provider>-<family>` label needs its rows added to a set that "
-        "`models_by_provider[<provider>]` includes"
+def test_every_cost_map_provider_is_registered():
+    assert unregistered_providers(json.loads(PRICES_PATH.read_text())) == [], (
+        f"{PRICES_PATH.name} carries a litellm_provider whose models a `<provider>/*` grant does not list. "
+        "A new provider needs a `<provider>_models` set in litellm/__init__.py, filled in "
+        "_populate_provider_model_sets and listed in _build_models_by_provider. A new `<provider>-<family>` label "
+        "needs its rows added to a set that `models_by_provider[<provider>]` includes"
     )
 
 
@@ -750,9 +730,8 @@ def _search_free_requests_rows(path: Path) -> Mapping[str, dict[str, JsonValue]]
     )
 
 
-@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-def test_search_free_requests_rows_are_grounding_rows_with_one_allowance_per_group(path: Path) -> None:
-    rows = _search_free_requests_rows(path)
+def test_search_free_requests_rows_are_grounding_rows_with_one_allowance_per_group() -> None:
+    rows = _search_free_requests_rows(PRICES_PATH)
     assert rows
     allowances = {
         key: TypeAdapter(SearchFreeRequests).validate_python(row["search_free_requests"]) for key, row in rows.items()
@@ -766,17 +745,12 @@ def test_search_free_requests_rows_are_grounding_rows_with_one_allowance_per_gro
         assert len(same_group) == 1, (group, same_group)
 
 
-def test_search_free_requests_backup_rows_match_the_main_catalog() -> None:
-    assert _search_free_requests_rows(BACKUP_PRICES_PATH) == _search_free_requests_rows(PRICES_PATH)
-
-
-@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(path: Path):
+def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata():
     """Volcengine Ark lists doubao-seed-2-1-pro-260915 at 6 / 30 CNY per million input / output tokens with
     cache hits at 1.2 (ark.volcengine.com model detail and docs.volcengine.com/docs/82379/1544106, read
     2026-10-20), a 1024k context window and a 256k output cap. USD rows use the 6.9565 CNY/USD rate of the
     sibling 260628 row."""
-    rows: Mapping[str, object] = json.loads(path.read_text())
+    rows: Mapping[str, object] = json.loads(PRICES_PATH.read_text())
     entry = rows.get("volcengine/doubao-seed-2-1-pro-260915")
     assert isinstance(entry, dict)
     assert entry["litellm_provider"] == "volcengine"
@@ -790,7 +764,10 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     assert entry["cache_read_input_token_cost"] == pytest.approx(1.2 / 6.9565 / 1_000_000, rel=1e-4)
     sibling = rows["volcengine/doubao-seed-2-1-pro-260628"]
     assert isinstance(sibling, dict)
-    assert all(entry[key] == sibling[key] for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+    assert all(
+        entry[key] == sibling[key]
+        for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    )
 
 
 def _bedrock_gpt_oss_rows(prices: Mapping[str, JsonValue]) -> tuple[str, ...]:
@@ -801,9 +778,13 @@ def _bedrock_gpt_oss_rows(prices: Mapping[str, JsonValue]) -> tuple[str, ...]:
     )
 
 
-@pytest.mark.parametrize("path", [PRICES_PATH, BACKUP_PRICES_PATH], ids=["main", "backup"])
-def test_bedrock_gpt_oss_rows_declare_vision_support_like_their_safeguard_siblings(path: Path) -> None:
-    prices: Final = json.loads(path.read_text())
+@pytest.mark.parametrize(
+    "catalog_bytes",
+    [PRICES_PATH.read_bytes(), GetModelCostMap.read_local_model_cost_map_bytes()],
+    ids=["main", "bundled"],
+)
+def test_bedrock_gpt_oss_rows_declare_vision_support_like_their_safeguard_siblings(catalog_bytes: bytes) -> None:
+    prices: Final = json.loads(catalog_bytes)
     rows: Final = _bedrock_gpt_oss_rows(prices)
     assert rows, "no Bedrock gpt-oss rows found"
     reference: Final = prices["openai.gpt-oss-safeguard-120b"]["supports_vision"]

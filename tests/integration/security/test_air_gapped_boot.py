@@ -9,7 +9,7 @@ from integration._support.client import Gateway, string_value
 from integration._support.forward_proxy import refusing_forward_proxy
 from integration._support.process import owned_proxy
 
-_BUNDLED_COST_MAP: Final = Path(__file__).resolve().parents[3] / "litellm/model_prices_and_context_window_backup.json"
+_BUNDLED_COST_MAP: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
 
 
 def _git_blob_id(body: bytes) -> str:

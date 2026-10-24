@@ -24,6 +24,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     configured_injection_points,
     supports_openai_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _convert_to_bedrock_tool_call_invoke,
     convert_to_anthropic_tool_invoke,
@@ -4153,9 +4154,7 @@ class TestPromptCacheBreakpointCapability:
 
     @pytest.fixture(autouse=True)
     def _bundled_model_map(self, monkeypatch):
-        bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
-        with open(bundled) as handle:
-            monkeypatch.setattr(litellm, "model_cost", json.load(handle))
+        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
         litellm.utils.cached_get_model_info_helper.cache_clear()
         yield
         litellm.utils.cached_get_model_info_helper.cache_clear()
@@ -4387,9 +4386,7 @@ class TestBedrockMantleGptShipsTheOpenAIDialect:
 
     @pytest.fixture(autouse=True)
     def _bundled_model_map(self, monkeypatch):
-        bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
-        with open(bundled) as handle:
-            monkeypatch.setattr(litellm, "model_cost", json.load(handle))
+        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
         litellm.utils.cached_get_model_info_helper.cache_clear()
         yield
         litellm.utils.cached_get_model_info_helper.cache_clear()

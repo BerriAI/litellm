@@ -1,10 +1,8 @@
 import json
 import uuid
 from hashlib import sha256
-from pathlib import Path
 from typing import Final
 
-import litellm
 import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
@@ -12,11 +10,11 @@ from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI
 from openai.types import ContainerCreateResponse
 
-# run.py sets LITELLM_LOCAL_MODEL_COST_MAP=True and reads model_prices_and_context_window_backup.json
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+# run.py sets LITELLM_LOCAL_MODEL_COST_MAP=True, so the proxy serves the map embedded in the native extension
 CODE_INTERPRETER_SESSION_COST: Final = float(
-    json.loads((Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json").read_text())[
-        "openai/container"
-    ]["code_interpreter_cost_per_session"]
+    GetModelCostMap.load_local_model_cost_map()["openai/container"]["code_interpreter_cost_per_session"]
 )
 PROVIDER_KEY: Final = "synthetic-container-key"
 

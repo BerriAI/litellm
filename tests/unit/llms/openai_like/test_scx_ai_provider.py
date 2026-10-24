@@ -138,34 +138,6 @@ class TestSCXAIProviderConfig:
         assert router.model_list[0]["model_name"] == "scx-chat"
 
 
-class TestSCXAIModelMetadata:
-    SCX_MODELS = (
-        "scx-ai/DeepSeek-V4.1-flash",
-        "scx-ai/GLM-5.2",
-        "scx-ai/GLM-5.3",
-        "scx-ai/Kimi-K3",
-        "scx-ai/Qwen3.8-Max",
-    )
-    VISION_MODELS = ("scx-ai/DeepSeek-V4.1-flash", "scx-ai/Qwen3.8-Max")
-
-    @staticmethod
-    def _load(path_parts):
-        import json
-        from pathlib import Path
-
-        json_path = Path(__file__).parents[4].joinpath(*path_parts)
-        with open(json_path) as f:
-            return json.load(f)
-
-
-    def test_scx_ai_models_synced_to_backup(self):
-        model_cost = self._load(("model_prices_and_context_window.json",))
-        backup = self._load(("litellm", "model_prices_and_context_window_backup.json"))
-        for model in self.SCX_MODELS:
-            assert model in backup, f"{model} missing from backup json"
-            assert backup[model] == model_cost[model], f"{model} differs between root and backup json"
-
-
 class TestSCXAIDashboardRegistration:
     @staticmethod
     def _provider_create_fields():
