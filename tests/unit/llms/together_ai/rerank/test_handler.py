@@ -1,5 +1,6 @@
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from typing import Final
 
 import httpx
 import pytest
@@ -8,6 +9,8 @@ from pydantic import ValidationError
 
 import litellm
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
+from litellm.llms.together_ai.rerank.transformation import TogetherAIRerankConfig
+from litellm.types.rerank import RerankBilledUnits
 
 API_BASE = "https://api.together.example/v1"
 RERANKED = {
@@ -94,3 +97,37 @@ def test_rerank_without_results_is_a_value_error(rerank_route: respx.Route):
 
     with pytest.raises(ValueError, match="No results found"):
         _rerank(is_async=False)
+
+
+@pytest.mark.parametrize(
+    ("usage_fields", "expected_billed_units"),
+    (
+        pytest.param({}, {}, id="missing-usage"),
+        pytest.param({"usage": {}}, {}, id="empty-usage"),
+        pytest.param({"usage": {"search_units": 1, "cost": None}}, {"search_units": 1, "cost": None}, id="null-cost"),
+        pytest.param({"usage": {"search_units": 1, "cost": 0.0}}, {"search_units": 1, "cost": 0.0}, id="free"),
+        pytest.param(
+            {
+                "usage": {
+                    "search_units": 2,
+                    "total_tokens": 7,
+                    "input_tokens": 5,
+                    "output_tokens": 2,
+                    "cost": 0.001,
+                    "extra": 9,
+                }
+            },
+            {"search_units": 2, "total_tokens": 7, "cost": 0.001},
+            id="charged-with-token-counts",
+        ),
+    ),
+)
+def test_together_ai_rerank_preserves_billed_units(
+    usage_fields: Mapping[str, object], expected_billed_units: RerankBilledUnits
+) -> None:
+    response: Final = TogetherAIRerankConfig().transform_response(
+        {"results": [{"index": 0, "relevance_score": 0.9}], **usage_fields}
+    )
+
+    assert response.meta is not None
+    assert response.meta["billed_units"] == expected_billed_units
