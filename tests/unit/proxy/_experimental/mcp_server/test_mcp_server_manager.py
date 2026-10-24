@@ -19906,8 +19906,8 @@ def catalog_guardrail(monkeypatch):
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     monkeypatch.setattr(
         litellm_llms,
-        "endpoint_guardrail_translation_mappings",
-        litellm_llms.endpoint_guardrail_translation_mappings,
+        "guardrail_translation_discovery",
+        litellm_llms.guardrail_translation_discovery,
     )
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     proxy_logging_obj.slack_alerting_instance.send_alert = AsyncMock()
