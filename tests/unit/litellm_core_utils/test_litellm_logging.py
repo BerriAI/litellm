@@ -11825,7 +11825,7 @@ def test_get_additional_headers():
     assert additional_logging_headers.get("llm_provider-anthropic-ratelimit-requests-reset") == "2024-10-29T23:57:40Z"
 
 def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
-    for field in StandardLoggingMetadata.__annotations__.keys():
+    for field in StandardLoggingMetadata.__required_keys__:
         assert field in standard_logging_metadata
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")

@@ -79,6 +79,7 @@ from litellm.constants import (
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    SILENT_EXPERIMENT_METADATA_KEY,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail, is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
@@ -411,6 +412,7 @@ from litellm.types.router import (
     RoutingPlugin,
     RoutingStrategy,
     SearchToolTypedDict,
+    SilentExperimentMarker,
     TaggedPreRoutingStrategy,
     holds_secret_pointer,
 )
@@ -3227,6 +3229,12 @@ class Router:
         silent_kwargs["metadata"].pop("litellm_parent_otel_span", None)
 
         silent_kwargs["metadata"]["is_silent_experiment"] = True
+        silent_kwargs["metadata"][SILENT_EXPERIMENT_METADATA_KEY] = SilentExperimentMarker.MIRRORED
+        if "litellm_metadata" in silent_kwargs and isinstance(silent_kwargs["litellm_metadata"], dict):
+            silent_kwargs["litellm_metadata"] = {
+                **silent_kwargs["litellm_metadata"],
+                SILENT_EXPERIMENT_METADATA_KEY: SilentExperimentMarker.MIRRORED,
+            }
 
         # Pop logging objects and call IDs to ensure a fresh logging context
         # This prevents collisions in the Proxy's database (spend_logs)

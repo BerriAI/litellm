@@ -66,6 +66,14 @@ from .utils import (
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
 
 
+class SilentExperimentMarker(str, enum.Enum):
+    MIRRORED = "mirrored"
+
+
+class SilentExperimentFlag(TypedDict, total=False):
+    is_silent_experiment: ReadOnly[bool]
+
+
 class FallbackSkipReason(str, enum.Enum):
     NOT_AUTHORIZED = "not_authorized"
     OVER_BUDGET = "over_budget"
