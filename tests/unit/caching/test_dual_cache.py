@@ -6,10 +6,20 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeRedis as SyncFakeRedis
+from fakeredis import FakeServer
+from fakeredis.aioredis import FakeRedis
 
+from litellm._service_logger import ServiceLogging
+from litellm.caching.base_cache import BaseCache
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache, _redis_circuit_breaker_guard, _redis_circuit_breaker_guard_sync
+from litellm.caching.redis_cache import (
+    RedisCache,
+    RedisCircuitBreaker,
+    _redis_circuit_breaker_guard,
+    _redis_circuit_breaker_guard_sync,
+)
 from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 from litellm.types.caching import RedisPipelineIncrementOperation
 
@@ -609,6 +619,10 @@ class _OpenBreakerRedis:
         raise AssertionError("never reached")
 
     @_redis_circuit_breaker_guard
+    async def async_get_and_refresh_ttl_or_raise(self, key: str, ttl: int) -> object:
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
     async def async_batch_get_cache(self, key_list, **kwargs):
         raise AssertionError("never reached")
 
@@ -1025,3 +1039,155 @@ async def test_async_batch_reads_of_missing_keys_hit_redis_once_per_expiry_windo
     dual_cache.last_redis_batch_access_time.update({key: time.time() - 61 for key in keys})
     await dual_cache.async_batch_get_cache(keys)
     assert redis_cache.async_batch_get_cache.await_count == 2
+
+
+class _RecordingRedis:
+    def __init__(self, values: dict[str, object]) -> None:
+        self.values = values
+
+    async def async_get_and_refresh_ttl_or_raise(self, key: str, ttl: int) -> object:
+        return self.values.get(key)
+
+
+class _FakeServerRedis(RedisCache):
+    def __init__(self, server: FakeServer) -> None:
+        BaseCache.__init__(self)
+        self._server = server
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=60)
+        self.namespace = None
+        self.service_logger_obj = ServiceLogging()
+
+    def init_async_client(self) -> FakeRedis:
+        return FakeRedis(server=self._server)
+
+
+def _disconnected_server() -> FakeServer:
+    server = FakeServer()
+    server.connected = False
+    return server
+
+
+class _UnreachableRedis(_FakeServerRedis):
+    def __init__(self) -> None:
+        super().__init__(_disconnected_server())
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_serves_redis_over_the_local_copy():
+    """The ordinary read serves this process's copy first; the Redis-first read is for a value another
+    process may have replaced since this one last wrote it, and it brings this process's copy up to date."""
+    cache = DualCache(redis_cache=_RecordingRedis({"pin": "from-redis"}))
+    await cache.in_memory_cache.async_set_cache("pin", "from-memory")
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) == "from-redis"
+    assert await cache.async_get_cache("pin") == "from-redis"
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_treats_a_redis_miss_as_a_miss_and_drops_the_local_copy():
+    """Redis is the shared truth, so a copy it no longer holds must not come back from this process
+    once Redis goes down or the next continuation is not pinnable."""
+    cache = DualCache(redis_cache=_RecordingRedis({}))
+    await cache.in_memory_cache.async_set_cache("pin", "from-memory")
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) is None
+    assert await cache.in_memory_cache.async_get_cache("pin") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redis_cache", [None, _UnreachableRedis()], ids=["no_redis", "redis_unreachable"])
+async def test_dual_cache_async_get_cache_redis_first_keeps_the_local_deadline_when_redis_cannot_serve(
+    redis_cache: RedisCache | None,
+):
+    clock = MagicMock(return_value=1_000.0)
+    cache = DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis_cache)
+    await cache.in_memory_cache.async_set_cache("pin", "local", ttl=300)
+    clock.return_value = 1_200.0
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) == "local"
+    clock.return_value = 1_301.0
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) is None
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_falls_back_to_the_local_copy_when_redis_raises():
+    cache = DualCache(redis_cache=_OpenBreakerRedis())
+    await cache.in_memory_cache.async_set_cache("pin", "local")
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) == "local"
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_serves_the_local_copy_while_redis_is_unreachable():
+    """The plain Redis read swallows a connection failure and answers None, which the Redis-first read
+    must not take for a miss while this process still holds the value and the breaker is still closed."""
+    redis_cache = _UnreachableRedis()
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+    await cache.in_memory_cache.async_set_cache("pin", "local")
+    assert await redis_cache.async_get_cache("pin") is None
+    assert not redis_cache._circuit_breaker.is_open()
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) == "local"
+
+
+def _garbled_server() -> FakeServer:
+    server = FakeServer()
+    SyncFakeRedis(server=server).set("pin", b"not{valid")
+    return server
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_treats_an_undecodable_redis_value_as_a_miss():
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_FakeServerRedis(_garbled_server()))
+    await cache.in_memory_cache.async_set_cache("pin", "local")
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) is None
+    assert await cache.in_memory_cache.async_get_cache("pin") is None
+
+
+class _RedisThatGoesDown(_RecordingRedis):
+    def __init__(self, values: dict[str, object]) -> None:
+        super().__init__(values)
+        self.down = False
+
+    async def async_get_and_refresh_ttl_or_raise(self, key: str, ttl: int) -> object:
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        if self.down:
+            raise RedisConnectionError("redis is down")
+        return await super().async_get_and_refresh_ttl_or_raise(key, ttl)
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_keeps_a_copy_of_the_hit_for_the_outage_fallback():
+    """A replica that only ever read the pin from Redis must still hold it once Redis goes down, and
+    the copy carries the caller's TTL so it never outlives the pin it mirrors."""
+    redis = _RedisThatGoesDown({"pin": "from-redis"})
+    clock = MagicMock(return_value=1_000.0)
+    cache = DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) == "from-redis"
+
+    redis.down = True
+    clock.return_value = 1_299.0
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) == "from-redis"
+    clock.return_value = 1_301.0
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) is None
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_restarts_the_pin_ttl_in_redis():
+    """The read is the pinned path's only Redis round trip, so it restarts the TTL in Redis too, or an
+    active session's pin would expire mid-conversation on every replica."""
+    server = FakeServer()
+    await FakeRedis(server=server).set("pin", '"v"', ex=30)
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_FakeServerRedis(server))
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) == "v"
+    assert await FakeRedis(server=server).ttl("pin") == 300
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_costs_one_failed_redis_call_per_read_during_an_outage():
+    """Each pinned read waits on Redis once, so an outage stalls a request on one failing call and the
+    breaker opens after its threshold of reads, not after half of them."""
+    redis_cache = _UnreachableRedis()
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+    await cache.in_memory_cache.async_set_cache("pin", "local")
+    for _ in range(4):
+        assert await cache.async_get_cache_redis_first("pin", ttl=300) == "local"
+    assert not redis_cache._circuit_breaker.is_open()
+    assert await cache.async_get_cache_redis_first("pin", ttl=300) == "local"
+    assert redis_cache._circuit_breaker.is_open()
