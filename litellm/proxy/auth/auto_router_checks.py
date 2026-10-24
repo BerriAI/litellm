@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Final
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+from litellm.router_utils.auto_router_model_naming import is_complexity_router_model
+from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -29,7 +31,16 @@ async def authorize_member_auto_router_inference(
     if deployment is None:
         return
     model_info: Final = _mapping(deployment.get("model_info"))
-    if model_info is None or model_info.get("member_auto_router") is not True:
+    params: Final = _mapping(deployment.get("litellm_params"))
+    member_router: Final = model_info is not None and model_info.get("member_auto_router") is True
+    team_router: Final = (
+        model_info is not None
+        and bool(model_info.get("team_id"))
+        and params is not None
+        and isinstance(model := params.get("model"), str)
+        and is_complexity_router_model(model)
+    )
+    if model_info is None or not (member_router or team_router):
         return
 
     from fastapi import HTTPException
@@ -51,6 +62,8 @@ async def authorize_member_auto_router_inference(
 
     metadata: Final = _mapping(request_kwargs.get(get_metadata_variable_name_from_kwargs(request_kwargs)))
     actor: Final = metadata.get("user_api_key_auth") if metadata is not None else None
+    if not member_router and isinstance(actor, UserAPIKeyAuth) and actor.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
     team_id: Final = model_info.get("team_id")
     if not isinstance(actor, UserAPIKeyAuth) or not isinstance(team_id, str) or not team_id:
         raise HTTPException(status_code=403, detail="Member auto-routers require authenticated team access")
@@ -79,14 +92,17 @@ async def authorize_member_auto_router_inference(
         raise HTTPException(status_code=403, detail="You are no longer a member of this auto-router's team")
     if team.blocked:
         raise HTTPException(status_code=403, detail="This auto router's team is blocked.")
-    params: Final = _mapping(deployment.get("litellm_params"))
     if params is None:
         raise HTTPException(status_code=403, detail="The member auto-router configuration is invalid")
     raw_config: Final = _mapping(params.get("complexity_router_config"))
     if raw_config is None:
         raise HTTPException(status_code=403, detail="The member auto-router configuration is invalid")
     default_model: Final = params.get("complexity_router_default_model")
-    config: Final = validate_member_auto_router_config(raw_config)
+    config: Final = (
+        validate_member_auto_router_config(raw_config)
+        if member_router
+        else RequestComplexityRouterConfig.model_validate(raw_config)
+    )
     membership: Final = (
         await get_team_membership(
             user_id=actor.user_id,
@@ -128,7 +144,7 @@ async def authorize_member_auto_router_inference(
         default_model=default_model if isinstance(default_model, str) else None,
         user_api_key_dict=actor,
         team=team,
-        prisma_client=None,
+        prisma_client=prisma_client,
         llm_router=llm_router,
         dependency_objects=MemberAutoRouterDependencyObjects(
             membership=membership, organization=organization, project=project
