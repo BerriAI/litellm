@@ -372,6 +372,20 @@ def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provide
     )
 
 
+@dataclass(frozen=True, slots=True)
+class TokenRates:
+    input_rate: float
+    output_rate: float
+    cache_read_rate: float
+    cache_creation_rate: float
+    reasoning_rate: float | None
+    cache_creation_rates_by_ttl: Mapping[str, float] = MappingProxyType({})
+
+    @property
+    def billed_reasoning_rate(self) -> float:
+        return self.output_rate if self.reasoning_rate is None else self.reasoning_rate
+
+
 def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> dict[str, object] | None:
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if not isinstance(tiered_pricing, list) or not tiered_pricing:
@@ -392,7 +406,7 @@ def _get_tiered_reasoning_rate(model_info: ModelInfo, usage: Usage) -> float | N
     return tier_rate(tier, "output_cost_per_reasoning_token", "output_cost_per_token")
 
 
-def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> "tuple[TokenRates, dict[str, object]] | None":
+def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[TokenRates, dict[str, object]] | None:
     """
     Resolve the base rates from a model's ``tiered_pricing`` table, if it has one.
 
@@ -544,20 +558,6 @@ def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None =
         if _is_within_off_peak_window(rule_windows, reference_utc):
             return True
     return False
-
-
-@dataclass(frozen=True, slots=True)
-class TokenRates:
-    input_rate: float
-    output_rate: float
-    cache_read_rate: float
-    cache_creation_rate: float
-    reasoning_rate: float | None
-    cache_creation_rates_by_ttl: Mapping[str, float] = MappingProxyType({})
-
-    @property
-    def billed_reasoning_rate(self) -> float:
-        return self.output_rate if self.reasoning_rate is None else self.reasoning_rate
 
 
 def resolve_explicit_cache_read_cost_rate(
