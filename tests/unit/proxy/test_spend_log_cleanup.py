@@ -258,8 +258,8 @@ async def test_cleanup_old_spend_logs_batch_deletion():
     _wire_tx(mock_db)
 
     # Mock execute_raw to return deleted counts (3 spend-log batches, then the
-    # tool-index cleanup's first batch returning 0)
-    mock_db.execute_raw = AsyncMock(side_effect=[1000, 500, 0, 0])
+    # tool-index and guardrail-index cleanups' first batches returning 0)
+    mock_db.execute_raw = AsyncMock(side_effect=[1000, 500, 0, 0, 0])
 
     # Wire up mocks
     mock_prisma_client.db = mock_db
@@ -279,7 +279,7 @@ async def test_cleanup_old_spend_logs_batch_deletion():
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
     # Validate batching and deletion via raw SQL
-    assert mock_db.execute_raw.call_count == 4
+    assert mock_db.execute_raw.call_count == 5
 
     # Check the first call argument
     call_args_sql = mock_db.execute_raw.call_args_list[0][0][0]
@@ -417,7 +417,7 @@ async def test_cleanup_uses_delete_when_not_partitioned():
 
     mock_prisma_client = MagicMock()
     _wire_tx(mock_prisma_client.db)
-    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[10, 0, 0])
+    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[10, 0, 0, 0])
 
     partition_manager = MagicMock()
     partition_manager.is_partitioned = AsyncMock(return_value=False)
@@ -436,7 +436,7 @@ async def test_cleanup_uses_delete_when_not_partitioned():
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
     partition_manager.drop_partitions_older_than.assert_not_awaited()
-    assert mock_prisma_client.db.execute_raw.await_count == 3
+    assert mock_prisma_client.db.execute_raw.await_count == 4
     delete_sql = mock_prisma_client.db.execute_raw.call_args_list[0][0][0]
     assert 'DELETE FROM "LiteLLM_SpendLogs"' in delete_sql
 
@@ -600,6 +600,46 @@ async def test_delete_old_tool_index_rows_deletes_on_composite_key():
     assert 'WHERE ("request_id", "tool_name") IN' in delete_sql
     assert '"start_time" <' in delete_sql
     assert mock_db.execute_raw.call_args_list[0][0][1] == cutoff_date
+
+
+@pytest.mark.asyncio
+async def test_spend_log_retention_prunes_expired_guardrail_index_rows_on_the_same_cutoff():
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(return_value=0)
+    mock_prisma_client.db = mock_db
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    cleaner.pod_lock_manager = None
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    deletes = {
+        call.args[0].split('"')[1]: call
+        for call in mock_db.execute_raw.call_args_list
+        if call.args[0].lstrip().startswith("DELETE")
+    }
+    guardrail_delete = deletes.get("LiteLLM_SpendLogGuardrailIndex")
+    assert guardrail_delete is not None, f"no guardrail index delete was issued: {sorted(deletes)}"
+    assert 'WHERE ("request_id", "guardrail_id") IN' in guardrail_delete.args[0]
+    assert '"start_time" <' in guardrail_delete.args[0]
+    assert guardrail_delete.args[1] == deletes["LiteLLM_SpendLogs"].args[1]
+
+
+@pytest.mark.asyncio
+async def test_guardrail_index_is_not_pruned_when_spend_log_retention_is_unset():
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(return_value=0)
+    mock_prisma_client.db = mock_db
+    cleaner = SpendLogCleanup(general_settings={"maximum_health_check_retention_period": "7d"})
+    cleaner.pod_lock_manager = None
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    statements = [call.args[0] for call in mock_db.execute_raw.call_args_list]
+    assert not any("LiteLLM_SpendLogGuardrailIndex" in sql for sql in statements), statements
 
 
 @pytest.mark.asyncio
@@ -1524,7 +1564,7 @@ async def test_progress_reported_for_a_cancelled_run_is_that_run_only(monkeypatc
 
     mock_prisma_client = MagicMock()
     _wire_tx(mock_prisma_client.db)
-    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[150, 0, 0])
+    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[150, 0, 0, 0])
     cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
     cleaner.pod_lock_manager = None
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
@@ -1566,7 +1606,7 @@ async def test_a_size_pass_that_fires_while_an_age_pass_is_running_in_the_same_p
 
     age_cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
     age_cleaner.pod_lock_manager = None
-    size_cleaner = _size_cleaner({})
+    size_cleaner = _size_cleaner({"maximum_spend_logs_cleanup_max_batches": 3})
 
     slow_run = asyncio.ensure_future(age_cleaner.cleanup_old_spend_logs(slow_client))
     await asyncio.wait_for(first_batch_done.wait(), timeout=5)
@@ -1617,6 +1657,7 @@ async def test_spend_logs_backlog_cannot_starve_tool_index_cleanup():
     tables = [call[0][0].split('"')[1] for call in mock_db.execute_raw.call_args_list]
     assert tables.count("LiteLLM_SpendLogs") > 0
     assert tables.count("LiteLLM_SpendLogToolIndex") > 0, "tool index cleanup was starved by the spend-log backlog"
+    assert tables.count("LiteLLM_SpendLogGuardrailIndex") > 0, "guardrail index cleanup was starved by the backlog"
     assert elapsed < 2.5, f"splitting the budget must not extend the run: {elapsed}s"
 
 
@@ -1802,14 +1843,14 @@ async def test_size_pass_under_the_limit_issues_no_delete():
 async def test_size_pass_deletes_oldest_first_in_steps_until_the_live_estimate_is_under_the_target(caplog):
     """
     Over the limit, the pass turns the next step of oldest rows into a cutoff and runs the retention DELETE
-    for the spend logs and their tool-index rows, re-measuring after each step; it stops on the first
+    for the spend logs and their tool and guardrail index rows, re-measuring after each step; it stops on the first
     measurement under the target, not when the file size (which deletes never shrink) moves.
     """
     db = MagicMock()
     _wire_tx(db)
     # 3 GiB over 3000 rows is 1 MiB a row, so 2560 rows take it from 3 GiB to the 512 MiB target: one step
-    # of 3 batches; the tool index is cleaned on the same cutoff
-    db.execute_raw = AsyncMock(side_effect=[1000, 1000, 1000, 300, 0])
+    # of 3 batches; the tool and guardrail indexes are cleaned on the same cutoff
+    db.execute_raw = AsyncMock(side_effect=[1000, 1000, 1000, 300, 0, 200, 0])
     step_cutoff = datetime(2026, 9, 1, tzinfo=timezone.utc)
     allocated = 3 * 1024**3
     _wire_size_probes(db, [_storage(allocated, live=3000, dead=0)], cutoff=step_cutoff)
@@ -1821,18 +1862,22 @@ async def test_size_pass_deletes_oldest_first_in_steps_until_the_live_estimate_i
         await cleaner.cleanup_spend_logs_by_size(client)
 
     deletes = [(call[0][0], call[0][1:]) for call in db.deletes.call_args_list]
-    assert len(deletes) == 5
+    assert len(deletes) == 7
     assert 'DELETE FROM "LiteLLM_SpendLogs"' in deletes[0][0]
     assert 'WHERE "startTime" < $1' in deletes[0][0]
     assert deletes[0][1][0] == step_cutoff
     assert 'DELETE FROM "LiteLLM_SpendLogToolIndex"' in deletes[3][0]
     assert deletes[3][1][0] == step_cutoff
+    assert 'DELETE FROM "LiteLLM_SpendLogGuardrailIndex"' in deletes[5][0]
+    assert 'WHERE ("request_id", "guardrail_id") IN' in deletes[5][0]
+    assert deletes[5][1][0] == step_cutoff
     offset_query = next(call for call in db.query_raw.call_args_list if "OFFSET" in call[0][0])
     assert offset_query[0][1] == 3000
     summary = next(r.getMessage() for r in caplog.records if "Spend log cleanup run finished" in r.getMessage())
     assert "outcome=completed" in summary
     assert "LiteLLM_SpendLogs (size rule): deleted=3000 stop_reason=target_reached" in summary
     assert "LiteLLM_SpendLogToolIndex (size rule): deleted=300 stop_reason=target_reached" in summary
+    assert "LiteLLM_SpendLogGuardrailIndex (size rule): deleted=200 stop_reason=target_reached" in summary
     assert f"allocated_before={allocated}" in summary
     assert "estimated_live_before=3221225472" in summary
     assert "estimated_live_after=0" in summary
@@ -1841,11 +1886,30 @@ async def test_size_pass_deletes_oldest_first_in_steps_until_the_live_estimate_i
 
 
 @pytest.mark.asyncio
+async def test_size_pass_deletes_every_guardrail_row_under_the_step_cutoff_not_one_per_spend_log(caplog):
+    db = MagicMock()
+    _wire_tx(db)
+    # one step of 3 SpendLogs batches, but two guardrails per request leave twice as many guardrail rows under it
+    db.execute_raw = AsyncMock(side_effect=[1000, 1000, 1000, 0, 1000, 1000, 1000, 1000, 1000, 1000, 0])
+    _wire_size_probes(db, [_storage(3 * 1024**3, live=3000, dead=0)], cutoff=datetime(2026, 9, 1, tzinfo=timezone.utc))
+    client = MagicMock()
+    client.db = db
+    cleaner = _size_cleaner({"maximum_spend_logs_cleanup_target_size": "512MB"})
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+        await cleaner.cleanup_spend_logs_by_size(client)
+
+    summary = next(r.getMessage() for r in caplog.records if "Spend log cleanup run finished" in r.getMessage())
+    assert "LiteLLM_SpendLogs (size rule): deleted=3000" in summary, summary
+    assert "LiteLLM_SpendLogGuardrailIndex (size rule): deleted=6000" in summary, summary
+
+
+@pytest.mark.asyncio
 async def test_size_pass_stops_at_the_run_batch_cap_and_reports_how_far_above_the_target_it_is(caplog):
     db = MagicMock()
     _wire_tx(db)
     # 4 GiB over 4000 rows: 3584 rows must go to reach the 512 MiB target, the cap allows 3 batches
-    db.execute_raw = AsyncMock(side_effect=[1000, 1000, 1000, 0])
+    db.execute_raw = AsyncMock(side_effect=[1000, 1000, 1000, 0, 0])
     allocated = 4 * 1024**3
     saves = _wire_size_probes(db, [_storage(allocated, live=4000, dead=0)], cutoff=datetime.now(timezone.utc))
     client = MagicMock()
@@ -1857,7 +1921,7 @@ async def test_size_pass_stops_at_the_run_batch_cap_and_reports_how_far_above_th
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         await cleaner.cleanup_spend_logs_by_size(client)
 
-    assert db.deletes.await_count == 4
+    assert db.deletes.await_count == 5
     summary = next(r for r in caplog.records if "Spend log cleanup run finished" in r.getMessage())
     assert summary.levelno == logging.WARNING
     assert "outcome=batch_cap_reached" in summary.getMessage()
@@ -2019,7 +2083,7 @@ async def test_size_only_run_leaves_the_age_rules_to_the_retention_job():
     await cleaner.cleanup_spend_logs_by_size(client)
 
     tables = {call[0][0].split('"')[1] for call in db.deletes.call_args_list}
-    assert tables == {"LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex"}
+    assert tables == {"LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex", "LiteLLM_SpendLogGuardrailIndex"}
 
 
 @pytest.mark.asyncio
@@ -2199,7 +2263,11 @@ async def test_probe_storage_reads_the_catalog_row_for_both_tables_and_a_failed_
         20_000,
         0,
     )
-    assert prisma_client.db.query_raw.call_args.args[1] == ["LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex"]
+    assert prisma_client.db.query_raw.call_args.args[1] == [
+        "LiteLLM_SpendLogs",
+        "LiteLLM_SpendLogToolIndex",
+        "LiteLLM_SpendLogGuardrailIndex",
+    ]
 
     prisma_client.db.query_raw = AsyncMock(side_effect=RuntimeError("pg_stat_user_tables unavailable"))
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
