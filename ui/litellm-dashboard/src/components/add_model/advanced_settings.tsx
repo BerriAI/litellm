@@ -194,6 +194,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     label: tag.name,
                     description: tag.description || undefined,
                   }))}
+                  searchDescriptions={false}
                   allowCustomValues
                 />
               )}

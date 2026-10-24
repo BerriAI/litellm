@@ -39,6 +39,7 @@ const TagSelector: React.FC<TagSelectorProps> = ({ onChange, value, className, a
       loading={loading}
       className={className}
       allowCustomValues
+      searchDescriptions={false}
       options={tags.map((tag) => ({
         label: tag.name,
         value: tag.name,
