@@ -550,7 +550,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         title={`Spend Per ${capitalizedEntityLabel}`}
         action={
           <a
-            href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking"
+            href="https://docs.litellm.ai/docs/proxy/cost_tracking"
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
           >
             Track cost per {entityType}

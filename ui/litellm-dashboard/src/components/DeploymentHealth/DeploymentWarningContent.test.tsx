@@ -20,6 +20,12 @@ describe("deploymentWarningContent", () => {
     expect(screen.getByRole("link", { name: "sales@berri.ai" })).toHaveAttribute("href", "mailto:sales@berri.ai");
   });
 
+  it.each(["2026-10-20", "2026-10-01"])("should link a license expiring %s to the enterprise docs", (expiry) => {
+    expect(deploymentWarningContent(`license_expiry:${expiry}`, NOW).docsUrl).toBe(
+      "https://docs.litellm.ai/docs/enterprise",
+    );
+  });
+
   it("should tell admins which setting turns env credential login off", () => {
     render(<p>{deploymentWarningContent("env_credential_login", NOW).fix}</p>);
 
