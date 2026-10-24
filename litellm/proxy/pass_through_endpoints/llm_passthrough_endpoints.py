@@ -2806,6 +2806,9 @@ def _caller_headers_without_litellm_secrets(
     )
 
 
+caller_headers_without_litellm_secrets: Final = _caller_headers_without_litellm_secrets
+
+
 def _forwarded_headers_for_credentialless_vertex_passthrough(
     request: Request, user_api_key_dict: UserAPIKeyAuth
 ) -> Mapping[str, str]:

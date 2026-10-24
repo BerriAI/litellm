@@ -23,6 +23,23 @@ FLAG: Final = "LITELLM_DISABLE_LAZY_ROUTES"
 WARMUP_PATH: Final = "/lazy/warm/{name}"
 
 
+@pytest.mark.parametrize("root_path", ("", "/gateway"))
+@pytest.mark.parametrize("disable_lazy_routes", ("false", "true"))
+def test_codex_routes_enforce_credentials_on_cold_requests(
+    monkeypatch: pytest.MonkeyPatch, root_path: str, disable_lazy_routes: str
+) -> None:
+    monkeypatch.setenv(FLAG, disable_lazy_routes)
+    app: Final = FastAPI()
+    attach_lazy_features(app)
+    with TestClient(app, root_path=root_path) as client:
+        catalog: Final = client.get(f"{root_path}/backend-api/codex/models?client_version=synthetic-version")
+        response: Final = client.post(f"{root_path}/backend-api/codex/responses", json={"model": "synthetic-native"})
+        unrelated: Final = client.get(f"{root_path}/backend-api/codex/login")
+    assert catalog.status_code == 401
+    assert response.status_code == 401
+    assert unrelated.status_code == 404
+
+
 def test_cimd_metadata_is_available_before_any_oauth_request(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(FLAG, "false")
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")

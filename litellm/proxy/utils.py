@@ -51,6 +51,7 @@ from typing import (
 
 import anyio
 import httpx
+from httpx import Response as HTTPXResponse
 from typing_extensions import Never, ReadOnly, TypedDict
 
 from litellm import _custom_logger_compatible_callbacks_literal
@@ -4200,7 +4201,12 @@ class ProxyLogging:
         if not ProxyLogging.callback_capabilities().has_post_call_response_headers:
             return merged_headers
 
+        from litellm.proxy.pass_through_endpoints.common_utils import passthrough_logging_response
+
         try:
+            callback_response: Final = (
+                passthrough_logging_response(response) if isinstance(response, HTTPXResponse) else response
+            )
             # Build litellm_call_info — normalized routing metadata for callbacks
             litellm_call_info: Final = self._build_litellm_call_info(data=data, response=response)
 
@@ -4218,7 +4224,7 @@ class ProxyLogging:
                         result = await _callback.async_post_call_response_headers_hook(
                             data=data,
                             user_api_key_dict=user_api_key_dict,
-                            response=response,
+                            response=callback_response,
                             request_headers=request_headers,
                             litellm_call_info=litellm_call_info,
                         )
@@ -4227,7 +4233,7 @@ class ProxyLogging:
                         result = await _callback.async_post_call_response_headers_hook(
                             data=data,
                             user_api_key_dict=user_api_key_dict,
-                            response=response,
+                            response=callback_response,
                             request_headers=request_headers,
                         )
                     if result is not None:
