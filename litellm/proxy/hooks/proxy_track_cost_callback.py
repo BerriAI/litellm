@@ -61,7 +61,12 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     sanitize_error_information_for_spend_logs,
     should_store_prompts_and_responses_in_spend_logs,
 )
-from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP_KEY, BilledFailedAttempt, ProxyUpdateSpend
+from litellm.proxy.utils import (
+    REJECTED_BEFORE_REQUEST_SETUP,
+    REJECTED_BEFORE_REQUEST_SETUP_KEY,
+    BilledFailedAttempt,
+    ProxyUpdateSpend,
+)
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     CallTypes,
@@ -890,14 +895,12 @@ _REQUEST_DATA: Final = TypeAdapter(dict[str, object])
 
 
 def is_pre_routing_rejection(exception: Exception, request_data: Mapping[str, object]) -> bool:
-    """The pipeline stamps ``litellm_call_id`` only after auth, body parsing and model resolution succeed, and
-    before guardrails or routing run. A request that reaches the failure hook without one (or with one the
-    failure handler minted, see ``REJECTED_BEFORE_REQUEST_SETUP_KEY``) never had a provider considered. An unknown
-    model is the one later rejection that still never reached a provider."""
-    return (
-        REJECTED_BEFORE_REQUEST_SETUP_KEY in request_data
-        or "litellm_call_id" not in request_data
-        or isinstance(exception, ProxyModelNotFoundError)
+    """The pipeline sets up the logging object only after auth, body parsing and model resolution succeed, and
+    before guardrails or routing run. ``ProxyLogging._handle_logging_proxy_only_error`` marks a failure that
+    arrives without one with the ``REJECTED_BEFORE_REQUEST_SETUP`` sentinel, so that request never had a provider
+    considered. An unknown model is the one later rejection that still never reached a provider."""
+    return request_data.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is REJECTED_BEFORE_REQUEST_SETUP or isinstance(
+        exception, ProxyModelNotFoundError
     )
 
 

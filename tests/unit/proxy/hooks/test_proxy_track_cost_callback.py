@@ -32,7 +32,11 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.utils import ProxyUpdateSpend
+from litellm.proxy.utils import (
+    REJECTED_BEFORE_REQUEST_SETUP,
+    REJECTED_BEFORE_REQUEST_SETUP_KEY,
+    ProxyUpdateSpend,
+)
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 
@@ -3564,12 +3568,17 @@ async def test_batch_accounting_does_not_retry_after_a_search_allowance_update(m
     assert outcome.retryable_failure is False
 
 
-_PRE_ROUTING_REQUEST: Final[Mapping[str, object]] = {
+_ROUTED_REQUEST: Final[Mapping[str, object]] = {
     "model": "anthropic-haiku-4-5",
     "messages": [{"role": "user", "content": "hi"}],
     "proxy_server_request": {"request_id": "req-1"},
+    "litellm_call_id": "call-1",
 }
-_ROUTED_REQUEST: Final[Mapping[str, object]] = {**_PRE_ROUTING_REQUEST, "litellm_call_id": "call-1"}
+_PRE_ROUTING_REQUEST: Final[Mapping[str, object]] = {
+    **_ROUTED_REQUEST,
+    REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP,
+}
+_SPOOFED_REQUEST: Final[Mapping[str, object]] = {**_ROUTED_REQUEST, REJECTED_BEFORE_REQUEST_SETUP_KEY: True}
 _INVALID_REQUEST_400: Final = ProxyException(
     message="Violated guardrail policy", type="invalid_request_error", param=None, code=400
 )
@@ -3585,6 +3594,7 @@ _PROVIDER_AUTH_ERROR: Final = litellm.AuthenticationError(
         (litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), _PRE_ROUTING_REQUEST, True),
         (ProxyModelNotFoundError(route="/chat/completions", model_name="4.6"), _ROUTED_REQUEST, True),
         (_INVALID_REQUEST_400, _ROUTED_REQUEST, False),
+        (_INVALID_REQUEST_400, _SPOOFED_REQUEST, False),
         (_PROVIDER_AUTH_ERROR, _ROUTED_REQUEST, False),
         (
             litellm.RateLimitError(message="slow down", llm_provider="anthropic", model="claude-haiku-4-5"),
@@ -3593,7 +3603,16 @@ _PROVIDER_AUTH_ERROR: Final = litellm.AuthenticationError(
         ),
         (HTTPException(status_code=429, detail="Max parallel request limit reached"), _ROUTED_REQUEST, False),
     ],
-    ids=["bad-body", "budget", "unknown-model", "guardrail-block", "provider-auth", "provider-429", "proxy-429"],
+    ids=[
+        "bad-body",
+        "budget",
+        "unknown-model",
+        "guardrail-block",
+        "guardrail-block-with-client-spoofed-marker",
+        "provider-auth",
+        "provider-429",
+        "proxy-429",
+    ],
 )
 def test_is_pre_routing_rejection_is_decided_by_pipeline_stage_not_exception_type(
     exception: Exception, request_data: Mapping[str, object], expected: bool
@@ -3617,6 +3636,7 @@ class _RecordingSpendWriter:
         (True, litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), _PRE_ROUTING_REQUEST, 0),
         (True, ProxyModelNotFoundError(route="/chat/completions", model_name="4.6"), _ROUTED_REQUEST, 0),
         (True, _INVALID_REQUEST_400, _ROUTED_REQUEST, 1),
+        (True, _INVALID_REQUEST_400, _SPOOFED_REQUEST, 1),
         (True, _PROVIDER_AUTH_ERROR, _ROUTED_REQUEST, 1),
         (False, _INVALID_REQUEST_400, _PRE_ROUTING_REQUEST, 1),
         (False, litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), _PRE_ROUTING_REQUEST, 1),
@@ -3626,6 +3646,7 @@ class _RecordingSpendWriter:
         "flag-budget",
         "flag-unknown-model",
         "flag-guardrail-block-kept",
+        "flag-guardrail-block-with-spoofed-marker-kept",
         "flag-provider-error-kept",
         "off-bad-body",
         "off-budget",

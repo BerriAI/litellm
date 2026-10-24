@@ -18,7 +18,7 @@ from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP_KEY, ProxyLogging
+from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP, REJECTED_BEFORE_REQUEST_SETUP_KEY, ProxyLogging
 from litellm.types.utils import CachingDetails
 
 
@@ -1039,10 +1039,17 @@ async def test_post_call_failure_hook_guardrail_block_fires_failure_callback(
 async def test_handle_logging_proxy_only_path_flags_requests_that_died_before_request_setup(
     proxy_logging, make_user_api_key_auth
 ):
-    """A reject before the pipeline set up logging (bad key, bad body) reaches the failure hook with no
-    ``litellm_call_id``. The handler mints one so error logs can carry it, and flags the request so spend
-    tracking can still tell it apart from a guardrail block, which arrives with the pipeline's own call id."""
-    rejected_before_setup: dict[str, object] = {"model": "m", "messages": [{"role": "user", "content": "x"}], "metadata": {}}
+    """A reject before the pipeline set up logging (bad key, bad body) reaches the failure hook with no logging
+    object. The handler mints a ``litellm_call_id`` so error logs can carry it, and marks the request with a
+    server-owned sentinel so spend tracking can tell it apart from a guardrail block, which arrives with the
+    pipeline's logging object. ``request_data`` is the client body, so a client-sent call id or marker value must
+    not change either outcome."""
+    rejected_before_setup: dict[str, object] = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "x"}],
+        "metadata": {},
+        "litellm_call_id": "client-supplied",
+    }
     await proxy_logging._handle_logging_proxy_only_error(
         request_data=rejected_before_setup,
         user_api_key_dict=make_user_api_key_auth(),
@@ -1060,6 +1067,7 @@ async def test_handle_logging_proxy_only_path_flags_requests_that_died_before_re
         "model": "m",
         "messages": [{"role": "user", "content": "x"}],
         "metadata": {},
+        REJECTED_BEFORE_REQUEST_SETUP_KEY: True,
     }
     await proxy_logging._handle_logging_proxy_only_error(
         request_data=blocked_by_guardrail,
@@ -1069,8 +1077,8 @@ async def test_handle_logging_proxy_only_path_flags_requests_that_died_before_re
     )
 
     assert (
-        rejected_before_setup.get(REJECTED_BEFORE_REQUEST_SETUP_KEY),
-        isinstance(rejected_before_setup.get("litellm_call_id"), str),
-        REJECTED_BEFORE_REQUEST_SETUP_KEY in blocked_by_guardrail,
+        rejected_before_setup.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is REJECTED_BEFORE_REQUEST_SETUP,
+        rejected_before_setup["litellm_call_id"],
+        blocked_by_guardrail.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is REJECTED_BEFORE_REQUEST_SETUP,
         blocked_by_guardrail["litellm_call_id"],
-    ) == (True, True, False, "call-1")
+    ) == (True, "client-supplied", False, "call-1")
