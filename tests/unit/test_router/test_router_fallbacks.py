@@ -77,14 +77,14 @@ async def test_async_fallbacks_streaming():
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("litellm_module_fallbacks", [True, False])
 @pytest.mark.asyncio
-async def test_default_model_fallbacks(sync_mode, litellm_module_fallbacks):
+async def test_default_model_fallbacks(sync_mode, litellm_module_fallbacks, monkeypatch: pytest.MonkeyPatch):
     """
     Related issue - https://github.com/BerriAI/litellm/issues/3623
 
     If model misconfigured, setup a default model for generic fallback
     """
     if litellm_module_fallbacks:
-        litellm.default_fallbacks = ["my-good-model"]
+        monkeypatch.setattr(litellm, "default_fallbacks", ["my-good-model"])
     router = Router(
         model_list=[
             {
