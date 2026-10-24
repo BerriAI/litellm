@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Any, Final
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -41,7 +41,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict[str, str],
         model: str,
-        messages: list[object],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -87,17 +87,32 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         on Anthropic-only ``cache_control`` extensions (``cache_control.ttl: 1h
         is not supported``), so unless the provider declares ttl support the
         hints are reduced to their portable ``{"type": ...}`` core.
+
+        The deployment speaks the Messages API natively, so caller-supplied
+        ``thinking``/``output_config``/``temperature`` are forwarded verbatim:
+        the base capability checks resolve the provider as "anthropic" and
+        would otherwise strip modern fields (e.g. adaptive thinking) from a
+        model the cost map does not know (see #40890). Pop them before the
+        base transform so no drop warning fires, restore afterwards.
         """
-        request: Final = super().transform_anthropic_messages_request(
+        params: Final[dict[str, object]] = anthropic_messages_optional_request_params  # mutable-ok: popped below
+        stashed: Final[dict[str, object]] = {}  # mutable-ok: filled key-by-key, then restored onto the request
+        for _key in ("thinking", "output_config", "temperature"):
+            if _key in params:
+                stashed[_key] = params.pop(_key)
+        request: Final[dict[str, object]] = super().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the shared base returns a bare dict  # mutable-ok: stash restored into it before returning
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=params,
             litellm_params=litellm_params,
             headers=headers,
         )
         if self.supports_cache_control_ttl():
+            request.update(stashed)
             return request
-        return normalize_cache_control_in_anthropic_payload(request)
+        normalized: Final = normalize_cache_control_in_anthropic_payload(request)
+        normalized.update(stashed)
+        return normalized
 
     def get_complete_url(
         self,
@@ -151,7 +166,7 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         self,
         headers: dict[str, str],
         model: str,
-        messages: list[object],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
