@@ -1,5 +1,7 @@
 import json
 import os
+import unittest.mock
+from collections.abc import Iterator
 from typing import Final
 
 import pytest
@@ -179,6 +181,12 @@ def mock_auth():
     app.dependency_overrides[user_api_key_auth] = mock_user_api_key_auth
     yield
     app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.fixture(autouse=True)
+def restore_environment() -> Iterator[None]:
+    with unittest.mock.patch.dict(os.environ):
+        yield
 
 
 @pytest.fixture(autouse=True)
