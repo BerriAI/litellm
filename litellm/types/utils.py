@@ -13,6 +13,7 @@ from typing import (
     TypeAlias,
     get_args,
 )
+from urllib.parse import urlsplit
 
 import httpx
 from openai._models import BaseModel as OpenAIObject
@@ -39,6 +40,7 @@ from pydantic import (
     ConfigDict,
     Field,
     FieldSerializationInfo,
+    GetCoreSchemaHandler,
     JsonValue,
     PrivateAttr,
     SkipValidation,
@@ -46,6 +48,7 @@ from pydantic import (
     field_validator,
 )
 from pydantic.main import IncEx
+from pydantic_core import core_schema
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
@@ -58,6 +61,7 @@ from litellm.types.llms.base import (
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
+from litellm.types.token_count import TokenCountModelInfo, TokenCountSource, TokenCountTokenizer
 from litellm.types.workload_identity import (
     ANTHROPIC_WIF_KWARGS_KEYS,
     OPENAI_WIF_KWARGS_KEYS,
@@ -208,6 +212,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_parallel_function_calling: bool | None
     supports_web_search: bool | None
     supports_reasoning: bool | None
+    supports_sampling_params: ReadOnly[bool | None]
     supports_adaptive_thinking: bool | None
     supports_legacy_thinking: ReadOnly[bool | None]
     thinking_always_on: ReadOnly[bool | None]
@@ -230,12 +235,21 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
     bedrock_converse_supports_strict_tools: bool | None
     supports_regex_lookaround: ReadOnly[bool | None]
+    token_count_framing: ReadOnly[int | None]
+    token_count_model: ReadOnly[TokenCountModelInfo | None]
+    token_count_tokenizer: ReadOnly[TokenCountTokenizer | None]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
     search_context_size_low: float
     search_context_size_medium: float
     search_context_size_high: float
+
+
+class SearchFreeRequests(TypedDict):
+    count: ReadOnly[int]
+    period: ReadOnly[Literal["day", "month"]]
+    shared_group: ReadOnly[str]
 
 
 class AgenticLoopParams(TypedDict, total=False):
@@ -284,6 +298,7 @@ class OffPeakPricing(TypedDict, total=False):
     output_cost_per_token: ReadOnly[float]
     output_cost_per_reasoning_token: ReadOnly[float]
     cache_read_input_token_cost: ReadOnly[float]
+    explicit_cache_read_input_token_cost: ReadOnly[float]
     cache_creation_input_token_cost: ReadOnly[float]
 
 
@@ -307,12 +322,21 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None
     cache_creation_input_token_cost_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_creation_input_token_cost_above_1hr: float | None
+    cache_creation_input_token_cost_above_12hr: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_flex: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_priority: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: ReadOnly[float | None]
     cache_creation_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
     cache_read_input_audio_token_cost: ReadOnly[float | None]
+    cache_read_input_audio_token_cost_flex: ReadOnly[float | None]
+    cache_read_input_audio_token_cost_priority: ReadOnly[float | None]
     cache_read_input_image_token_cost: ReadOnly[float | None]
+    explicit_cache_read_input_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_read_input_token_cost_balanced: ReadOnly[float | None]
@@ -326,6 +350,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_read_input_token_cost_above_512k_tokens: float | None
     cache_read_input_token_cost_batches: ReadOnly[float | None]
+    cache_read_input_audio_token_cost_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_100k_tokens_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
@@ -339,6 +364,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     off_peak_pricing: ReadOnly[OffPeakPricing | None]  # time-windowed off-peak rates
     input_cost_per_character: float | None  # only for vertex ai models
     input_cost_per_audio_token: float | None
+    input_cost_per_audio_token_flex: ReadOnly[float | None]
+    input_cost_per_audio_token_priority: ReadOnly[float | None]
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
     input_cost_per_token_above_100k_tokens: ReadOnly[float | None]
@@ -427,6 +454,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
+    search_free_requests: ReadOnly[SearchFreeRequests | None]
     google_maps_grounding_cost_per_query: ReadOnly[float | None]
     citation_cost_per_token: float | None  # Cost per citation token for Perplexity
     tiered_pricing: list[dict[str, Any]] | None  # Tiered pricing structure for models like Dashscope
@@ -442,6 +470,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "responses",
             "decisions",
             "evaluation",
+            "extraction",
             "ocr",
             "realtime",
         ]
@@ -502,6 +531,8 @@ class CallTypes(str, Enum):
     adecisions = "adecisions"
     systemone = "systemone"
     asystemone = "asystemone"
+    extraction = "extraction"
+    aextraction = "aextraction"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
@@ -692,6 +723,8 @@ CallTypesLiteral = Literal[
     "adecisions",
     "systemone",
     "asystemone",
+    "extraction",
+    "aextraction",
     "_arealtime",
     "_aresponses_websocket",
     "create_batch",
@@ -805,6 +838,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
     "/systemone": [CallTypes.asystemone, CallTypes.systemone],
     "/v1/systemone": [CallTypes.asystemone, CallTypes.systemone],
+    "/extraction": [CallTypes.aextraction, CallTypes.extraction],
+    "/v1/extraction": [CallTypes.aextraction, CallTypes.extraction],
     # Batches
     "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
     "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
@@ -1780,7 +1815,9 @@ class CompletionTokensDetailsWrapper(CompletionTokensDetails):  # wrapper for ol
 
 class CacheCreationTokenDetails(LiteLLMBaseModel):
     ephemeral_5m_input_tokens: int | None = None
+    ephemeral_30m_input_tokens: int | None = None
     ephemeral_1h_input_tokens: int | None = None
+    ephemeral_12h_input_tokens: int | None = None
 
 
 class PromptTokensDetailsWrapper(
@@ -1833,6 +1870,13 @@ class PromptTokensDetailsWrapper(
 
     cached_tokens_details: CachedTokensDetails | None = None
     """Details of cached (cache-hit) tokens sent to the model. OpenAI realtime naming; carries the per-modality cache-read split."""
+    cache_type: str | None = None
+    """Provider-reported cache mode. DashScope returns ``ephemeral`` for explicit Qwen Context Cache requests."""
+
+    @field_validator("cache_type", mode="before")
+    @classmethod
+    def _drop_non_string_cache_type(cls, value: object) -> str | None:
+        return value if isinstance(value, str) else None
 
     def __setattr__(self, name: str, value: object) -> None:
         super().__setattr__(name, value)
@@ -1882,6 +1926,8 @@ class PromptTokensDetailsWrapper(
             del self.cache_creation_token_details
         if self.cached_tokens_details is None:
             del self.cached_tokens_details
+        if self.cache_type is None:
+            del self.cache_type
 
 
 class ServerToolUse(LiteLLMBaseModel):
@@ -2042,6 +2088,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+class UnreportedUsage(Usage):
+    pass
 
 
 class StreamingChoices(OpenAIObject):
@@ -3238,6 +3288,13 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
+class StandardLoggingKubernetesPodRouting(TypedDict):
+    service_host: ReadOnly[str]
+    pod_ip: ReadOnly[str]
+    pod_count: ReadOnly[int]
+    selection: ReadOnly[Literal["round_robin", "session_affinity", "session_affinity_retry"]]
+
+
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
 # logging off. Every other field aggregates the prompt without reproducing it and is kept,
 # so a redacted row stays explainable. `test_every_routing_decision_field_is_classified`
@@ -3304,6 +3361,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
     routing_decision: StandardLoggingRoutingDecision | None
+    kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     applied_guardrails: list[str] | None
     usage_object: dict | None
     cold_storage_object_key: str | None  # S3/GCS object key for cold storage retrieval
@@ -3374,6 +3432,11 @@ class StandardLoggingZeroCostDiagnostic(TypedDict):
     missing_pricing_keys: ReadOnly[tuple[str, ...]]
 
 
+class CooldownDeploymentInfo(TypedDict):
+    model_id: ReadOnly[str]
+    api_base: ReadOnly[str | None]
+
+
 class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_code: str | None
     error_class: str | None
@@ -3402,6 +3465,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_budget_entity_id: str | None
     error_budget_limit: float | None
     error_budget_spend: float | None
+    error_cooldown_deployments: ReadOnly[tuple[CooldownDeploymentInfo, ...] | None]
     normalized_error: ReadOnly[str | None]
 
 
@@ -3900,8 +3964,15 @@ class MirroredPricingParams(LiteLLMBaseModel):
     input_cost_per_character: float | None = None
     output_cost_per_character: float | None = None
     cache_read_input_token_cost: float | None = None
+    explicit_cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_creation_input_token_cost_above_12hr: float | None = None
+    cache_creation_input_token_cost_above_12hr_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: float | None = None
     tiered_pricing: list[dict[str, Any]] | None = None
 
 
@@ -3954,14 +4025,19 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_100k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
+    cache_read_input_audio_token_cost_batches: float | None = None
     cache_creation_input_token_cost_batches: float | None = None
     cache_creation_input_token_cost_above_100k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_read_input_audio_token_cost: float | None = None
+    cache_read_input_audio_token_cost_flex: float | None = None
+    cache_read_input_audio_token_cost_priority: float | None = None
     cache_read_input_image_token_cost: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
+    input_cost_per_audio_token_flex: float | None = None
+    input_cost_per_audio_token_priority: float | None = None
     input_cost_per_token_cache_hit: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
     input_cost_per_token_above_100k_tokens: float | None = None
@@ -4051,11 +4127,14 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
     {"supports_regex_lookaround", "supports_assistant_prefill", "supports_bedrock_native_structured_output"}
 )
 
+DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset({"token_count_framing", "token_count_model"})
+
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
     - frozenset(CustomPricingLiteLLMParams.model_fields)
     - DEPLOYMENT_SCOPED_PRICING_FIELDS
     - DEPLOYMENT_SCOPED_CAPABILITY_FIELDS
+    - DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS
 )
 
 
@@ -4164,7 +4243,110 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_profile",
     "token_exchange_scope",
 )
-github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
+github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type", "github_copilot_host")
+OIDC_SECRET_REFERENCE_PREFIX: Final = "oidc/"
+API_KEY_SECRET_REFERENCE_REJECTION: Final = (
+    "Rejected Request: api_key holds an oidc/ secret reference, which only a deployment or credential a proxy "
+    "admin configures can carry."
+)
+
+
+API_KEY_UPSTREAM_PARAMS: Final = (
+    "api_base",
+    "base_url",
+    "aws_bedrock_runtime_endpoint",
+    "s3_endpoint_url",
+    "sagemaker_base_url",
+    "deployment_url",
+)
+
+
+_DEFAULT_PORTS: Final = MappingProxyType({"http": 80, "ws": 80, "https": 443, "wss": 443})
+
+
+def _origin(url: str) -> str:
+    text: Final = url.strip()
+    try:
+        parts: Final = urlsplit(text)
+        explicit_port: Final = parts.port
+    except ValueError:
+        return text.rstrip("/").lower()
+    host: Final = (parts.hostname or "").rstrip(".")
+    if not host:
+        return text.rstrip("/").lower()
+    scheme: Final = parts.scheme.lower()
+    port: Final = explicit_port if explicit_port is not None else _DEFAULT_PORTS.get(scheme)
+    return f"{scheme}://{host}" if port is None else f"{scheme}://{host}:{port}"
+
+
+_URL_IN_MODEL: Final = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+def _model_url(model: object) -> str | None:
+    found: Final = _URL_IN_MODEL.search(model) if isinstance(model, str) else None
+    return None if found is None else found.group(0)
+
+
+def upstream_origins(params: Mapping[str, object]) -> frozenset[str]:
+    values: Final = (*(params.get(key) for key in API_KEY_UPSTREAM_PARAMS), _model_url(params.get("model")))
+    return frozenset(_origin(value) for value in values if isinstance(value, str) and value)
+
+
+class AdminApiKeySecretReference(str):
+    """An ``oidc/`` api_key reference read from a source only a proxy admin writes: a proxy-level deployment or a
+    stored credential. The call path swaps only this type for the secret it points to, so the same text arriving
+    in a request, a prompt template, or a row a non-admin wrote is sent as written, and the secret goes only to the
+    origins the admin configured beside the reference."""
+
+    def __new__(cls, reference: str, origins: frozenset[str]) -> "AdminApiKeySecretReference":
+        return super().__new__(cls, reference)
+
+    def __init__(self, reference: str, origins: frozenset[str]) -> None:
+        super().__init__()
+        self.origins: Final = origins
+
+    def __reduce__(self) -> tuple[type["AdminApiKeySecretReference"], tuple[str, frozenset[str]]]:
+        return type(self), (str(self), self.origins)
+
+    def may_reach(self, upstream: Mapping[str, object]) -> bool:
+        destinations: Final = upstream_origins(upstream)
+        return destinations <= self.origins if destinations else not self.origins
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: object, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+        return core_schema.is_instance_schema(cls, serialization=core_schema.to_string_ser_schema())
+
+
+class CredentialApiKeySecretReference(AdminApiKeySecretReference):
+    """An admin ``oidc/`` api_key reference stored in a named credential, so its origins are the credential's own."""
+
+
+def _unmarked_api_key_secret_reference(params: Mapping[str, object]) -> str | None:
+    api_key: Final = params.get("api_key")
+    if (
+        not isinstance(api_key, str)
+        or isinstance(api_key, AdminApiKeySecretReference)
+        or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX)
+    ):
+        return None
+    return api_key
+
+
+def admin_api_key_secret_reference(params: Mapping[str, object]) -> Mapping[str, object]:
+    api_key: Final = _unmarked_api_key_secret_reference(params)
+    if api_key is None:
+        return params
+    return {**params, "api_key": AdminApiKeySecretReference(api_key, upstream_origins(params))}
+
+
+def credential_api_key_secret_reference(credential_values: Mapping[str, object]) -> Mapping[str, object]:
+    api_key: Final = _unmarked_api_key_secret_reference(credential_values)
+    if api_key is None:
+        return credential_values
+    reference: Final = CredentialApiKeySecretReference(api_key, upstream_origins(credential_values))
+    return {**credential_values, "api_key": reference}
+
+
 server_owned_wif_litellm_params: Final = (
     anthropic_wif_litellm_params
     + openai_wif_litellm_params
@@ -4296,6 +4478,7 @@ class LlmProviders(str, Enum):
     PUBLICAI = "publicai"
     V0 = "v0"
     MORPH = "morph"
+    OPENCODE_GO = "opencode_go"
     LAMBDA_AI = "lambda_ai"
     INCEPTION = "inception"
     TEXT_COMPLETION_INCEPTION = "text-completion-inception"
@@ -4389,6 +4572,7 @@ class LlmProviders(str, Enum):
     CORTECS = "cortecs"
     SCX_AI = "scx-ai"
     PRISM = "prism"
+    OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
     DARKBLOOM = "darkbloom"
     META = "meta"
@@ -4447,6 +4631,7 @@ class SearchProviders(str, Enum):
     AGENTCORE = "agentcore"
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
+    DEEPSEEK = "deepseek"
 
 
 # Create a set of all search provider values for quick lookup
@@ -4491,6 +4676,7 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     request_model: str
     model_used: str
     tokenizer_type: str
+    count_source: TokenCountSource | None = None
     original_response: dict | None = None
     """
     Original Response from upstream API call - if an API call was made for token counting
@@ -4501,6 +4687,7 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     HTTP status code from the token counting API (e.g., 200 for success, 429 for rate limit, 400 for bad request)
     """
     status_code: int | None = None
+    rejected_before_provider_call: bool = Field(default=False, exclude=True)
 
 
 class CustomHuggingfaceTokenizer(TypedDict):
@@ -4528,6 +4715,7 @@ class HttpHandlerRequestFields(TypedDict, total=False):
 class ProviderSpecificHeader(TypedDict):
     custom_llm_provider: str
     extra_headers: dict
+    native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
 
 
 class SelectTokenizerResponse(TypedDict):

@@ -24,6 +24,7 @@ from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.decisions import (
@@ -611,13 +612,35 @@ async def test_oss_classifier_rejects_unknown_models_and_ambiguous_bases_before_
     assert len(respx_mock.calls) == 0
 
 
-@pytest.mark.asyncio
-async def test_upstream_reply_without_answers_is_a_server_error(respx_mock: respx.MockRouter) -> None:
-    respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(
-        json={"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 10, "output_tokens": 0}}
-    )
+_PPLX_USAGE: Final = {"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 10, "output_tokens": 0}}
 
-    with pytest.raises(litellm.InternalServerError, match="unexpected response"):
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reply", "detail"),
+    (
+        pytest.param(_PPLX_USAGE, "DecisionsResponse answers: Field required", id="usage"),
+        pytest.param({"error": "Rate limit reached"}, "DecisionsResponse answers: Field required", id="rate_limit_text"),
+        pytest.param({"error": "Request timed out"}, "DecisionsResponse answers: Field required", id="timeout_text"),
+        pytest.param(
+            {**_PPLX_USAGE, "answers": {"rate_limit": None}},
+            "DecisionsResponse answers.rate_limit: Input should be a valid dictionary",
+            id="null_answer_named_rate_limit",
+        ),
+        pytest.param(
+            {**_PPLX_USAGE, "answers": {"is_defect": {"type": "Request timed out"}}},
+            "DecisionsResponse answers.is_defect",
+            id="answer_type_timeout_text",
+        ),
+        pytest.param(["Rate limit reached"], "DecisionsResponse Input should be a valid dictionary", id="not_an_object"),
+    ),
+)
+async def test_a_malformed_upstream_reply_is_a_server_error_whatever_its_text(
+    reply: object, detail: str, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=reply)
+
+    with pytest.raises(litellm.InternalServerError, match=re.escape(f"unexpected response: {detail}")):
         await litellm.asystemone(
             model="perplexity/pplx-decider-v1-27b",
             state="review",
@@ -2682,6 +2705,269 @@ async def test_azure_ai_decision_requires_api_base_before_http(
     assert len(respx_mock.calls) == 0
 
 
+def _clear_azure_ai_auth_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", False)
+
+
+def test_azure_ai_systemone_uses_entra_token_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.systemone(
+        model="azure_ai/decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_decisions_use_entra_token_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    await litellm.adecisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+
+
+def test_azure_ai_systemone_environment_api_key_wins_over_deployment_entra(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-key")
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.systemone(
+        model="azure_ai/decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer env-key"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_decisions_environment_api_key_wins_over_deployment_entra(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-key")
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    await litellm.adecisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer env-key"
+
+
+def test_azure_ai_decisions_uses_environment_api_key_without_entra_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-key")
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.decisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer env-key"
+
+
+def test_azure_ai_decisions_explicit_api_key_precedes_entra_and_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-key")
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.decisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        api_key="call-key",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer call-key"
+
+
+def test_azure_ai_decisions_does_not_validate_noncredential_params_as_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.decisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+        max_retries="three",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+
+
+def test_azure_ai_decisions_malformed_credential_is_a_sanitized_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.decisions(
+            model="azure_ai/decision-1",
+            input="review",
+            questions=_PREDICATE_QUESTIONS,
+            api_base="https://res.services.ai.azure.com",
+            tenant_id="tenant-id",
+            client_id="client-id",
+            client_secret=123,
+        )
+
+    assert caught.value.status_code == 400
+    assert "`client_secret`" in str(caught.value)
+    assert "123" not in str(caught.value)
+    assert not route.called
+
+
+def test_azure_ai_decisions_prefer_api_key_when_both_are_set(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.decisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        api_key="foundry-key",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer foundry-key"
+
+
+def test_azure_ai_decisions_without_credentials_raise_authentication_error(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    with pytest.raises(ValueError, match="Missing Azure AI credentials") as helper_error:
+        get_azure_ai_auth_headers(None, {})
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as caught:
+        litellm.decisions(
+            model="azure_ai/decision-1",
+            input="review",
+            questions=_PREDICATE_QUESTIONS,
+            api_base="https://res.services.ai.azure.com",
+        )
+
+    assert caught.value.status_code == 401
+    assert str(helper_error.value) in str(caught.value)
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_systemone_without_credentials_raises_authentication_error(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    with pytest.raises(ValueError, match="Missing Azure AI credentials") as helper_error:
+        get_azure_ai_auth_headers(None, {})
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as caught:
+        await litellm.asystemone(
+            model="azure_ai/decision-1",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            api_base="https://res.services.ai.azure.com",
+        )
+
+    assert caught.value.status_code == 401
+    assert str(helper_error.value) in str(caught.value)
+    assert not route.called
+
+
 _CLEF_OMNI_UPSTREAM: Final = "https://example.com/ai/run/@cf/cloudflare/clef-omni"
 _CLEF_OMNI_RESPONSE: Final[Mapping[str, object]] = {
     "success": True,
@@ -3424,6 +3710,39 @@ async def test_decision_hosts_preserve_drex_model_routing_credentials_and_return
         "state": "damaged order",
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
+
+
+@pytest.mark.parametrize(
+    "unpriced_row",
+    (
+        pytest.param({}, id="empty"),
+        pytest.param(
+            {"litellm_provider": "typesafe", "mode": "evaluation", "input_cost_per_token": None},
+            id="metadata_and_null_rate",
+        ),
+    ),
+)
+async def test_a_returned_model_registered_without_prices_is_billed_at_the_requested_model(
+    unpriced_row: dict[str, object], monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "typesafe/jev-test-alias",
+        {"litellm_provider": "typesafe", "mode": "evaluation", "input_cost_per_token": 0.001, "output_cost_per_token": 0},
+    )
+    monkeypatch.setitem(litellm.model_cost, "typesafe/jev-test-unpriced", unpriced_row)
+    respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json={**_RESPONSE, "model": "jev-test-unpriced"})
+
+    response: Final = await litellm.asystemone(
+        model="typesafe/jev-test-alias",
+        state="damaged order",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    assert litellm.completion_cost(completion_response=response, call_type="asystemone") == pytest.approx(
+        _INPUT_TOKENS * 0.001
+    )
 
 
 @pytest.mark.parametrize("base_env", ("NACE_API_BASE", "NACE_BASE_URL"))

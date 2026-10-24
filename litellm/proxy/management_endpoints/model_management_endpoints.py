@@ -157,6 +157,7 @@ from litellm.types.router import (
 )
 from litellm.types.utils import (
     COST_MAP_LOOKUP_KEY,
+    OIDC_SECRET_REFERENCE_PREFIX,
     echoed_cost_map_fields,
     echoed_cost_map_pricing_fields,
     without_server_derived_pricing,
@@ -168,6 +169,19 @@ if TYPE_CHECKING:
     from prisma import types as prisma_types
 
 router: Final = APIRouter()
+
+
+class KubernetesPodsResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_id: str
+    service_host: str
+    port: int | None
+    pod_ips: tuple[str, ...]
+    pod_count: int
+    error: str | None
+
+
 CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points", "litellm_credential_name"})
 NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset((*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS))
 
@@ -1161,6 +1175,77 @@ def update_db_model(
         prisma_compatible_model_dict["blocked"] = updated_patch.blocked
 
     return prisma_compatible_model_dict
+
+
+@router.get(
+    "/model/{model_id}/kubernetes_pods",
+    response_model=KubernetesPodsResponse,
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_kubernetes_pods(
+    model_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> KubernetesPodsResponse:
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        raise ProxyException(
+            message="Only proxy admins can view Kubernetes pods",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param=None,
+        )
+
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        raise ProxyException(
+            message=CommonProxyErrors.no_llm_router.value,
+            type=ProxyErrorTypes.internal_server_error.value,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            param=None,
+        )
+
+    deployment: Final[Mapping[str, object] | None] = _OPTIONAL_JSON_OBJECT.validate_python(
+        llm_router.get_model_info(id=model_id)  # pyright: ignore[reportUnknownMemberType]  # validated below
+    )
+    if deployment is None:
+        raise ProxyException(
+            message=f"Model with id {model_id} not found",
+            type=ProxyErrorTypes.not_found_error.value,
+            code=status.HTTP_404_NOT_FOUND,
+            param="model_id",
+        )
+
+    lookup: Final = await llm_router.kubernetes_pod_discovery.async_lookup_pods(deployment)
+    if lookup is None:
+        raw_litellm_params: Final = deployment.get("litellm_params")
+        litellm_params: Final[Mapping[str, object] | None] = (
+            _JSON_OBJECT.validate_python(raw_litellm_params) if isinstance(raw_litellm_params, Mapping) else None
+        )
+        discovery_enabled: Final = litellm_params is not None and litellm_params.get("kubernetes_pod_discovery") is True
+        raise ProxyException(
+            message=(
+                "Kubernetes pod discovery is enabled for this model, but its api_base is not an http:// "
+                "service hostname, so no pods are resolved"
+                if discovery_enabled
+                else "Kubernetes pod discovery is not enabled for this model"
+            ),
+            type=ProxyErrorTypes.bad_request_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="model_id",
+        )
+
+    return KubernetesPodsResponse(
+        model_id=model_id,
+        service_host=lookup.service_host,
+        port=lookup.port,
+        pod_ips=tuple(lookup.pod_ips),
+        pod_count=len(lookup.pod_ips),
+        error=lookup.error,
+    )
 
 
 @router.patch(
@@ -2214,7 +2299,8 @@ class ModelManagementAuthChecks:
             raise ProxyException(
                 message=(
                     f"Only proxy admins can change the credentials of a deployment configured for "
-                    f"workload identity federation or OAuth token exchange ({wif_fields[0]!r})."
+                    f"workload identity federation or OAuth token exchange, or holding an oidc/ api_key secret "
+                    f"reference ({wif_fields[0]!r})."
                 ),
                 type=ProxyErrorTypes.auth_error.value,
                 code=status.HTTP_403_FORBIDDEN,
@@ -2230,6 +2316,33 @@ class ModelManagementAuthChecks:
                 code=status.HTTP_400_BAD_REQUEST,
                 param="litellm_credential_name",
             )
+
+    @staticmethod
+    def _reject_team_inline_api_key_secret_reference(
+        *,
+        model_params: Deployment,
+        incoming_params: Mapping[str, object] | None,
+        incoming_model_params: updateDeployment | None,
+    ) -> None:
+        api_key: Final = None if incoming_params is None else incoming_params.get("api_key")
+        incoming_model_info: Final = None if incoming_model_params is None else incoming_model_params.model_info
+        team_id: Final = (
+            incoming_model_info.team_id
+            if incoming_model_info is not None and incoming_model_info.team_id is not None
+            else model_params.model_info.team_id
+        )
+        if team_id is None or not isinstance(api_key, str) or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX):
+            return
+        raise ProxyException(
+            message=(
+                "A team model cannot hold an oidc/ api_key secret reference, because LiteLLM resolves one only on a "
+                "proxy-level model or in a stored credential. Store the reference in a credential and set "
+                "litellm_credential_name on this model."
+            ),
+            type=ProxyErrorTypes.bad_request_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="api_key",
+        )
 
     @staticmethod
     async def can_user_make_model_call(
@@ -2248,6 +2361,9 @@ class ModelManagementAuthChecks:
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ):
             raise HTTPException(status_code=403, detail="View-only users cannot manage models.")
+        ModelManagementAuthChecks._reject_team_inline_api_key_secret_reference(
+            model_params=model_params, incoming_params=incoming_params, incoming_model_params=incoming_model_params
+        )
         # Federation fields choose which server-side secret is read and where the org-scoped token
         # it buys is sent, so only a proxy admin may point a federated deployment somewhere else.
         # Evaluated on the RESULTING deployment: a patch attaching a credential by name inherits
@@ -3101,12 +3217,13 @@ async def update_useful_links(
         )
 
 
-def _validated_labeled_tiers(
-    tier_labels: dict[ComplexityTier, str],  # mutable-ok: Pydantic materializes JSON object fields as dicts
-) -> tuple[tuple[ComplexityTier, str], ...]:
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _validated_labeled_tiers(tier_labels: object) -> tuple[tuple[ComplexityTier, str], ...]:
     """Validate tier labels once for both prompt-preview transports."""
     try:
-        return ComplexityRouterConfig(tier_labels=tier_labels).labeled_tiers()
+        return ComplexityRouterConfig.model_validate({"tier_labels": tier_labels}).labeled_tiers()
     except (TypeError, ValidationError) as e:
         raise ProxyException(
             message=f"tier_labels must be a JSON object of tier name to display name: {e}",
@@ -3121,7 +3238,7 @@ def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[Complexity
     if not tier_labels:
         return None
     try:
-        parsed: Final = json.loads(tier_labels)
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(tier_labels))
     except JSONDecodeError as e:
         raise ProxyException(
             message=f"tier_labels must be a JSON object of tier name to display name: {e}",
@@ -3257,6 +3374,10 @@ _deduplicate_litellm_router_models: Final = deduplicate_litellm_router_models
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_OPTIONAL_JSON_OBJECT: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Mapping[str, object] | None,
+    config=ConfigDict(hide_input_in_errors=True),
+)
 
 
 def model_info_as_mapping(model_info: object) -> Mapping[str, object] | None:

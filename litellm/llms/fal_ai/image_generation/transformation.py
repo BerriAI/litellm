@@ -5,6 +5,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -85,12 +86,10 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
 
         Some providers need `model` in `api_base`
         """
-        complete_url: str = api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
-
-        complete_url = complete_url.rstrip("/")
-        if self.IMAGE_GENERATION_ENDPOINT:
-            complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
-        return complete_url
+        base_url: Final = api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
+        if not self.IMAGE_GENERATION_ENDPOINT:
+            return base_url.rstrip("/")
+        return join_api_base(base_url, self.IMAGE_GENERATION_ENDPOINT)
 
     def validate_environment(
         self,

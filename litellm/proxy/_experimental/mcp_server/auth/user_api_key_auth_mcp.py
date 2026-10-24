@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import re
 import secrets
@@ -5,8 +6,9 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
 from pydantic import SecretStr, TypeAdapter
@@ -41,11 +43,15 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     is_session_bearer_shaped,
 )
-from litellm.proxy._experimental.mcp_server.utils import asgi_scope_fields
+from litellm.proxy._experimental.mcp_server.utils import (
+    asgi_scope_fields,
+    strip_known_server_prefix,
+)
 from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_AccessGroupTable,
     LiteLLM_ObjectPermissionTable,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     ProxyException,
     SpecialHeaders,
@@ -93,6 +99,7 @@ if TYPE_CHECKING:
 
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
 OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+_CACHED_VALUE: Final = TypeAdapter(object)
 
 
 def _normalize_caller_admission_credential(value: str) -> str:
@@ -464,6 +471,24 @@ def _admission_failure_fallback(
 class MCPServerAccess:
     server_ids: tuple[str, ...]
     scope: Literal["unscoped", "scoped", "unresolved"] = "unscoped"
+
+
+def _mcp_server_access_after_error(
+    error: Exception,
+    key_object_permission: LiteLLM_ObjectPermissionTable | None,
+    *,
+    require_readable_team_policy: bool,
+) -> MCPServerAccess:
+    if require_readable_team_policy:
+        raise error
+    if isinstance(error, UnloadableEntitlementError):
+        verbose_logger.warning("Denying MCP access, entitlement unreadable: %s", error)
+    else:
+        verbose_logger.warning("Failed to get allowed MCP servers: %s", error)
+    return MCPServerAccess(
+        server_ids=(),
+        scope="scoped" if getattr(key_object_permission, "mcp_servers", None) is not None else "unresolved",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1344,7 +1369,7 @@ class MCPRequestHandler:
 
         if auth is None:
             return None
-        refreshed = auth.model_copy()
+        refreshed: Final = auth.model_copy(update={"requires_fresh_policy": True})
         if (auth.mcp_admitted_user_subject or auth.is_session_token) and auth.user_id:
             # A session credential (``lite login`` or a redeemed ID-JAG) has no key row, its authority is
             # sealed in the token: refresh the live user policy and keep the token's team, routes and models.
@@ -1362,7 +1387,12 @@ class MCPRequestHandler:
             refreshed.project_id = current.project_id
             refreshed.user_id = current.user_id
             refreshed.access_group_ids = current.access_group_ids
-        refreshed.requires_fresh_policy = True
+        else:
+            return refreshed
+        if refreshed.mcp_toolset_id is not None:
+            from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
+
+            return await apply_toolset_scope(refreshed, refreshed.mcp_toolset_id)
         return refreshed
 
     @staticmethod
@@ -1805,10 +1835,27 @@ class MCPRequestHandler:
         return list(access.server_ids)
 
     @staticmethod
+    async def _apply_agent_caller_ceiling_to_multi_source_server_access(
+        access: MCPServerAccess,
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> MCPServerAccess:
+        if user_api_key_auth is None or not MCPRequestHandler.is_personal_key_inheriting_team_grants(user_api_key_auth):
+            return access
+        caller_capped, caller_restricts = await MCPRequestHandler.apply_agent_caller_ceiling(
+            access.server_ids,
+            user_api_key_auth,
+        )
+        return MCPServerAccess(
+            server_ids=caller_capped,
+            scope="scoped" if caller_restricts else access.scope,
+        )
+
+    @staticmethod
     async def get_mcp_server_access(
         user_api_key_auth: UserAPIKeyAuth | None = None,
         *,
         keyless_source: bool = False,
+        require_readable_team_policy: bool = False,
     ) -> MCPServerAccess:
         """
         Get list of allowed MCP servers for the given user/key based on permissions.
@@ -1844,9 +1891,11 @@ class MCPRequestHandler:
             # matters: the no_mcp_servers opt-out below reads the caller's own object_permission, so above
             # this branch a user's own opt-out would wrongly zero their TEAMS' grants too (each source is
             # independent; an opt-out silences only its own source, inside the recursive call).
-            if is_mcp_admitted_user_subject(user_api_key_auth) and user_api_key_auth is not None:
-                return MCPServerAccess(
-                    server_ids=tuple(await MCPRequestHandler.resolve_admitted_subject_servers(user_api_key_auth)),
+            multi_source_access: Final = await MCPRequestHandler._multi_source_server_access(user_api_key_auth)
+            if multi_source_access is not None:
+                return await MCPRequestHandler._apply_agent_caller_ceiling_to_multi_source_server_access(
+                    multi_source_access,
+                    user_api_key_auth,
                 )
 
             # Get allowed servers from key and team
@@ -1861,7 +1910,10 @@ class MCPRequestHandler:
             ):
                 return MCPServerAccess(server_ids=(), scope="scoped")
 
-            allowed_mcp_servers_for_team = await MCPRequestHandler._get_allowed_mcp_servers_for_team(user_api_key_auth)
+            allowed_mcp_servers_for_team = await MCPRequestHandler._get_allowed_mcp_servers_for_policy(
+                user_api_key_auth,
+                require_readable_policy=require_readable_team_policy,
+            )
 
             key_access_group_grants = await MCPRequestHandler._get_key_access_group_mcp_server_extras(user_api_key_auth)
 
@@ -1993,15 +2045,10 @@ class MCPRequestHandler:
                 ),
             )
         except Exception as e:
-            if isinstance(e, UnloadableEntitlementError):
-                # A ceiling we KNOW exists and cannot read. Denying is the only answer that does not
-                # widen this caller past what an operator configured, for both caller shapes.
-                verbose_logger.warning("Denying MCP access, entitlement unreadable: %s", e)
-            else:
-                verbose_logger.warning("Failed to get allowed MCP servers: %s", e)
-            return MCPServerAccess(
-                server_ids=(),
-                scope="scoped" if getattr(key_object_permission, "mcp_servers", None) is not None else "unresolved",
+            return _mcp_server_access_after_error(
+                e,
+                key_object_permission,
+                require_readable_team_policy=require_readable_team_policy,
             )
 
     @staticmethod
@@ -2144,8 +2191,6 @@ class MCPRequestHandler:
             # whole union to deny-all over one momentarily-unreadable row.
             verbose_logger.warning("MCP admitted-subject source team %r unresolvable, skipping: %s", team_id, e)
             return None
-        if team_obj is None:
-            return None
         member_user_ids: Final = {getattr(m, "user_id", None) for m in (team_obj.members_with_roles or [])} - {None}
         if auth.user_id not in member_user_ids:
             return None
@@ -2240,34 +2285,155 @@ class MCPRequestHandler:
         return list(reachable)
 
     @staticmethod
-    async def billing_auth_for_tool_call(auth: UserAPIKeyAuth, tool_name: str) -> UserAPIKeyAuth:
+    async def billing_auth_for_tool_call(
+        auth: UserAPIKeyAuth,
+        tool_name: str,
+        *,
+        mcp_servers: Sequence[str] | None = None,
+        scoped_server: MCPServer | None = None,
+        native_tool_name: str | None = None,
+        allowed_mcp_servers: Sequence[MCPServer] | None = None,
+    ) -> UserAPIKeyAuth:
         """The auth object a tool call's SPEND should be recorded against.
 
-        ``auth`` unchanged for any non-admitted caller (key/JWT billing byte-identical). For an admitted
-        subject whose call is reached through a team's grant, a copy carrying that team's ``team_id`` and
-        owning ``org_id`` so the team's budget accumulates and the right org is charged. Falls back to
-        user-level attribution (rather than guessing a team) when the tool name does not resolve to a
-        server, reusing the manager's own tool-name lookup."""
-        if not is_mcp_admitted_user_subject(auth):
+        ``auth`` unchanged for callers without inherited team grants. For an admitted subject or personal
+        key whose call is reached through a team's grant, a copy carrying that team's ``team_id`` and
+        owning ``org_id`` so the team's budget accumulates and the right org is charged."""
+        from litellm.proxy.auth.auth_checks import personal_key_inherits_team_grants
+
+        if not is_mcp_admitted_user_subject(auth) and not personal_key_inherits_team_grants(auth):
             return auth
         try:
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-                global_mcp_server_manager,
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+            from litellm.proxy._experimental.mcp_server.operations import (
+                _get_allowed_mcp_servers,
+                _resolve_display_name_to_original,
+                resolve_scoped_mcp_server,
             )
 
-            server: Final = global_mcp_server_manager.get_mcp_server_from_tool_name(tool_name)
+            servers_for_name_resolution: Final = (
+                allowed_mcp_servers
+                if allowed_mcp_servers is not None
+                else await _get_allowed_mcp_servers(auth, mcp_servers)
+            )
+            resolved_tool_name: Final = _resolve_display_name_to_original(tool_name, servers_for_name_resolution)
+            server: Final = (
+                scoped_server
+                or (await resolve_scoped_mcp_server(auth, mcp_servers) if mcp_servers is not None else None)
+                or global_mcp_server_manager.get_mcp_server_from_tool_name(resolved_tool_name)
+                or global_mcp_server_manager.server_owning_tool_name_prefix(resolved_tool_name)
+            )
             if server is None:
                 return auth
-            source: Final = await MCPRequestHandler.attributing_source_for_server(auth, server.server_id)
+            source: Final = await (
+                MCPRequestHandler.attributing_source_for_server(auth, server.server_id)
+                if is_mcp_admitted_user_subject(auth)
+                else MCPRequestHandler.personal_key_attributing_source(
+                    auth,
+                    server.server_id,
+                    native_tool_name
+                    if native_tool_name is not None
+                    else strip_known_server_prefix(resolved_tool_name, server),
+                )
+            )
             if source is None or not source.team_id:
                 return auth
-            billed: Final = auth.model_copy()
-            billed.team_id = source.team_id
-            billed.org_id = source.org_id
-            return billed
+            if is_mcp_admitted_user_subject(auth):
+                return auth.model_copy(
+                    update=MappingProxyType(
+                        {
+                            "team_id": source.team_id,
+                            "org_id": source.org_id,
+                            "team_metadata": source.team_metadata,
+                        }
+                    )
+                )
+            source_auth_update: Final = MappingProxyType(
+                {
+                    "team_id": source.team_id,
+                    "org_id": source.org_id,
+                    "team_metadata": source.team_metadata,
+                }
+            )
+            try:
+                team_auth_context: Final = await MCPRequestHandler._personal_key_team_auth_context(auth, source)
+            except Exception as e:  # noqa: BLE001  # keep the selected team's attribution on follow-up read failures
+                verbose_logger.warning("MCP billing context lookup failed for team %r: %s", source.team_id, e)
+                return auth.model_copy(update=source_auth_update)
+            if team_auth_context is None:
+                return auth.model_copy(update=source_auth_update)
+            team_object, team_membership = team_auth_context
+            from litellm.proxy.auth.team_grants import team_grant_auth_update, team_grant_billing_auth_update
+
+            try:
+                billed_update: Final = await team_grant_billing_auth_update(auth, team_object, team_membership)
+            except Exception as e:  # noqa: BLE001  # retain team controls when organization attribution fails
+                verbose_logger.warning("MCP billing controls lookup failed for team %r: %s", team_object.team_id, e)
+                return auth.model_copy(
+                    update=team_grant_auth_update(
+                        team_object,
+                        team_membership,
+                        auth.user_id,
+                        key_org_id=auth.org_id,
+                    )
+                )
+            return auth.model_copy(update=billed_update)
         except Exception as e:  # noqa: BLE001  # attribution must never fail an authorized call
             verbose_logger.warning("MCP billing attribution failed for %r, billing the user: %s", tool_name, e)
             return auth
+
+    @staticmethod
+    async def guardrail_auth_for_call(
+        guardrail_auth: UserAPIKeyAuth | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        server: MCPServer | None,
+        tool_name: str,
+        allowed_mcp_servers: Sequence[MCPServer] | None = None,
+    ) -> UserAPIKeyAuth | None:
+        if guardrail_auth is not None or user_api_key_auth is None or server is None:
+            return guardrail_auth if guardrail_auth is not None else user_api_key_auth
+        if not MCPRequestHandler.is_personal_key_inheriting_team_grants(user_api_key_auth):
+            return user_api_key_auth
+        return await MCPRequestHandler.billing_auth_for_tool_call(
+            user_api_key_auth,
+            tool_name,
+            scoped_server=server,
+            native_tool_name=tool_name,
+            allowed_mcp_servers=allowed_mcp_servers,
+        )
+
+    @staticmethod
+    async def _personal_key_team_auth_context(
+        auth: UserAPIKeyAuth,
+        source: UserAPIKeyAuth,
+    ) -> tuple[LiteLLM_TeamTable, LiteLLM_TeamMembership | None] | None:
+        from litellm.proxy.auth.auth_checks import get_team_membership, get_team_object
+        from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+        if prisma_client is None or source.team_id is None:
+            return None
+        team: Final = await get_team_object(
+            team_id=source.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=auth.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=auth.requires_fresh_policy,
+        )
+        membership: Final = (
+            await get_team_membership(
+                user_id=auth.user_id,
+                team_id=source.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=auth.requires_fresh_policy,
+            )
+            if auth.user_id is not None
+            else None
+        )
+        return team, membership
 
     @staticmethod
     async def attributing_source_for_server(
@@ -2327,6 +2493,201 @@ class MCPRequestHandler:
                 return await MCPRequestHandler._narrow_tools_to_toolset(None, server_id, auth)
             allowed.update(tools)
         return await MCPRequestHandler._narrow_tools_to_toolset(sorted(allowed), server_id, auth)
+
+    @staticmethod
+    async def _multi_source_server_access(user_api_key_auth: UserAPIKeyAuth | None) -> MCPServerAccess | None:
+        """Server access for the two caller shapes pinned to no single team, each resolved per grant
+        source: a keyless admitted subject (its own grants plus its teams') and, under
+        ``personal_key_model_access_from_teams``, a personal key (its owner's teams). None for every
+        other caller, which the single-source rules then resolve."""
+        from litellm.proxy.auth.auth_checks import personal_key_inherits_team_grants
+
+        if user_api_key_auth is None:
+            return None
+        if is_mcp_admitted_user_subject(user_api_key_auth):
+            return MCPServerAccess(
+                server_ids=tuple(await MCPRequestHandler.resolve_admitted_subject_servers(user_api_key_auth)),
+            )
+        if personal_key_inherits_team_grants(user_api_key_auth):
+            return await MCPRequestHandler.resolve_personal_key_team_servers(user_api_key_auth)
+        return None
+
+    @staticmethod
+    def is_personal_key_inheriting_team_grants(auth: UserAPIKeyAuth) -> bool:
+        from litellm.proxy.auth.auth_checks import personal_key_inherits_team_grants
+
+        return personal_key_inherits_team_grants(auth)
+
+    @staticmethod
+    async def personal_key_team_sources(auth: UserAPIKeyAuth) -> tuple[UserAPIKeyAuth, ...]:
+        """One source per current team of a personal key's owner, each resolving as the same key pinned
+        to that team, so key/team inheritance and intersection hold exactly as for a team key. The
+        pinned ``team_id`` keeps a source out of this branch. A team of another organization grants
+        nothing to a key issued under its own org, so neither org ceiling is dropped. No team, or an owner that cannot be
+        loaded, yields no source: the key reaches nothing through its owner."""
+        from litellm.proxy.auth.auth_checks import personal_key_owner_teams
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        teams: Final = await personal_key_owner_teams(
+            valid_token=auth,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=bool(auth.requires_fresh_policy),
+        )
+        return tuple(
+            auth.model_copy(
+                update=MappingProxyType(
+                    {
+                        "team_id": team.team_id,
+                        "org_id": auth.org_id or team.organization_id,
+                        "team_metadata": TypeAdapter(Mapping[str, object]).validate_python(
+                            team.model_dump().get("metadata") or {}
+                        ),
+                    }
+                )
+            )
+            for team in teams
+            if MCPRequestHandler._personal_key_team_permission_is_readable(team)
+            and (auth.org_id is None or team.organization_id in (None, auth.org_id))
+        )
+
+    @staticmethod
+    def _personal_key_team_permission_is_readable(team: LiteLLM_TeamTable) -> bool:
+        if team.object_permission_id is None or team.object_permission is not None:
+            return True
+        verbose_logger.warning(
+            "Personal key owner team %s has an unreadable object_permission, granting nothing",
+            team.team_id,
+        )
+        return False
+
+    @staticmethod
+    async def personal_key_team_server_grants(
+        auth: UserAPIKeyAuth,
+    ) -> tuple[tuple[UserAPIKeyAuth, MCPServerAccess], ...]:
+        sources: Final = await MCPRequestHandler.personal_key_team_sources(auth)
+
+        async def resolve_source(source: UserAPIKeyAuth) -> tuple[UserAPIKeyAuth, MCPServerAccess]:
+            try:
+                return source, await MCPRequestHandler.get_mcp_server_access(
+                    source,
+                    require_readable_team_policy=True,
+                )
+            except Exception as e:  # noqa: BLE001  # an unreadable team grant must not widen inherited access
+                verbose_logger.warning("MCP access lookup failed for owner team %r: %s", source.team_id, e)
+                return source, MCPServerAccess(server_ids=(), scope="scoped")
+
+        return tuple(await asyncio.gather(*(resolve_source(source) for source in sources)))
+
+    @staticmethod
+    async def personal_key_attributing_source(
+        auth: UserAPIKeyAuth,
+        server_id: str,
+        tool_name: str,
+        grants: tuple[tuple[UserAPIKeyAuth, MCPServerAccess], ...] | None = None,
+    ) -> UserAPIKeyAuth | None:
+        source_grants: Final = grants or await MCPRequestHandler.personal_key_team_server_grants(auth)
+
+        async def _source_if_tool_allowed(source: UserAPIKeyAuth, access: MCPServerAccess) -> UserAPIKeyAuth | None:
+            if server_id not in access.server_ids:
+                return None
+            try:
+                allowed_tools: Final = await MCPRequestHandler._single_credential_tools(server_id, source)
+            except Exception as e:  # noqa: BLE001  # attribution metadata must not fail an authorized call
+                verbose_logger.warning("MCP tool attribution failed for team %r: %s", source.team_id, e)
+                return None
+            return source if allowed_tools is None or tool_name in allowed_tools else None
+
+        eligible_sources: Final = tuple(
+            source
+            for source in await asyncio.gather(
+                *(_source_if_tool_allowed(source, access) for source, access in source_grants)
+            )
+            if source is not None
+        )
+        return min(eligible_sources, key=lambda source: source.team_id or "") if eligible_sources else None
+
+    @staticmethod
+    async def personal_key_team_rpm_limits(
+        auth: UserAPIKeyAuth, server: MCPServer, tool_name: str
+    ) -> Mapping[str, Mapping[str, int]] | None:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+        try:
+            source: Final = await MCPRequestHandler.personal_key_attributing_source(auth, server.server_id, tool_name)
+            if source is None or source.team_id is None or prisma_client is None:
+                return None
+            team: Final = await get_team_object(
+                team_id=source.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=bool(auth.requires_fresh_policy),
+            )
+            team_metadata: Final[Mapping[str, object]] = TypeAdapter(Mapping[str, object]).validate_python(
+                team.model_dump().get("metadata") or {}
+            )
+            team_limit: Final = team_metadata.get("mcp_rpm_limit")
+            if not isinstance(team_limit, dict) or not team_limit:
+                return None
+            validated_limit: Final = TypeAdapter(dict[str, int]).validate_python(team_limit)
+            applicable: Final = {
+                name: rpm
+                for name, rpm in validated_limit.items()
+                if server.server_id in global_mcp_server_manager.expand_permission_list([name])
+            }
+        except Exception as e:  # noqa: BLE001  # throttling metadata must not fail an allowed request
+            verbose_logger.warning("Failed to resolve per-team MCP rpm limits for personal key: %s", e)
+            return None
+        else:
+            return {source.team_id: applicable} if applicable else None
+
+    @staticmethod
+    async def resolve_personal_key_team_servers(auth: UserAPIKeyAuth) -> MCPServerAccess:
+        """Union of what the owner's teams grant the personal key, each answered by the canonical
+        resolver. Unscoped only when some team leaves the key unscoped, as a team key of it would be."""
+        grants: Final = await MCPRequestHandler.personal_key_team_server_grants(auth)
+        server_ids: Final = tuple(dict.fromkeys(chain.from_iterable(access.server_ids for _source, access in grants)))
+        unscoped: Final = any(access.scope == "unscoped" for _source, access in grants)
+        return MCPServerAccess(server_ids=server_ids, scope="unscoped" if unscoped else "scoped")
+
+    @staticmethod
+    async def resolve_personal_key_team_tools(server_id: str, auth: UserAPIKeyAuth) -> tuple[str, ...] | None:
+        """Effective tool allowlist on ``server_id`` for a personal key: the union over the owner's teams
+        that grant the server, where a granting team without a tool rule allows every tool. A server no
+        team grants is reachable only through an open channel (allow_all_keys, the owner's BYOM, the
+        admin-view role) and
+        then carries the key's OWN tool rules, never a team's; otherwise nothing is allowed. Each team
+        resolves through the raising ``_single_credential_tools`` so one team's fault reaches the
+        caller's fail-closed handler instead of becoming an allow-all ``None`` in the union."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        grants: Final = await MCPRequestHandler.personal_key_team_server_grants(auth)
+        granting: Final = tuple(source for source, access in grants if server_id in access.server_ids)
+        if not granting:
+            reachable: Final = server_id in await global_mcp_server_manager.operator_open_server_ids(
+                auth
+            ) or await MCPRequestHandler.admin_view_unscoped(auth)
+            if not reachable:
+                return ()
+            own_tools: Final = await MCPRequestHandler._single_credential_tools(server_id, auth)
+            return None if own_tools is None else tuple(own_tools)
+        tool_lists: Final = await asyncio.gather(
+            *(MCPRequestHandler._single_credential_tools(server_id, source) for source in granting)
+        )
+        if any(tools is None for tools in tool_lists):
+            return None
+        return tuple(sorted(frozenset(chain.from_iterable(tools for tools in tool_lists if tools is not None))))
 
     @staticmethod
     def _get_key_object_permission(
@@ -2693,6 +3054,8 @@ class MCPRequestHandler:
 
             return await managed_agent_tools(server_id, user_api_key_auth)
 
+        from litellm.proxy.auth.auth_checks import personal_key_inherits_team_grants
+
         try:
             # FIRST statement, mirroring get_allowed_mcp_servers: a keyless admitted subject resolves per
             # source and shares nothing with the single-credential prelude below. Ordering is the invariant:
@@ -2700,97 +3063,11 @@ class MCPRequestHandler:
             if is_mcp_admitted_user_subject(user_api_key_auth):
                 return await MCPRequestHandler.resolve_admitted_subject_tools(server_id, user_api_key_auth)
 
-            # Get key and team object permissions (already loaded in main auth flow)
-            key_obj_perm: Final = MCPRequestHandler._get_key_object_permission(user_api_key_auth)
-            team_obj_perm: Final = await MCPRequestHandler._get_team_object_permission(user_api_key_auth)
+            if personal_key_inherits_team_grants(user_api_key_auth):
+                return _as_list(await MCPRequestHandler.resolve_personal_key_team_tools(server_id, user_api_key_auth))
 
-            # Extract tool permissions for this server. Dict keys may be
-            # server_ids OR names/aliases; normalize to server_id-keyed form
-            # before lookup so a name-based key does not silently drop its
-            # tool restrictions when server_id is the resolved uuid.
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-                global_mcp_server_manager,
-            )
-
-            key_direct_tools: Final = (
-                global_mcp_server_manager.expand_tool_permissions(key_obj_perm.mcp_tool_permissions).get(server_id)
-                if key_obj_perm
-                else None
-            )
-
-            # Tools granted through the key's toolsets restrict this server exactly
-            # as direct tool permissions do; union with any direct grants so the
-            # tool-level check sees the key's full effective tool scope
-            key_toolset_ids: Final = (key_obj_perm.mcp_toolsets or []) if key_obj_perm else []
-            key_toolset_tools: Final = (
-                (
-                    await global_mcp_server_manager.resolve_toolset_tool_permissions(
-                        toolset_ids=key_toolset_ids,
-                        requires_fresh_policy=user_api_key_auth.requires_fresh_policy,
-                    )
-                ).get(server_id)
-                if key_toolset_ids
-                else None
-            )
-
-            key_group_tools: Final = await MCPRequestHandler._key_access_group_tools_for_server(
-                user_api_key_auth, server_id
-            )
-            key_direct_servers: Final = await MCPRequestHandler._key_direct_servers(
-                key_obj_perm, requires_fresh_policy=bool(user_api_key_auth.requires_fresh_policy)
-            )
-            key_tools: Final = _as_list(
-                MCPRequestHandler._key_tool_scope(
-                    key_direct_tools, key_toolset_tools, key_group_tools, server_id in key_direct_servers
-                )
-            )
-            team_direct_tools: Final = (
-                global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
-                if team_obj_perm
-                else None
-            )
-
-            # Tools granted through the team's toolsets restrict this server exactly
-            # as the team's direct tool permissions do, mirroring the key path above
-            team_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
-                team_obj_perm, server_id, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
-            )
-            team_group_tools: Final = await MCPRequestHandler._team_access_group_tools_for_server(
-                user_api_key_auth, server_id
-            )
-            team_tools: Final = MCPRequestHandler._union_tool_grants(
-                team_direct_tools, team_toolset_tools, team_group_tools
-            )
-
-            # Apply same inheritance logic as get_allowed_mcp_servers. ``is not None`` so an explicit
-            # empty allowlist stays a deny instead of reading as "no restriction".
-            if team_tools is not None:
-                if key_tools is not None:
-                    # Both have restrictions → intersection
-                    allowed_tools = list(set(team_tools) & set(key_tools))
-                else:
-                    # Only team has restrictions → inherit from team
-                    allowed_tools = team_tools
-            else:
-                # No team restrictions → use key restrictions
-                allowed_tools = cast(list[str], key_tools)
-
-            allowed_tools = _as_list(
-                await MCPRequestHandler._apply_end_user_tool_ceiling(allowed_tools, server_id, user_api_key_auth)
-            )
-
-            allowed_tools = _as_list(
-                await MCPRequestHandler._apply_user_tool_ceiling(
-                    allowed_tools, server_id, user_api_key_auth, keyless_source=keyless_source
-                )
-            )
-
-            allowed_tools = _as_list(
-                await MCPRequestHandler.apply_agent_caller_tool_ceiling(allowed_tools, server_id, user_api_key_auth)
-            )
-
-            return await MCPRequestHandler._apply_agent_and_org_tool_ceilings(
-                allowed_tools, server_id, user_api_key_auth, keyless_source=keyless_source
+            return await MCPRequestHandler._single_credential_tools(
+                server_id, user_api_key_auth, keyless_source=keyless_source
             )
 
         except Exception as e:
@@ -2806,9 +3083,107 @@ class MCPRequestHandler:
             # keyless_source AND the marker are needed: each source resolves through an UNMARKED auth, so
             # without keyless_source a fault under a source returns None and wins the union as allow-all.
             deny_all: Final = (
-                unreadable_entitlement or keyless_source or is_mcp_admitted_user_subject(user_api_key_auth)
+                unreadable_entitlement
+                or keyless_source
+                or is_mcp_admitted_user_subject(user_api_key_auth)
+                or personal_key_inherits_team_grants(user_api_key_auth)
             )
             return [] if deny_all else None
+
+    @staticmethod
+    async def _single_credential_tools(
+        server_id: str,
+        user_api_key_auth: UserAPIKeyAuth,
+        *,
+        keyless_source: bool = False,
+    ) -> list[str] | None:  # mutable-ok: resolver returns a list
+        """Tool allowlist on ``server_id`` for one credential pinned to at most one team: the key's own
+        and its team's tool rules under the end-user, user, agent-caller, agent and org ceilings."""
+        # Get key and team object permissions (already loaded in main auth flow)
+        key_obj_perm: Final = MCPRequestHandler._get_key_object_permission(user_api_key_auth)
+        team_obj_perm: Final = await MCPRequestHandler._get_team_object_permission(user_api_key_auth)
+
+        # Extract tool permissions for this server. Dict keys may be
+        # server_ids OR names/aliases; normalize to server_id-keyed form
+        # before lookup so a name-based key does not silently drop its
+        # tool restrictions when server_id is the resolved uuid.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        key_direct_tools: Final = (
+            global_mcp_server_manager.expand_tool_permissions(key_obj_perm.mcp_tool_permissions).get(server_id)
+            if key_obj_perm
+            else None
+        )
+
+        # Tools granted through the key's toolsets restrict this server exactly
+        # as direct tool permissions do; union with any direct grants so the
+        # tool-level check sees the key's full effective tool scope
+        key_toolset_ids: Final = (key_obj_perm.mcp_toolsets or []) if key_obj_perm else []
+        key_toolset_tools: Final = (
+            (
+                await global_mcp_server_manager.resolve_toolset_tool_permissions(
+                    toolset_ids=key_toolset_ids,
+                    requires_fresh_policy=user_api_key_auth.requires_fresh_policy,
+                )
+            ).get(server_id)
+            if key_toolset_ids
+            else None
+        )
+
+        key_group_tools: Final = await MCPRequestHandler._key_access_group_tools_for_server(
+            user_api_key_auth, server_id
+        )
+        key_direct_servers: Final = await MCPRequestHandler._key_direct_servers(
+            key_obj_perm, requires_fresh_policy=bool(user_api_key_auth.requires_fresh_policy)
+        )
+        key_tools: Final = _as_list(
+            MCPRequestHandler._key_tool_scope(
+                key_direct_tools, key_toolset_tools, key_group_tools, server_id in key_direct_servers
+            )
+        )
+        team_direct_tools: Final = (
+            global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
+            if team_obj_perm
+            else None
+        )
+
+        # Tools granted through the team's toolsets restrict this server exactly
+        # as the team's direct tool permissions do, mirroring the key path above
+        team_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
+            team_obj_perm, server_id, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
+        )
+        team_group_tools: Final = await MCPRequestHandler._team_access_group_tools_for_server(
+            user_api_key_auth, server_id
+        )
+        team_tools: Final = MCPRequestHandler._union_tool_grants(
+            team_direct_tools, team_toolset_tools, team_group_tools
+        )
+
+        # Apply same inheritance logic as get_allowed_mcp_servers. ``is not None`` so an explicit
+        # empty allowlist stays a deny instead of reading as "no restriction".
+        initial_allowed_tools: Final = (
+            list(set(team_tools) & set(key_tools))
+            if team_tools is not None and key_tools is not None
+            else team_tools
+            if team_tools is not None
+            else key_tools
+        )
+        end_user_allowed_tools: Final = _as_list(
+            await MCPRequestHandler._apply_end_user_tool_ceiling(initial_allowed_tools, server_id, user_api_key_auth)
+        )
+        user_allowed_tools: Final = _as_list(
+            await MCPRequestHandler._apply_user_tool_ceiling(
+                end_user_allowed_tools, server_id, user_api_key_auth, keyless_source=keyless_source
+            )
+        )
+        caller_allowed_tools: Final = _as_list(
+            await MCPRequestHandler.apply_agent_caller_tool_ceiling(user_allowed_tools, server_id, user_api_key_auth)
+        )
+        return await MCPRequestHandler._apply_agent_and_org_tool_ceilings(
+            caller_allowed_tools, server_id, user_api_key_auth, keyless_source=keyless_source
+        )
 
     @staticmethod
     async def _apply_agent_and_org_tool_ceilings(
@@ -3069,6 +3444,8 @@ class MCPRequestHandler:
     @staticmethod
     async def _get_allowed_mcp_servers_for_team(
         user_api_key_auth: UserAPIKeyAuth | None = None,
+        *,
+        require_readable_policy: bool = False,
     ) -> list[str]:
         """Get allowed MCP servers a caller inherits from the team it is pinned to.
 
@@ -3080,7 +3457,24 @@ class MCPRequestHandler:
         team_ids: Final = await MCPRequestHandler._team_ids_for_mcp_grant(user_api_key_auth)
         if not team_ids:
             return []
-        return await MCPRequestHandler._allowed_mcp_servers_for_single_team(team_ids[0], user_api_key_auth)
+        return await MCPRequestHandler._allowed_mcp_servers_for_single_team(
+            team_ids[0],
+            user_api_key_auth,
+            require_readable_policy=require_readable_policy,
+        )
+
+    @staticmethod
+    async def _get_allowed_mcp_servers_for_policy(
+        user_api_key_auth: UserAPIKeyAuth | None,
+        *,
+        require_readable_policy: bool,
+    ) -> list[str]:
+        if require_readable_policy:
+            return await MCPRequestHandler._get_allowed_mcp_servers_for_team(
+                user_api_key_auth,
+                require_readable_policy=True,
+            )
+        return await MCPRequestHandler._get_allowed_mcp_servers_for_team(user_api_key_auth)
 
     @staticmethod
     async def _team_ids_for_mcp_grant(user_api_key_auth: UserAPIKeyAuth | None) -> list[str]:
@@ -3134,6 +3528,7 @@ class MCPRequestHandler:
         team_access_group_servers: list[str],
         *,
         requires_fresh_policy: bool = False,
+        require_readable_policy: bool = False,
     ) -> AbstractSet[str]:
         """The raw MCP-server set a team grants (before any org ceiling): its object_permission (direct
         ``mcp_servers``, the ``all_proxy_servers`` sentinel → the full registry, legacy access groups,
@@ -3150,10 +3545,11 @@ class MCPRequestHandler:
             return set(global_mcp_server_manager.get_registry().keys())
         legacy_access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(
             object_permissions.mcp_access_groups or [],
-            requires_fresh_policy=requires_fresh_policy,
+            requires_fresh_policy=requires_fresh_policy or require_readable_policy,
         )
         toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(
-            object_permissions, requires_fresh_policy=requires_fresh_policy
+            object_permissions,
+            requires_fresh_policy=requires_fresh_policy or require_readable_policy,
         )
         servers: Final = (
             set(global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or []))
@@ -3168,6 +3564,8 @@ class MCPRequestHandler:
     async def _allowed_mcp_servers_for_single_team(
         team_id: str,
         user_api_key_auth: UserAPIKeyAuth | None,
+        *,
+        require_readable_policy: bool = False,
     ) -> list[str]:
         """Allowed MCP servers granted by ONE team (its raw grant, then capped by the team's own org
         for a keyless admitted subject).
@@ -3216,17 +3614,19 @@ class MCPRequestHandler:
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
                 check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
+                strict_errors=require_readable_policy,
             )
 
             servers: Final = await MCPRequestHandler._team_granted_servers(
                 team_obj,
                 team_access_group_servers,
                 requires_fresh_policy=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
+                require_readable_policy=require_readable_policy,
             )
             return list(servers)
         except Exception as e:
             if isinstance(e, UnloadableEntitlementError) or (
-                user_api_key_auth is not None and user_api_key_auth.requires_fresh_policy
+                require_readable_policy or (user_api_key_auth is not None and user_api_key_auth.requires_fresh_policy)
             ):
                 raise
             verbose_logger.warning("Failed to get allowed MCP servers for team: %s", e)
@@ -3859,7 +4259,7 @@ class MCPRequestHandler:
 
         cache_key: Final = f"agent_object_permission_id:{agent_id}"
         try:
-            cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
+            cached: Final = _CACHED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
             if cached == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:
                 return None
             if isinstance(cached, str) and cached:

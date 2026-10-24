@@ -1731,6 +1731,16 @@
         "field_type": "password",
         "options": null,
         "default_value": null
+      },
+      {
+        "key": "github_copilot_host",
+        "label": "GitHub host",
+        "placeholder": "github.com",
+        "tooltip": "Leave empty for github.com. For GHE.com data residency enter your SUBDOMAIN.ghe.com host",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
@@ -1984,6 +1994,24 @@
       }
     ],
     "default_model_placeholder": "laya/english"
+  },
+  {
+    "provider": "OPENCODE_GO",
+    "provider_display_name": "OpenCode Go",
+    "litellm_provider": "opencode_go",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": "OpenCode Console API key",
+        "tooltip": "Use a Console API key with an active Go or Go Plus subscription.",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "glm-5.3-flash"
   },
   {
     "provider": "LAMBDA_AI",
@@ -2734,6 +2762,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "OPENINFER",
+    "provider_display_name": "OpenInfer",
+    "litellm_provider": "openinfer",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.openinfer.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "openinfer/@oi/Qwen3.5-27B"
   },
   {
     "provider": "OPENAI_LIKE",

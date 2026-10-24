@@ -86,6 +86,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot as UserBudgetSnapshot,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
@@ -105,6 +106,7 @@ from litellm.types.utils import (
     ProviderField,
     StandardCallbackDynamicParams,
     StandardLoggingGuardrailInformation,
+    StandardLoggingKubernetesPodRouting,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
@@ -375,6 +377,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/decisions",
         "/systemone",
         "/v1/systemone",
+        "/extraction",
+        "/v1/extraction",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -563,6 +567,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/metadata_schema",
         "/user/info",
         "/v2/user/info",
+        "/management/v1/users/me",
         "/model/info",
         "/v1/model/info",
         "/v2/model/info",
@@ -666,6 +671,7 @@ class LiteLLMRoutes(enum.Enum):
             "/model/update",
             "/model/delete",
             "/model/info",
+            "/model/{model_id}/kubernetes_pods",
             "/jwt/key/mapping/new",
             "/jwt/key/mapping/update",
             "/jwt/key/mapping/delete",
@@ -2454,6 +2460,20 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
+        None,
+        description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",
+    )
+
+    @field_validator("request_tag_mappings")
+    @classmethod
+    def validate_request_tag_mapping_duplicates(
+        cls, rules: Sequence[RequestTagMapping] | None
+    ) -> Sequence[RequestTagMapping] | None:
+        if rules is not None and len({(rule.key, rule.value) for rule in rules}) != len(rules):
+            raise ValueError("Only one mapping is allowed for each baggage key/value, including its any-value fallback")
+        return rules
+
     completion_model: str | None = Field(None, description="proxy level default model for all chat completion calls")
     max_in_flight_requests_per_worker: int | None = Field(
         None, gt=0, description="maximum concurrent requests handled by each worker"
@@ -2697,6 +2717,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "hidden model can still be called."
         ),
     )
+    return_wildcard_routes: bool | None = Field(
+        None,
+        description=(
+            "When true, `/v1/models` lists wildcard routes like `openai/*` unless the request passes "
+            "`return_wildcard_routes=false`."
+        ),
+    )
     alerting: list | None = Field(
         None,
         description="List of alerting integrations - e.g. `alerting: ['slack', 'webhook', 'email']`. 'slack' posts Slack-format messages to any Slack-compatible webhook (Slack, Rocket.Chat, Mattermost); 'webhook' posts structured JSON budget alerts to WEBHOOK_URL",
@@ -2773,6 +2800,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=None,
         description="Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.",
     )
+    vertex_ai_pass_through_drop_anthropic_betas: tuple[str, ...] | None = Field(
+        default=None,
+        description="anthropic-beta header values the Vertex AI pass-through routes (/vertex_ai/* and /vertex-ai/*) remove before calling Vertex, for a beta a Vertex Claude model rejects, whether the client sent them as anthropic-beta or x-pass-anthropic-beta. Every other value the client sent is forwarded unchanged, and the header is left out when no value remains. Unset forwards the header as sent.",
+    )
     transcribe_media_buckets: list[str] | None = Field(
         default=None,
         description="S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.",
@@ -2785,6 +2816,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     supported_db_objects: list[SupportedDBObjectType] | None = Field(
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
+    )
+    self_serve_budget_policy: Literal["disabled", "lower_only", "ceiling"] | None = Field(
+        None,
+        description="Lets a non-admin change max_budget or budget_limits on a key they created and still own via /key/update. 'disabled' (default) requires an admin for any budget change. 'lower_only' lets the owner add or lower limits. 'ceiling' also lets the owner raise or remove limits when they could create that key with the new budget via /key/generate.",
     )
     user_mcp_management_mode: UserMCPManagementMode | None = Field(
         None,
@@ -2856,6 +2891,30 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Maximum retention period for per-day tag spend aggregate rows (e.g., '90d'). Rows whose day is older "
             "than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never "
             "deleted. Only historical tag usage analytics are affected; tag budgets read the lifetime counter."
+        ),
+    )
+    maximum_spend_logs_size: str | None = Field(
+        None,
+        description=(
+            "Size rule for spend logs (e.g. '180GB'): when LiteLLM_SpendLogs plus LiteLLM_SpendLogToolIndex "
+            "(heap, indexes and TOAST, measured with pg_total_relation_size) hold more live data than this, the "
+            "cleanup job deletes the oldest spend logs first until they are under "
+            "maximum_spend_logs_cleanup_target_size. Independent of maximum_spend_logs_retention_period: a row is "
+            "deleted when either rule says so. Unset means no size rule."
+        ),
+    )
+    maximum_spend_logs_cleanup_target_size: str | None = Field(
+        None,
+        description=(
+            "Level a size-triggered cleanup run deletes down to (e.g. '20GB'). Must be below maximum_spend_logs_size. "
+            "Unset means the run stops as soon as the tables are back under maximum_spend_logs_size."
+        ),
+    )
+    maximum_spend_logs_size_check_interval: str | None = Field(
+        None,
+        description=(
+            "How often the size rule is checked (e.g. '10m'). Defaults to '1d'. Ignored when "
+            "maximum_spend_logs_cleanup_cron is set, which then drives both the age and the size cleanup."
         ),
     )
     use_spend_logs_partitioning: bool | None = Field(
@@ -3667,6 +3726,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key_project_alias: str | None
     user_api_key_org_id: str | None
     user_api_key_user_id: str | None
+    user_api_key_user_email: ReadOnly[str | None]
     user_api_key_team_alias: str | None
     spend_logs_metadata: dict | None  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: str | None
@@ -3676,7 +3736,9 @@ class SpendLogsMetadata(TypedDict):
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
     routing_decision: StandardLoggingRoutingDecision | None
+    kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     internal_call_origin: InternalCallOrigin | None
+    billed_retry_attempt: ReadOnly[NotRequired[bool | None]]
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     guardrail_information: list[StandardLoggingGuardrailInformation] | None
     eval_information: Any | None
@@ -4827,6 +4889,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         "mcp_routes",
         "/v1/messages",
         "/v1/messages/count_tokens",
+        "/rag/ingest",
+        "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
     ]
     team_id_default: str | None = Field(
         default=None,
@@ -5196,6 +5262,7 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     team_id: str | None  # team that triggered discovery
     key_alias: str | None  # human-readable key alias
     user_agent: str | None  # HTTP User-Agent of the caller
+    call_count: ReadOnly[int]  # invocations folded into this row since the previous flush
 
 
 from litellm.models.managed_files import (  # noqa: E402

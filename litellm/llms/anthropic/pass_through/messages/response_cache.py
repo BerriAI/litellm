@@ -1,5 +1,6 @@
 import re
 from collections.abc import AsyncIterator, Mapping, Sequence
+from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
@@ -153,6 +154,8 @@ class CachedAnthropicMessagesStreamIterator(BaseAnthropicMessagesStreamingIterat
                 await self._handle_streaming_logging(chunks)
             raise StopAsyncIteration
         chunk: Final = self.chunks[self.current_index]
+        if self.completion_start_time is None:
+            self.completion_start_time = datetime.now()
         self.current_index += 1
         return chunk
 

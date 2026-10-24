@@ -4,18 +4,26 @@ OpenAI Responses API token counting transformation logic.
 This module handles the transformation of requests to OpenAI's /v1/responses/input_tokens endpoint.
 """
 
+import copy
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal, TypeAlias
+from typing import Final, Literal, Protocol, TypeAlias
 
+from openai.types.responses.input_token_count_params import InputTokenCountParams
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
+from litellm.litellm_core_utils.tool_fields import DropPolicy
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.pass_through.convertible_blocks import malformed_tool_result_text_error
 from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicOutputSchema
+from litellm.types.llms.openai import ResponsesAPIRequestParams
+from litellm.types.utils import all_litellm_params
 
 
 class ResponsesInputTextPart(TypedDict):
@@ -54,6 +62,26 @@ class _AnthropicCountMessage(TypedDict):
 
 
 _ANTHROPIC_COUNT_MESSAGES: Final = TypeAdapter(tuple[_AnthropicCountMessage, ...])
+
+
+class _FieldReader(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+class _FunctionFields(_FieldReader, Protocol):
+    def __contains__(self, key: object, /) -> bool: ...
+
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+def _field_reader(value: object) -> _FieldReader:
+    return require_attributes(value, _FieldReader, "get")
+
+
+def _function_fields(value: object) -> _FunctionFields:
+    return require_attributes(value, _FunctionFields, "get", "__contains__", "__getitem__")
+
+
 _ANTHROPIC_OUTPUT_SCHEMA: Final = TypeAdapter(AnthropicOutputSchema)
 
 
@@ -142,9 +170,8 @@ class OpenAICountTokensConfig:
     """
 
     def get_openai_count_tokens_endpoint(self, api_base: str | None = None) -> str:
-        base = api_base or "https://api.openai.com/v1"
-        base = base.rstrip("/")
-        return f"{base}/responses/input_tokens"
+        base: Final = api_base or "https://api.openai.com/v1"
+        return join_api_base(base, "responses/input_tokens")
 
     def transform_request_to_count_tokens(
         self,
@@ -190,7 +217,7 @@ class OpenAICountTokensConfig:
 
     @staticmethod
     def _transform_tools_for_responses_api(
-        tools: list[dict[str, Any]],
+        tools: list[dict[str, object]],
     ) -> list[dict[str, object]]:
         """
         Transform OpenAI chat and Anthropic tools to Responses API tools format.
@@ -202,7 +229,7 @@ class OpenAICountTokensConfig:
         transformed: Final[list[dict[str, object]]] = []
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
-                func = tool["function"]
+                func = _function_fields(tool["function"])
                 item: dict[str, object] = {
                     "type": "function",
                     "name": func.get("name", ""),
@@ -229,7 +256,7 @@ class OpenAICountTokensConfig:
 
     @staticmethod
     def messages_to_responses_input(
-        messages: list[dict[str, Any]],
+        messages: Sequence[Mapping[str, object]],
     ) -> tuple[list[dict[str, object]], str | None]:
         """
         Convert standard chat messages format to OpenAI Responses API input format.
@@ -270,14 +297,17 @@ class OpenAICountTokensConfig:
                 if content:
                     input_items.append({"role": "assistant", "content": content})
                 if tool_calls:
-                    for tc in tool_calls:
-                        func = tc.get("function", {})
+                    for tc in iter_items(tool_calls):
+                        tool_call = _field_reader(tc)
+                        function = tool_call.get("function", {})
+                        call_id = tool_call.get("id", "")
+                        function_fields = _field_reader(function)
                         input_items.append(
                             {
                                 "type": "function_call",
-                                "call_id": tc.get("id", ""),
-                                "name": func.get("name", ""),
-                                "arguments": func.get("arguments", ""),
+                                "call_id": call_id,
+                                "name": function_fields.get("name", ""),
+                                "arguments": function_fields.get("arguments", ""),
                             }
                         )
                 elif not content:
@@ -295,14 +325,16 @@ class OpenAICountTokensConfig:
         return input_items, instructions
 
     @staticmethod
-    def malformed_anthropic_messages_error(messages: Sequence[Mapping[str, object]]) -> str | None:
+    def malformed_anthropic_messages_error(
+        messages: Sequence[Mapping[str, object]], *, drop_params: bool
+    ) -> str | None:
         try:
             _ANTHROPIC_COUNT_MESSAGES.validate_python(messages)
         except ValidationError as e:
             return "; ".join(
                 f"messages.{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in e.errors()
             )
-        return None
+        return None if drop_params else malformed_tool_result_text_error(messages)
 
     @staticmethod
     def anthropic_messages_to_responses_input(
@@ -337,3 +369,34 @@ class OpenAICountTokensConfig:
         input_items: object, instructions: object, tools: object, text: object = None
     ) -> ResponsesCountRequestParts:
         return _RESPONSES_COUNT_REQUEST_PARTS.validate_python((input_items, instructions, tools, text))
+
+
+_COUNT_FIELDS_THE_SDK_TYPE_OMITS: Final = frozenset({"prompt"})
+_COUNT_REQUEST_FIELDS: Final = (
+    InputTokenCountParams.__required_keys__ | InputTokenCountParams.__optional_keys__ | _COUNT_FIELDS_THE_SDK_TYPE_OMITS
+)
+_INFERENCE_REQUEST_FIELDS: Final = (
+    ResponsesAPIRequestParams.__required_keys__ | ResponsesAPIRequestParams.__optional_keys__
+)
+_LITELLM_REQUEST_FIELDS: Final = frozenset((*all_litellm_params, "drop_params", "additional_drop_params"))
+
+
+def _forwards(field: str, policy: DropPolicy) -> bool:
+    if field in _LITELLM_REQUEST_FIELDS or field in policy.additional_drop_params:
+        return False
+    return field in _COUNT_REQUEST_FIELDS or (not policy.drop_params and field in _INFERENCE_REQUEST_FIELDS)
+
+
+def _restored(field: str, value: object) -> object:
+    match field, value:
+        case "input", _:
+            return ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(value))
+        case "previous_response_id", str():
+            return ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(value)
+        case _:
+            return value
+
+
+def native_count_request(request: Mapping[str, object], model: str, policy: DropPolicy) -> Mapping[str, object]:
+    forwarded: Final = {field: _restored(field, value) for field, value in request.items() if _forwards(field, policy)}
+    return {**forwarded, "model": model}

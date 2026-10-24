@@ -39,9 +39,11 @@ from litellm.constants import (
 from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
+_DECODED_JSON: Final = TypeAdapter(object)
 _BUNDLED_CATALOG_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 
@@ -313,7 +315,7 @@ def _classify_fetch_error(error: httpx.HTTPError | httpx.InvalidURL, url: str) -
 
 def _classify_fetch_content(content: bytes, url: str, etag: str | None) -> _FetchAttemptOutcome:
     try:
-        parsed: Final[object] = json.loads(content)
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(content))
     except ValueError as e:
         return ModelCostMapReloadUnavailable(reason=f"invalid JSON from {url}: {e}")
     if not isinstance(parsed, dict):
@@ -324,10 +326,16 @@ def _classify_fetch_content(content: bytes, url: str, etag: str | None) -> _Fetc
     return ModelCostMapReloaded(model_cost_map=model_cost_map, revision=git_blob_id(content), etag=etag)
 
 
-def _attempt_fetch_s3(url: str, timeout: int) -> _FetchAttemptOutcome:
+def _split_url(url: str) -> urllib.parse.SplitResult | ModelCostMapReloadUnavailable:
+    try:
+        return urllib.parse.urlsplit(url)
+    except ValueError as error:
+        return ModelCostMapReloadUnavailable(reason=f"invalid URL {url}: {error}")
+
+
+def _attempt_fetch_s3(parts: urllib.parse.SplitResult, url: str, timeout: int) -> _FetchAttemptOutcome:
     from botocore.exceptions import BotoCoreError, ClientError
 
-    parts: Final = urllib.parse.urlsplit(url)
     bucket: Final = parts.netloc
     key: Final = parts.path.lstrip("/")
     if not bucket or not key:
@@ -343,9 +351,11 @@ def _attempt_fetch_s3(url: str, timeout: int) -> _FetchAttemptOutcome:
 
 
 async def _attempt_fetch(client: _AsyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
-    parts: Final = urllib.parse.urlsplit(url)
+    parts: Final = _split_url(url)
+    if isinstance(parts, ModelCostMapReloadUnavailable):
+        return parts
     if parts.scheme == "s3":
-        return await asyncio.to_thread(_attempt_fetch_s3, url, timeout)
+        return await asyncio.to_thread(_attempt_fetch_s3, parts, url, timeout)
     try:
         response: Final = await client.get(url, timeout=timeout)
     except (httpx.HTTPError, httpx.InvalidURL) as e:
@@ -354,9 +364,11 @@ async def _attempt_fetch(client: _AsyncGetClient, url: str, timeout: int) -> _Fe
 
 
 def _attempt_fetch_sync(client: _SyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
-    parts: Final = urllib.parse.urlsplit(url)
+    parts: Final = _split_url(url)
+    if isinstance(parts, ModelCostMapReloadUnavailable):
+        return parts
     if parts.scheme == "s3":
-        return _attempt_fetch_s3(url, timeout)
+        return _attempt_fetch_s3(parts, url, timeout)
     try:
         response: Final = client.get(url, timeout=timeout)
     except (httpx.HTTPError, httpx.InvalidURL) as e:
@@ -372,7 +384,8 @@ def _classify_fetch_response(response: httpx.Response, url: str) -> _FetchAttemp
         )
     if response.is_error:
         return ModelCostMapReloadUnavailable(reason=f"HTTP {response.status_code} from {url}")
-    return _classify_fetch_content(response.content, url, response.headers.get("etag"))
+    etag_values: Final = response.headers.get_list("etag")
+    return _classify_fetch_content(response.content, url, ", ".join(etag_values) if etag_values else None)
 
 
 def _next_retry_wait(
@@ -446,7 +459,7 @@ async def refetch_model_cost_map(
     on failure it returns ``ModelCostMapReloadUnavailable`` so callers keep the
     map they already have.
     """
-    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
+    if is_offline_mode() or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
         _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
         _cost_map_source_info.source = "local"
         _cost_map_source_info.url = None
@@ -547,22 +560,42 @@ def get_model_cost_map_loaded_at() -> "datetime | None":
     return _cost_map_source_info.loaded_at
 
 
-def _expand_model_aliases(model_cost: dict) -> dict:
+class AliasedCostEntry(dict[str, object]):
+    __slots__ = ("names", "registered_fields")
+
+    def __init__(
+        self, entry: Mapping[str, object], names: tuple[str, ...], registered_fields: frozenset[str] = frozenset()
+    ) -> None:
+        super().__init__(entry)
+        self.names: tuple[str, ...] = names
+        self.registered_fields: frozenset[str] = registered_fields
+
+
+def _alias_groups(alias_owners: Mapping[str, str]) -> Mapping[str, tuple[str, ...]]:
+    return MappingProxyType(
+        {
+            owner: (owner, *(alias for alias, alias_owner in alias_owners.items() if alias_owner == owner))
+            for owner in dict.fromkeys(alias_owners.values())
+        }
+    )
+
+
+def _expand_model_aliases(model_cost: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
     """
     Expand ``aliases`` lists in model cost entries into top-level entries.
 
-    Each alias gets a reference to the **same** dict object as the canonical
-    entry (zero memory overhead).  The ``aliases`` key is removed from the
-    entry so downstream code never sees it.
+    Each alias gets a reference to the **same** ``AliasedCostEntry`` as the
+    canonical entry, which carries every name it is served under.  The
+    ``aliases`` key is removed from the entry so downstream code never sees it.
 
     If an alias collides with an existing canonical entry the alias is
     skipped and a warning is logged.
     """
-    aliases_to_add: Final[dict[str, dict]] = {}
+    alias_owners: Final[dict[str, str]] = {}
     keys_with_aliases: Final[list[str]] = []
 
     for model_name, model_info in model_cost.items():
-        aliases: list | None = model_info.get("aliases")
+        aliases: object = model_info.get("aliases")
         if aliases is None:
             continue
         keys_with_aliases.append(model_name)
@@ -584,7 +617,7 @@ def _expand_model_aliases(model_cost: dict) -> dict:
                     model_name,
                 )
                 continue
-            if alias in aliases_to_add:
+            if alias in alias_owners:
                 verbose_logger.warning(
                     "LiteLLM model alias conflict: alias '%s' (from '%s') "
                     "was already claimed by another entry — skipping.",
@@ -592,13 +625,14 @@ def _expand_model_aliases(model_cost: dict) -> dict:
                     model_name,
                 )
                 continue
-            aliases_to_add[alias] = model_info  # same dict reference
+            alias_owners[alias] = model_name
 
     # Remove the ``aliases`` key from entries so it doesn't pollute model info
     for key in keys_with_aliases:
         model_cost[key].pop("aliases", None)
 
-    model_cost.update(aliases_to_add)
+    for owner, names in _alias_groups(alias_owners).items():
+        model_cost.update(dict.fromkeys(names, AliasedCostEntry(model_cost[owner], names)))
     return model_cost
 
 
@@ -709,7 +743,7 @@ def get_model_cost_map(
     _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
-    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process():
+    if is_offline_mode() or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process():
         _cost_map_source_info.source = "local"
         _cost_map_source_info.url = None
         _cost_map_source_info.is_env_forced = True
