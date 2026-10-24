@@ -36,6 +36,7 @@ class OAuthScopeResponse:
         self._start: Message | None = None
         self._challenge: MCPUpstreamAuthError | None = None
         self._refused = False
+        self._release: asyncio.Task[None] | None = None
 
     @property
     def pending(self) -> bool:
@@ -43,6 +44,16 @@ class OAuthScopeResponse:
 
     def allow(self) -> None:
         self._ready.set()
+        if self._start is not None and self._release is None:
+            self._release = asyncio.create_task(self._release_start())
+
+    async def _release_start(self) -> None:
+        """Send the held headers once nothing can replace them, without waiting for the first body chunk."""
+        async with self._lock:
+            if self._start is not None and self._challenge is None and not self._refused:
+                start: Final = self._start
+                self._start = None
+                await self._send(start)
 
     def deny(self, error: MCPUpstreamAuthError) -> None:
         if self.pending and error.status_code == 403 and error.required_scope is not None:
@@ -53,9 +64,13 @@ class OAuthScopeResponse:
         if message["type"] == "http.response.start":
             self._start = message
             if message["status"] != 200:
-                self.allow()
+                self._ready.set()
+            if not self.pending:
+                await self._release_start()
             return
         await self._ready.wait()
+        if self._release is not None:
+            await self._release
         async with self._lock:
             if self._refused:
                 return
