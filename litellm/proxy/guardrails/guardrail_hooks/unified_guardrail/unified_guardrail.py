@@ -213,15 +213,25 @@ def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapp
 
 
 def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
-    """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
-    if "litellm_metadata" not in data:
-        from litellm.llms.base_llm.guardrail_translation.base_translation import (
-            BaseTranslation,
-        )
+    """Merge the ``user_api_key_*`` metadata into the request's resolved bucket.
 
-        user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-        if user_metadata:
-            data["litellm_metadata"] = user_metadata
+    Not ``data["litellm_metadata"]``: creating that key on a route whose bucket
+    is ``metadata`` flips every reader of
+    ``get_metadata_variable_name_from_kwargs`` onto the new dict and silently
+    strands the tags and router fields (#45543).
+    ``merge_user_api_key_metadata_into_request`` resolves the bucket and
+    ``setdefault``s, so an upstream value is never overwritten.
+    """
+    from litellm.llms.base_llm.guardrail_translation.base_translation import (
+        BaseTranslation,
+    )
+
+    BaseTranslation.merge_user_api_key_metadata_into_request(
+        cast(  # cast-ok: _RequestData is this module's own alias for the bare-dict request payload
+            _RequestData, data
+        ),
+        user_api_key_dict,
+    )
 
 
 class UnifiedLLMGuardrails(CustomLogger):
