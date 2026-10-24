@@ -3,7 +3,7 @@
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
 from typing import Final, Literal, TypedDict, cast
@@ -553,19 +553,11 @@ class TokenRates:
     cache_read_rate: float
     cache_creation_rate: float
     reasoning_rate: float | None
+    cache_creation_rates_by_ttl: Mapping[str, float] = MappingProxyType({})
 
     @property
     def billed_reasoning_rate(self) -> float:
         return self.output_rate if self.reasoning_rate is None else self.reasoning_rate
-
-
-@dataclass(frozen=True, slots=True)
-class TokenBaseCosts:
-    input_rate: float
-    output_rate: float
-    cache_read_rate: float
-    cache_creation_rate: float
-    cache_creation_rates_by_ttl: Mapping[str, float]
 
 
 def resolve_explicit_cache_read_cost_rate(
@@ -672,7 +664,8 @@ def apply_off_peak_pricing(model_info: ModelInfo, current_time: datetime | None,
     if off_peak is None:
         return rates
     off_peak_reasoning_rate: Final = _parse_off_peak_rate(off_peak.get("output_cost_per_reasoning_token"))
-    return TokenRates(
+    return replace(
+        rates,
         input_rate=_off_peak_rate(off_peak, "input_cost_per_token", rates.input_rate),
         output_rate=_off_peak_rate(off_peak, "output_cost_per_token", rates.output_rate),
         cache_read_rate=_off_peak_rate(off_peak, "cache_read_input_token_cost", rates.cache_read_rate),
@@ -686,18 +679,15 @@ def _apply_off_peak_to_base_costs(
     current_time: datetime | None,
     base_rates: TokenRates,
     tier: dict[str, object],
-) -> TokenBaseCosts:
+) -> TokenRates:
     """Apply off-peak rates to the base costs resolved from a pricing tier. off_peak_pricing has no
     field for the long-TTL cache-creation rates, so a tier that declares one keeps it, and a tier
     that does not bills that TTL at the off-peak-adjusted write rate. Reasoning is left to
     _resolve_billed_reasoning_rate.
     """
     rates: Final = apply_off_peak_pricing(model_info, current_time, base_rates)
-    return TokenBaseCosts(
-        input_rate=rates.input_rate,
-        output_rate=rates.output_rate,
-        cache_read_rate=rates.cache_read_rate,
-        cache_creation_rate=rates.cache_creation_rate,
+    return replace(
+        rates,
         cache_creation_rates_by_ttl=MappingProxyType(
             {
                 ttl: rates.cache_creation_rate if tier.get(key) is None else tier_rate(tier, key)
@@ -718,7 +708,7 @@ def _get_token_base_cost(
     current_time: datetime | None = None,
     *,
     threshold_is_inclusive: bool = False,
-) -> TokenBaseCosts:
+) -> TokenRates:
     """
     Return prompt cost, completion cost, and cache costs for a given model and usage.
 
@@ -880,11 +870,8 @@ def _get_token_base_cost(
             reasoning_rate=None,
         ),
     )
-    return TokenBaseCosts(
-        input_rate=base_rates.input_rate,
-        output_rate=base_rates.output_rate,
-        cache_read_rate=base_rates.cache_read_rate,
-        cache_creation_rate=base_rates.cache_creation_rate,
+    return replace(
+        base_rates,
         cache_creation_rates_by_ttl=MappingProxyType(
             {
                 ttl: base_rates.cache_creation_rate
