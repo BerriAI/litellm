@@ -5,6 +5,7 @@ This module contains the core login logic that can be reused across different
 login endpoints (e.g., /login and /v2/login).
 """
 
+import asyncio
 import os
 import secrets
 from collections.abc import Mapping
@@ -42,6 +43,7 @@ from litellm.proxy.utils import (
     PrismaClient,
     get_server_root_path,
     hash_password,
+    needs_password_rehash,
     verify_password,
 )
 from litellm.repositories.user_repository import UserRepository
@@ -106,16 +108,22 @@ async def screen_login_password_for_breach(
 
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
-    """Rehash legacy password (SHA256) to scrypt on successful login."""
-    if stored.startswith("scrypt:"):
+    """Rehash legacy scrypt or SHA256 password rows to pbkdf2 on successful login."""
+    if not needs_password_rehash(stored):
         return
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is not None:
-        await UserRepository(prisma_client).table.update(
-            where={"user_id": user_id},
-            data={"password": hash_password(password)},
-        )
+        try:
+            # PBKDF2 at 600k iterations is CPU-bound (~240ms); hash it off the
+            # event loop so concurrent requests do not stall behind a rehash.
+            rehashed: Final = await asyncio.to_thread(hash_password, password)
+            await UserRepository(prisma_client).table.update_many(
+                where={"user_id": user_id, "password": stored},
+                data={"password": rehashed},
+            )
+        except Exception as e:  # noqa: BLE001  # a failed rehash must never surface into the login
+            verbose_proxy_logger.warning("Login-time password rehash could not update user %s: %s", user_id, e)
 
 
 def get_ui_credentials(master_key: str | None) -> tuple[str, str]:
@@ -411,7 +419,9 @@ async def _sign_in(
                 code=401,
             )
 
-        if verify_password(password, _password):
+        # PBKDF2 at 600k iterations is CPU-bound (~240ms); run the KDF on a
+        # worker thread so the event loop keeps serving requests during login.
+        if await asyncio.to_thread(verify_password, password, _password):
             await _rehash_password_if_needed(_user_row.user_id, password, _password)
             breached_now: Final = prisma_client is not None and await screen_login_password_for_breach(
                 user_id=_user_row.user_id,
