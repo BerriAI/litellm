@@ -6,9 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-axum.workspace = true
+axum = { workspace = true, features = ["original-uri"] }
+bytes.workspace = true
 envy = "0.4.2"
 http-body-util = "0.1"
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
+litellm-core-utils.workspace = true
 litellm-inference.workspace = true
 litellm-gateway-inference.workspace = true
 litellm-gateway-mcp.workspace = true
@@ -32,6 +35,9 @@ uuid.workspace = true
 tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
+reqwest.workspace = true
+wiremock.workspace = true
 base64.workspace = true
 rstest.workspace = true
 tempfile.workspace = true

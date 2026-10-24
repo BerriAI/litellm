@@ -21,7 +21,7 @@ Each hop is one `From` that nests the lower error in one variant, see [conversio
 
 | Answer | Status |
 |---|---|
-| `declined()` | 501, for a route error, the gateway matched and parsed the request but core cannot serve it, nothing reached the provider |
+| `declined()` | 501, for a route error, the gateway matched and parsed the request but core cannot serve it, nothing reached the provider. The response carries the `Decline` as an extension, so the dispatch layer can forward the request to Python instead |
 | `upstream_response()` | the provider's own status, 502 when it is not a valid code |
 | `is_missing_credential()` | 401 |
 | `is_request()` | 400, for a route error |
@@ -46,7 +46,8 @@ The message of anything that is not a provider answer is the `litellm_error::Rep
 A request can fail before the handler runs, in the handler, or after the headers went out. All three end in the same `Error`, so they get the same classification and envelope
 
 - An extractor sets `type Rejection = Error`, so a bad body is the surface's envelope rather than axum's plain text
-- A path the gateway knows but does not serve returns `Error::Unsupported(path)` from one handler, so the client gets a 501 in the surface's envelope rather than a bare 404
+- A path or method no native route serves never reaches an `Error`. The merged router's fallbacks in `crates/gateway/src/dispatch` forward it to Python, and a standalone gateway answers axum's 404 or 405
+- `openai_response()` and `anthropic_response()` attach a route error's `Decline` to the response, so a handler that builds its envelope through them never drops a decline
 - A stream that fails after its headers went out hands the surface's SSE frame of `Error::from(error)` to `litellm_host_http::Sse::new`. `litellm_host_http::Error<E>` separates `Call(E)`, the route's own error, from `Protocol`, a host bug, and the `From` maps the second to `Internal`
 
 The axum hooks behind each line are in [`rust-gateway`](../../rust-gateway/SKILL.md)

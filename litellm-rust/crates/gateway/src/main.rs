@@ -4,6 +4,7 @@ use std::{
 };
 
 use litellm_config::Config;
+use litellm_gateway::{Fallback, Forward};
 use litellm_gateway_auth::UiBackend;
 use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
 use serde_json::json;
@@ -46,6 +47,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Logger::new(StderrSink { level }).install_global()?;
     let config = Config::load(settings.litellm_config)?;
     let inference = litellm_gateway::build_inference(&config)?;
+    let fallback = match settings.litellm_python_upstream.as_deref() {
+        Some(upstream) => Fallback::Forward(Forward::new(upstream)?),
+        None => Fallback::Reject,
+    };
     let ui = match std::env::var_os("LITELLM_UI_PATH") {
         Some(directory) => {
             let ui_settings: UiSettings = settings::from_iter(std::env::vars_os())?;
@@ -97,13 +102,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
 
-    tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %level, "gateway listening");
+    tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %level, python_upstream = settings.litellm_python_upstream.as_deref(), "gateway listening");
 
-    let result = axum::serve(
+    let result = litellm_gateway::serve(
         listener,
-        litellm_gateway::router(inference, &config, ui, mcp_router),
+        litellm_gateway::router(inference, &config, ui, mcp_router, fallback),
+        shutdown.clone().cancelled_owned(),
     )
-    .with_graceful_shutdown(shutdown.clone().cancelled_owned())
     .await;
     shutdown.cancel();
     if let Some(mcp) = mcp {

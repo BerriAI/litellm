@@ -1,15 +1,14 @@
 use axum::{
     body::Bytes,
-    extract::{FromRequest, FromRequestParts, Multipart, OriginalUri, Request},
+    extract::{FromRequest, FromRequestParts, Multipart, Request},
     http::request::Parts,
-    response::IntoResponse,
 };
 use serde_json::{Map, Value};
 
 use crate::{BodyError, Deployment, Error, Gateway};
 
 pub(crate) const MAX_FILE_BYTES: usize = 50 * 1024 * 1024;
-pub(crate) const MAX_BODY_BYTES: usize = MAX_FILE_BYTES + 1024 * 1024;
+pub const MAX_BODY_BYTES: usize = MAX_FILE_BYTES + 1024 * 1024;
 
 pub(crate) struct Upload {
     pub bytes: Bytes,
@@ -177,10 +176,6 @@ fn multipart_error(error: axum::extract::multipart::MultipartError) -> Error {
         return Error::BodyTooLarge;
     }
     BodyError::MultipartField(error).into()
-}
-
-pub(crate) async fn unsupported(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
-    Error::Unsupported(uri.path().to_owned())
 }
 
 #[cfg(test)]

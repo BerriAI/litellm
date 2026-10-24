@@ -6,6 +6,7 @@ use std::{
 use axum::{body::Body, http::Request};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use litellm_config::Config;
+use litellm_gateway::{Fallback, Forward};
 use litellm_gateway_inference::{Error, Gateway};
 use litellm_http::ClientVariant;
 use litellm_tracing::{Logger, Metadata, Record, Sink};
@@ -74,7 +75,7 @@ async fn authenticates_before_serving_mounted_inference_routes(
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            litellm_gateway::router(inference, &config, None, None),
+            litellm_gateway::router(inference, &config, None, None, Fallback::Reject),
         )
         .with_graceful_shutdown(async move {
             let _ = stopped.await;
@@ -132,7 +133,10 @@ async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gatewa
     let logger = Logger::new(LogSink(sender));
 
     let response = logger
-        .instrument(litellm_gateway::router(inference, &config, None, None).oneshot(request))
+        .instrument(
+            litellm_gateway::router(inference, &config, None, None, Fallback::Reject)
+                .oneshot(request),
+        )
         .await
         .unwrap();
 
@@ -168,7 +172,7 @@ async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(inferen
         false,
     )
     .merge(litellm_gateway_ui::dashboard_assets(assets.path()));
-    let app = litellm_gateway::router(inference, &config, Some(ui), None);
+    let app = litellm_gateway::router(inference, &config, Some(ui), None, Fallback::Reject);
     let page = app
         .clone()
         .oneshot(Request::get("/ui/").body(Body::empty()).unwrap())
@@ -278,7 +282,7 @@ async fn ui_routes_are_absent_when_not_mounted(
     let config =
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
             .unwrap();
-    let response = litellm_gateway::router(inference, &config, None, None)
+    let response = litellm_gateway::router(inference, &config, None, None, Fallback::Reject)
         .oneshot(
             Request::builder()
                 .method(method)
@@ -289,4 +293,63 @@ async fn ui_routes_are_absent_when_not_mounted(
         .await
         .unwrap();
     assert_eq!(response.status().as_u16(), 404);
+}
+
+#[rstest]
+#[case::unserved_path("POST", "/v1/embeddings", None, true)]
+#[case::management_api("GET", "/key/info?key=sk-1", None, true)]
+#[case::wrong_method_on_a_native_path("GET", "/v1/messages", None, true)]
+#[case::bad_key_on_a_native_route("POST", "/v1/messages", Some("Bearer wrong"), false)]
+#[tokio::test]
+async fn python_serves_every_request_the_gateway_does_not_route(
+    inference: Arc<Gateway>,
+    #[case] method: &str,
+    #[case] path: &str,
+    #[case] authorization: Option<&str>,
+    #[case] forwarded: bool,
+) {
+    let python = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::any())
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("from python"))
+        .mount(&python)
+        .await;
+    let config =
+        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
+            .unwrap();
+    let fallback = Fallback::Forward(Forward::new(&python.uri()).unwrap());
+    let request = Request::builder().method(method).uri(path);
+    let request = match authorization {
+        Some(value) => request.header("authorization", value),
+        None => request,
+    };
+
+    let mut request = request.body(Body::from("{}")).unwrap();
+    request.extensions_mut().insert(axum::extract::ConnectInfo(
+        "203.0.113.7:50000".parse::<std::net::SocketAddr>().unwrap(),
+    ));
+
+    let response = litellm_gateway::router(inference, &config, None, None, fallback)
+        .oneshot(request)
+        .await
+        .unwrap();
+
+    let received = python.received_requests().await.unwrap();
+    assert_eq!(received.len(), usize::from(forwarded));
+    if forwarded {
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(received[0].method.as_str(), method);
+        let url = &received[0].url;
+        let forwarded_path = match url.query() {
+            Some(query) => format!("{}?{query}", url.path()),
+            None => url.path().to_owned(),
+        };
+        assert_eq!(forwarded_path, path);
+        assert_eq!(
+            received[0].headers["x-litellm-gateway-declined"],
+            "route not native"
+        );
+        assert_eq!(received[0].headers["x-forwarded-for"], "203.0.113.7");
+    } else {
+        assert_eq!(response.status().as_u16(), 401);
+    }
 }

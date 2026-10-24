@@ -3761,11 +3761,14 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "bytes",
  "envy",
  "futures-util",
  "http-body-util",
+ "hyper-util",
  "litellm-auth-types",
  "litellm-config",
+ "litellm-core-utils",
  "litellm-error",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
@@ -3776,6 +3779,7 @@ dependencies = [
  "litellm-llms",
  "litellm-secrets",
  "litellm-tracing",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",
@@ -3787,6 +3791,7 @@ dependencies = [
  "tower-sessions-moka-store",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -3822,6 +3827,7 @@ dependencies = [
  "litellm-auth",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-core-utils",
  "litellm-error",
  "litellm-gateway-auth",
  "litellm-host",

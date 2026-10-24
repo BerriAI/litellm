@@ -10,6 +10,7 @@ pub(super) struct Settings {
     pub host: String,
     pub port: u16,
     pub litellm_config: String,
+    pub litellm_python_upstream: Option<String>,
     rust_log: Option<String>,
 }
 
@@ -19,6 +20,7 @@ impl Default for Settings {
             host: "0.0.0.0".into(),
             port: 4000,
             litellm_config: "config.yaml".into(),
+            litellm_python_upstream: None,
             rust_log: None,
         }
     }
@@ -81,6 +83,7 @@ mod tests {
         assert_eq!(settings.host, "0.0.0.0");
         assert_eq!(settings.port, 4000);
         assert_eq!(settings.litellm_config, "config.yaml");
+        assert_eq!(settings.litellm_python_upstream, None);
         assert_eq!(settings.log_level(), Level::INFO);
     }
 
@@ -90,6 +93,7 @@ mod tests {
             ("HOST", "127.0.0.1"),
             ("PORT", "8080"),
             ("LITELLM_CONFIG", "/tmp/custom.yaml"),
+            ("LITELLM_PYTHON_UPSTREAM", "http://127.0.0.1:4001"),
             ("RUST_LOG", "debug"),
             ("LITELLM_UI_SECURE_COOKIES", "invalid-but-ui-disabled"),
         ])
@@ -98,6 +102,10 @@ mod tests {
         assert_eq!(settings.host, "127.0.0.1");
         assert_eq!(settings.port, 8080);
         assert_eq!(settings.litellm_config, "/tmp/custom.yaml");
+        assert_eq!(
+            settings.litellm_python_upstream.as_deref(),
+            Some("http://127.0.0.1:4001")
+        );
         assert_eq!(settings.log_level(), Level::DEBUG);
     }
 

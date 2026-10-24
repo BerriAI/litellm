@@ -39,7 +39,7 @@ pub fn is_request(&self) -> bool {
 
 Add a predicate when a real caller needs a new distinction, and name it after the fact the caller needs, in the caller's words, not after the variant's spelling. An upper type's predicates call through to the nested error, as in `Self::Http(error) => error.is_request()` and `Self::Auth(error) => error.is_missing_credential()`
 
-A public enum may be matched one level down by the type that owns the variant, such as the gateway matching its own `Unsupported` or the OCR bridge matching `FileRead`. Going a second level down, into a variant of a variant, is what to avoid, the gateway used to do that for `MissingApiKey` and the old `Unsupported` route variant
+A public enum may be matched one level down by the type that owns the variant, such as the gateway matching its own `UnknownModel` or the OCR bridge matching `FileRead`. Going a second level down, into a variant of a variant, is what to avoid, the gateway used to do that for `MissingApiKey` and the old `Unsupported` route variant
 
 ## Facts, not policy
 
