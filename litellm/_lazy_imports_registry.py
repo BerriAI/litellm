@@ -319,6 +319,8 @@ LLM_CONFIG_NAMES: Final = (
     "DeepSeekChatConfig",
     "TencentChatConfig",
     "LMStudioChatConfig",
+    "FoundryLocalChatConfig",
+    "FoundryLocalAudioTranscriptionConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
     "PerplexityChatConfig",
@@ -1211,6 +1213,14 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
     "TencentChatConfig": (".llms.tencent.chat.transformation", "TencentChatConfig"),
     "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
+    "FoundryLocalChatConfig": (
+        ".llms.foundry_local.chat.transformation",
+        "FoundryLocalChatConfig",
+    ),
+    "FoundryLocalAudioTranscriptionConfig": (
+        ".llms.foundry_local.audio_transcription.transformation",
+        "FoundryLocalAudioTranscriptionConfig",
+    ),
     "LmStudioEmbeddingConfig": (
         ".llms.lm_studio.embed.transformation",
         "LmStudioEmbeddingConfig",

@@ -1953,50 +1953,48 @@ class BaseLLMHTTPHandler:
                 shared_session=shared_session,
             )
 
-        # Prepare the request
-        (
-            headers,
-            complete_url,
-            data,
-            files,
-        ) = self._prepare_audio_transcription_request(
-            model=model,
-            audio_file=audio_file,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers,
-            provider_config=provider_config,
-        )
-
-        if client is None or not isinstance(client, HTTPHandler):
-            client = get_httpx_client()
-
-        json_data: Final = data if files is None and isinstance(data, dict) else None
-
-        try:
-            response: Final = client.post(
-                url=complete_url,
+        with provider_config.audio_file_context(audio_file) as prepared_audio_file:
+            (
+                prepared_headers,
+                complete_url,
+                data,
+                files,
+            ) = self._prepare_audio_transcription_request(
+                model=model,
+                audio_file=prepared_audio_file,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
                 headers=headers,
-                data=data if json_data is None else None,
-                files=files,
-                json=json_data,
-                timeout=timeout,
+                provider_config=provider_config,
             )
-        except Exception as e:
-            raise self._handle_error(e=e, provider_config=provider_config)
 
-        return self._transform_audio_transcription_response(
-            provider_config=provider_config,
-            model=model,
-            response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            optional_params=optional_params,
-            api_key=api_key,
-        )
+            sync_client: Final = client if isinstance(client, HTTPHandler) else get_httpx_client()
+            json_data: Final = data if files is None and isinstance(data, dict) else None
+
+            try:
+                response: Final = sync_client.post(
+                    url=complete_url,
+                    headers=prepared_headers,
+                    data=data if json_data is None else None,
+                    files=files,
+                    json=json_data,
+                    timeout=timeout,
+                )
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=provider_config)
+
+            return self._transform_audio_transcription_response(
+                provider_config=provider_config,
+                model=model,
+                response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                api_key=api_key,
+            )
 
     async def async_audio_transcriptions(
         self,
@@ -2019,56 +2017,56 @@ class BaseLLMHTTPHandler:
         if provider_config is None:
             raise ValueError(f"No provider config found for model: {model} and provider: {custom_llm_provider}")
 
-        # Prepare the request
-        (
-            headers,
-            complete_url,
-            data,
-            files,
-        ) = self._prepare_audio_transcription_request(
-            model=model,
-            audio_file=audio_file,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers,
-            provider_config=provider_config,
-        )
-
-        if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-                shared_session=shared_session,
-            )
-        else:
-            async_httpx_client = client
-
-        json_data: Final = data if files is None and isinstance(data, dict) else None
-
-        try:
-            response: Final = await async_httpx_client.post(
-                url=complete_url,
+        with provider_config.audio_file_context(audio_file) as prepared_audio_file:
+            (
+                prepared_headers,
+                complete_url,
+                data,
+                files,
+            ) = self._prepare_audio_transcription_request(
+                model=model,
+                audio_file=prepared_audio_file,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
                 headers=headers,
-                data=data if json_data is None else None,
-                files=files,
-                json=json_data,
-                timeout=timeout,
+                provider_config=provider_config,
             )
-        except Exception as e:
-            raise self._handle_error(e=e, provider_config=provider_config)
 
-        return self._transform_audio_transcription_response(
-            provider_config=provider_config,
-            model=model,
-            response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            optional_params=optional_params,
-            api_key=api_key,
-        )
+            async_httpx_client: Final = (
+                client
+                if isinstance(client, AsyncHTTPHandler)
+                else get_async_httpx_client(
+                    llm_provider=litellm.LlmProviders(custom_llm_provider),
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                    shared_session=shared_session,
+                )
+            )
+            json_data: Final = data if files is None and isinstance(data, dict) else None
+
+            try:
+                response: Final = await async_httpx_client.post(
+                    url=complete_url,
+                    headers=prepared_headers,
+                    data=data if json_data is None else None,
+                    files=files,
+                    json=json_data,
+                    timeout=timeout,
+                )
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=provider_config)
+
+            return self._transform_audio_transcription_response(
+                provider_config=provider_config,
+                model=model,
+                response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                api_key=api_key,
+            )
 
     def search(
         self,

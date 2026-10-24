@@ -20,6 +20,7 @@ import elevenlabsLogo from "../../public/assets/logos/elevenlabs.png";
 import falAiLogo from "../../public/assets/logos/fal_ai.jpg";
 import featherlessLogo from "../../public/assets/logos/featherless.svg";
 import fireworksLogo from "../../public/assets/logos/fireworks.svg";
+import foundryLocalLogo from "../../public/assets/logos/foundry_local.svg";
 import friendliLogo from "../../public/assets/logos/friendli.svg";
 import gigachatLogo from "../../public/assets/logos/gigachat.svg";
 import githubCopilotLogo from "../../public/assets/logos/github_copilot.svg";
@@ -134,6 +135,7 @@ export enum Providers {
   LEMONADE = "Lemonade",
   LLAMAFILE = "Llamafile",
   LM_STUDIO = "Lm Studio",
+  FOUNDRY_LOCAL = "Foundry Local",
   LLAMA = "Meta Llama",
   MARITALK = "Maritalk",
   MICROSOFT_365_COPILOT = "Microsoft 365 Copilot",
@@ -261,6 +263,7 @@ export const provider_map: Record<string, string> = {
   LLAMAFILE: "llamafile",
   LLAMA: "meta_llama",
   LM_STUDIO: "lm_studio",
+  FOUNDRY_LOCAL: "foundry_local",
   MICROSOFT_365_COPILOT: "microsoft_365_copilot",
   MARITALK: "maritalk",
   MiniMax: "minimax",
@@ -364,6 +367,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.FalAI]: falAiLogo.src,
   [Providers.FEATHERLESS_AI]: featherlessLogo.src,
   [Providers.FireworksAI]: fireworksLogo.src,
+  [Providers.FOUNDRY_LOCAL]: foundryLocalLogo.src,
   [Providers.FRIENDLIAI]: friendliLogo.src,
   [Providers.GIGACHAT]: gigachatLogo.src,
   [Providers.GITHUB_COPILOT]: githubCopilotLogo.src,

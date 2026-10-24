@@ -4484,6 +4484,7 @@ class LlmProviders(str, Enum):
     TENCENT = "tencent"
     LLAMAFILE = "llamafile"
     LM_STUDIO = "lm_studio"
+    FOUNDRY_LOCAL = "foundry_local"
     GALADRIEL = "galadriel"
     NEBIUS = "nebius"
     INFINITY = "infinity"
