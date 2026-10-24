@@ -100,6 +100,32 @@ class BaseImageGenerationConfig(ABC):
             "ImageVariationConfig implements 'transform_response_image_variation' for image variation models"
         )
 
+    async def async_transform_image_generation_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ImageResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict[str, object],  # mutable-ok: mirrors the sync hook so the default passes the same objects
+        optional_params: dict[str, object],  # mutable-ok: mirrors the sync hook so the default passes the same objects
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the sync hook so the default passes the same objects
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ImageResponse:
+        return self.transform_image_generation_response(  # pyright: ignore[reportUnknownMemberType]  # sync hook signature is untyped
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+
     def use_multipart_form_data(self) -> bool:
         """
         Returns True if this provider requires multipart/form-data instead of JSON.
