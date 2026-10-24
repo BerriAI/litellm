@@ -1932,6 +1932,62 @@ describe("CreateMCPServer", () => {
   });
 
   describe("when prefillData is provided", () => {
+    it("waits for a required discovery token before previewing or adding the server", async () => {
+      const credentialUrl =
+        "https://platform.acedata.cloud/console/applications?utm_source=opensource&utm_medium=referral&utm_campaign=evergreen&utm_content=litellm_suno_discovery_api_key";
+      render(
+        <CreateMCPServer
+          {...defaultProps}
+          prefillData={{
+            name: "suno_acedatacloud",
+            title: "Suno by Ace Data Cloud",
+            description: "Music generation with your own API token",
+            category: "Media Generation",
+            transport: "http",
+            url: "https://suno.mcp.acedata.cloud/mcp",
+            auth_type: "bearer_token",
+            credential_url: credentialUrl,
+          }}
+        />,
+      );
+
+      expect(await screen.findByText("Authentication Value")).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: "Authentication", exact: true })).toHaveTextContent("Bearer Token");
+      expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toHaveValue(
+        "https://suno.mcp.acedata.cloud/mcp",
+      );
+      expect(getServerNameInput()).toHaveValue("suno_acedatacloud");
+      const tokenInput = screen.getByPlaceholderText("Enter token or secret");
+      expect(tokenInput).toHaveValue("");
+      expect(tokenInput).toHaveAttribute("type", "password");
+      expect(screen.getByRole("link", { name: "Get your API token" })).toHaveAttribute("href", credentialUrl);
+      expect(networking.testMCPToolsListRequest).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      expect(await screen.findByText("Enter your API token before adding this server")).toBeInTheDocument();
+      expect(networking.createMCPServer).not.toHaveBeenCalled();
+      expect(networking.testMCPToolsListRequest).not.toHaveBeenCalled();
+
+      fireEvent.change(tokenInput, { target: { value: "   " } });
+      expect(networking.testMCPToolsListRequest).not.toHaveBeenCalled();
+      fireEvent.change(tokenInput, { target: { value: "local-test-token" } });
+      await waitFor(() => expect(networking.testMCPToolsListRequest).toHaveBeenCalledTimes(1));
+      expect(networking.testMCPToolsListRequest).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          url: "https://suno.mcp.acedata.cloud/mcp",
+          auth_type: "bearer_token",
+          credentials: { auth_value: "local-test-token" },
+        }),
+        null,
+      );
+
+      fireEvent.change(tokenInput, { target: { value: "" } });
+      expect(tokenInput).toHaveValue("");
+      expect(networking.testMCPToolsListRequest).toHaveBeenCalledTimes(1);
+      expect(networking.createMCPServer).not.toHaveBeenCalled();
+    });
+
     it("should populate form fields from discovery data", async () => {
       const prefillData = {
         name: "github-mcp",
