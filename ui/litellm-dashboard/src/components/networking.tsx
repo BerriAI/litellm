@@ -144,6 +144,8 @@ import type {
   DailyActivityKeyPageResponse,
   DailyActivityKeySearchResponse,
   DailyActivityRequest,
+  DailyActivityTagPageRequest,
+  DailyActivityTagPageResponse,
   DailyActivityUserPageResponse,
   ExportFormat,
   ExportType,
@@ -1404,6 +1406,20 @@ export const dailyActivityKeyPageCall = (
     accessToken: req.accessToken,
     query: dailyActivityQuery(entity, req, { offset, limit }),
   });
+
+export const dailyActivityTagPageCall = (req: DailyActivityTagPageRequest): Promise<DailyActivityTagPageResponse> => {
+  const dailyActivityRequest: DailyActivityRequest = {
+    accessToken: req.accessToken,
+    startTime: req.startTime,
+    endTime: req.endTime,
+    entityIds: [req.teamId],
+  };
+  return apiClient.get<DailyActivityTagPageResponse>(`/team/daily/activity/aggregated/tags`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery("team", dailyActivityRequest, { offset: req.offset, limit: req.limit }),
+    ...(req.signal ? { signal: req.signal } : {}),
+  });
+};
 
 export const dailyActivityKeySearchCall = (
   entity: DailyActivityEntity,
