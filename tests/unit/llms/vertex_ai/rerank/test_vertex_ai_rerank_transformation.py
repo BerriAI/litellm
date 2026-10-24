@@ -5,12 +5,16 @@ Based on the test patterns from other rerank providers and the current Vertex AI
 
 import json
 import os
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
+import litellm
+from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.rerank import RerankResponse
 
 
@@ -92,13 +96,9 @@ class TestVertexAIRerankTransform:
             litellm.vertex_project = None
             # Reset mock and set it to raise an error
             mock_ensure_access_token.reset_mock()
-            mock_ensure_access_token.side_effect = ValueError(
-                "Vertex AI project ID is required"
-            )
+            mock_ensure_access_token.side_effect = ValueError("Vertex AI project ID is required")
             try:
-                with pytest.raises(
-                    ValueError, match="Vertex AI project ID is required"
-                ):
+                with pytest.raises(ValueError, match="Vertex AI project ID is required"):
                     self.config.get_complete_url(api_base=None, model=self.model)
             finally:
                 litellm.vertex_project = original_project
@@ -111,14 +111,10 @@ class TestVertexAIRerankTransform:
         importlib.reload(litellm) in conftest.py.
         """
         # Mock the authentication at instance level
-        mock_ensure_access_token = MagicMock(
-            return_value=("test-access-token", "test-project-123")
-        )
+        mock_ensure_access_token = MagicMock(return_value=("test-access-token", "test-project-123"))
         self.config._ensure_access_token = mock_ensure_access_token
 
-        headers = self.config.validate_environment(
-            headers={}, model=self.model, api_key=None
-        )
+        headers = self.config.validate_environment(headers={}, model=self.model, api_key=None)
 
         expected_headers = {
             "Authorization": "Bearer test-access-token",
@@ -166,9 +162,7 @@ class TestVertexAIRerankTransform:
                     "text": "Gemini is a cutting edge large language model created by Google.",
                     "title": "Custom Title 1",
                 },
-                {
-                    "text": "The Gemini zodiac symbol often depicts two figures standing side-by-side."
-                },
+                {"text": "The Gemini zodiac symbol often depicts two figures standing side-by-side."},
             ],
         }
 
@@ -178,9 +172,7 @@ class TestVertexAIRerankTransform:
 
         # Verify record structure with custom titles
         assert request_data["records"][0]["title"] == "Custom Title 1"
-        assert (
-            request_data["records"][1]["title"] == "The Gemini zodiac"
-        )  # First 3 words
+        assert request_data["records"][1]["title"] == "The Gemini zodiac"  # First 3 words
 
     def test_transform_rerank_request_return_documents_mapping(self):
         """Test return_documents to ignoreRecordDetailsInResponse mapping."""
@@ -194,7 +186,7 @@ class TestVertexAIRerankTransform:
         request_data_true = self.config.transform_rerank_request(
             model=self.model, optional_rerank_params=optional_params_true, headers={}
         )
-        assert request_data_true["ignoreRecordDetailsInResponse"] == False
+        assert not request_data_true["ignoreRecordDetailsInResponse"]
 
         # Test return_documents=False
         optional_params_false = {
@@ -206,7 +198,7 @@ class TestVertexAIRerankTransform:
         request_data_false = self.config.transform_rerank_request(
             model=self.model, optional_rerank_params=optional_params_false, headers={}
         )
-        assert request_data_false["ignoreRecordDetailsInResponse"] == True
+        assert request_data_false["ignoreRecordDetailsInResponse"]
 
         # Test return_documents not specified (should default to True)
         optional_params_default = {"query": "test query", "documents": ["doc1", "doc2"]}
@@ -214,7 +206,7 @@ class TestVertexAIRerankTransform:
         request_data_default = self.config.transform_rerank_request(
             model=self.model, optional_rerank_params=optional_params_default, headers={}
         )
-        assert request_data_default["ignoreRecordDetailsInResponse"] == False
+        assert not request_data_default["ignoreRecordDetailsInResponse"]
 
     def test_transform_rerank_request_user_labels_from_metadata(self):
         """Discovery Engine Rank API uses userLabels (string map) for billing."""
@@ -226,9 +218,7 @@ class TestVertexAIRerankTransform:
             model=self.model,
             optional_rerank_params=optional_params,
             headers={},
-            litellm_params={
-                "metadata": {"requester_metadata": {"app": "litellm", "tier": "1"}}
-            },
+            litellm_params={"metadata": {"requester_metadata": {"app": "litellm", "tier": "1"}}},
         )
         assert request_data["userLabels"] == {"app": "litellm", "tier": "1"}
 
@@ -243,9 +233,7 @@ class TestVertexAIRerankTransform:
             )
 
         # Test missing documents
-        with pytest.raises(
-            ValueError, match="documents is required for Vertex AI rerank"
-        ):
+        with pytest.raises(ValueError, match="documents is required for Vertex AI rerank"):
             self.config.transform_rerank_request(
                 model=self.model,
                 optional_rerank_params={"query": "test query"},
@@ -330,8 +318,7 @@ class TestVertexAIRerankTransform:
     def _build_response(self, num_records):
         response_data = {
             "records": [
-                {"id": str(i), "score": 1.0 - i / 1000, "title": "t", "content": "c"}
-                for i in range(num_records)
+                {"id": str(i), "score": 1.0 - i / 1000, "title": "t", "content": "c"} for i in range(num_records)
             ]
         }
         mock_response = MagicMock(spec=httpx.Response)
@@ -478,9 +465,7 @@ class TestVertexAIRerankTransform:
         # Verify title generation
         assert request_data["records"][0]["title"] == "This is a"  # First 3 words
         assert request_data["records"][1]["title"] == "Short doc"  # Less than 3 words
-        assert (
-            request_data["records"][2]["title"] == "Another document with"
-        )  # First 3 words
+        assert request_data["records"][2]["title"] == "Another document with"  # First 3 words
 
     def test_record_id_generation(self):
         """Test that record IDs are generated correctly with 0-based indexing."""
@@ -526,7 +511,7 @@ class TestVertexAIRerankTransform:
         assert params["query"] == "test query"
         assert params["documents"] == ["doc1", "doc2"]
         assert params["top_n"] == 2
-        assert params["return_documents"] == True
+        assert params["return_documents"]
 
     def test_map_cohere_rerank_params_without_vertex_credentials(self):
         """Test that map_cohere_rerank_params works when vertex credentials are not provided."""
@@ -551,7 +536,7 @@ class TestVertexAIRerankTransform:
         assert params["query"] == "test query"
         assert params["documents"] == ["doc1", "doc2"]
         assert params["top_n"] == 2
-        assert params["return_documents"] == True
+        assert params["return_documents"]
 
     def test_validate_environment_with_optional_params(self):
         """
@@ -561,9 +546,7 @@ class TestVertexAIRerankTransform:
         importlib.reload(litellm) in conftest.py.
         """
         # Mock the authentication at instance level
-        mock_ensure_access_token = MagicMock(
-            return_value=("test-access-token", "test-project-123")
-        )
+        mock_ensure_access_token = MagicMock(return_value=("test-access-token", "test-project-123"))
         self.config._ensure_access_token = mock_ensure_access_token
 
         optional_params = {
@@ -579,7 +562,6 @@ class TestVertexAIRerankTransform:
 
         # Verify that _ensure_access_token was called with the credentials from optional_params
         mock_ensure_access_token.assert_called_once()
-        call_args = mock_ensure_access_token.call_args
         # The first call argument should be credentials (which will be the value from optional_params)
         # We can't check the exact value easily due to how get_vertex_ai_credentials pops values,
         # but we can verify the headers were set correctly
@@ -596,14 +578,13 @@ class TestVertexAIRerankTransform:
     ):
         """
         Validate that calling validate_environment does not remove vertex-specific
-        parameters needed later by get_complete_url.
+        parameters needed later by get_complete_url, and that credentials are
+        cached so _ensure_access_token is only called once per request.
 
         Uses instance-level mocking to avoid class-reference issues caused by
         importlib.reload(litellm) in conftest.py.
         """
-        mock_ensure_access_token = MagicMock(
-            return_value=("test-access-token", "project-from-token")
-        )
+        mock_ensure_access_token = MagicMock(return_value=("test-access-token", "project-from-token"))
         self.config._ensure_access_token = mock_ensure_access_token
 
         optional_params = {
@@ -640,9 +621,110 @@ class TestVertexAIRerankTransform:
         )
         assert url == expected_url
 
-        # _ensure_access_token should have been called twice with the same credentials
-        assert mock_ensure_access_token.call_count == 2
-        first_call = mock_ensure_access_token.call_args_list[0]
-        second_call = mock_ensure_access_token.call_args_list[1]
-        assert first_call.kwargs["credentials"] == "path/to/credentials.json"
-        assert second_call.kwargs["credentials"] == "path/to/credentials.json"
+        # _ensure_access_token should only be called once due to request-level caching
+        assert mock_ensure_access_token.call_count == 1
+        call_args = mock_ensure_access_token.call_args
+        assert call_args.kwargs["credentials"] == "path/to/credentials.json"
+
+
+def test_vertex_ai_rerank_credentials_reused_across_requests_and_refreshed_on_expiry():
+    mock_creds_first: Final = MagicMock()
+    mock_creds_first.expired = False
+    mock_creds_first.token = "initial-token"
+
+    mock_creds_second: Final = MagicMock()
+    mock_creds_second.expired = False
+    mock_creds_second.token = "second-token"
+
+    loaded_credentials: Final[list[tuple[object, str | None]]] = []
+
+    def mock_load_auth(
+        self: VertexBase,
+        credentials: object,
+        project_id: str | None,
+    ) -> tuple[MagicMock, str]:
+        loaded_credentials.append((credentials, project_id))
+        if credentials == "cred-a":
+            return mock_creds_first, project_id or "project-a"
+        return mock_creds_second, project_id or "project-b"
+
+    refresh_calls: Final[list[MagicMock]] = []
+
+    def mock_refresh_auth(self: VertexBase, creds: MagicMock) -> None:
+        refresh_calls.append(creds)
+        creds.expired = False
+        creds.token = "refreshed-token"
+
+    clear_cache: Final = getattr(
+        getattr(litellm.ProviderConfigManager, "_get_vertex_ai_rerank_config", None),
+        "cache_clear",
+        None,
+    )
+    if callable(clear_cache):
+        clear_cache()
+
+    try:
+        with (
+            patch.object(VertexBase, "load_auth", mock_load_auth),
+            patch.object(VertexBase, "refresh_auth", mock_refresh_auth),
+        ):
+            config_first: Final[BaseRerankConfig] = litellm.ProviderConfigManager.get_provider_rerank_config(
+                model="semantic-ranker-default@latest",
+                provider=litellm.LlmProviders.VERTEX_AI,
+                api_base=None,
+                present_version_params=[],
+            )
+            headers_first: Final[dict[str, object]] = config_first.validate_environment(
+                headers={},
+                model="semantic-ranker-default@latest",
+                optional_params={"vertex_credentials": "cred-a", "vertex_project": "project-a"},
+            )
+            assert headers_first["Authorization"] == "Bearer initial-token"
+            assert len(loaded_credentials) == 1
+
+            config_repeat: Final[BaseRerankConfig] = litellm.ProviderConfigManager.get_provider_rerank_config(
+                model="semantic-ranker-default@latest",
+                provider=litellm.LlmProviders.VERTEX_AI,
+                api_base=None,
+                present_version_params=[],
+            )
+            headers_repeat: Final[dict[str, object]] = config_repeat.validate_environment(
+                headers={},
+                model="semantic-ranker-default@latest",
+                optional_params={"vertex_credentials": "cred-a", "vertex_project": "project-a"},
+            )
+            assert headers_repeat["Authorization"] == "Bearer initial-token"
+            assert len(loaded_credentials) == 1
+
+            config_different: Final[BaseRerankConfig] = litellm.ProviderConfigManager.get_provider_rerank_config(
+                model="semantic-ranker-default@latest",
+                provider=litellm.LlmProviders.VERTEX_AI,
+                api_base=None,
+                present_version_params=[],
+            )
+            headers_different: Final[dict[str, object]] = config_different.validate_environment(
+                headers={},
+                model="semantic-ranker-default@latest",
+                optional_params={"vertex_credentials": "cred-b", "vertex_project": "project-b"},
+            )
+            assert headers_different["Authorization"] == "Bearer second-token"
+            assert len(loaded_credentials) == 2
+
+            mock_creds_first.expired = True
+            config_expired: Final[BaseRerankConfig] = litellm.ProviderConfigManager.get_provider_rerank_config(
+                model="semantic-ranker-default@latest",
+                provider=litellm.LlmProviders.VERTEX_AI,
+                api_base=None,
+                present_version_params=[],
+            )
+            headers_expired: Final[dict[str, object]] = config_expired.validate_environment(
+                headers={},
+                model="semantic-ranker-default@latest",
+                optional_params={"vertex_credentials": "cred-a", "vertex_project": "project-a"},
+            )
+            assert headers_expired["Authorization"] == "Bearer refreshed-token"
+            assert len(refresh_calls) == 1
+            assert len(loaded_credentials) == 2
+    finally:
+        if callable(clear_cache):
+            clear_cache()

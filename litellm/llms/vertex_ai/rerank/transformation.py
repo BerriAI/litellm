@@ -17,8 +17,12 @@ from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.vertex_ai.common_utils import (
     vertex_request_labels_from_litellm_params,
 )
-from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.llms.vertex_ai.vertex_llm_base import (
+    VertexBase,
+    _VertexCredentialsObject,  # pyright: ignore[reportPrivateUsage]  # exported vertex type
+)
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.rerank import (
     RerankBilledUnits,
     RerankResponse,
@@ -38,6 +42,58 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
 
     def __init__(self) -> None:
         super().__init__()
+        self._rerank_token_cache: dict[  # mutable-ok: token cache keyed per (credentials, project)
+            tuple[VERTEX_CREDENTIALS_TYPES | None, str | None],
+            tuple[str, str, _VertexCredentialsObject | None],
+        ] = {}
+
+    def _get_cached_rerank_token(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+    ) -> tuple[str, str] | None:
+        cache_key: Final = (credentials, project_id)
+        cached: Final = self._rerank_token_cache.get(cache_key)
+        if cached is None:
+            return None
+        token, cached_project, creds = cached
+        # Check if underlying credentials are expired; if so, invalidate cache
+        if creds is not None and getattr(creds, "expired", False):
+            self._rerank_token_cache.pop(cache_key, None)
+            return None
+        return token, cached_project
+
+    def _set_cached_rerank_token(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        token: str,
+        cached_project: str,
+    ) -> None:
+        cache_key: Final = (credentials, project_id)
+        # Get the underlying credentials object from the base class cache
+        creds, _ = self._unpack_cached_credentials(cache_key)  # pyright: ignore[reportUnknownMemberType]  # base helper
+        if creds is not None:
+            self._rerank_token_cache[cache_key] = (token, cached_project, creds)
+        else:
+            # Fallback: cache without expiration tracking (e.g., when mocked)
+            self._rerank_token_cache[cache_key] = (token, cached_project, None)
+
+    def _resolve_rerank_token(self, params: dict[str, object]) -> tuple[str, str]:  # mutable-ok: safe_get takes dict
+        vertex_credentials: Final = self.safe_get_vertex_ai_credentials(params)
+        vertex_project_hint: Final = self.safe_get_vertex_ai_project(params)
+
+        cached: Final = self._get_cached_rerank_token(vertex_credentials, vertex_project_hint)
+        if cached is not None:
+            return cached
+
+        token, project_id = self._ensure_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_project_hint,
+            custom_llm_provider="vertex_ai",
+        )
+        self._set_cached_rerank_token(vertex_credentials, vertex_project_hint, token, project_id)
+        return token, project_id
 
     def get_complete_url(
         self,
@@ -49,19 +105,9 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         Get the complete URL for the Vertex AI Discovery Engine ranking API
         """
         # Try to get project ID from optional_params first (e.g., vertex_project parameter)
-        params: Final = optional_params or {}
+        params: Final[dict[str, object]] = optional_params or {}  # mutable-ok: reuses caller-owned optional_params
 
-        # Get credentials to extract project ID if needed
-        vertex_credentials: Final = self.safe_get_vertex_ai_credentials(params.copy())
-        vertex_project = self.safe_get_vertex_ai_project(params.copy())
-
-        # Use _ensure_access_token to extract project_id from credentials
-        # This is the same method used in vertex embeddings
-        _, vertex_project = self._ensure_access_token(
-            credentials=vertex_credentials,
-            project_id=vertex_project,
-            custom_llm_provider="vertex_ai",
-        )
+        _, vertex_project = self._resolve_rerank_token(params)
 
         # Fallback to environment or litellm config
         project_id: Final = vertex_project or get_secret_str("VERTEXAI_PROJECT") or litellm.vertex_project
@@ -85,16 +131,10 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         Validate and set up authentication for Vertex AI Discovery Engine API
         """
         # Get credentials and project info from optional_params (which contains vertex_credentials, etc.)
-        vertex_params: Final = optional_params.copy() if optional_params else {}
-        vertex_credentials: Final = self.safe_get_vertex_ai_credentials(vertex_params)
-        vertex_project: Final = self.safe_get_vertex_ai_project(vertex_params)
-
-        # Get access token using the base class method
-        access_token, project_id = self._ensure_access_token(
-            credentials=vertex_credentials,
-            project_id=vertex_project,
-            custom_llm_provider="vertex_ai",
+        vertex_params: Final[dict[str, object]] = (  # mutable-ok: read-only lookup input from caller
+            optional_params.copy() if optional_params else {}
         )
+        access_token, project_id = self._resolve_rerank_token(vertex_params)
 
         default_headers: Final = {
             "Authorization": f"Bearer {access_token}",
