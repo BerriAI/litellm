@@ -2142,7 +2142,6 @@ class TestBedrockPassthroughAwsErrors:
         assert exc_info.value.aws_error_type == "ValidationException"
         assert (exc_info.value.error.message, exc_info.value.error.code) == (message, status_code)
 
-
     @pytest.mark.asyncio
     async def test_bedrock_request_check_is_raised_with_the_aws_error_type_it_carries(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2183,6 +2182,7 @@ class TestBedrockPassthroughAwsErrors:
             await self._answer(error)
 
         assert (exc_info.value.code, exc_info.value.headers.get("x-model-group")) == ("403", "modèle")
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("error", "message", "code"),
@@ -5470,6 +5470,7 @@ class TestAzureProxyRouteCrossIndexAuthorization:
     async def test_authorizes_the_targeted_index(self):
         index_object = MagicMock()
         index_object.litellm_params.vector_store_name = "my-store"
+        index_object.litellm_params.vector_store_index = "my-real-index"
         vector_store = {"litellm_params": {"api_base": "https://svc.search.windows.net"}}
 
         with (
@@ -5554,6 +5555,147 @@ class TestAzureProxyRouteCrossIndexAuthorization:
             mock_is_allowed.assert_not_called()
             mock_handler.assert_awaited_once()
             assert mock_handler.await_args.kwargs["custom_llm_provider"] == litellm.LlmProviders.AZURE
+
+
+@pytest.fixture
+def azure_ai_search_virtual_index_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[Callable[[UserAPIKeyAuth], TestClient]]:
+    from litellm.proxy import proxy_server
+    from litellm.types.vector_stores import IndexCreateLiteLLMParams, LiteLLM_ManagedVectorStoreIndex
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=[]))
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_index_registry",
+        VectorStoreIndexRegistry(
+            vector_store_indexes=[
+                LiteLLM_ManagedVectorStoreIndex(
+                    id="idx-1",
+                    index_name="virtual-idx",
+                    litellm_params=IndexCreateLiteLLMParams(vector_store_index="real-idx", vector_store_name="search"),
+                )
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[
+                {
+                    "vector_store_id": "can-be-anything",
+                    "vector_store_name": "search",
+                    "custom_llm_provider": "azure_ai",
+                    "litellm_params": {
+                        "vector_store_name": "search",
+                        "api_base": "https://svc.search.windows.net",
+                        "api_key": "search-admin-key",
+                    },
+                }
+            ]
+        ),
+    )
+
+    def client_as(caller: UserAPIKeyAuth) -> TestClient:
+        monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth, lambda: caller)
+        return TestClient(proxy_server.app)
+
+    yield client_as
+
+
+DEVELOPER_KEY_ON_VIRTUAL_INDEX: Final = UserAPIKeyAuth(
+    api_key="sk-developer",
+    metadata={"allowed_vector_store_indexes": [{"index_name": "virtual-idx", "index_permissions": ["read", "write"]}]},
+)
+
+
+@pytest.mark.parametrize(
+    "method, path, body, upstream_path",
+    [
+        ("POST", "indexes/virtual-idx/docs/search", {"search": "refund"}, "/indexes/real-idx/docs/search"),
+        (
+            "POST",
+            "indexes/virtual-idx/docs/index",
+            {"value": [{"@search.action": "upload", "id": "1", "content": "refund policy"}]},
+            "/indexes/real-idx/docs/index",
+        ),
+        ("GET", "indexes/virtual-idx/docs/$count", None, "/indexes/real-idx/docs/$count"),
+        ("GET", "indexes/virtual-idx", None, "/indexes/real-idx"),
+        ("GET", "indexes/virtual-idx/docs/virtual-idx", None, "/indexes/real-idx/docs/virtual-idx"),
+        (
+            "POST",
+            "indexes/virtual-idx/docs/search",
+            {"search": "*", "name": "virtual-idx"},
+            "/indexes/real-idx/docs/search",
+        ),
+    ],
+)
+def test_azure_ai_search_virtual_index_reaches_azure_as_the_mapped_index(
+    azure_ai_search_virtual_index_client: Callable[[UserAPIKeyAuth], TestClient],
+    method: str,
+    path: str,
+    body: dict[str, object] | None,
+    upstream_path: str,
+) -> None:
+    client: Final = azure_ai_search_virtual_index_client(DEVELOPER_KEY_ON_VIRTUAL_INDEX)
+    with respx.mock(assert_all_called=True) as upstream:
+        azure: Final = upstream.route(host="svc.search.windows.net").mock(
+            return_value=httpx.Response(200, json={"value": []})
+        )
+        response: Final = client.request(method, f"/azure_ai/{path}?api-version=2024-07-01", json=body)
+
+        assert response.status_code == 200
+        sent: Final = azure.calls.last.request
+        assert (sent.method, sent.url.path, sent.url.params["api-version"]) == (method, upstream_path, "2024-07-01")
+        assert sent.headers["api-key"] == "search-admin-key"
+        assert json.loads(sent.content or b"null") == body
+
+
+@pytest.mark.parametrize(
+    "sent_name, upstream_name",
+    [("virtual-idx", "real-idx"), ("some-other-idx", "some-other-idx")],
+)
+def test_azure_ai_search_index_definition_put_names_the_mapped_index(
+    azure_ai_search_virtual_index_client: Callable[[UserAPIKeyAuth], TestClient], sent_name: str, upstream_name: str
+) -> None:
+    client: Final = azure_ai_search_virtual_index_client(
+        UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    )
+    fields: Final = [{"name": "id", "type": "Edm.String", "key": True}]
+    with respx.mock(assert_all_called=True) as upstream:
+        azure: Final = upstream.route(host="svc.search.windows.net").mock(
+            return_value=httpx.Response(201, json={"name": upstream_name})
+        )
+        response: Final = client.put(
+            "/azure_ai/indexes/virtual-idx?api-version=2024-07-01", json={"name": sent_name, "fields": fields}
+        )
+
+        assert response.status_code == 201
+        sent: Final = azure.calls.last.request
+        assert (sent.method, sent.url.path) == ("PUT", "/indexes/real-idx")
+        assert json.loads(sent.content) == {"name": upstream_name, "fields": fields}
+
+
+def test_azure_ai_search_index_delete_on_the_virtual_index_deletes_the_mapped_index(
+    azure_ai_search_virtual_index_client: Callable[[UserAPIKeyAuth], TestClient],
+) -> None:
+    client: Final = azure_ai_search_virtual_index_client(
+        UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        azure: Final = upstream.route(host="svc.search.windows.net").mock(return_value=httpx.Response(204))
+        response: Final = client.delete("/azure_ai/indexes/virtual-idx?api-version=2024-07-01")
+
+        assert response.status_code == 204
+        sent: Final = azure.calls.last.request
+        assert (sent.method, sent.url.path, sent.headers["api-key"]) == (
+            "DELETE",
+            "/indexes/real-idx",
+            "search-admin-key",
+        )
 
 
 class TestAzureProxyRouteServiceLevelIndexCreate:
