@@ -2879,6 +2879,31 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
         ## base case ## key is disabled
         if valid_token.blocked is True:
             raise Exception("Key is blocked. Update via `/key/unblock` if you're an admin.")
+        if RouteChecks.is_llm_api_route(route=route):
+            from litellm.proxy.auth.ui_session_models import load_ui_session_model_sources
+
+            session_sources: Final = await load_ui_session_model_sources(
+                valid_token, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
+            )
+            if session_sources is not None:
+                requested_model: Final = _get_model_from_request_context(
+                    request_data, route, request, llm_router, valid_token.team_id
+                )
+                requested_models: Final = (
+                    (requested_model,) if isinstance(requested_model, str) else tuple(requested_model or ())
+                )
+                if requested_models:
+                    valid_token = await session_sources.for_request(  # rebind-ok: replace the local token with a scoped copy for all existing checks below
+                        (
+                            *requested_models,
+                            *(
+                                name
+                                for target in iter_request_fallback_targets(request_data)
+                                if (name := fallback_target_model_name(target)) is not None
+                            ),
+                        ),
+                        request.headers.get("x-litellm-team-id"),
+                    )
         await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,

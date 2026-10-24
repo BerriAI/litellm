@@ -3923,6 +3923,8 @@ class ProxyErrorTypes(str, enum.Enum):
     Team does not have access to the model
     """
 
+    team_selection_required = "team_selection_required"
+
     user_model_access_denied = "user_model_access_denied"
     """
     User does not have access to the model

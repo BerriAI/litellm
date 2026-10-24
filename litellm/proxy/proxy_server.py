@@ -999,6 +999,7 @@ from litellm.types.llms.openai import (
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
+    ModelGroupInfoResponse,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -17801,6 +17802,7 @@ _get_model_group_info: Final = get_model_group_info
     "/model_group/info",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=ModelGroupInfoResponse,
 )
 async def model_group_info(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -18004,13 +18006,24 @@ async def model_group_info(
         append_agents_to_model_group,
     )
 
+    visible_groups: Final = get_model_group_info(
+        llm_router=llm_router,
+        all_models_str=listed_group_names,
+        model_group=model_group,
+        team_id=user_api_key_dict.team_id,
+    )
+    from litellm.proxy.auth.ui_session_models import load_ui_session_model_sources
+
+    session_sources: Final = await load_ui_session_model_sources(
+        user_api_key_dict, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
+    )
+    if session_sources is not None:
+        for group in visible_groups:
+            group.available_teams = await session_sources.available_teams(group.model_group)
     model_groups: Final = await append_agents_to_model_group(
-        model_groups=get_model_group_info(
-            llm_router=llm_router,
-            all_models_str=listed_group_names,
-            model_group=model_group,
-            team_id=user_api_key_dict.team_id,
-        ),
+        model_groups=[
+            group for group in visible_groups if session_sources is None or group.available_teams is not None
+        ],
         user_api_key_dict=user_api_key_dict,
     )
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
