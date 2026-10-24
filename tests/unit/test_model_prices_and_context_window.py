@@ -791,3 +791,26 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     sibling = rows["volcengine/doubao-seed-2-1-pro-260628"]
     assert isinstance(sibling, dict)
     assert all(entry[key] == sibling[key] for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+
+
+def _bedrock_gpt_oss_rows(prices: Mapping[str, JsonValue]) -> tuple[str, ...]:
+    return tuple(
+        key
+        for key, row in prices.items()
+        if "gpt-oss" in key and isinstance(row, dict) and str(row.get("litellm_provider", "")).startswith("bedrock")
+    )
+
+
+@pytest.mark.parametrize("path", [PRICES_PATH, BACKUP_PRICES_PATH], ids=["main", "backup"])
+def test_bedrock_gpt_oss_rows_declare_vision_support_like_their_safeguard_siblings(path: Path) -> None:
+    prices: Final = json.loads(path.read_text())
+    rows: Final = _bedrock_gpt_oss_rows(prices)
+    assert rows, "no Bedrock gpt-oss rows found"
+    reference: Final = prices["openai.gpt-oss-safeguard-120b"]["supports_vision"]
+    undeclared: Final = tuple(key for key in rows if prices[key].get("supports_vision") is not reference)
+    assert undeclared == (), f"modality routing only skips rows that declare supports_vision: {undeclared}"
+
+
+def test_bedrock_gpt_oss_vision_is_explicitly_disabled_for_the_router_gate() -> None:
+    assert litellm.utils.is_vision_explicitly_disabled("bedrock/openai.gpt-oss-120b-1:0") is True
+    assert litellm.utils.is_vision_explicitly_disabled("bedrock_mantle/openai.gpt-oss-20b") is True

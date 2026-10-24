@@ -1,11 +1,10 @@
 import math
-from collections.abc import Mapping
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_response_cost_in_hidden_params
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -26,28 +25,24 @@ _SUPPORTED_OPENAI_PARAMS: Final = (
     "top_p",
     "user",
 )
-
-
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
-
-
-def _pricing_failed(reported: Mapping[str, object]) -> bool:
-    try:
-        return bool(_JSON_OBJECT.validate_python(reported.get("cost_breakdown")).get("pricing_failed"))
-    except ValidationError:
-        return False
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _reported_cost_usd(raw_response: httpx.Response) -> float | None:
     try:
-        reported: Final = _JSON_OBJECT.validate_python(raw_response.json()["nadir_metadata"]["cost"])
+        body: Final = as_str_mapping(_DECODED_JSON.validate_python(raw_response.json()))
     except (ValueError, KeyError, TypeError):
+        return None
+    metadata: Final = as_str_mapping(body.get("nadir_metadata")) if body is not None else None
+    cost_block: Final = as_str_mapping(metadata.get("cost")) if metadata is not None else None
+    if cost_block is None:
         return None
     # An unpriced call still carries a total (0.0, or the sum of the attempts Nadir could price),
     # flagged in its breakdown. Logging that total would record a paid call as free or cheaper than it was.
-    if _pricing_failed(reported):
+    breakdown: Final = as_str_mapping(cost_block.get("cost_breakdown"))
+    if breakdown is not None and breakdown.get("pricing_failed"):
         return None
-    cost: Final = reported.get("total_cost_usd")
+    cost: Final = cost_block.get("total_cost_usd")
     if isinstance(cost, bool) or not isinstance(cost, (int, float)):
         return None
     if not math.isfinite(cost) or cost < 0:

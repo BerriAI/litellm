@@ -2717,6 +2717,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "hidden model can still be called."
         ),
     )
+    return_wildcard_routes: bool | None = Field(
+        None,
+        description=(
+            "When true, `/v1/models` lists wildcard routes like `openai/*` unless the request passes "
+            "`return_wildcard_routes=false`."
+        ),
+    )
     alerting: list | None = Field(
         None,
         description="List of alerting integrations - e.g. `alerting: ['slack', 'webhook', 'email']`. 'slack' posts Slack-format messages to any Slack-compatible webhook (Slack, Rocket.Chat, Mattermost); 'webhook' posts structured JSON budget alerts to WEBHOOK_URL",
@@ -5255,6 +5262,7 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     team_id: str | None  # team that triggered discovery
     key_alias: str | None  # human-readable key alias
     user_agent: str | None  # HTTP User-Agent of the caller
+    call_count: ReadOnly[int]  # invocations folded into this row since the previous flush
 
 
 from litellm.models.managed_files import (  # noqa: E402
