@@ -9016,6 +9016,28 @@ def speech(
             client=client,
             _is_async=aspeech or False,
         )
+    elif custom_llm_provider == "speechify":
+        from litellm.llms.speechify.text_to_speech.transformation import (
+            SpeechifyTextToSpeechConfig,
+        )
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice if isinstance(voice, str) else None,
+            text_to_speech_provider_config=text_to_speech_provider_config or SpeechifyTextToSpeechConfig(),
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
     elif custom_llm_provider == "aws_polly":
         from litellm.llms.aws_polly.text_to_speech.transformation import (
             AWSPollyTextToSpeechConfig,
