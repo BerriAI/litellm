@@ -52,7 +52,7 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 
-_CACHE_WRITE_RATE_KEYS: Final[Mapping[str, str]] = MappingProxyType(
+_LONG_TTL_CACHE_WRITE_RATE_KEYS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "1hr": "cache_creation_input_token_cost_above_1hr",
         "12hr": "cache_creation_input_token_cost_above_12hr",
@@ -417,7 +417,7 @@ def _get_tiered_base_costs(
     return rates, MappingProxyType(
         {
             ttl: tier_rate(tier, key) if tier.get(key) is not None else None
-            for ttl, key in _CACHE_WRITE_RATE_KEYS.items()
+            for ttl, key in _LONG_TTL_CACHE_WRITE_RATE_KEYS.items()
         }
     )
 
@@ -757,7 +757,7 @@ def _get_token_base_cost(
             completion_base_cost = output_image_cost
     cache_creation_cost = get_cost_per_unit(model_info, cache_creation_cost_key, default_value=None)
     cache_creation_keys_by_ttl: Mapping[str, str] = MappingProxyType(
-        {ttl: get_service_tier_cost_key(key, service_tier) for ttl, key in _CACHE_WRITE_RATE_KEYS.items()}
+        {ttl: get_service_tier_cost_key(key, service_tier) for ttl, key in _LONG_TTL_CACHE_WRITE_RATE_KEYS.items()}
     )
     cache_read_cost = get_cost_per_unit(model_info, cache_read_cost_key, default_value=None)
 
@@ -844,7 +844,7 @@ def _get_token_base_cost(
                             ttl: _first_present_key(
                                 model_info,
                                 get_service_tier_cost_key(
-                                    f"{_CACHE_WRITE_RATE_KEYS[ttl]}_above_{threshold_str}_tokens",
+                                    f"{_LONG_TTL_CACHE_WRITE_RATE_KEYS[ttl]}_above_{threshold_str}_tokens",
                                     service_tier,
                                 ),
                                 key,
