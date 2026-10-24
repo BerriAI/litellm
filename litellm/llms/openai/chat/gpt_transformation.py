@@ -60,7 +60,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import convert_to_model_response_object
 
-from ..common_utils import OpenAIError
+from ..common_utils import OpenAIError, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 if TYPE_CHECKING:
@@ -417,23 +417,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         tools: list["ChatCompletionToolParam"] | None = None,
     ) -> tuple[list[AllMessageValues], list["ChatCompletionToolParam"] | None]:
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            filter_value_from_dict,
-        )
         from litellm.types.llms.openai import ChatCompletionToolParam
 
-        for i, message in enumerate(messages):
-            messages[i] = cast(
-                AllMessageValues,
-                filter_value_from_dict(message, "cache_control"),
-            )
-        if tools is not None:
-            for i, tool in enumerate(tools):
-                tools[i] = cast(
-                    ChatCompletionToolParam,
-                    filter_value_from_dict(tool, "cache_control"),
-                )
-        return messages, tools
+        new_messages: Final = [cast(AllMessageValues, without_cache_control(message)) for message in messages]
+        new_tools: Final = (
+            [cast(ChatCompletionToolParam, without_cache_control(tool)) for tool in tools]
+            if tools is not None
+            else None
+        )
+        return new_messages, new_tools
 
     def _targets_openai_hosted_endpoint(
         self,
