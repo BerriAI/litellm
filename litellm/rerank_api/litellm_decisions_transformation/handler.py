@@ -10,6 +10,8 @@ from queue import Empty, SimpleQueue
 from threading import Event
 from typing import Final, Literal
 
+import httpx
+
 import litellm
 from litellm.decisions.call import (
     DecisionsCall,
@@ -53,6 +55,17 @@ def _call_with_deadline(document: _DocumentCall, deadline: float) -> DecisionsCa
     remaining: Final = deadline - time.monotonic()
     if remaining <= 0:
         return _timeout(document.call.requested_model, document.call.custom_llm_provider)
+    timeout: Final = document.call.timeout
+    if isinstance(timeout, httpx.Timeout):
+        return replace(
+            document.call,
+            timeout=httpx.Timeout(
+                connect=remaining if timeout.connect is None else min(timeout.connect, remaining),
+                read=remaining if timeout.read is None else min(timeout.read, remaining),
+                write=remaining if timeout.write is None else min(timeout.write, remaining),
+                pool=remaining if timeout.pool is None else min(timeout.pool, remaining),
+            ),
+        )
     return replace(document.call, timeout=remaining)
 
 
@@ -264,6 +277,7 @@ def _prepare_document(
     provider: str,
     api_key: str | None,
     api_base: str | None,
+    transport_timeout: float | httpx.Timeout,
     kwargs: Mapping[str, object],
 ) -> _DocumentCall:
     text: Final = request.document_text(index)
@@ -277,7 +291,7 @@ def _prepare_document(
             safety_identifier=request.safety_identifier,
             api_key=api_key,
             api_base=api_base,
-            timeout=request.timeout,
+            timeout=transport_timeout,
             custom_llm_provider=provider,
             extra_headers=request.extra_headers,
             kwargs={key: value for key, value in kwargs.items() if key not in _CHILD_OMIT},
@@ -294,6 +308,7 @@ def rerank_with_decisions(
     logging_obj: Logging,
     is_async: bool,
     strategy: Literal["pointwise", "multiple_choice"],
+    transport_timeout: float | httpx.Timeout,
     params: Mapping[str, object],
     kwargs: Mapping[str, object],
 ) -> DecisionRerankResponse | Awaitable[DecisionRerankResponse]:
@@ -315,6 +330,7 @@ def rerank_with_decisions(
         provider=provider,
         api_key=api_key,
         api_base=api_base,
+        transport_timeout=transport_timeout,
         kwargs=kwargs,
     )
     first: Final = prepare(0)

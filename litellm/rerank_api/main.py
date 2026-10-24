@@ -36,11 +36,10 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
-def _decision_rerank_timeout(timeout: object) -> float:
-    limit: Final = CompletionTimeout.as_limit(litellm.request_timeout if timeout is None else timeout)
-    if isinstance(limit, httpx.Timeout):
-        return float(litellm.request_timeout) if limit.read is None else limit.read
-    return limit
+def _decision_rerank_timeout(timeout: float | httpx.Timeout) -> float:
+    if isinstance(timeout, httpx.Timeout):
+        return float(litellm.request_timeout) if timeout.read is None else timeout.read
+    return timeout
 
 
 @client
@@ -173,6 +172,9 @@ def rerank(
         decision_strategy: Final = get_decision_rerank_strategy(model, litellm.LlmProviders(_custom_llm_provider))
         if decision_strategy is not None:
             decision_kwargs: Final = _DECISION_KWARGS.validate_python(kwargs)
+            decision_timeout: Final = CompletionTimeout.as_limit(
+                litellm.request_timeout if optional_params.timeout is None else optional_params.timeout
+            )
             from litellm.rerank_api.litellm_decisions_transformation.handler import (
                 rerank_with_decisions,
             )
@@ -185,6 +187,7 @@ def rerank(
                 logging_obj=litellm_logging_obj,
                 is_async=_is_async,
                 strategy=decision_strategy,
+                transport_timeout=decision_timeout,
                 params=_DECISION_KWARGS.validate_python(
                     {
                         **decision_kwargs,
@@ -195,7 +198,7 @@ def rerank(
                         "rank_fields": rank_fields,
                         "max_chunks_per_doc": max_chunks_per_doc,
                         "max_tokens_per_doc": max_tokens_per_doc,
-                        "timeout": _decision_rerank_timeout(optional_params.timeout),
+                        "timeout": _decision_rerank_timeout(decision_timeout),
                         "extra_headers": decision_kwargs.get("extra_headers") or headers,
                     }
                 ),

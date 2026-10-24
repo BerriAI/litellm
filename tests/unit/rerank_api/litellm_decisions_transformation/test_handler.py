@@ -1359,24 +1359,43 @@ async def test_proxy_catalog_model_keeps_native_rerank_transport(sync: bool, res
 
 @pytest.mark.parametrize("sync", [True, False])
 @pytest.mark.parametrize(
-    "timeout",
-    [httpx.Timeout(12.0), httpx.Timeout(12.0, connect=2.0), httpx.Timeout(12.0, read=None)],
+    "timeout,expected_limits",
+    [
+        (12.0, ((12.0, 12.0, 12.0, 12.0), (5.0, 5.0, 5.0, 5.0))),
+        (httpx.Timeout(12.0), ((12.0, 12.0, 12.0, 12.0), (5.0, 5.0, 5.0, 5.0))),
+        (
+            httpx.Timeout(connect=2.0, read=12.0, write=9.0, pool=3.0),
+            ((2.0, 12.0, 9.0, 3.0), (2.0, 5.0, 5.0, 3.0)),
+        ),
+        (httpx.Timeout(12.0, read=None), ((12.0, 20.0, 12.0, 12.0), (12.0, 13.0, 12.0, 12.0))),
+        (httpx.Timeout(None), ((20.0, 20.0, 20.0, 20.0), (13.0, 13.0, 13.0, 13.0))),
+        (None, ((20.0, 20.0, 20.0, 20.0), (13.0, 13.0, 13.0, 13.0))),
+    ],
 )
-async def test_decision_rerank_accepts_httpx_timeout(
-    sync: bool, timeout: httpx.Timeout, respx_mock: respx.MockRouter
+async def test_decision_rerank_preserves_phase_timeouts_within_remaining_deadline(
+    sync: bool,
+    timeout: float | httpx.Timeout | None,
+    expected_limits: tuple[tuple[float, float, float, float], tuple[float, float, float, float]],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import litellm.rerank_api.litellm_decisions_transformation.handler as handler
+
+    monkeypatch.setattr(litellm, "request_timeout", 20.0)
     route: Final = respx_mock.post(URL).mock(return_value=response())
-    params: Final = {
-        "model": MODEL,
-        "query": "warranty",
-        "documents": ["one"],
-        "return_documents": False,
-        "api_key": "test-key",
-        "timeout": timeout,
-    }
-    result: Final = litellm.rerank(**params) if sync else await litellm.arerank(**params)
-    assert result.results == [{"index": 0, "relevance_score": 0.8}]
-    assert route.call_count == 1
+    original_timeout: Final = httpx.Timeout(timeout).as_dict()
+    monkeypatch.setattr(
+        handler,
+        "time",
+        SimpleNamespace(monotonic=lambda: 100.0 + 7.0 * min(route.call_count, 1)),
+    )
+    result: Final = await rerank(sync, documents=["one", "two"], return_documents=False, timeout=timeout, concurrency=1)
+    assert result.results == [{"index": 0, "relevance_score": 0.8}, {"index": 1, "relevance_score": 0.8}]
+    assert tuple(call.request.extensions["timeout"] for call in route.calls) == tuple(
+        {"connect": connect, "read": read, "write": write, "pool": pool}
+        for connect, read, write, pool in expected_limits
+    )
+    assert httpx.Timeout(timeout).as_dict() == original_timeout
 
 
 @pytest.mark.parametrize("sync", [True, False])
