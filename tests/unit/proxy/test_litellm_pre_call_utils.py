@@ -926,6 +926,222 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
     assert snapshot_body["messages"] == [{"role": "user", "content": "hello"}]
 
 
+FORWARD_PROVIDER_AUTH_HEADERS: Final = {
+    "forward_llm_provider_auth_headers": True,
+    "forward_client_headers_to_llm_api": True,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent,request_headers,general_settings,expected",
+    [
+        ({"headers": {"Authorization": "Bearer sk-caller"}}, {}, {}, ("headers",)),
+        ({"headers": {"X-Trace-Id": "trace-1"}}, {}, {}, ("headers",)),
+        ({"headers": {}}, {}, {}, ()),
+        ({"extra_headers": {"API-Key": "caller-azure-key"}}, {}, {}, ("extra_headers",)),
+        ({"extra_headers": {"OpenAI-Project": "proj_caller"}}, {}, {}, ("extra_headers",)),
+        (
+            {"provider_specific_header": {"custom_llm_provider": "openai", "extra_headers": {"x-api-key": "caller"}}},
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {
+                "provider_specific_header": [
+                    {"custom_llm_provider": "anthropic", "extra_headers": {"anthropic-beta": "tools"}},
+                    {"custom_llm_provider": "gemini", "extra_headers": {"X-Goog-Api-Key": "caller"}},
+                ]
+            },
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "anthropic",
+                    "extra_headers": {"x-caller-trace": "x"},
+                }
+            },
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "anthropic",
+                    "extra_headers": {"anthropic-version": "2023-06-01", "anthropic-beta": "tools-2024-04-04"},
+                }
+            },
+            {},
+            {},
+            (),
+        ),
+        ({"headers": {"Anthropic-Version": "2023-06-01"}}, {}, {}, ()),
+        ({"organization": "org-caller"}, {}, {}, ("organization",)),
+        ({"headers": "authorization", "provider_specific_header": "x-api-key"}, {}, {}, ()),
+        (
+            {"api_key": "sk-caller", "headers": {"Ocp-Apim-Subscription-Key": "caller"}},
+            {},
+            {},
+            ("api_key", "headers"),
+        ),
+        ({}, {"anthropic-beta": "tools-2024-04-04"}, {}, ()),
+        ({}, {"anthropic-version": "2023-06-01", "anthropic-beta": "tools-2024-04-04"}, {}, ()),
+        ({}, {"openai-organization": "org-caller"}, {"forward_openai_org_id": True}, ("organization",)),
+        (
+            {},
+            {"x-litellm-api-key": "sk-virtual", "authorization": "Bearer sk-ant-oat01-caller"},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {},
+            {"authorization": "Bearer sk-virtual", "x-goog-api-key": "AIza-caller"},
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            ("headers",),
+        ),
+        (
+            {},
+            {"authorization": "Bearer sk-virtual", "x-portkey-api-key": "caller-gateway-key"},
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            ("headers",),
+        ),
+        ({}, {"authorization": "Bearer sk-virtual"}, FORWARD_PROVIDER_AUTH_HEADERS, ()),
+    ],
+    ids=[
+        "authorization-in-headers",
+        "plain-headers",
+        "empty-headers",
+        "api-key-in-extra-headers",
+        "openai-project-in-extra-headers",
+        "credential-in-provider-specific-header",
+        "credential-in-one-provider-specific-header-entry",
+        "plain-provider-specific-header",
+        "anthropic-version-and-beta-in-provider-specific-header",
+        "anthropic-version-in-headers",
+        "organization",
+        "malformed-header-fields",
+        "api-key-and-credential-headers",
+        "proxy-forwarded-anthropic-beta",
+        "proxy-forwarded-anthropic-sdk-headers",
+        "proxy-forwarded-openai-organization",
+        "proxy-forwarded-anthropic-oauth-token",
+        "proxy-forwarded-provider-auth-header",
+        "proxy-forwarded-gateway-key",
+        "proxy-forwarding-nothing",
+    ],
+)
+async def test_caller_credential_fields_name_every_field_that_carries_a_caller_header_or_credential(
+    sent: dict[str, object],
+    request_headers: dict[str, str],
+    general_settings: dict[str, object],
+    expected: tuple[str, ...],
+) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(sent, request_headers, general_settings)
+
+    assert updated["proxy_server_request"]["caller_credential_fields"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_headers,expected",
+    [({}, ()), ({"x-caller-trace": "trace-1"}, ("headers",))],
+    ids=["user-information-only", "user-information-and-caller-header"],
+)
+async def test_caller_credential_fields_ignore_the_user_information_the_proxy_adds_to_forwarded_headers(
+    monkeypatch: pytest.MonkeyPatch, request_headers: dict[str, str], expected: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(litellm, "add_user_information_to_llm_headers", True)
+
+    updated: Final = await _request_data_added_by_the_proxy({}, request_headers, FORWARD_PROVIDER_AUTH_HEADERS)
+
+    assert updated["headers"]["x-litellm-user_api_key_user_id"] == "test-user"
+    assert updated["proxy_server_request"]["caller_credential_fields"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent,request_headers,general_settings,expected",
+    [
+        ({"headers": {"Anthropic-Version": "2023-06-01"}}, {}, {}, ("headers",)),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "anthropic",
+                    "extra_headers": {"anthropic-version": "2023-06-01"},
+                }
+            },
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        ({"organization": "org-caller"}, {}, {}, ()),
+        ({"extra_headers": {"API-Key": "caller-azure-key"}}, {}, {}, ()),
+        (
+            {"api_key": "sk-caller", "headers": {"Ocp-Apim-Subscription-Key": "caller"}},
+            {},
+            {},
+            ("api_key", "headers"),
+        ),
+        ({}, {"openai-organization": "org-caller"}, {"forward_openai_org_id": True}, ()),
+        (
+            {},
+            {"authorization": "Bearer sk-virtual", "x-goog-api-key": "AIza-caller"},
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            (),
+        ),
+    ],
+    ids=[
+        "anthropic-version-in-headers",
+        "anthropic-version-in-provider-specific-header",
+        "organization",
+        "api-key-in-extra-headers",
+        "api-key-and-credential-headers",
+        "proxy-forwarded-openai-organization",
+        "proxy-forwarded-provider-auth-header",
+    ],
+)
+async def test_credential_fields_name_the_stripped_fields_the_caller_sent(
+    sent: dict[str, object],
+    request_headers: dict[str, str],
+    general_settings: dict[str, object],
+    expected: tuple[str, ...],
+) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(sent, request_headers, general_settings)
+
+    assert updated["proxy_server_request"]["credential_fields"] == expected
+
+
+async def _request_data_added_by_the_proxy(
+    sent: dict[str, object], request_headers: dict[str, str], general_settings: dict[str, object]
+) -> dict:
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock: Final = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"content-type": "application/json", **request_headers}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    data: Final = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], **sent}
+
+    return await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", user_id="test-user"),
+        proxy_config=MagicMock(),
+        general_settings=dict(general_settings),
+        version="test-version",
+    )
+
+
 def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> None:
     from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
     from litellm.litellm_core_utils.litellm_logging import Logging
