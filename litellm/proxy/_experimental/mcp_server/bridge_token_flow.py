@@ -55,6 +55,21 @@ def _litellm_key_from_request(request: Request) -> str | None:
     return None
 
 
+def request_carries_litellm_credential(request: Request) -> bool:
+    """Whether the request presented a litellm key or JWT at all, as opposed to resolving one that
+    was refused. The per-server relay keys its token response on this: an anonymous token request
+    (an MCP client whose OAuth fetches carry none of its MCP headers) gets a sealed claim token the
+    key on its next ``/mcp`` request vaults, while a presented credential keeps the upstream token
+    even when it could not be stored. ``Authorization: Basic`` is OAuth client authentication
+    (``client_secret_basic``), never a litellm credential."""
+    if request.headers.get("x-litellm-api-key"):
+        return True
+    authorization: Final = request.headers.get("Authorization") or request.headers.get("authorization") or ""
+    if authorization.strip().lower().startswith("basic "):
+        return False
+    return _litellm_key_from_request(request) is not None
+
+
 async def oauth_authorization_uses_gateway_credential(request: Request) -> bool:
     """Classify credentials for browser authorize; candidates still require full authorization."""
     from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
