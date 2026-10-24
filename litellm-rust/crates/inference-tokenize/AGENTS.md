@@ -1,0 +1,5 @@
+- Own tokenization call orchestration, provider dispatch, and hosted execution
+- Keep public payloads in llms-types and provider policy in llms
+- Resolve providers through inference::provider when execution begins
+- Token strings and numeric token IDs are separate optional fields; never synthesize either from the other
+- Omitted include returns every available representation; explicit include selects representations and an empty array requests count-only
