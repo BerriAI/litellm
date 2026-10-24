@@ -3972,9 +3972,8 @@ class TestNativeWebSocketEncryptedContentAffinity:
         assert completed["response"]["id"] == ResponsesAPIRequestUtils._build_responses_api_response_id(
             custom_llm_provider="openai", model_id="dep-1", response_id="resp_1"
         )
-        assert completed["response"]["output"][0]["id"] == ResponsesAPIRequestUtils._build_encrypted_item_id(
-            "dep-1", "rs_1"
-        )
+        # The provider's item ID is preserved; only the content is wrapped (#47881)
+        assert completed["response"]["output"][0]["id"] == "rs_1"
         assert completed["response"]["output"][0]["encrypted_content"] == wrapped_content
         await asyncio.sleep(0)
         logged = logging_obj.dispatch_success_handlers.await_args[0][0]

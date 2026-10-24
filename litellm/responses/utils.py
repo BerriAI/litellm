@@ -502,13 +502,17 @@ class ResponsesAPIRequestUtils:
         response: Union["ResponsesAPIResponse", dict[str, object]],
         model_id: str | None,
     ) -> Union["ResponsesAPIResponse", dict[str, object]]:
-        """Rewrite item IDs for output items that contain ``encrypted_content``.
+        """Wrap ``encrypted_content`` of output items with the ``model_id``.
 
-        Encodes ``model_id`` into the item ID so that follow-up requests can be
-        routed back to the originating deployment without any cache lookup.
+        Follow-up requests are routed back to the originating deployment from
+        the ``litellm_enc:`` marker in the content - no cache lookup needed.
 
-        For items without an ID (e.g., from Codex), encodes model_id directly
-        into the encrypted_content itself.
+        Item IDs are deliberately left as the provider issued them: the streamed
+        ``output_item.added``/``.done`` events cannot rewrite IDs (at ``.added``
+        time the item may not carry ``encrypted_content`` yet), so rewriting
+        only here gave one item two IDs, and ID-keyed clients replayed both
+        copies (#47881). Clients holding older ``encitem_...`` IDs keep working
+        through ``restore_encrypted_content_item_ids_in_input``.
         """
         if not model_id:
             return response
@@ -524,35 +528,26 @@ class ResponsesAPIRequestUtils:
 
         for item in output:
             if isinstance(item, dict):
-                item_id = item.get("id")
                 encrypted_content = item.get("encrypted_content")
 
                 if encrypted_content and isinstance(encrypted_content, str):
-                    # Always wrap encrypted_content with model_id for redundancy
+                    # Wrap encrypted_content with the model_id; the item ID stays
+                    # as the provider issued it so the item keeps one ID across
+                    # the streamed output_item events and the final response.
                     item["encrypted_content"] = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
                         encrypted_content, model_id
                     )
-                    # Also encode the ID if present
-                    if item_id and isinstance(item_id, str):
-                        item["id"] = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, item_id)
             else:
-                item_id = getattr(item, "id", None)
                 encrypted_content = getattr(item, "encrypted_content", None)
 
                 if encrypted_content and isinstance(encrypted_content, str):
-                    # Always wrap encrypted_content with model_id for redundancy
+                    # Same as the dict branch: wrap the content, keep the ID.
                     try:
                         item.encrypted_content = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
                             encrypted_content, model_id
                         )
                     except AttributeError:
                         pass
-                    # Also encode the ID if present
-                    if item_id and isinstance(item_id, str):
-                        try:
-                            item.id = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, item_id)
-                        except AttributeError:
-                            pass
 
         return response
 
@@ -566,10 +561,17 @@ class ResponsesAPIRequestUtils:
         Handles both:
         1. Items with encoded IDs (encitem_...)
         2. Items with wrapped encrypted_content (litellm_enc:...)
+
+        Also drops later duplicates of the same restored item ID: clients that
+        collected an item from both the streamed per-item events and
+        ``response.completed`` while those carried different IDs replay both
+        copies, and providers reject duplicate item IDs with a 400 (#47881).
         """
         if not isinstance(request_input, list):
             return request_input
 
+        seen_ids: Final = set()
+        restored_input: Final = []
         for item in request_input:
             if isinstance(item, dict):
                 item_id = item.get("id")
@@ -577,6 +579,7 @@ class ResponsesAPIRequestUtils:
                     decoded = ResponsesAPIRequestUtils.decode_encrypted_item_id(item_id)
                     if decoded:
                         item["id"] = decoded["item_id"]
+                        item_id = item["id"]
 
                 encrypted_content = item.get("encrypted_content")
                 if encrypted_content and isinstance(encrypted_content, str):
@@ -587,6 +590,14 @@ class ResponsesAPIRequestUtils:
                     if unwrapped != encrypted_content:
                         item["encrypted_content"] = unwrapped
 
+                if item_id and isinstance(item_id, str):
+                    if item_id in seen_ids:
+                        # A second copy of an item the client collected twice
+                        continue
+                    seen_ids.add(item_id)
+            restored_input.append(item)
+
+        request_input[:] = restored_input
         return request_input
 
     _restore_encrypted_content_item_ids_in_input = restore_encrypted_content_item_ids_in_input
