@@ -99,7 +99,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.token_counter import apply_mid_conversation_tool_changes, offload_token_count
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     HUGGING_FACE_SOURCE,
     KimiK3Encodings,
@@ -15373,10 +15373,15 @@ async def count_request_tokens(
     counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
-    framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
-    kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
+    resolved_messages, resolved_tools = (
+        apply_mid_conversation_tool_changes(counted_messages, counted_tools)
+        if counted_messages is not None
+        else (counted_messages, counted_tools)
+    )
+    framing: Final = settings.framing if resolved_messages is not None and settings.framing is not None else 0
+    kimi_k3_messages: Final = resolved_messages if settings.tokenizer == "kimi_k3" else None
     exact: Final = (
-        await _kimi_k3_count(request, messages_format, model_to_use, kimi_k3_messages, counted_tools)
+        await _kimi_k3_count(request, messages_format, model_to_use, kimi_k3_messages, resolved_tools)
         if kimi_k3_messages is not None and custom_tokenizer is None
         else None
     )
@@ -15390,14 +15395,14 @@ async def count_request_tokens(
         )
     estimate: Final = await _local_token_estimate(
         model=model_to_use,
-        prompt=prompt if counted_messages is None else None,
-        messages=counted_messages,
-        tools=counted_tools,
+        prompt=prompt if resolved_messages is None else None,
+        messages=resolved_messages,
+        tools=resolved_tools,
         custom_tokenizer=custom_tokenizer,
         provider_failure=ladder,
     )
     template: Final = (
-        0 if kimi_k3_messages is None else kimi_k3_template_tokens(len(kimi_k3_messages), bool(counted_tools))
+        0 if kimi_k3_messages is None else kimi_k3_template_tokens(len(kimi_k3_messages), bool(resolved_tools))
     )
     return TokenCountResponse(
         total_tokens=estimate.total_tokens + template + framing,
