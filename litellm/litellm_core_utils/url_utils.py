@@ -23,7 +23,7 @@ import asyncio
 import socket
 from ipaddress import ip_address, ip_network
 from typing import Any, Final, Protocol
-from urllib.parse import quote, urlparse, urlsplit, urlunparse
+from urllib.parse import quote, urlparse, urlsplit, urlunparse, urlunsplit
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
@@ -141,7 +141,12 @@ def _strip_trailing_slashes_keeping_the_scheme(api_base: str) -> str:
 
 
 def join_api_base(api_base: str, route: str) -> str:
-    return f"{_strip_trailing_slashes_keeping_the_scheme(api_base)}/{route.lstrip('/')}"
+    base: Final = _strip_trailing_slashes_keeping_the_scheme(api_base)
+    path: Final = route.lstrip("/")
+    if "?" not in base and "#" not in base:
+        return f"{base}/{path}"
+    parts: Final = urlsplit(base)
+    return urlunsplit((parts.scheme, parts.netloc, f"{parts.path.rstrip('/')}/{path}", parts.query, parts.fragment))
 
 
 def ensure_api_route(api_base: str, route: str) -> str:
