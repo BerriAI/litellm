@@ -89,6 +89,7 @@ from litellm.litellm_core_utils.get_litellm_params import (
     with_control_options,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import (
+    get_provider_affinity_header,
     invalid_provider_routing_hints_message,
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
@@ -130,6 +131,7 @@ from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantl
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -5988,19 +5990,28 @@ def completion(
             },
         )
         litellm_params: Final = with_control_options(requested_litellm_params, control_options)
-        if litellm_params.get("provider_affinity_header") is not None:
+        affinity_api_base: Final = (
+            str(client.base_url)
+            if isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            else get_openai_credentials(api_base=api_base).api_base
+            if custom_llm_provider == "openai"
+            else api_base
+        )
+        default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
+        if litellm_params.get("provider_affinity_header") is not None or default_affinity_header is not None:
             try:
                 headers = add_provider_affinity_header(
                     headers=headers or litellm.headers or MappingProxyType({}),
                     litellm_params=MappingProxyType(
                         {
-                            "provider_affinity_header": litellm_params["provider_affinity_header"],
+                            "provider_affinity_header": litellm_params.get("provider_affinity_header"),
                             "litellm_session_id": kwargs.get("litellm_session_id"),
                             "session_id": kwargs.get("session_id"),
                             "metadata": metadata,
                             "litellm_metadata": kwargs.get("litellm_metadata"),
                         }
                     ),
+                    default_header=default_affinity_header,
                 )
             except ValueError as affinity_error:
                 raise litellm.BadRequestError(

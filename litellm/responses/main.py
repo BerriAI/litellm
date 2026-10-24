@@ -30,6 +30,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -39,6 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 from litellm.main import register_custom_pricing_for_request
 from litellm.responses.litellm_completion_transformation.compaction_items import (
@@ -1486,6 +1488,12 @@ def responses(
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        affinity_api_base: Final = (
+            get_openai_credentials(api_base=litellm_params.api_base).api_base
+            if custom_llm_provider == "openai"
+            else litellm_params.api_base
+        )
+        default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
         try:
             effective_extra_headers: Final = (
                 add_provider_affinity_header(
@@ -1499,8 +1507,9 @@ def responses(
                             "litellm_metadata": kwargs.get("litellm_metadata"),
                         }
                     ),
+                    default_header=default_affinity_header,
                 )
-                if litellm_params.provider_affinity_header is not None
+                if litellm_params.provider_affinity_header is not None or default_affinity_header is not None
                 else extra_headers
             )
         except ValueError as affinity_error:
