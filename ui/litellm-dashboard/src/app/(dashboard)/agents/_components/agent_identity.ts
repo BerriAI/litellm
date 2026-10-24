@@ -23,6 +23,7 @@ const identityShape = {
   tenant_id: z.string().regex(IDENTITY_UUID_PATTERN),
   client_id: z.string().regex(IDENTITY_UUID_PATTERN),
   service_principal_id: z.string().regex(IDENTITY_UUID_PATTERN).nullable().default(null),
+  blueprint_id: z.string().regex(IDENTITY_UUID_PATTERN).nullable().default(null),
   required_roles: stringGrants([]),
   required_scopes: stringGrants(["user_impersonation"]),
 };
@@ -38,6 +39,7 @@ const identityFormFields = (identity: EntraAgentIdentity | null): AgentFormValue
   identity_tenant_id: identity?.tenant_id ?? "",
   identity_client_id: identity?.client_id ?? "",
   identity_service_principal_id: identity?.service_principal_id ?? "",
+  identity_blueprint_id: identity?.blueprint_id ?? "",
   identity_required_roles: identity?.required_roles?.join(", ") ?? "",
   identity_required_scopes: identity?.required_scopes?.join(", ") ?? "user_impersonation",
 });
@@ -73,6 +75,10 @@ export const buildIdentityParams = (
     service_principal_id:
       typeof values.identity_service_principal_id === "string" && values.identity_service_principal_id.trim()
         ? values.identity_service_principal_id.trim().toLowerCase()
+        : null,
+    blueprint_id:
+      typeof values.identity_blueprint_id === "string" && values.identity_blueprint_id.trim()
+        ? values.identity_blueprint_id.trim().toLowerCase()
         : null,
     required_roles: splitGrants(values.identity_required_roles, []),
     required_scopes: splitGrants(values.identity_required_scopes, ["user_impersonation"]),
