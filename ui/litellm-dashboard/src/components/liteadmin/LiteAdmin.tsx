@@ -549,6 +549,7 @@ function ModelPicker({
       value={value}
       onValueChange={onChange}
       placeholder="Choose a chat model"
+      emptyText={models.data?.length ? "No matching models" : "No available models"}
       disabled={disabled}
       allowClear={false}
       className={compact ? "border-transparent shadow-none dark:bg-transparent" : undefined}
@@ -557,24 +558,16 @@ function ModelPicker({
 }
 
 function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
+  if (!models.isError) return null;
   return (
-    <>
-      {models.isError && (
-        <Alert variant="destructive">
-          <AlertDescription>
-            Could not load models.{" "}
-            <Button variant="link" onClick={() => void models.refetch()}>
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {models.isSuccess && models.data.length === 0 && (
-        <Alert role="status">
-          <AlertDescription>No chat models are available for your account.</AlertDescription>
-        </Alert>
-      )}
-    </>
+    <Alert variant="destructive">
+      <AlertDescription>
+        Could not load models.{" "}
+        <Button variant="link" onClick={() => void models.refetch()}>
+          Retry
+        </Button>
+      </AlertDescription>
+    </Alert>
   );
 }
 

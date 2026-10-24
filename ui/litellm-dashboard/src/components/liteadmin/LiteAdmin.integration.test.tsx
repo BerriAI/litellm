@@ -269,7 +269,12 @@ describe("Aria Agent in the gateway", () => {
     const requests = gateway([], { models: [] });
     renderWidget();
     await userEvent.setup().click(await screen.findByRole("button", { name: "Launch Aria Agent" }));
-    await screen.findByText("No chat models are available for your account.");
+    const picker = await screen.findByRole("combobox", { name: "Aria Agent model" });
+    expect(picker).toBeEnabled();
+    expect(screen.queryByText("No chat models are available for your account.")).not.toBeInTheDocument();
+    await userEvent.setup().click(picker);
+    expect(await screen.findByText("No available models")).toBeVisible();
+    await userEvent.setup().keyboard("{Escape}");
     for (const question of [
       "How much have I spent this week?",
       "Which models are costing the most?",
@@ -739,7 +744,10 @@ describe("Aria Agent in the gateway", () => {
     const requests = gateway([], options);
     const { client } = renderWidget(undefined, true);
     const home = await screen.findByRole("region", { name: "Ask Aria Agent" });
-    expect(await within(home).findByText("No chat models are available for your account.")).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(await within(home).findByRole("combobox", { name: "Aria Agent model" }));
+    expect(await screen.findByText("No available models")).toBeVisible();
+    await user.keyboard("{Escape}");
     expect(within(home).getByPlaceholderText("What would you like to do?")).toBeDisabled();
     expect(within(home).getByRole("button", { name: "Send message" })).toBeDisabled();
     options.models = [{ model_group: "chat-model", mode: "chat" }];
@@ -1222,7 +1230,9 @@ describe("Aria Agent in the gateway", () => {
     expect(discovery?.headers.get("X-Gateway-Session")).toBe("Bearer sk-session-first-admin");
     options.callableModels = [];
     await act(async () => client.invalidateQueries({ queryKey: ["liteadmin-models"] }));
-    expect(await screen.findByText("No chat models are available for your account.")).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Aria Agent model" }));
+    expect(await screen.findByText("No available models")).toBeVisible();
+    await user.keyboard("{Escape}");
     expect(screen.getByPlaceholderText("Ask Aria…")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
     expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(1);
