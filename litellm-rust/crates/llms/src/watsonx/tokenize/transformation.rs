@@ -242,11 +242,12 @@ fn filtered_params(
 
 #[cfg(test)]
 mod tests {
-    use litellm_auth::{InputSource, SecretValue, Sourced};
+    use litellm_auth::{CredentialPlacement, InputSource, SecretValue, Sourced};
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
+    use crate::base_llm::auth::AuthScheme;
     use crate::base_llm::tokenize::transformation::TokenizeMap;
 
     fn no_env(_: &str) -> Option<String> {
@@ -469,8 +470,7 @@ mod tests {
         let extra_headers = TokenizeMap::new();
         let deployment_params = TokenizeMap::new();
         let optional_params = TokenizeMap::new();
-        let missing_key =
-            tokenize_input(None, &extra_headers, &deployment_params, &optional_params);
+        let input = tokenize_input(None, &extra_headers, &deployment_params, &optional_params);
         let environment = WatsonxTokenizeConfig
             .validate_environment(&input, &Map::new(), &|name| {
                 (name == "WATSONX_TOKEN").then(|| "environment-token".into())
@@ -489,7 +489,7 @@ mod tests {
         let extra_headers = TokenizeMap::new();
         let deployment_params = TokenizeMap::new();
         let optional_params = TokenizeMap::new();
-        let input = input(
+        let input = tokenize_input(
             Some(&api_key),
             &extra_headers,
             &deployment_params,
@@ -499,7 +499,8 @@ mod tests {
             .validate_environment(&input, &Map::new(), &no_env)
             .unwrap();
         assert!(matches!(environment.auth, AuthScheme::WatsonxIam { .. }));
-        let missing_key = input(None, &extra_headers, &deployment_params, &optional_params);
+        let missing_key =
+            tokenize_input(None, &extra_headers, &deployment_params, &optional_params);
         assert!(
             WatsonxTokenizeConfig
                 .validate_environment(&missing_key, &Map::new(), &no_env)
