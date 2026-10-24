@@ -4359,6 +4359,15 @@ class ProxyBaseLLMRequestProcessing:
                     and user_api_key_dict is not None
                 ):
                     await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
+            logging_obj: Final = request_data.get("litellm_logging_obj")
+            if (
+                stream_completed
+                and isinstance(logging_obj, LiteLLMLoggingObj)
+                and logging_obj.async_success_claimed
+                and proxy_logging_obj is not None
+                and user_api_key_dict is not None
+            ):
+                await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
 
             if hasattr(response, "aclose"):
                 try:
@@ -4368,7 +4377,6 @@ class ProxyBaseLLMRequestProcessing:
                         "async_streaming_data_generator: error closing response stream: %s",
                         e,
                     )
-            logging_obj: Final = request_data.get("litellm_logging_obj")
             if (
                 not stream_completed
                 and isinstance(logging_obj, LiteLLMLoggingObj)
