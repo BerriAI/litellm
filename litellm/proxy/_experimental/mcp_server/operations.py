@@ -321,39 +321,61 @@ async def _build_virtual_call_logging_obj(
     raw_headers: Mapping[str, str] | None = None,
     client_ip: str | None = None,
 ) -> LiteLLMLoggingObj | None:
-    """Run the pre-call pipeline (guardrails + logging setup) for a virtual
-    mcp_tool_call so the SSE path spend-logs like the REST path."""
-    from litellm.proxy.common_request_processing import (
-        ProxyBaseLLMRequestProcessing,
-    )
-    from litellm.proxy.proxy_server import (
-        general_settings,
-        proxy_config,
-        proxy_logging_obj,
-    )
+    """Build the virtual tool's logger without running request admission twice.
 
-    request: Final = build_synthetic_mcp_request(
-        path="/mcp/tools/call",
-        raw_headers=raw_headers,
-        client_ip=client_ip,
+    The real tool call owns admission and pre-call guardrails. Running the full
+    proxy pre-call path here consumes a second RPM slot and parallel slot.
+    """
+    from litellm.proxy.common_request_processing import resolve_litellm_call_id
+
+    headers: Final = dict(raw_headers) if raw_headers else {}
+    call_id: Final = resolve_litellm_call_id(headers.get("x-litellm-call-id"))
+    trace_id: Final = get_chain_id_from_headers(headers)
+    request_data: dict[str, object] = {
+        "model": f"MCP: {name}",
+        "call_type": CallTypes.call_mcp_tool.value,
+        "litellm_call_id": call_id,
+        "litellm_trace_id": trace_id,
+        "metadata": {
+            "spend_logs_metadata": {
+                "mcp_operation": "call_tool",
+                "mcp_tool_name": name,
+            },
+            "headers": logging_safe_mcp_headers(raw_headers),
+            **({"existing_trace_id": trace_id} if trace_id else {}),
+        },
+        "input": [
+            {
+                "role": "system",
+                "content": {
+                    "mcp_operation": "call_tool",
+                    "mcp_tool_name": name,
+                    "arguments": arguments,
+                    "client_ip": client_ip,
+                },
+            }
+        ],
+    }
+    auth_for_logging: Final = logging_auth or user_api_key_auth
+    LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=request_data,
+        user_api_key_dict=auth_for_logging,
+        _metadata_variable_name="metadata",
     )
-    pre_call_result: Final = await ProxyBaseLLMRequestProcessing(
-        data={"name": name, "arguments": arguments}
-    ).common_processing_pre_call_logic(
-        request=request,
-        user_api_key_dict=user_api_key_auth,
-        proxy_config=proxy_config,
-        route_type=CallTypes.call_mcp_tool.value,
-        proxy_logging_obj=proxy_logging_obj,
-        general_settings=general_settings,
-        logging_auth=logging_auth,
-    )
-    _, logging_candidate = TypeAdapter(tuple[dict[str, object], object]).validate_python(pre_call_result)
-    if not isinstance(logging_candidate, LiteLLMLoggingObj):
-        verbose_logger.warning("MCP request processing did not return a logging object")
+    try:
+        logging_obj, _ = function_setup(
+            original_function=CallTypes.call_mcp_tool.value,
+            is_async_call=True,
+            rules_obj=Rules(),
+            start_time=datetime.now(),  # noqa: DTZ005  # logging timestamps are naive
+            **request_data,
+        )
+    except Exception as exc:  # noqa: BLE001  # logging setup must not block the tool call
+        verbose_logger.debug("Failed to initialize logging for MCP virtual tool %s: %s", name, exc)
         return None
-    virtual_logging_obj: Final = logging_candidate
-    return virtual_logging_obj
+    logging_obj.call_type = CallTypes.call_mcp_tool.value
+    logging_obj.model = f"MCP: {name}"
+    return logging_obj
 
 
 async def _log_virtual_mcp_tool_failure(
@@ -595,6 +617,7 @@ async def _dispatch_virtual_mcp_tool(
         tool_name=tool_request.name,
         mcp_servers=mcp_servers,
     )
+    virtual_call_start: Final = datetime.now()  # noqa: DTZ005  # logging timestamps are naive
     virtual_logging_obj: Final = await _build_virtual_call_logging_obj(
         name=tool_request.name,
         arguments=tool_request.arguments or {},
@@ -603,19 +626,45 @@ async def _dispatch_virtual_mcp_tool(
         raw_headers=raw_headers,
         client_ip=client_ip,
     )
-    return await handle_mcp_tool_call(
-        tool_name=tool_request.name,
-        arguments=tool_request.arguments or {},
-        user_api_key_dict=user_api_key_auth,
-        client_ip=client_ip,
-        mcp_servers=mcp_servers,
-        mcp_auth_header=mcp_auth_header,
-        mcp_server_auth_headers=mcp_server_auth_headers,
-        oauth2_headers=oauth2_headers,
-        raw_headers=raw_headers,
-        litellm_logging_obj=virtual_logging_obj,
-        incoming_bearer_token=incoming_bearer_token,
-        guardrail_auth=tool_guardrail_auth,
+    request_data: Final = types.MappingProxyType(
+        {
+            "name": tool_request.name,
+            "arguments": tool_request.arguments or {},
+        }
+    )
+    try:
+        result: Final = await handle_mcp_tool_call(
+            tool_name=tool_request.name,
+            arguments=tool_request.arguments or {},
+            user_api_key_dict=user_api_key_auth,
+            client_ip=client_ip,
+            mcp_servers=mcp_servers,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            litellm_logging_obj=virtual_logging_obj,
+            incoming_bearer_token=incoming_bearer_token,
+            guardrail_auth=tool_guardrail_auth,
+        )
+    except Exception as exc:
+        await fire_mcp_tool_call_failure_logging(
+            virtual_logging_obj,
+            exc,
+            virtual_call_start,
+            user_api_key_auth,
+            request_data,
+        )
+        raise
+    if virtual_logging_obj is None:
+        return result
+    return await _fire_mcp_tool_call_logging(
+        logging_obj=virtual_logging_obj,
+        result=result,
+        start_time=virtual_call_start,
+        end_time=datetime.now(),  # noqa: DTZ005  # logging timestamps are naive
+        user_api_key_auth=user_api_key_auth,
+        request_data=request_data,
     )
 
 

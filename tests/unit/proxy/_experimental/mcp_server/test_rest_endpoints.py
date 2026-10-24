@@ -3524,7 +3524,6 @@ class TestCallToolRestAPI:
     async def test_virtual_mcp_tool_call_guardrail_block_runs_failure_logging(self, monkeypatch):
         """A pre_mcp_call guardrail block on the virtual mcp_tool_call branch must write a failure
         spend log, same as the direct tool call branch, and still raise the original error."""
-        from litellm.proxy import proxy_server
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
         guardrail_error = HTTPException(status_code=400, detail={"error": "Content blocked"})
@@ -3532,20 +3531,20 @@ class TestCallToolRestAPI:
         async def fake_contexts(user_api_key_auth):
             return [user_api_key_auth]
 
-        async def fake_add_litellm_data_to_request(**kwargs):
-            return kwargs.get("data", {})
-
-        async def blocking_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
-            raise guardrail_error
-
         failure_logging = AsyncMock()
         monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
         monkeypatch.setattr(
-            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+            mcp_operations,
+            "_get_allowed_mcp_servers",
+            AsyncMock(return_value=[MagicMock()]),
+            raising=False,
         )
-        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
-        monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
-        monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", blocking_pre_call_hook)
+        monkeypatch.setattr(
+            mcp_operations,
+            "execute_mcp_tool",
+            AsyncMock(side_effect=guardrail_error),
+            raising=False,
+        )
         monkeypatch.setattr(rest_endpoints, "fire_mcp_tool_call_failure_logging", failure_logging, raising=False)
 
         user_api_key_dict = UserAPIKeyAuth(
@@ -3570,8 +3569,8 @@ class TestCallToolRestAPI:
         logging_obj, exception, _start_time, user_api_key_auth, request_data = failure_logging.await_args.args
         assert exception is guardrail_error
         assert user_api_key_auth is user_api_key_dict
-        assert logging_obj is request_data.get("litellm_logging_obj")
         assert logging_obj is not None
+        assert request_data["name"] == "mcp_tool_call"
 
 
 @pytest.mark.asyncio
