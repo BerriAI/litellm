@@ -6032,13 +6032,12 @@ class PrismaClient:
             elif table_name == "user":
                 db_data = self.jsonify_object(data=data)
                 try:
-                    new_user_row: Final = await UserRepository(self).table.upsert(
-                        where={"user_id": data["user_id"]},
-                        data={
-                            "create": {**db_data},
-                            "update": {},  # don't do anything if it already exists
-                        },
-                    )
+                    new_user_row: Final = await UserRepository(self).upsert_user(db_data)
+                    if new_user_row is None:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="SSO for more than 5 users requires a LiteLLM Enterprise license. Existing users can still sign in.",
+                        )
                 except Exception as e:
                     if (
                         "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"

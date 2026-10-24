@@ -41,11 +41,9 @@ const passThroughFormSchema = z.object({
     .pipe(z.url({ error: "Please enter a valid URL" })),
   methods: z.array(z.string()).optional(),
   include_subpath: z.boolean(),
-  headers: keyValuePairsSchema.refine((pairs) => pairs.some(([name]) => name !== ""), {
-    error: "Please configure the headers",
-  }),
+  headers: keyValuePairsSchema,
   default_query_params: keyValuePairsSchema.optional(),
-  auth: z.boolean().optional(),
+  auth: z.boolean(),
   timeout: z.string().optional(),
   cost_per_request: z.string().optional(),
 });
@@ -59,7 +57,7 @@ const emptyFormValues = {
   include_subpath: true,
   headers: [],
   default_query_params: undefined,
-  auth: undefined,
+  auth: true,
   timeout: undefined,
   cost_per_request: undefined,
 } as unknown as PassThroughFormValues;
@@ -88,14 +86,12 @@ interface AddFallbacksProps {
   accessToken: string;
   passThroughItems: passThroughItem[];
   setPassThroughItems: React.Dispatch<React.SetStateAction<passThroughItem[]>>;
-  premiumUser?: boolean;
 }
 
 const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   accessToken,
   setPassThroughItems,
   passThroughItems,
-  premiumUser = false,
 }) => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -123,7 +119,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
         include_subpath: values.include_subpath,
         headers: toRecord(values.headers),
         default_query_params: optionalRecord(values.default_query_params),
-        ...(premiumUser ? { auth: values.auth } : {}),
+        auth: values.auth,
         timeout: values.timeout,
         cost_per_request: values.cost_per_request,
         ...(Object.keys(guardrails).length > 0 ? { guardrails } : {}),
@@ -268,14 +264,12 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                     control={form.control}
                     name="headers"
                     label={labelWithHint(
-                      "Authentication Headers",
+                      "Headers (Optional)",
                       "Authentication and other headers to forward with requests",
                     )}
                     description={
                       <>
-                        <span className="mb-1 block font-medium">
-                          Add authentication tokens and other required headers
-                        </span>
+                        <span className="mb-1 block font-medium">Add headers only if required by the target API</span>
                         <span className="block">Common examples: auth_token, Authorization, x-api-key</span>
                       </>
                     }
@@ -313,13 +307,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 </Card>
 
                 <FormField control={form.control} name="auth">
-                  {({ value, onChange }) => (
-                    <PassThroughSecuritySection
-                      premiumUser={premiumUser}
-                      authEnabled={value ?? false}
-                      onAuthChange={onChange}
-                    />
-                  )}
+                  {({ value, onChange }) => <PassThroughSecuritySection authEnabled={value} onAuthChange={onChange} />}
                 </FormField>
 
                 <PassThroughGuardrailsSection accessToken={accessToken} value={guardrails} onChange={setGuardrails} />
