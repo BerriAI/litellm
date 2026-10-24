@@ -7,7 +7,7 @@ import os
 import sys
 import uuid
 import zlib
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,12 +30,12 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS, WEBSOCKET_CLOSE_REASON_MAX_BYTES
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -53,6 +53,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
     pass_through_request,
     resolve_llm_passthrough_timeout,
+    WebsocketClientFrameGate,
     resolve_pass_through_request_timeout,
     set_env_variables_in_header,
     websocket_passthrough_request,
@@ -7175,6 +7176,39 @@ class RecordingUpstreamWebSocket:
         raise StopAsyncIteration
 
 
+class ClosableUpstreamWebSocket:
+    """An upstream whose ``recv`` ends when ``close`` does, and whose close keeps yielding after that.
+
+    A real close handshake outlives the ``recv`` it unblocks, so the reader task finishes while the closing
+    task is still suspended. That is the interleaving that leaves a refusal stranded in a cancelled task
+    """
+
+    CLOSE_HANDSHAKE_YIELDS = 5
+
+    def __init__(self) -> None:
+        self._closing = asyncio.Event()
+        self.send = AsyncMock()
+        self.close = AsyncMock(side_effect=self._close)
+
+    async def _close(self) -> None:
+        self._closing.set()
+        for _ in range(self.CLOSE_HANDSHAKE_YIELDS):
+            await asyncio.sleep(0)
+
+    async def recv(self, decode: bool = True) -> str:
+        from websockets.exceptions import ConnectionClosedOK
+        from websockets.frames import Close
+
+        await self._closing.wait()
+        raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+
+    def __aiter__(self) -> "ClosableUpstreamWebSocket":
+        return self
+
+    async def __anext__(self) -> str:
+        raise StopAsyncIteration
+
+
 def _client_websocket(receive):
     from starlette.websockets import WebSocketState
 
@@ -7207,10 +7241,16 @@ def _patched_websocket_passthrough_environment(upstream_ws):
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_success_hook = AsyncMock()
         mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        enqueued_handler = MagicMock()
         mock_worker.ensure_initialized_and_enqueue = MagicMock(
-            side_effect=lambda async_coroutine: async_coroutine.close()
+            side_effect=lambda async_coroutine: (
+                enqueued_handler(**async_coroutine.cr_frame.f_locals),
+                async_coroutine.close(),
+            )
         )
-        yield
+        yield SimpleNamespace(
+            proxy_logging=mock_proxy_logging, logging_worker=mock_worker, enqueued_handler=enqueued_handler
+        )
 
 
 async def _pending_receive():
@@ -7244,6 +7284,36 @@ async def test_websocket_passthrough_relays_upstream_policy_close_to_client():
         )
 
     websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_relays_as_much_of_a_long_upstream_close_reason_as_fits():
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    upstream_reason = (
+        "Quota exceeded for concurrent_sessions. Request more quota for aiplatform.googleapis.com "
+        "BidiGenerateContent sessions in us-central1 from the Google Cloud console quotas page"
+    )
+    upstream_ws = ClosingUpstreamWebSocket(
+        ConnectionClosedError(rcvd=Close(1011, upstream_reason), sent=Close(1011, ""), rcvd_then_sent=True)
+    )
+    websocket = _client_websocket(_pending_receive)
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+        )
+
+    relayed_reason = websocket.close.await_args.kwargs["reason"]
+    assert upstream_reason.startswith(relayed_reason)
+    assert len(relayed_reason.encode("utf-8")) == WEBSOCKET_CLOSE_REASON_MAX_BYTES
 
 
 @pytest.mark.asyncio
@@ -7334,6 +7404,796 @@ async def test_websocket_passthrough_rewrites_gateway_alias_setup_model():
 
     sent_setup = json.loads(sent_frame)["setup"]
     assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
+
+
+VERTEX_LIVE_TARGET = "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+
+
+VERTEX_LIVE_GROUP = "gemini-live-2.5-flash-native-audio"
+
+VERTEX_LIVE_ALIAS_GROUP = "gemini-live-native-audio"
+
+VERTEX_LIVE_GROUP_ADDRESSINGS = (
+    "{model}",
+    "models/{model}",
+    "vertex_ai/{model}",
+    "publishers/google/models/{model}",
+)
+
+VERTEX_LIVE_FULL_PATH = "projects/proj-db/locations/global/publishers/google/models/{model}"
+
+VERTEX_LIVE_CLIENT_ADDRESSINGS = (*VERTEX_LIVE_GROUP_ADDRESSINGS, VERTEX_LIVE_FULL_PATH)
+
+
+def _vertex_live_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-live-2.5-flash",
+                "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"},
+            },
+            {
+                "model_name": VERTEX_LIVE_GROUP,
+                "litellm_params": {"model": f"vertex_ai/{VERTEX_LIVE_GROUP}"},
+            },
+            {
+                "model_name": VERTEX_LIVE_ALIAS_GROUP,
+                "litellm_params": {"model": f"vertex_ai/{VERTEX_LIVE_GROUP}"},
+            },
+            {
+                "model_name": "gemini-3-pro-live",
+                "litellm_params": {"model": "vertex_ai/gemini-3-pro-live"},
+            },
+        ]
+    )
+
+
+async def _run_vertex_live_gated_passthrough(
+    client_frames: Sequence[Mapping[str, str | bytes]],
+    valid_token: UserAPIKeyAuth,
+    llm_router: litellm.Router | None = None,
+) -> tuple[MagicMock, RecordingUpstreamWebSocket]:
+    """Drive /vertex_ai/live with the real frame gate, returning the client and upstream sockets"""
+    upstream_ws = RecordingUpstreamWebSocket()
+    websocket, _ = await _run_vertex_live_gated_session(
+        AsyncMock(side_effect=[*client_frames, {"type": "websocket.disconnect"}]),
+        upstream_ws,
+        valid_token,
+        llm_router or _vertex_live_router(),
+    )
+    return websocket, upstream_ws
+
+
+async def _run_vertex_live_gated_session(
+    receive: Callable[[], Awaitable[Mapping[str, str | bytes]]],
+    upstream_ws: "RecordingUpstreamWebSocket | ScriptedUpstreamWebSocket",
+    valid_token: UserAPIKeyAuth,
+    llm_router: litellm.Router,
+) -> tuple[MagicMock, SimpleNamespace]:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _build_vertex_live_client_frame_gate,
+        _build_vertex_live_setup_model_rewriter,
+    )
+
+    websocket = _client_websocket(receive)
+
+    with _patched_websocket_passthrough_environment(upstream_ws) as environment:
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target=VERTEX_LIVE_TARGET,
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=valid_token,
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+            setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
+                vertex_project="proj-db",
+                vertex_location="global",
+                llm_router=llm_router,
+            ),
+            client_frame_gate=_build_vertex_live_client_frame_gate(llm_router=llm_router),
+        )
+
+    return websocket, environment
+
+
+def _setup_frame(model: str) -> dict[str, str]:
+    return {
+        "type": "websocket.receive",
+        "text": json.dumps({"setup": {"model": model, "generationConfig": {"responseModalities": ["TEXT"]}}}),
+    }
+
+
+def _policy_close_reason(websocket: MagicMock) -> str | None:
+    return next(
+        (call.kwargs.get("reason") for call in websocket.close.await_args_list if call.kwargs.get("code") == 1008),
+        None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_setup_frame_naming_a_model_the_key_cannot_call_is_refused():
+    """
+    ?model= is optional on this route, so a key that names an unlisted model only in the setup frame used to
+    reach Vertex with the gateway's own service-account credentials
+    """
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame("totally-unlisted-model-abc")],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    reason = _policy_close_reason(websocket)
+    assert reason is not None and "totally-unlisted-model-abc" in reason
+    assert reason.endswith(".")
+    upstream_ws.close.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_setup_frame_naming_a_permitted_model_still_reaches_vertex():
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame("gemini-live-2.5-flash")],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+    )
+
+    upstream_ws.send.assert_awaited_once()
+    sent_setup = json.loads(upstream_ws.send.await_args.args[0])["setup"]
+    assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
+    assert _policy_close_reason(websocket) is None
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_setup_frame_from_an_unrestricted_key_still_reaches_vertex():
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame("gemini-3-pro-live")],
+        UserAPIKeyAuth(token="hashed", models=[]),
+    )
+
+    upstream_ws.send.assert_awaited_once()
+    assert _policy_close_reason(websocket) is None
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_setup_frame_is_checked_against_the_team_for_an_all_team_models_key():
+    """
+    ``all-team-models`` skips the key allowlist, so the team's own restriction is the only thing left to apply
+    """
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame("gemini-3-pro-live")],
+        UserAPIKeyAuth(
+            token="hashed",
+            models=["all-team-models"],
+            team_id="team-1",
+            team_models=["gemini-live-2.5-flash"],
+        ),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    reason = _policy_close_reason(websocket)
+    assert reason is not None and "gemini-3-pro-live" in reason
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_setup_frame_is_gated_when_it_arrives_as_binary():
+    """A client that sends its setup frame as bytes must not skip the check the text path applies"""
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [
+            {
+                "type": "websocket.receive",
+                "bytes": json.dumps({"setup": {"model": "totally-unlisted-model-abc"}}).encode(),
+            }
+        ],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    assert _policy_close_reason(websocket) is not None
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_setup_frame_with_an_escaped_key_is_still_gated():
+    """Large audio frames skip the parse on a substring test, so a JSON-escaped key must not slip past it"""
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [{"type": "websocket.receive", "text": '{"\\u0073etup": {"model": "totally-unlisted-model-abc"}}'}],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    assert _policy_close_reason(websocket) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frame_kind", ["text", "bytes"])
+@pytest.mark.parametrize(
+    "lenient_setup",
+    [
+        '{"setup": {"model": "totally-unlisted-model-abc",},}',
+        "{'setup': {'model': 'totally-unlisted-model-abc'}}",
+        '{setup: {model: "totally-unlisted-model-abc"}}',
+    ],
+)
+async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused(lenient_setup, frame_kind):
+    """Vertex reads trailing commas, single quotes and bare keys, which strict JSON refuses to parse"""
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [
+            {
+                "type": "websocket.receive",
+                frame_kind: lenient_setup if frame_kind == "text" else lenient_setup.encode(),
+            }
+        ],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    assert _policy_close_reason(websocket) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "lenient_setup",
+    [
+        '{"setup": {"model": "gemini-3-pro-live",},}',
+        "{'setup': {'model': 'gemini-3-pro-live'}}",
+        '{setup: {model: "gemini-3-pro-live"}}',
+    ],
+)
+async def test_vertex_live_setup_frame_only_vertex_can_parse_still_reaches_vertex_for_an_unrestricted_key(
+    lenient_setup,
+):
+    """A key that may call any model loses nothing the proxy cannot read, so its lenient frames still go through"""
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [{"type": "websocket.receive", "text": lenient_setup}],
+        UserAPIKeyAuth(token="hashed", models=[]),
+    )
+
+    upstream_ws.send.assert_awaited_once()
+    assert _policy_close_reason(websocket) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "repeated_key_setup",
+    [
+        '{"setup": {"model": "gemini-3-pro-live", "model": null}}',
+        '{"setup": {"model": "gemini-3-pro-live"}, "setup": null}',
+    ],
+)
+async def test_vertex_live_setup_frame_repeating_a_key_as_null_is_refused(repeated_key_setup):
+    """
+    Vertex keeps the first of two keys when the second is null, while ``json.loads`` keeps the last, so the
+    proxy would read no model where Vertex runs the first one
+    """
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [{"type": "websocket.receive", "text": repeated_key_setup}],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    assert _policy_close_reason(websocket) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limited_token",
+    [
+        UserAPIKeyAuth(token="hashed", models=["litellm-*"]),
+        UserAPIKeyAuth(token="hashed", models=["vertex_ai/gemini-*"]),
+        UserAPIKeyAuth(token="hashed", models=[], team_id="team-1", team_models=["gemini-live-2.5-flash"]),
+        UserAPIKeyAuth(token="hashed", models=[], agent_id="agent-1"),
+        UserAPIKeyAuth(token="hashed", models=[], end_user_id="end-user-1"),
+    ],
+    ids=["litellm-wildcard", "vertex-wildcard", "team", "agent", "end-user"],
+)
+async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused_for_any_limited_caller(limited_token):
+    """A wildcard can match any name the proxy might test the caller with, so only a caller with no model limit
+    anywhere may send a frame the proxy cannot read"""
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [
+            {
+                "type": "websocket.receive",
+                "text": "{'setup': {'model': '"
+                + VERTEX_LIVE_FULL_PATH.format(model="gemini-3-pro-live")
+                + "',},}",
+            }
+        ],
+        limited_token,
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    assert _policy_close_reason(websocket) is not None
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_client_content_that_mentions_setup_is_forwarded():
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [
+            _setup_frame("gemini-live-2.5-flash"),
+            {
+                "type": "websocket.receive",
+                "text": json.dumps(
+                    {"clientContent": {"turns": [{"role": "user", "parts": [{"text": "help me setup a meeting"}]}]}}
+                ),
+            },
+        ],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+    )
+
+    assert upstream_ws.send.await_count == 2
+    assert _policy_close_reason(websocket) is None
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_non_setup_frames_are_forwarded_without_a_model_check():
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [
+            _setup_frame("gemini-live-2.5-flash"),
+            {"type": "websocket.receive", "text": json.dumps({"realtimeInput": {"audio": {"data": "AAAA"}}})},
+        ],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+    )
+
+    assert upstream_ws.send.await_count == 2
+    assert _policy_close_reason(websocket) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("addressing", VERTEX_LIVE_GROUP_ADDRESSINGS)
+@pytest.mark.parametrize("group", [VERTEX_LIVE_GROUP, VERTEX_LIVE_ALIAS_GROUP])
+async def test_vertex_live_setup_frame_authorizes_a_permitted_group_in_every_addressing(addressing, group):
+    """
+    The Live SDK wraps the caller's model as ``models/<name>``, so a key holding the group has to work
+    whichever addressing its client actually sends
+    """
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(addressing.format(model=group))],
+        UserAPIKeyAuth(token="hashed", models=[group]),
+    )
+
+    upstream_ws.send.assert_awaited_once()
+    sent_setup = json.loads(upstream_ws.send.await_args.args[0])["setup"]
+    assert sent_setup["model"].startswith("projects/")
+    assert _policy_close_reason(websocket) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("addressing", VERTEX_LIVE_CLIENT_ADDRESSINGS)
+async def test_vertex_live_setup_frame_refuses_an_unpermitted_group_in_every_addressing(addressing):
+    """Normalizing the addressing must not become a way to reach a group the key does not hold"""
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(addressing.format(model="gemini-3-pro-live"))],
+        UserAPIKeyAuth(token="hashed", models=[VERTEX_LIVE_GROUP]),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    reason = _policy_close_reason(websocket)
+    assert reason is not None and "gemini-3-pro-live" in reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("addressing", VERTEX_LIVE_CLIENT_ADDRESSINGS)
+async def test_vertex_live_setup_frame_naming_no_group_at_all_is_refused_in_every_addressing(addressing):
+    """A name that resolves to no group is authorized as it arrived, so an unknown model cannot ride a prefix in"""
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(addressing.format(model="totally-unlisted-model-abc"))],
+        UserAPIKeyAuth(token="hashed", models=[VERTEX_LIVE_GROUP]),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    assert _policy_close_reason(websocket) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("addressing", VERTEX_LIVE_CLIENT_ADDRESSINGS)
+@pytest.mark.parametrize("key_model", ["gemini-4-pro-live-unserved", "vertex_ai/gemini-4-pro-live-unserved"])
+async def test_vertex_live_setup_frame_authorizes_a_model_no_group_serves_by_its_publisher_id(addressing, key_model):
+    """
+    With no group to resolve, the setup rewriter sends Vertex the last path segment, so a key holding that
+    publisher model, bare or as a LiteLLM ``vertex_ai/`` id, can open it whichever addressing its client sends
+    """
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(addressing.format(model="gemini-4-pro-live-unserved"))],
+        UserAPIKeyAuth(token="hashed", models=[key_model]),
+    )
+
+    upstream_ws.send.assert_awaited_once()
+    sent_setup = json.loads(upstream_ws.send.await_args.args[0])["setup"]
+    assert sent_setup["model"].endswith("/models/gemini-4-pro-live-unserved")
+    assert _policy_close_reason(websocket) is None
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_setup_frame_addressing_cannot_satisfy_a_wildcard_for_another_publisher_model():
+    """Vertex runs only the last segment, so the segments ahead of it must not be what matches the key's wildcard"""
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame("vertex_ai/gemini-anything/forbidden-model")],
+        UserAPIKeyAuth(token="hashed", models=["vertex_ai/gemini-*"]),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    reason = _policy_close_reason(websocket)
+    assert reason is not None and "forbidden-model" in reason
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_setup_frame_prefers_the_group_its_whole_name_matches():
+    """A group named ``vertex_ai/<id>`` is the one the rewriter sends, so it is the one the key must hold"""
+    llm_router = litellm.Router(
+        model_list=[
+            {"model_name": "gemini-3-pro-live", "litellm_params": {"model": "vertex_ai/gemini-3-pro-live"}},
+            {"model_name": "vertex_ai/gemini-3-pro-live", "litellm_params": {"model": "vertex_ai/gemini-3-pro-live"}},
+        ]
+    )
+
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame("vertex_ai/gemini-3-pro-live")],
+        UserAPIKeyAuth(token="hashed", models=["vertex_ai/gemini-3-pro-live"]),
+        llm_router=llm_router,
+    )
+
+    upstream_ws.send.assert_awaited_once()
+    assert _policy_close_reason(websocket) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("group", [VERTEX_LIVE_GROUP, VERTEX_LIVE_ALIAS_GROUP])
+async def test_vertex_live_full_path_is_authorized_by_any_group_serving_its_publisher_model(group):
+    """The docs tell callers to send the full resource path, which Vertex runs as sent, so every group serving
+    that publisher model grants it, whatever the group is called"""
+    full_path = VERTEX_LIVE_FULL_PATH.format(model=VERTEX_LIVE_GROUP)
+
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(full_path)],
+        UserAPIKeyAuth(token="hashed", models=[group]),
+    )
+
+    upstream_ws.send.assert_awaited_once()
+    assert json.loads(upstream_ws.send.await_args.args[0])["setup"]["model"] == full_path
+    assert _policy_close_reason(websocket) is None
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_full_path_is_not_granted_by_a_group_named_after_it_that_serves_another_model():
+    llm_router = litellm.Router(
+        model_list=[
+            {"model_name": "gemini-3-pro-live", "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"}},
+        ]
+    )
+
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(VERTEX_LIVE_FULL_PATH.format(model="gemini-3-pro-live"))],
+        UserAPIKeyAuth(token="hashed", models=["gemini-3-pro-live"]),
+        llm_router=llm_router,
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    reason = _policy_close_reason(websocket)
+    assert reason is not None and "gemini-3-pro-live" in reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "valid_token",
+    [
+        UserAPIKeyAuth(
+            token="hashed",
+            models=["gemini-live-2.5-flash"],
+            aliases={"gemini-3-pro-live": "gemini-live-2.5-flash"},
+        ),
+        UserAPIKeyAuth(
+            token="hashed",
+            models=["all-team-models"],
+            team_id="team-1",
+            team_models=["gemini-live-2.5-flash"],
+            team_model_aliases={"gemini-3-pro-live": "gemini-live-2.5-flash"},
+        ),
+    ],
+    ids=["key-alias", "team-alias"],
+)
+async def test_vertex_live_setup_frame_naming_an_alias_cannot_open_the_model_the_alias_shadows(valid_token):
+    """
+    An alias passes the access check by its target, while the setup rewriter sends the name as written, so a
+    key that could set an alias would open the model the alias name belongs to
+    """
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough([_setup_frame("gemini-3-pro-live")], valid_token)
+
+    upstream_ws.send.assert_not_awaited()
+    reason = _policy_close_reason(websocket)
+    assert reason is not None and "gemini-3-pro-live" in reason
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_setup_frame_naming_a_router_alias_cannot_open_the_model_the_alias_shadows():
+    llm_router = litellm.Router(
+        model_list=[
+            {"model_name": "gemini-live-2.5-flash", "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"}},
+        ],
+        model_group_alias={"gemini-3-pro-live": "gemini-live-2.5-flash"},
+    )
+
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame("gemini-3-pro-live")],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+        llm_router=llm_router,
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    reason = _policy_close_reason(websocket)
+    assert reason is not None and "gemini-3-pro-live" in reason
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_setup_frame_is_checked_against_the_owner_of_a_personal_key():
+    """A personal key's owner can be limited to fewer models than the key lists, and auth enforces that limit too"""
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    user_id = f"live-user-{uuid.uuid4().hex}"
+    await user_api_key_cache.async_set_cache(
+        key=user_id,
+        value={"user_id": user_id, "user_email": "live@example.com", "models": ["gemini-live-2.5-flash"]},
+    )
+
+    with patch(  # test-quality-ok: read at call time, and the user row comes from the cache seeded above
+        "litellm.proxy.proxy_server.prisma_client", MagicMock()
+    ):
+        websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+            [_setup_frame("gemini-3-pro-live")],
+            UserAPIKeyAuth(token="hashed", user_id=user_id, models=[]),
+        )
+
+    upstream_ws.send.assert_not_awaited()
+    reason = _policy_close_reason(websocket)
+    assert reason is not None and "gemini-3-pro-live" in reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("addressing", VERTEX_LIVE_CLIENT_ADDRESSINGS)
+async def test_vertex_live_setup_frame_is_checked_against_the_team_in_every_addressing(addressing):
+    """The team allowlist is keyed by group too, so the addressing must not decide whether the team is checked"""
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(addressing.format(model="gemini-3-pro-live"))],
+        UserAPIKeyAuth(
+            token="hashed",
+            models=["all-team-models"],
+            team_id="team-1",
+            team_models=[VERTEX_LIVE_GROUP],
+        ),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    reason = _policy_close_reason(websocket)
+    assert reason is not None and "gemini-3-pro-live" in reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("addressing", VERTEX_LIVE_CLIENT_ADDRESSINGS)
+async def test_vertex_live_setup_frame_resolves_an_access_group_grant_in_every_addressing(addressing):
+    """
+    ``get_model_access_groups`` is keyed by group as well, and returns nothing for a prefixed name, so a key
+    entitled through an access group rather than a model name needs the same normalization
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _build_vertex_live_client_frame_gate,
+    )
+
+    llm_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": VERTEX_LIVE_GROUP,
+                "litellm_params": {"model": f"vertex_ai/{VERTEX_LIVE_GROUP}"},
+                "model_info": {"access_groups": ["live-team"]},
+            },
+        ]
+    )
+    gate = _build_vertex_live_client_frame_gate(llm_router=llm_router)
+
+    frame = json.dumps({"setup": {"model": addressing.format(model=VERTEX_LIVE_GROUP)}})
+    denial = await gate(frame, UserAPIKeyAuth(token="hashed", models=["live-team"]))
+
+    assert denial is None
+
+
+async def _run_vertex_live_route(
+    client_frames: Sequence[Mapping[str, str | bytes]], valid_token: UserAPIKeyAuth
+) -> tuple[MagicMock, RecordingUpstreamWebSocket, SimpleNamespace]:
+    """Drive the /vertex_ai/live route, so the gate under test is whichever one the route itself wires"""
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        vertex_ai_live_websocket_passthrough,
+        vertex_llm_base,
+    )
+
+    upstream_ws = RecordingUpstreamWebSocket()
+    websocket = _client_websocket(
+        AsyncMock(side_effect=[*client_frames, {"type": "websocket.disconnect"}]),
+    )
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws) as environment,
+        patch.object(  # test-quality-ok: an OAuth exchange with Google, so this is the boundary being faked
+            vertex_llm_base,
+            "_ensure_access_token_async",
+            AsyncMock(return_value=("token-abc", "proj-db")),
+        ),
+    ):
+        await vertex_ai_live_websocket_passthrough(
+            websocket=websocket,
+            model="gemini-live-2.5-flash",
+            vertex_project="proj-db",
+            vertex_location="global",
+            user_api_key_dict=valid_token,
+        )
+
+    return websocket, upstream_ws, environment
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_route_gates_the_setup_frame_even_when_the_query_model_is_permitted():
+    """
+    ?model= is all connect-time auth sees, so a key that passes it and then names a different model in its setup
+    frame reaches Vertex on the gateway's own credentials unless the route gates the frames as well
+    """
+    websocket, upstream_ws, environment = await _run_vertex_live_route(
+        [_setup_frame("gemini-3-pro-live")],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    reason = _policy_close_reason(websocket)
+    assert reason is not None and "gemini-3-pro-live" in reason
+    refusal = environment.proxy_logging.post_call_failure_hook.await_args.kwargs["original_exception"]
+    assert refusal.code == "403"
+    assert refusal.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_route_keeps_the_key_allowlist_out_of_the_close_reason_and_in_the_proxy_log(caplog):
+    """The client learns which model was refused, while only the proxy log names the models the key may reach"""
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        websocket, _, _ = await _run_vertex_live_route(
+            [_setup_frame("gemini-3-pro-live")],
+            UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+        )
+
+    reason = _policy_close_reason(websocket)
+    assert reason is not None and "gemini-live-2.5-flash" not in reason
+    assert any(
+        "gemini-3-pro-live" in record.getMessage() and "gemini-live-2.5-flash" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_route_forwards_a_setup_frame_the_key_is_allowed_to_run():
+    websocket, upstream_ws, _ = await _run_vertex_live_route(
+        [_setup_frame("gemini-live-2.5-flash")],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+    )
+
+    upstream_ws.send.assert_awaited_once()
+    assert _policy_close_reason(websocket) is None
+
+
+class ScriptedUpstreamWebSocket:
+    """An upstream that sends the given frames in order, then stays open with nothing more to say"""
+
+    def __init__(self, frames: Iterable[str]) -> None:
+        self._frames = iter(frames)
+        self.sent_every_frame = asyncio.Event()
+        self.send = AsyncMock()
+        self.close = AsyncMock()
+
+    async def recv(self, decode: bool = True) -> str | None:
+        frame = next(self._frames, None)
+        if frame is not None:
+            return frame
+        self.sent_every_frame.set()
+        await asyncio.Event().wait()
+
+    def __aiter__(self) -> "ScriptedUpstreamWebSocket":
+        return self
+
+    async def __anext__(self) -> str:
+        raise StopAsyncIteration
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_turns_served_before_a_refused_frame_are_still_billed():
+    """
+    A refusal used to log the whole session as a failure, which records no spend, so a key could run allowed
+    turns and then send a refused frame to have them go unbilled. The refused frame's model must not become
+    the model those turns are priced at either
+    """
+    upstream_ws = ScriptedUpstreamWebSocket(
+        (
+            json.dumps({"setupComplete": {}}),
+            json.dumps({"serverContent": {"turnComplete": True}, "usageMetadata": {"totalTokenCount": 60}}),
+        )
+    )
+
+    async def client_frames() -> AsyncIterator[dict[str, str]]:
+        yield _setup_frame("gemini-live-2.5-flash")
+        await upstream_ws.sent_every_frame.wait()
+        yield _setup_frame("gemini-3-pro-live")
+
+    websocket, environment = await _run_vertex_live_gated_session(
+        client_frames().__anext__,
+        upstream_ws,
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+        _vertex_live_router(),
+    )
+
+    reason = _policy_close_reason(websocket)
+    assert reason is not None and "gemini-3-pro-live" in reason
+    upstream_ws.send.assert_awaited_once()
+    upstream_ws.close.assert_awaited()
+    environment.logging_worker.ensure_initialized_and_enqueue.assert_called_once()
+    assert environment.enqueued_handler.call_args.kwargs["logging_obj"].model == "gemini-live-2.5-flash"
+    environment.proxy_logging.post_call_success_hook.assert_awaited_once()
+    environment.proxy_logging.post_call_failure_hook.assert_not_awaited()
+
+
+async def _run_passthrough_with_frame_gate(
+    gate: WebsocketClientFrameGate,
+) -> tuple[MagicMock, ClosableUpstreamWebSocket, SimpleNamespace]:
+    upstream_ws = ClosableUpstreamWebSocket()
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                {"type": "websocket.receive", "text": json.dumps({"setup": {"model": "gemini-live-2.5-flash"}})},
+                {"type": "websocket.disconnect"},
+            ]
+        ),
+    )
+
+    with _patched_websocket_passthrough_environment(upstream_ws) as environment:
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target=VERTEX_LIVE_TARGET,
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(token="hashed"),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+            client_frame_gate=gate,
+        )
+
+    return websocket, upstream_ws, environment
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_reports_a_refused_client_frame_as_a_failure():
+    """A denied session logged through the success hooks tells spend tracking and audit that it succeeded"""
+    denial = ProxyException(
+        message="gemini-live-2.5-flash: key not allowed to access model",
+        type=ProxyErrorTypes.key_model_access_denied,
+        param="model",
+        code=403,
+    )
+
+    async def refusing_gate(frame_data: str | bytes, valid_token: UserAPIKeyAuth, /) -> ProxyException | None:
+        return denial
+
+    websocket, upstream_ws, environment = await _run_passthrough_with_frame_gate(refusing_gate)
+
+    assert _policy_close_reason(websocket) == "gemini-live-2.5-flash: key not allowed to access model"
+    upstream_ws.close.assert_awaited()
+    environment.proxy_logging.post_call_success_hook.assert_not_awaited()
+    environment.logging_worker.ensure_initialized_and_enqueue.assert_not_called()
+    environment.proxy_logging.post_call_failure_hook.assert_awaited_once()
+    failure_kwargs = environment.proxy_logging.post_call_failure_hook.await_args.kwargs
+    assert failure_kwargs["original_exception"] is denial
+    assert failure_kwargs["request_data"]["litellm_logging_obj"].litellm_call_id
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_still_reports_an_allowed_session_as_a_success():
+    async def permitting_gate(frame_data: str | bytes, valid_token: UserAPIKeyAuth, /) -> ProxyException | None:
+        return None
+
+    _, _, environment = await _run_passthrough_with_frame_gate(permitting_gate)
+
+    environment.proxy_logging.post_call_failure_hook.assert_not_awaited()
+    environment.proxy_logging.post_call_success_hook.assert_awaited_once()
+    environment.logging_worker.ensure_initialized_and_enqueue.assert_called_once()
 
 
 @pytest.mark.parametrize(
