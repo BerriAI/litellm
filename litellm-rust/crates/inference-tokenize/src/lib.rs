@@ -12,6 +12,7 @@ use litellm_inference::provider::resolve_llm_provider;
 use litellm_llms::{
     base_llm::tokenize::transformation::BaseTokenizeConfig,
     hosted_vllm::tokenize::transformation::HostedVllmTokenizeConfig,
+    watsonx::tokenize::transformation::WatsonxTokenizeConfig,
 };
 use litellm_llms_types::formats::tokenize::TokenizeResponse;
 use litellm_secrets::source::SecretSource;
@@ -67,6 +68,7 @@ impl TokenizeRoute {
                 resolve_llm_provider(&call.model, call.custom_llm_provider.as_deref(), "tokenize")?;
             let config: &dyn BaseTokenizeConfig = match provider.provider {
                 LlmProviders::HostedVllm => &HostedVllmTokenizeConfig,
+                LlmProviders::Watsonx => &WatsonxTokenizeConfig,
                 _ => return Err(Error::Unsupported("tokenize provider")),
             };
             if call.add_special_tokens.is_some()
