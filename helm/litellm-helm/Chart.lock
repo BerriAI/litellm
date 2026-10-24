@@ -8,5 +8,8 @@ dependencies:
 - name: lens
   repository: oci://ghcr.io/berriai/charts
   version: 0.1.0-dev.0
-digest: sha256:16b92c3d7fc74632e8aa11e602c136d273c774ed39b2fe970b80273e0570898b
-generated: '2026-10-09T04:18:10.643228000Z'
+- name: k8s-aibom
+  repository: oci://ghcr.io/googlecloudplatform/charts
+  version: 1.6.0
+digest: sha256:9689ac37f45123eebdefd80bf77d552d33988d8b87bb5be4e6cb663d28f268d2
+generated: "2026-10-19T13:46:54.219936Z"
