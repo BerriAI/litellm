@@ -347,7 +347,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             if "delimiters" in stream_options:
                 stream_config["delimiters"] = stream_options["delimiters"]
 
-        optional_params.pop("tool_choice", None)
+        # tool_choice is forwarded via model.params for Anthropic and GPT models
+        if not model.startswith(("anthropic", "gpt")):
+            optional_params.pop("tool_choice", None)
 
         modules: Final = [
             self._build_prompt_module(
