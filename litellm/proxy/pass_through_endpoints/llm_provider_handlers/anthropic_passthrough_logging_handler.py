@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -10,6 +10,8 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
+from litellm.cost_calculator import get_response_cost_from_hidden_params
+from litellm.litellm_core_utils.core_helpers import provider_reported_usage_cost, set_response_cost_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -21,6 +23,7 @@ from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response_legacy,
     build_usage_only_response_from_chunks,
     collapse_pure_text_chunks,
+    extract_sse_data,
     split_sse_chunk_into_events,
 )
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
@@ -51,6 +54,30 @@ else:
     EndpointType = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _message_delta_usages(all_chunks: Sequence[str | bytes]) -> Iterator[object]:
+    for chunk in reversed(all_chunks):
+        for event in reversed(split_sse_chunk_into_events(chunk)):
+            data: Final = extract_sse_data(event)
+            if isinstance(data, dict) and data.get("type") == "message_delta":
+                yield data.get("usage")
+
+
+def _stamp_reported_stream_cost(
+    response: ModelResponse, all_chunks: Sequence[str | bytes], logging_obj: LiteLLMLoggingObj
+) -> None:
+    """The final ``message_delta`` is where a provider that prices its own responses reports the cost."""
+    provider: Final = logging_obj.model_call_details.get("custom_llm_provider")
+    costs: Final = (
+        provider_reported_usage_cost(usage, provider if isinstance(provider, str) else None)
+        for usage in _message_delta_usages(all_chunks)
+    )
+    reported: Final = next((cost for cost in costs if cost is not None), None)
+    if reported is None:
+        return
+    set_response_cost_in_hidden_params(response, reported)
+    response.hidden_params["response_cost"] = reported
 
 
 class AnthropicPassthroughLoggingHandler:
@@ -222,6 +249,7 @@ class AnthropicPassthroughLoggingHandler:
         )
         if not isinstance(response, ModelResponse):
             return response
+        _stamp_reported_stream_cost(response, all_chunks, litellm_logging_obj)
         recovered_usage: Final = AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
             response=response, all_chunks=all_chunks, model=model
         )
@@ -286,13 +314,21 @@ class AnthropicPassthroughLoggingHandler:
             if custom_llm_provider and not model.startswith(f"{custom_llm_provider}/")
             else model
         )
+        custom_pricing: Final = use_custom_pricing_for_model(
+            litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
+        )
+        reported_cost: Final = (
+            get_response_cost_from_hidden_params(litellm_model_response.hidden_params)
+            if isinstance(litellm_model_response, ModelResponse)
+            else None
+        )
+        if reported_cost is not None and not custom_pricing:
+            return reported_cost
         return litellm.completion_cost(
             completion_response=litellm_model_response,
             model=model_for_cost,
             custom_llm_provider=custom_llm_provider,
-            custom_pricing=use_custom_pricing_for_model(
-                litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
-            ),
+            custom_pricing=custom_pricing,
             router_model_id=logging_obj.get_router_model_id(),
         )
 

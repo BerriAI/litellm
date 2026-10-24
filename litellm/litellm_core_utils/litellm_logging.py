@@ -4828,7 +4828,9 @@ class Logging(LiteLLMLoggingBaseClass):
         bridge is replaced by the ModelResponse its spend row is built from, anything else is
         priced as is."""
         served: Final[object] = result
-        if self.bridged_model_response is None or not isinstance(result, dict):
+        if not isinstance(result, dict):
+            return result
+        if self.bridged_model_response is None and self.call_type != CallTypes.anthropic_messages.value:
             return result
         return self._anthropic_messages_logged_response(result=served)
 
@@ -4872,6 +4874,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if isinstance(result, ResponsesAPIResponse):
             return self._translate_responses_api_response_to_model_response(result)
 
+        reported_cost: Final = provider_reported_usage_cost(
+            result.get("usage") if isinstance(result, dict) else None,
+            self.model_call_details.get("custom_llm_provider"),
+        )
         provider_response_id: Final = _provider_response_id(result)
         bridged: Final = self.bridged_model_response
         if bridged is not None and isinstance(result, dict):
@@ -4910,6 +4916,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=None,
                 speed=self.optional_params.get("speed") if self.optional_params else None,
             )
+        if isinstance(result, ModelResponse):
+            set_response_cost_in_hidden_params(result, reported_cost)
         return result
 
     def _translate_responses_api_response_to_model_response(self, result: ResponsesAPIResponse) -> ModelResponse:
