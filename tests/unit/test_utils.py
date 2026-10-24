@@ -939,6 +939,18 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
+                "cache_creation_input_token_cost_above_12hr": {"type": "number"},
+                "cache_creation_input_token_cost_above_12hr_above_272k_tokens": {
+                    "type": "number"
+                },
+                "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex": {
+                    "type": "number"
+                },
+                "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority": {
+                    "type": "number"
+                },
+                "cache_creation_input_token_cost_above_12hr_flex": {"type": "number"},
+                "cache_creation_input_token_cost_above_12hr_priority": {"type": "number"},
                 "cache_creation_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_100k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_100k_tokens_batches": {"type": "number"},
@@ -982,6 +994,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_1hr_above_100k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_audio_token_cost_batches": {"type": "number"},
+                "cache_read_input_audio_token_cost_flex": {"type": "number"},
+                "cache_read_input_audio_token_cost_priority": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
@@ -989,6 +1004,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
                 "google_maps_grounding_cost_per_query": {"type": "number"},
                 "input_cost_per_audio_token": {"type": "number"},
+                "input_cost_per_audio_token_flex": {"type": "number"},
                 "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_character": {"type": "number"},
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},

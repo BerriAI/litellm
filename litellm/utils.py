@@ -1641,7 +1641,7 @@ def _deployment_provider(kwargs: Mapping[str, object]) -> str:
         return ""
 
 
-async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str) -> dict[str, Any]:
+async def async_pre_call_deployment_hook(kwargs: Mapping[str, object], call_type: str) -> dict[str, Any]:
     """
     Allow modifying the request just before it's sent to the deployment.
 
@@ -4287,7 +4287,7 @@ def get_optional_params_embeddings(
 
     # retrieve all parameters passed to the function
     passed_params: Final = locals()
-    custom_llm_provider = passed_params.pop("custom_llm_provider", None)
+    passed_params.pop("custom_llm_provider", None)
     special_params: Final = passed_params.pop("kwargs")
 
     passed_params.pop("drop_params", None)
@@ -4325,7 +4325,7 @@ def get_optional_params_embeddings(
     provider_config: BaseEmbeddingConfig | None = None
 
     optional_params = {}
-    if custom_llm_provider is not None and custom_llm_provider in LlmProviders._member_map_.values():
+    if custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model,
             provider=LlmProviders(custom_llm_provider),
@@ -6773,6 +6773,13 @@ def get_model_info_helper(
                 ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
                 cache_read_input_audio_token_cost=_model_info.get("cache_read_input_audio_token_cost", None),
+                cache_read_input_audio_token_cost_flex=_model_info.get("cache_read_input_audio_token_cost_flex", None),
+                cache_read_input_audio_token_cost_priority=_model_info.get(
+                    "cache_read_input_audio_token_cost_priority", None
+                ),
+                cache_read_input_audio_token_cost_batches=_model_info.get(
+                    "cache_read_input_audio_token_cost_batches", None
+                ),
                 explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
@@ -6817,6 +6824,24 @@ def get_model_info_helper(
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
+                cache_creation_input_token_cost_above_12hr=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr", None
+                ),
+                cache_creation_input_token_cost_above_12hr_flex=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_flex", None
+                ),
+                cache_creation_input_token_cost_above_12hr_priority=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_priority", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex", None
+                ),
+                cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority=_model_info.get(
+                    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority", None
+                ),
                 off_peak_pricing=_model_info.get("off_peak_pricing", None),
                 input_cost_per_character=_model_info.get("input_cost_per_character", None),
                 input_cost_per_token_above_128k_tokens=_model_info.get("input_cost_per_token_above_128k_tokens", None),
@@ -6840,6 +6865,8 @@ def get_model_info_helper(
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_text_message=_model_info.get("input_cost_per_text_message", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
+                input_cost_per_audio_token_flex=_model_info.get("input_cost_per_audio_token_flex", None),
+                input_cost_per_audio_token_priority=_model_info.get("input_cost_per_audio_token_priority", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
                 input_cost_per_audio_token_batches=_model_info.get("input_cost_per_audio_token_batches", None),
@@ -9033,8 +9060,9 @@ _get_bundled_model_cost_map = get_bundled_model_cost_map
 def _get_model_cost_entry_for_provider_config(
     model: str,
     provider: LlmProviders,
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     candidate_keys: Final = (model, f"{provider.value}/{model}")
+    model_info: Mapping[str, object] | None
     for model_key in candidate_keys:
         model_info = litellm.model_cost.get(model_key)
         if model_info is not None:
@@ -10880,18 +10908,12 @@ def extract_duration_from_srt_or_vtt(srt_or_vtt_content: str) -> float | None:
     # Regular expression to match timestamps in the format "hh:mm:ss,ms" or "hh:mm:ss.ms"
     timestamp_pattern: Final = r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})"
 
-    timestamps: Final[Sequence[tuple[str, str, str, str]]] = re.findall(timestamp_pattern, srt_or_vtt_content)
-
-    if not timestamps:
-        return None
+    timestamps: Final = re.finditer(timestamp_pattern, srt_or_vtt_content)
 
     # Convert timestamps to seconds and find the max (end time)
-    durations: Final = []
-    match: tuple[str, str, str, str]
-    for match in timestamps:
-        hours, minutes, seconds, milliseconds = map(int, match)
-        total_seconds = hours * 3600 + minutes * 60 + seconds + milliseconds / 1000.0
-        durations.append(total_seconds)
+    durations: Final = [
+        int(match[1]) * 3600 + int(match[2]) * 60 + int(match[3]) + int(match[4]) / 1000.0 for match in timestamps
+    ]
 
     return max(durations) if durations else None
 

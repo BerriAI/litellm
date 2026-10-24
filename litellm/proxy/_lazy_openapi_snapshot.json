@@ -22858,6 +22858,25 @@
           "title": "Body_image_edit_api_openai_deployments__model__images_edits_post",
           "type": "object"
         },
+        "CacheWriteTokensDetails": {
+          "additionalProperties": true,
+          "properties": {
+            "ttl_12h_tokens": {
+              "title": "Ttl 12H Tokens",
+              "type": "integer"
+            },
+            "ttl_30m_tokens": {
+              "title": "Ttl 30M Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ttl_30m_tokens",
+            "ttl_12h_tokens"
+          ],
+          "title": "CacheWriteTokensDetails",
+          "type": "object"
+        },
         "CachedTokensDetails": {
           "properties": {
             "audio_tokens": {
@@ -24351,6 +24370,27 @@
                 }
               ],
               "title": "Audio Tokens"
+            },
+            "cache_write_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cache Write Tokens"
+            },
+            "cache_write_tokens_details": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CacheWriteTokensDetails"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "cached_tokens": {
               "default": 0,
