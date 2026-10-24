@@ -33065,6 +33065,8 @@ export interface components {
             structured_messages?: (components["schemas"]["ChatCompletionUserMessage"] | components["schemas"]["ChatCompletionAssistantMessage"] | components["schemas"]["ChatCompletionToolMessage"] | components["schemas"]["ChatCompletionSystemMessage"] | components["schemas"]["ChatCompletionFunctionMessage"] | components["schemas"]["ChatCompletionDeveloperMessage"])[];
             /** Texts */
             texts?: string[];
+            /** Tool Call Text Offsets */
+            tool_call_text_offsets?: number[];
             /** Tool Calls */
             tool_calls?: components["schemas"]["ChatCompletionToolCallChunk"][] | components["schemas"]["ChatCompletionMessageToolCall"][];
             /** Tools */

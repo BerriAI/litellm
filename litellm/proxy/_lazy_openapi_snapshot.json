@@ -48464,6 +48464,13 @@
               "title": "Texts",
               "type": "array"
             },
+            "tool_call_text_offsets": {
+              "items": {
+                "type": "integer"
+              },
+              "title": "Tool Call Text Offsets",
+              "type": "array"
+            },
             "tool_calls": {
               "anyOf": [
                 {

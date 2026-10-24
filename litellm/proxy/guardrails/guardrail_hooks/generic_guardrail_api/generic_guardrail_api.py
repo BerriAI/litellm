@@ -405,8 +405,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             exc_info=error,
         )
         # Keep flow going - treat as action=NONE (no modifications)
-        return_inputs: Final[GenericGuardrailAPIInputs] = {}
-        return_inputs.update(inputs)
+        return_inputs: Final[GenericGuardrailAPIInputs] = {**inputs}
         return return_inputs
 
     def _build_request_headers(self) -> Mapping[str, str]:
