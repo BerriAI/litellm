@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { Modal, Button } from "antd";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface ToolModalProps {
   visible: boolean;
@@ -50,34 +51,36 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
   };
 
   return (
-    <Modal
-      title={
-        <div className="flex items-center justify-between">
-          <span className="text-lg font-medium">Add Tool</span>
+    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Add Tool</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          {error && (
+            <div
+              role="alert"
+              className="p-3 bg-destructive/10 border border-destructive/20 rounded-sm text-destructive text-sm"
+            >
+              {error}
+            </div>
+          )}
+          <textarea
+            aria-label="Tool JSON"
+            value={json}
+            onChange={(e) => setJson(e.target.value)}
+            className="w-full min-h-[400px] px-4 py-3 border border-input rounded-lg text-sm font-mono focus:outline-hidden focus:ring-2 focus:ring-ring resize-none"
+            placeholder="Paste your tool JSON here..."
+          />
         </div>
-      }
-      open={visible}
-      onCancel={handleClose}
-      width={800}
-      footer={[
-        <Button key="cancel" onClick={handleClose}>
-          Cancel
-        </Button>,
-        <Button key="save" type="primary" onClick={handleSave}>
-          Add
-        </Button>,
-      ]}
-    >
-      <div className="space-y-3">
-        {error && <div className="p-3 bg-red-50 border border-red-200 rounded-sm text-red-600 text-sm">{error}</div>}
-        <textarea
-          value={json}
-          onChange={(e) => setJson(e.target.value)}
-          className="w-full min-h-[400px] px-4 py-3 border border-gray-300 rounded-lg text-sm font-mono focus:outline-hidden focus:ring-2 focus:ring-blue-500 resize-none"
-          placeholder="Paste your tool JSON here..."
-        />
-      </div>
-    </Modal>
+        <DialogFooter>
+          <Button variant="outline" onClick={handleClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave}>Add</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

@@ -1,7 +1,9 @@
-from typing import Any, Optional
+from collections.abc import Sequence
+from typing import Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
 
 from litellm.exceptions import AuthenticationError
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 
@@ -10,9 +12,11 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
+    pin_session_authorization,
 )
+from ..per_user_auth import require_github_copilot_user_session
 
-_MESSAGES_PROXY_API_VERSION = "2026-06-01"
+_MESSAGES_PROXY_API_VERSION: Final = "2026-06-01"
 
 
 class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -26,7 +30,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         self.authenticator = Authenticator()
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "github_copilot"
 
     def handles_web_search_natively(self) -> bool:
@@ -51,12 +55,12 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> tuple[dict, Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
         """
         Validate environment for GitHub Copilot and add Copilot-specific headers.
 
@@ -68,9 +72,18 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         # session, never the caller-supplied api_base. rstrip so a
         # tenant-specific base with a trailing slash does not yield a
         # double-slash URL once "/v1/messages" is appended downstream.
-        dynamic_api_base = (self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
+        dynamic_api_base: Final = (
+            user_session.api_base
+            if user_session is not None
+            else (self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE)
+        ).rstrip("/")
         try:
-            dynamic_api_key = self.authenticator.get_api_key()
+            dynamic_api_key: Final = (
+                user_session.token if user_session is not None else self.authenticator.get_api_key()
+            )
         except GetAPIKeyError as e:
             raise AuthenticationError(
                 model=model,
@@ -79,10 +92,15 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             )
 
         # Merge Copilot headers with provided headers
-        copilot_headers = get_copilot_default_headers(dynamic_api_key)
+        copilot_headers: Final = get_copilot_default_headers(dynamic_api_key)
         for key, value in copilot_headers.items():
             if key not in headers:
                 headers[key] = value
+        if user_session is not None:
+            pin_session_authorization(
+                cast("dict[str, str]", headers),  # cast-ok: headers is a str-valued request dict at runtime
+                user_session.token,
+            )
 
         headers["openai-intent"] = "messages-proxy"
         headers["x-interaction-type"] = "messages-proxy"
@@ -92,19 +110,19 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers["anthropic-version"] = "2023-06-01"
 
         headers = self._update_headers_with_anthropic_beta(
-            headers, optional_params, custom_llm_provider="github_copilot"
+            headers, optional_params, custom_llm_provider="github_copilot", messages=messages
         )
 
         return headers, dynamic_api_base
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Return the complete URL for GitHub Copilot /v1/messages endpoint.
@@ -116,7 +134,13 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         reuse it to avoid a second authenticator read, falling back to a fresh
         resolution only if it was not provided.
         """
-        resolved = (api_base or self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
-        if not resolved.endswith("/v1/messages"):
-            resolved = f"{resolved}/v1/messages"
-        return resolved
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
+        resolved: Final = (
+            (user_session.api_base if user_session is not None else None)
+            or api_base
+            or self.authenticator.get_api_base()
+            or DEFAULT_GITHUB_COPILOT_API_BASE
+        )
+        return ensure_api_route(resolved, "v1/messages")

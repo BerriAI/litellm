@@ -5,6 +5,7 @@ import CodeInterpreterOutput from "./CodeInterpreterOutput";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://example.com"),
+  getGatewayBaseUrl: vi.fn(() => "https://gateway.example.com"),
   getGlobalLitellmHeaderName: vi.fn(() => "Authorization"),
 }));
 
@@ -74,7 +75,7 @@ describe("CodeInterpreterOutput", () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        "https://example.com/v1/containers/container-1/files/file-1/content",
+        "https://gateway.example.com/v1/containers/container-1/files/file-1/content",
         expect.objectContaining({
           headers: {
             Authorization: "Bearer test-token",
@@ -173,7 +174,7 @@ describe("CodeInterpreterOutput", () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        "https://example.com/v1/containers/container-1/files/file-1/content",
+        "https://gateway.example.com/v1/containers/container-1/files/file-1/content",
         expect.objectContaining({
           headers: {
             Authorization: "Bearer test-token",
@@ -222,7 +223,7 @@ describe("CodeInterpreterOutput", () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        "https://example.com/v1/containers/container-1/files/file-1/content",
+        "https://gateway.example.com/v1/containers/container-1/files/file-1/content",
         expect.objectContaining({
           headers: {
             Authorization: "Bearer test-token",
@@ -235,7 +236,7 @@ describe("CodeInterpreterOutput", () => {
   it("should return null when no code and no annotations", () => {
     const { container } = render(<CodeInterpreterOutput accessToken="test-token" />);
 
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should handle multiple image formats", async () => {

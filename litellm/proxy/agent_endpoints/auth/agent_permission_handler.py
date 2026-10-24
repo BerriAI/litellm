@@ -5,16 +5,108 @@ Handles agent permission checking for keys and teams using object_permission_id.
 Follows the same pattern as MCP permission handling.
 """
 
-from typing import List, Optional, Set
+import asyncio
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
+from itertools import chain
+from types import MappingProxyType
+from typing import Final, Protocol, TypeAlias
+
+from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.ui_session_utils import build_effective_auth_contexts
 from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
+    LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
+    CeilingResolver,
+    resolve_agent_access_group_ceiling,
+)
+from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
+from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 from litellm.repositories.table_repositories import AgentsRepository
+from litellm.types.agents import AgentResponse
+
+
+@dataclass(frozen=True, slots=True)
+class UnrestrictedAgentAccess:
+    """No agent grant exists on the key or its team, so every agent is reachable."""
+
+
+@dataclass(frozen=True, slots=True)
+class RestrictedAgentAccess:
+    """Only ``agent_ids`` are reachable. An empty set denies every agent."""
+
+    agent_ids: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class AgentPolicyUnavailable:
+    team_id: str
+
+
+AgentAccess: TypeAlias = UnrestrictedAgentAccess | RestrictedAgentAccess
+
+
+class AgentAccessLookup(Protocol):
+    def __call__(self, user_api_key_auth: UserAPIKeyAuth | None, /, *, strict: bool) -> Awaitable[AgentAccess]: ...
+
+
+_DEFAULT_DENY_FLAG: Final = TypeAdapter(bool)
+
+
+def agent_access_default_deny() -> bool:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    try:
+        return _DEFAULT_DENY_FLAG.validate_python(general_settings_view().get("agent_access_default_deny", False))
+    except ValidationError:
+        return True
+
+
+def _is_proxy_admin(user_api_key_auth: UserAPIKeyAuth | None) -> bool:
+    return user_api_key_auth is not None and user_api_key_auth.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN.value,
+    )
+
+
+def _to_stable_ids(agent_ids: frozenset[str]) -> frozenset[str]:
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+    return frozenset(global_agent_registry.stable_agent_id(agent_id) for agent_id in agent_ids)
+
+
+def _restricted_ids(access: AgentAccess) -> frozenset[str] | None:
+    if isinstance(access, UnrestrictedAgentAccess):
+        return None
+    return _to_stable_ids(access.agent_ids)
+
+
+def _union_agent_access(accesses: Sequence[AgentAccess]) -> AgentAccess:
+    if accesses and all(isinstance(access, UnrestrictedAgentAccess) for access in accesses):
+        return UnrestrictedAgentAccess()
+    return RestrictedAgentAccess(
+        frozenset(
+            chain.from_iterable(access.agent_ids for access in accesses if isinstance(access, RestrictedAgentAccess))
+        )
+    )
+
+
+def _intersect_agent_access(key_access: AgentAccess, team_access: AgentAccess) -> AgentAccess:
+    key_ids: Final = _restricted_ids(key_access)
+    team_ids: Final = _restricted_ids(team_access)
+    if key_ids is None:
+        return UnrestrictedAgentAccess() if team_ids is None else RestrictedAgentAccess(team_ids)
+    if team_ids is None:
+        return RestrictedAgentAccess(key_ids)
+    return RestrictedAgentAccess(key_ids & team_ids)
 
 
 class AgentRequestHandler:
@@ -28,46 +120,97 @@ class AgentRequestHandler:
     - If team has restrictions and key has restrictions: use intersection
     - If team has restrictions and key has none: inherit from team
     - If team has no restrictions: use key restrictions
-    - If no restrictions: allow all agents
+    - If no restrictions: allow all agents unless agent_access_default_deny is enabled for a non-admin key
     """
 
     @staticmethod
-    async def get_allowed_agents(
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> List[str]:
-        """
-        Get list of allowed agent IDs for the given user/key based on permissions.
+    async def resolve_agent_access(
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
+        *,
+        strict: bool = False,
+        default_deny: Callable[[], bool] = agent_access_default_deny,
+        lookup_key_access: AgentAccessLookup | None = None,
+        lookup_team_access: AgentAccessLookup | None = None,
+    ) -> AgentAccess:
+        """Agents the key may reach: key and team grants, intersected with the agent's access group ceiling
+        and, for an agent key acting on behalf of an invoking user, with that user's team grants."""
+        if managed_agent_policy(user_api_key_auth) is not None:
+            return await _managed_actor_agent_access(user_api_key_auth)
+        key_team_access: Final = await AgentRequestHandler.resolve_key_team_agent_access(
+            user_api_key_auth,
+            strict=strict,
+            lookup_key_access=lookup_key_access,
+            lookup_team_access=lookup_team_access,
+        )
+        deny_undefined: Final = strict or (not _is_proxy_admin(user_api_key_auth) and default_deny())
+        if deny_undefined and isinstance(key_team_access, UnrestrictedAgentAccess):
+            return RestrictedAgentAccess(frozenset())
+        caller_access: Final = await AgentRequestHandler.agent_caller_access(user_api_key_auth, strict=strict)
+        own_access: Final = _intersect_agent_access(key_team_access, caller_access)
+        agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(
+            user_api_key_auth, resolve_ceiling, strict=strict
+        )
+        if agent_ceiling is None:
+            return own_access
+        if isinstance(own_access, UnrestrictedAgentAccess):
+            return RestrictedAgentAccess(agent_ceiling)
+        return RestrictedAgentAccess(own_access.agent_ids & agent_ceiling)
 
-        Returns:
-            List[str]: List of allowed agent IDs. Empty list means no restrictions (allow all).
-        """
+    @staticmethod
+    async def agent_caller_access(user_api_key_auth: UserAPIKeyAuth | None, *, strict: bool = False) -> AgentAccess:
+        caller_auth: Final = agent_caller_auth(user_api_key_auth) if user_api_key_auth else None
+        if caller_auth is None:
+            return UnrestrictedAgentAccess()
+        return await AgentRequestHandler._get_allowed_agents_for_team(caller_auth, strict=strict)
+
+    @staticmethod
+    async def resolve_key_team_agent_access(
+        user_api_key_auth: UserAPIKeyAuth | None,
+        *,
+        strict: bool = False,
+        lookup_key_access: AgentAccessLookup | None = None,
+        lookup_team_access: AgentAccessLookup | None = None,
+    ) -> AgentAccess:
         try:
-            allowed_agents: List[str] = []
-            allowed_agents_for_key = await AgentRequestHandler._get_allowed_agents_for_key(user_api_key_auth)
-            allowed_agents_for_team = await AgentRequestHandler._get_allowed_agents_for_team(user_api_key_auth)
-
-            # If team has agent restrictions, handle inheritance and intersection logic
-            if len(allowed_agents_for_team) > 0:
-                if len(allowed_agents_for_key) > 0:
-                    # Key has its own agent permissions - use intersection with team permissions
-                    for agent_id in allowed_agents_for_key:
-                        if agent_id in allowed_agents_for_team:
-                            allowed_agents.append(agent_id)
-                else:
-                    # Key has no agent permissions - inherit from team
-                    allowed_agents = allowed_agents_for_team
-            else:
-                allowed_agents = allowed_agents_for_key
-
-            return list(set(allowed_agents))
+            key_lookup: Final = (
+                AgentRequestHandler.get_allowed_agents_for_key if lookup_key_access is None else lookup_key_access
+            )
+            team_lookup: Final = (
+                AgentRequestHandler._get_allowed_agents_for_team if lookup_team_access is None else lookup_team_access
+            )
+            key_access: Final = await key_lookup(user_api_key_auth, strict=strict)
+            team_access: Final = await team_lookup(user_api_key_auth, strict=strict)
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed agents: {str(e)}")
-            return []
+            if strict:
+                raise HTTPException(503, "Agent invocation policy is unavailable") from e
+            verbose_logger.warning("Failed to get allowed agents: %s", e)
+            return UnrestrictedAgentAccess()
+        return _intersect_agent_access(key_access, team_access)
+
+    @staticmethod
+    async def _agent_access_group_ceiling(
+        user_api_key_auth: UserAPIKeyAuth | None,
+        resolve_ceiling: CeilingResolver,
+        *,
+        strict: bool = False,
+    ) -> frozenset[str] | None:
+        if user_api_key_auth is None or not user_api_key_auth.agent_id:
+            return None
+        ceiling: Final = (
+            await resolve_agent_access_group_ceiling(user_api_key_auth.agent_id, check_db_only=True)
+            if strict
+            else await resolve_ceiling(user_api_key_auth.agent_id)
+        )
+        if ceiling is None:
+            return None
+        return _to_stable_ids(ceiling.agent_ids)
 
     @staticmethod
     async def is_agent_allowed(
         agent_id: str,
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
     ) -> bool:
         """
         Check if a specific agent is allowed for the given user/key.
@@ -79,18 +222,66 @@ class AgentRequestHandler:
         Returns:
             bool: True if agent is allowed, False otherwise
         """
-        allowed_agents = await AgentRequestHandler.get_allowed_agents(user_api_key_auth)
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+        from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
+        from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
+        from litellm.proxy.proxy_server import prisma_client
+        from litellm.types.proxy.agent_identity import AgentIdentityFailure
 
-        # Empty list means no restrictions - allow all
-        if len(allowed_agents) == 0:
-            return True
+        registered: Final = global_agent_registry.get_agent_by_id(agent_id)
+        registry_managed: Final = isinstance(registered, AgentResponse) and registered.identity_managed
+        if registry_managed or prisma_client is not None:
+            target: Final = await AgentIdentityStore.from_client(prisma_client).agent(agent_id)
+            if isinstance(target, AgentIdentityFailure):
+                raise_identity_failure(target)
+            elif target is None and registry_managed:
+                return False
+            elif isinstance(target, AgentResponse) and target.identity_managed:
+                if (
+                    not target.enabled
+                    or target.identity is None
+                    or not target.identity.active
+                    or user_api_key_auth is None
+                ):
+                    return False
+                from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 
-        return agent_id in allowed_agents
+                key_hash: Final = user_api_key_auth.api_key or user_api_key_auth.token
+                authority: Final = (
+                    await MCPRequestHandler._reload_admitted_key(key_hash, check_db_only=True)  # pyright: ignore[reportPrivateUsage]  # the authoritative key reload has no public seam
+                    if key_hash
+                    and managed_agent_policy(user_api_key_auth) is None
+                    and not user_api_key_auth.is_session_token
+                    and not user_api_key_auth.authenticated_by_custom_auth
+                    else user_api_key_auth
+                )
+                fresh_auth: Final = authority.model_copy(
+                    update=MappingProxyType(
+                        {"requires_fresh_policy": True, "agent_caller": user_api_key_auth.agent_caller}
+                    )
+                )
+                explicit: Final = await _granted_agent_ids(
+                    fresh_auth,
+                    _strict_agent_access,
+                    build_effective_auth_contexts,
+                )
+                return target.agent_id in explicit
+
+        match await AgentRequestHandler.resolve_agent_access(
+            user_api_key_auth,
+            resolve_ceiling,
+            strict=bool(user_api_key_auth is not None and user_api_key_auth.requires_fresh_policy),
+        ):
+            case UnrestrictedAgentAccess():
+                return True
+            case RestrictedAgentAccess(allowed_agent_ids):
+                stable_id: Final = global_agent_registry.stable_agent_id(agent_id)
+                return not global_agent_registry.ids_for_agent(stable_id).isdisjoint(allowed_agent_ids)
 
     @staticmethod
     def _get_key_object_permission(
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> Optional[LiteLLM_ObjectPermissionTable]:
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> LiteLLM_ObjectPermissionTable | None:
         """
         Get key object_permission - already loaded by get_key_object() in main auth flow.
 
@@ -104,8 +295,8 @@ class AgentRequestHandler:
 
     @staticmethod
     async def _get_team_object_permission(
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> Optional[LiteLLM_ObjectPermissionTable]:
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> LiteLLM_ObjectPermissionTable | None:
         """
         Get team object_permission - automatically loaded by get_team_object() in main auth flow.
 
@@ -123,7 +314,7 @@ class AgentRequestHandler:
             return None
 
         # Get the team object (which has object_permission already loaded)
-        team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
+        team_obj: Final[LiteLLM_TeamTable | None] = await get_team_object(
             team_id=user_api_key_auth.team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -137,57 +328,268 @@ class AgentRequestHandler:
         return team_obj.object_permission
 
     @staticmethod
-    async def _get_allowed_agents_for_key(
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> List[str]:
+    async def get_allowed_agents_for_key(
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        *,
+        strict: bool = False,
+    ) -> AgentAccess:
         """
         Get allowed agents for a key.
 
         1. First checks native key-level agent permissions (object_permission)
         2. Also includes agents from key's access_group_ids (unified access groups)
 
+        A key that declares agents or access groups is restricted even when those
+        declarations resolve to nothing, so an emptied or deleted access group denies
+        rather than opening the key up. Lookup failures still propagate to the caller,
+        which keeps them fail-open.
+
         Note: object_permission is already loaded by get_key_object() in main auth flow.
         """
         if user_api_key_auth is None:
-            return []
+            return UnrestrictedAgentAccess()
 
         try:
-            all_agents: List[str] = []
-
             # 1. Get agents from object_permission (native permissions)
-            key_object_permission = AgentRequestHandler._get_key_object_permission(user_api_key_auth)
-            if key_object_permission is not None:
-                # Get direct agents
-                direct_agents = key_object_permission.agents or []
-
-                # Get agents from access groups
-                access_group_agents = await AgentRequestHandler._get_agents_from_access_groups(
-                    key_object_permission.agent_access_groups or []
-                )
-
-                all_agents = direct_agents + access_group_agents
-
+            key_object_permission: Final = AgentRequestHandler._get_key_object_permission(user_api_key_auth)
+            direct_agents: Final = tuple(
+                key_object_permission.agents or () if key_object_permission is not None else ()
+            )
+            declared_access_groups: Final = tuple(
+                key_object_permission.agent_access_groups or () if key_object_permission is not None else ()
+            )
             # 2. Fallback: get agent IDs from key's access_group_ids (unified access groups)
-            key_access_group_ids = user_api_key_auth.access_group_ids or []
-            if key_access_group_ids:
-                from litellm.proxy.auth.auth_checks import (
-                    _get_agent_ids_from_access_groups,
-                )
+            key_access_group_ids: Final = tuple(user_api_key_auth.access_group_ids or ())
 
-                unified_agents = await _get_agent_ids_from_access_groups(
-                    access_group_ids=key_access_group_ids,
-                )
-                all_agents.extend(unified_agents)
+            if not direct_agents and not declared_access_groups and not key_access_group_ids:
+                return UnrestrictedAgentAccess()
 
-            return list(set(all_agents))
+            access_group_agents: Final = (
+                tuple(
+                    await AgentRequestHandler._get_agents_from_access_groups(
+                        declared_access_groups, check_db_only=strict
+                    )
+                )
+                if declared_access_groups
+                else ()
+            )
+            unified_agents: Final = (
+                tuple(
+                    await AgentRequestHandler._get_unified_access_group_agents(
+                        key_access_group_ids, check_db_only=strict
+                    )
+                )
+                if key_access_group_ids
+                else ()
+            )
+
+            return RestrictedAgentAccess(frozenset(direct_agents + access_group_agents + unified_agents))
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed agents for key: {str(e)}")
-            return []
+            if strict:
+                raise HTTPException(503, "Agent invocation policy is unavailable") from e
+            verbose_logger.warning("Failed to get allowed agents for key: %s", e)
+            return UnrestrictedAgentAccess()
+
+    @staticmethod
+    async def _personal_key_owner_team_agent_access(user_api_key_auth: UserAPIKeyAuth, *, strict: bool) -> AgentAccess:
+        """Union owner-team access; teams without a rule add nothing once any team declares one."""
+        from litellm.proxy.auth.auth_checks import personal_key_owner_teams_with_status
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        try:
+            owner_teams: Final = await personal_key_owner_teams_with_status(
+                valid_token=user_api_key_auth,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=strict,
+            )
+        except Exception as e:  # noqa: BLE001  # fail closed: an owner whose teams cannot be read grants nothing
+            if strict:
+                raise HTTPException(503, "Agent invocation policy is unavailable") from e
+            verbose_logger.warning("Failed to load owner teams for personal key agent access: %s", e)
+            return RestrictedAgentAccess(frozenset())
+        team_results: Final = await asyncio.gather(
+            *(AgentRequestHandler._owner_team_agent_grants(team, strict=strict) for team in owner_teams.teams)
+        )
+        withheld_results: Final = await asyncio.gather(
+            *(AgentRequestHandler._owner_team_agent_grants(team, strict=strict) for team in owner_teams.withheld)
+        )
+        if any(isinstance(access, AgentPolicyUnavailable) for access in team_results):
+            raise HTTPException(503, "Agent invocation policy is unavailable")
+        team_accesses: Final = tuple(
+            access for access in team_results if not isinstance(access, AgentPolicyUnavailable)
+        )
+        withheld_restrictions: Final = tuple(
+            RestrictedAgentAccess(frozenset())
+            for access in withheld_results
+            if isinstance(access, (AgentPolicyUnavailable, RestrictedAgentAccess))
+        )
+        accesses: Final = (
+            (*team_accesses, *withheld_restrictions, RestrictedAgentAccess(frozenset()))
+            if owner_teams.unreadable
+            else (*team_accesses, *withheld_restrictions)
+        )
+        return _union_agent_access(accesses)
+
+    @staticmethod
+    async def personal_key_agent_billing_auth(
+        auth: UserAPIKeyAuth,
+        agent_id: str,
+        *,
+        strict: bool = False,
+    ) -> UserAPIKeyAuth:
+        try:
+            from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+            from litellm.proxy.auth.auth_checks import (
+                personal_key_inherits_team_grants,
+                personal_key_owner_teams,
+            )
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            if not personal_key_inherits_team_grants(auth):
+                return auth
+            teams: Final = await personal_key_owner_teams(
+                valid_token=auth,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=strict,
+            )
+            accesses: Final = await asyncio.gather(
+                *(AgentRequestHandler._owner_team_agent_grants(team, strict=strict) for team in teams)
+            )
+            stable_agent_id: Final = global_agent_registry.stable_agent_id(agent_id)
+
+            restricted_sources: Final = tuple(
+                (team, access)
+                for team, access in zip(teams, accesses, strict=True)
+                if isinstance(access, RestrictedAgentAccess) and stable_agent_id in _to_stable_ids(access.agent_ids)
+            )
+            unrestricted_sources: Final = (
+                tuple(zip(teams, accesses, strict=True))
+                if not restricted_sources
+                and teams
+                and all(isinstance(access, UnrestrictedAgentAccess) for access in accesses)
+                else ()
+            )
+            sources: Final = restricted_sources or unrestricted_sources
+            if not sources:
+                verbose_logger.warning("No owner team grants agent %s; billing against the personal key", agent_id)
+                return auth
+            team: Final = min((source[0] for source in sources), key=lambda source: source.team_id)
+        except Exception as e:  # noqa: BLE001  # attribution must never fail an authorized call
+            verbose_logger.warning("Failed to attribute agent %s spend to an owner team: %s", agent_id, e)
+            return auth
+        return await AgentRequestHandler._personal_key_agent_billing_auth_for_team(
+            auth,
+            agent_id,
+            team,
+            strict=strict,
+        )
+
+    @staticmethod
+    async def _personal_key_agent_billing_auth_for_team(
+        auth: UserAPIKeyAuth,
+        agent_id: str,
+        team: LiteLLM_TeamTable,
+        *,
+        strict: bool,
+    ) -> UserAPIKeyAuth:
+        from litellm.proxy.auth.auth_checks import get_team_membership
+        from litellm.proxy.auth.team_grants import team_grant_auth_update, team_grant_billing_auth_update
+        from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+        try:
+            membership: Final = (
+                await get_team_membership(
+                    user_id=auth.user_id,
+                    team_id=team.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                    check_db_only=strict,
+                )
+                if auth.user_id and prisma_client is not None
+                else None
+            )
+            team_auth_update: Final = await team_grant_billing_auth_update(auth, team, membership)
+        except Exception as e:  # noqa: BLE001  # a chosen team's controls must survive billing lookup failures
+            verbose_logger.warning(
+                "Failed to load billing controls for agent %s from owner team %s: %s",
+                agent_id,
+                team.team_id,
+                e,
+            )
+            return auth.model_copy(update=team_grant_auth_update(team, None, auth.user_id, key_org_id=auth.org_id))
+        return auth.model_copy(update=team_auth_update)
+
+    @staticmethod
+    async def _owner_team_agent_grants(
+        team: LiteLLM_TeamTable,
+        *,
+        strict: bool,
+    ) -> AgentAccess | AgentPolicyUnavailable:
+        if team.object_permission_id is not None and team.object_permission is None:
+            if strict:
+                return AgentPolicyUnavailable(team_id=team.team_id)
+            verbose_logger.warning("Owner team %s has an unreadable object_permission, granting nothing", team.team_id)
+            return RestrictedAgentAccess(frozenset())
+        try:
+            return await AgentRequestHandler._team_agent_grants(team, strict=strict)
+        except Exception as e:  # noqa: BLE001  # per-team isolation: a team whose grants cannot be read grants nothing
+            if strict:
+                return AgentPolicyUnavailable(team_id=team.team_id)
+            verbose_logger.warning("Failed to get allowed agents for owner team %s: %s", team.team_id, e)
+            return RestrictedAgentAccess(frozenset())
+
+    @staticmethod
+    async def _team_agent_grants(team: LiteLLM_TeamTable, *, strict: bool) -> AgentAccess:
+        """The agents one loaded team grants: its object_permission agents plus its access groups.
+        Declared-but-empty grants stay restricted; a team with no grant at all does not restrict."""
+        # 1. Get agents from object_permission (native permissions)
+        object_permissions: Final = team.object_permission
+        direct_agents: Final = tuple(object_permissions.agents or () if object_permissions is not None else ())
+        declared_access_groups: Final = tuple(
+            object_permissions.agent_access_groups or () if object_permissions is not None else ()
+        )
+        # 2. Also include agents from team's access_group_ids (unified access groups)
+        team_access_group_ids: Final = tuple(team.access_group_ids or ())
+
+        if not direct_agents and not declared_access_groups and not team_access_group_ids:
+            return UnrestrictedAgentAccess()
+
+        access_group_agents: Final = (
+            tuple(
+                await AgentRequestHandler._get_agents_from_access_groups(declared_access_groups, check_db_only=strict)
+            )
+            if declared_access_groups
+            else ()
+        )
+        unified_agents: Final = (
+            tuple(
+                await AgentRequestHandler._get_unified_access_group_agents(team_access_group_ids, check_db_only=strict)
+            )
+            if team_access_group_ids
+            else ()
+        )
+
+        return RestrictedAgentAccess(frozenset(direct_agents + access_group_agents + unified_agents))
 
     @staticmethod
     async def _get_allowed_agents_for_team(
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> List[str]:
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        *,
+        strict: bool = False,
+    ) -> AgentAccess:
         """
         Get allowed agents for a team.
 
@@ -195,12 +597,17 @@ class AgentRequestHandler:
         2. Also includes agents from team's access_group_ids (unified access groups)
 
         Fetches the team object once and reuses it for both permission sources.
+        Declared-but-empty grants stay restricted; see `get_allowed_agents_for_key`.
         """
         if user_api_key_auth is None:
-            return []
+            return UnrestrictedAgentAccess()
 
         if user_api_key_auth.team_id is None:
-            return []
+            from litellm.proxy.auth.auth_checks import personal_key_inherits_team_grants
+
+            if not personal_key_inherits_team_grants(user_api_key_auth):
+                return UnrestrictedAgentAccess()
+            return await AgentRequestHandler._personal_key_owner_team_agent_access(user_api_key_auth, strict=strict)
 
         try:
             from litellm.proxy.auth.auth_checks import get_team_object
@@ -211,61 +618,39 @@ class AgentRequestHandler:
             )
 
             if not prisma_client:
-                return []
+                return RestrictedAgentAccess(frozenset()) if strict else UnrestrictedAgentAccess()
 
             # Fetch the team object once for both permission sources
-            team_obj = await get_team_object(
+            team_obj: Final = await get_team_object(
                 team_id=user_api_key_auth.team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=user_api_key_auth.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=strict,
             )
 
             if team_obj is None:
-                return []
+                return RestrictedAgentAccess(frozenset()) if strict else UnrestrictedAgentAccess()
 
-            all_agents: List[str] = []
-
-            # 1. Get agents from object_permission (native permissions)
-            object_permissions = team_obj.object_permission
-            if object_permissions is not None:
-                # Get direct agents
-                direct_agents = object_permissions.agents or []
-
-                # Get agents from access groups
-                access_group_agents = await AgentRequestHandler._get_agents_from_access_groups(
-                    object_permissions.agent_access_groups or []
-                )
-
-                all_agents = direct_agents + access_group_agents
-
-            # 2. Also include agents from team's access_group_ids (unified access groups)
-            team_access_group_ids = team_obj.access_group_ids or []
-            if team_access_group_ids:
-                from litellm.proxy.auth.auth_checks import (
-                    _get_agent_ids_from_access_groups,
-                )
-
-                unified_agents = await _get_agent_ids_from_access_groups(
-                    access_group_ids=team_access_group_ids,
-                )
-                all_agents.extend(unified_agents)
-
-            return list(set(all_agents))
+            return await AgentRequestHandler._team_agent_grants(team_obj, strict=strict)
         except Exception as e:
+            if strict:
+                raise HTTPException(503, "Agent invocation policy is unavailable") from e
             # litellm-dashboard is the default UI team and will never have agents;
             # skip noisy warnings for it.
             if user_api_key_auth.team_id != UI_TEAM_ID:
-                verbose_logger.warning(f"Failed to get allowed agents for team: {str(e)}")
-            return []
+                verbose_logger.warning("Failed to get allowed agents for team: %s", e)
+            return UnrestrictedAgentAccess()
 
     @staticmethod
-    def _get_config_agent_ids_for_access_groups(config_agents: List, access_groups: List[str]) -> Set[str]:
+    def _get_config_agent_ids_for_access_groups(
+        config_agents: Sequence[AgentResponse], access_groups: Sequence[str]
+    ) -> set[str]:
         """
         Helper to get agent_ids from config-loaded agents that match any of the given access groups.
         """
-        server_ids: Set[str] = set()
+        server_ids: Final[set[str]] = set()
         for agent in config_agents:
             agent_access_groups = getattr(agent, "agent_access_groups", None)
             if agent_access_groups:
@@ -274,57 +659,67 @@ class AgentRequestHandler:
         return server_ids
 
     @staticmethod
-    async def _get_db_agent_ids_for_access_groups(prisma_client, access_groups: List[str]) -> Set[str]:
+    async def _get_db_agent_ids_for_access_groups(
+        prisma_client, access_groups: Sequence[str], *, check_db_only: bool = False
+    ) -> set[str]:
         """
         Helper to get agent_ids from DB agents that match any of the given access groups.
+
+        Query failures propagate so the caller can tell "this group is empty" (deny)
+        apart from "the lookup failed" (fail-open).
         """
-        agent_ids: Set[str] = set()
-        if access_groups and prisma_client is not None:
-            try:
-                agents = await AgentsRepository(prisma_client).table.find_many(
-                    where={"agent_access_groups": {"hasSome": access_groups}}
-                )
-                for agent in agents:
-                    agent_ids.add(agent.agent_id)
-            except Exception as e:
-                verbose_logger.debug(f"Error getting agents from access groups: {e}")
-        return agent_ids
+        if not access_groups or prisma_client is None:
+            return set()
+
+        agents: Final = await AgentsRepository(prisma_client, use_writer=check_db_only).table.find_many(
+            where={"agent_access_groups": {"hasSome": access_groups}}
+        )
+        return {agent.agent_id for agent in agents}
+
+    @staticmethod
+    async def _get_unified_access_group_agents(
+        access_group_ids: Sequence[str], *, check_db_only: bool = False
+    ) -> list[str]:
+        """
+        Resolve unified access group ids to agent IDs.
+        """
+        from litellm.proxy.auth.auth_checks import get_agent_ids_from_access_groups
+
+        return await get_agent_ids_from_access_groups(access_group_ids=access_group_ids, check_db_only=check_db_only)
 
     @staticmethod
     async def _get_agents_from_access_groups(
-        access_groups: List[str],
-    ) -> List[str]:
+        access_groups: Sequence[str],
+        *,
+        check_db_only: bool = False,
+    ) -> list[str]:
         """
         Resolve agent access groups to agent IDs by querying BOTH the agent table (DB) AND config-loaded agents.
         """
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
         from litellm.proxy.proxy_server import prisma_client
 
-        try:
-            # Use the helper for config-loaded agents
-            agent_ids = AgentRequestHandler._get_config_agent_ids_for_access_groups(
-                global_agent_registry.agent_list, access_groups
-            )
+        config_agent_ids: Final = AgentRequestHandler._get_config_agent_ids_for_access_groups(
+            global_agent_registry.agent_list, access_groups
+        )
 
-            # Use the helper for DB agents
-            db_agent_ids = await AgentRequestHandler._get_db_agent_ids_for_access_groups(prisma_client, access_groups)
-            agent_ids.update(db_agent_ids)
+        # Use the helper for DB agents
+        db_agent_ids: Final = await AgentRequestHandler._get_db_agent_ids_for_access_groups(
+            prisma_client, access_groups, check_db_only=check_db_only
+        )
 
-            return list(agent_ids)
-        except Exception as e:
-            verbose_logger.warning(f"Failed to get agents from access groups: {str(e)}")
-            return []
+        return list(config_agent_ids | db_agent_ids)
 
     @staticmethod
     async def get_agent_access_groups(
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> List[str]:
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> list[str]:
         """
         Get list of agent access groups for the given user/key based on permissions.
         """
-        access_groups: List[str] = []
-        access_groups_for_key = await AgentRequestHandler._get_agent_access_groups_for_key(user_api_key_auth)
-        access_groups_for_team = await AgentRequestHandler._get_agent_access_groups_for_team(user_api_key_auth)
+        access_groups: list[str] = []
+        access_groups_for_key: Final = await AgentRequestHandler._get_agent_access_groups_for_key(user_api_key_auth)
+        access_groups_for_team: Final = await AgentRequestHandler._get_agent_access_groups_for_team(user_api_key_auth)
 
         # If team has access groups, then key must have a subset of the team's access groups
         if len(access_groups_for_team) > 0:
@@ -338,8 +733,8 @@ class AgentRequestHandler:
 
     @staticmethod
     async def _get_agent_access_groups_for_key(
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> List[str]:
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> list[str]:
         """Get agent access groups for the key."""
         from litellm.proxy.auth.auth_checks import get_object_permission
         from litellm.proxy.proxy_server import (
@@ -359,7 +754,7 @@ class AgentRequestHandler:
             return []
 
         try:
-            key_object_permission = await get_object_permission(
+            key_object_permission: Final = await get_object_permission(
                 object_permission_id=user_api_key_auth.object_permission_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -371,13 +766,13 @@ class AgentRequestHandler:
 
             return key_object_permission.agent_access_groups or []
         except Exception as e:
-            verbose_logger.warning(f"Failed to get agent access groups for key: {str(e)}")
+            verbose_logger.warning("Failed to get agent access groups for key: %s", e)
             return []
 
     @staticmethod
     async def _get_agent_access_groups_for_team(
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> List[str]:
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> list[str]:
         """Get agent access groups for the team."""
         from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import (
@@ -397,7 +792,7 @@ class AgentRequestHandler:
             return []
 
         try:
-            team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
+            team_obj: Final[LiteLLM_TeamTable | None] = await get_team_object(
                 team_id=user_api_key_auth.team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -408,11 +803,143 @@ class AgentRequestHandler:
                 verbose_logger.debug("team_obj is None")
                 return []
 
-            object_permissions = team_obj.object_permission
+            object_permissions: Final = team_obj.object_permission
             if object_permissions is None:
                 return []
 
             return object_permissions.agent_access_groups or []
         except Exception as e:
-            verbose_logger.warning(f"Failed to get agent access groups for team: {str(e)}")
+            verbose_logger.warning("Failed to get agent access groups for team: %s", e)
             return []
+
+
+def _granted_ids(access: AgentAccess) -> frozenset[str]:
+    match access:
+        case UnrestrictedAgentAccess():
+            return frozenset()
+        case RestrictedAgentAccess(agent_ids):
+            return agent_ids
+
+
+ResolveAgentAccess: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[AgentAccess]]
+EffectiveAuthContexts: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[Sequence[UserAPIKeyAuth]]]
+
+
+async def _granted_agent_ids(
+    user_api_key_auth: UserAPIKeyAuth,
+    resolve_access: ResolveAgentAccess,
+    effective_contexts: EffectiveAuthContexts,
+) -> frozenset[str]:
+    """Union of the explicit grants reachable from the key, its team, or (for a dashboard session)
+    the user's real teams and user row. No grant anywhere yields the empty set, unlike the
+    open-by-default ``resolve_agent_access`` that guards direct access."""
+    accesses: Final = await asyncio.gather(
+        *(resolve_access(auth_context) for auth_context in await effective_contexts(user_api_key_auth))
+    )
+    return frozenset().union(*(_granted_ids(access) for access in accesses))
+
+
+async def accessible_agents(
+    user_api_key_auth: UserAPIKeyAuth,
+    all_agents: tuple[AgentResponse, ...] | None = None,
+    resolve_access: ResolveAgentAccess | None = None,
+    effective_contexts: EffectiveAuthContexts = build_effective_auth_contexts,
+) -> tuple[AgentResponse, ...]:
+    """Every registry agent for proxy admins, else only the agents the caller was granted."""
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+    agents: Final = global_agent_registry.get_agent_list() if all_agents is None else all_agents
+    if user_api_key_auth.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN.value):
+        return agents
+    allowed_agent_ids: Final = await _granted_agent_ids(
+        user_api_key_auth,
+        AgentRequestHandler.resolve_agent_access if resolve_access is None else resolve_access,
+        effective_contexts,
+    )
+    allowed: Final = await asyncio.gather(
+        *(
+            AgentRequestHandler.is_agent_allowed(agent.agent_id, user_api_key_auth)
+            for agent in agents
+            if agent.identity_managed
+        )
+    )
+    managed_ids: Final = frozenset(
+        agent.agent_id
+        for agent, permitted in zip((agent for agent in agents if agent.identity_managed), allowed)
+        if permitted
+    )
+    return tuple(
+        agent
+        for agent in agents
+        if (agent.agent_id in managed_ids if agent.identity_managed else agent.agent_id in allowed_agent_ids)
+    )
+
+
+async def _strict_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
+    return await AgentRequestHandler.resolve_agent_access(auth, strict=True)
+
+
+async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
+    agent: Final = managed_agent_policy(auth)
+    if agent is None or not agent.object_permission:
+        return RestrictedAgentAccess(frozenset())
+    permission: Final = LiteLLM_ObjectPermissionTable.model_validate(agent.object_permission or MappingProxyType({}))
+    own_auth: Final = UserAPIKeyAuth(object_permission=permission)
+    own: Final = _granted_ids(await AgentRequestHandler.get_allowed_agents_for_key(own_auth, strict=True))
+
+    from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
+
+    ceilings: Final = await resolve_managed_agent_ceilings(agent)
+    grouped: Final = frozenset(target for target in own if all(target in ceiling.agent_ids for ceiling in ceilings))
+    caller: Final = await AgentRequestHandler.agent_caller_access(auth, strict=True)
+    capped: Final = grouped if isinstance(caller, UnrestrictedAgentAccess) else grouped & caller.agent_ids
+    context: Final = auth.managed_agent_context
+    if context is None or context.mode == "autonomous":
+        return RestrictedAgentAccess(capped)
+    if context.user_id is None:
+        return RestrictedAgentAccess(frozenset())
+    human_ids: Final = await verified_human_agent_grants(context.user_id, auth.team_id)
+    return RestrictedAgentAccess(capped.intersection(human_ids))
+
+
+async def _verified_human_agent_sources(
+    user_id: str | None, *, allowed_team_ids: frozenset[str] | None = None
+) -> tuple[tuple[str | None, frozenset[str]], ...]:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    if user_id is None:
+        return ()
+    human: Final = await MCPRequestHandler.reload_admitted_user(user_id, requires_fresh_policy=True)
+    sources: Final = await MCPRequestHandler.admitted_subject_sources(human, allowed_team_ids=allowed_team_ids)
+    access: Final = await asyncio.gather(*(_strict_agent_access(source) for source in sources))
+    return tuple((source.team_id, _granted_ids(grant)) for source, grant in zip(sources, access, strict=True))
+
+
+async def verified_human_agent_grants(user_id: str | None, team_id: str | None = None) -> frozenset[str]:
+    sources: Final = await _verified_human_agent_sources(
+        user_id, allowed_team_ids=frozenset((team_id,)) if team_id else frozenset()
+    )
+    return frozenset().union(*(grants for source, grants in sources if source is None or source == team_id))
+
+
+async def resolve_delegated_agent_team(
+    user_id: str | None,
+    agent_id: str,
+    team_id: str | None,
+    *,
+    explicit_team: bool,
+    allowed_team_ids: frozenset[str] | None = None,
+) -> str | None:
+    sources: Final = await _verified_human_agent_sources(user_id)
+    if any(source is None and agent_id in grants for source, grants in sources):
+        return team_id
+    granting_teams: Final = frozenset(
+        source
+        for source, grants in sources
+        if source is not None and agent_id in grants and (allowed_team_ids is None or source in allowed_team_ids)
+    )
+    if team_id in granting_teams:
+        return team_id
+    if not explicit_team and granting_teams:
+        return min(granting_teams)
+    raise HTTPException(403, "Select a team that grants access to this agent using x-litellm-team-id")

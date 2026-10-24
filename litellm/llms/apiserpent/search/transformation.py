@@ -8,12 +8,13 @@ Two endpoints under one provider, selected via the ``deep`` boolean param:
 APISerpent API Reference: https://apiserpent.com/docs
 """
 
-from typing import Dict, List, Literal, Optional, Union, cast
+from typing import Final, Literal, cast
 from urllib.parse import urlencode
 
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.apiserpent.search.defaults import (
     DEEP_SEARCH_PATH,
     NUM_MAX,
@@ -29,9 +30,9 @@ from litellm.llms.base_llm.search.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 
-DEEP_SEARCH_PARAM = "deep"
-APISERPENT_BASE = "https://apiserpent.com"
-APISERPENT_PARAMS_KEY = "_apiserpent_params"
+DEEP_SEARCH_PARAM: Final = "deep"
+APISERPENT_BASE: Final = "https://apiserpent.com"
+APISERPENT_PARAMS_KEY: Final = "_apiserpent_params"
 
 
 class APISerpentSearchConfig(BaseSearchConfig):
@@ -48,11 +49,11 @@ class APISerpentSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         api_key = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
@@ -68,35 +69,33 @@ class APISerpentSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
         Build the search URL. APISerpent uses GET, so the transformed request is
         serialized into the query string. The endpoint path (quick vs deep) is
         always applied; an ``api_base`` / ``APISERPENT_API_BASE`` override only
-        changes the host. The ``endswith`` guard keeps this idempotent, since the
+        changes the host. ``ensure_api_route`` keeps this idempotent, since the
         handler re-invokes this method with the already-resolved URL as api_base.
         """
-        base = (api_base or get_secret_str("APISERPENT_API_BASE") or APISERPENT_BASE).rstrip("/")
-        path = DEEP_SEARCH_PATH if self._is_deep_search(optional_params) else QUICK_SEARCH_PATH
-        if not base.endswith(path):
-            base = f"{base}{path}"
+        path: Final = DEEP_SEARCH_PATH if self._is_deep_search(optional_params) else QUICK_SEARCH_PATH
+        base: Final = ensure_api_route(api_base or get_secret_str("APISERPENT_API_BASE") or APISERPENT_BASE, path)
 
         if data and isinstance(data, dict) and APISERPENT_PARAMS_KEY in data:
-            query_string = urlencode(data[APISERPENT_PARAMS_KEY], doseq=True)
+            query_string: Final = urlencode(data[APISERPENT_PARAMS_KEY], doseq=True)
             return f"{base}?{query_string}"
 
         return base
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform a unified search request into APISerpent query params.
 
@@ -112,11 +111,11 @@ class APISerpentSearchConfig(BaseSearchConfig):
         if isinstance(query, list):
             query = " ".join(query)
 
-        is_deep = self._is_deep_search(optional_params)
+        is_deep: Final = self._is_deep_search(optional_params)
 
-        overrides: Dict = {}
+        overrides: Final[dict] = {}
         if "max_results" in optional_params:
-            num_min = NUM_MIN_DEEP if is_deep else NUM_MIN
+            num_min: Final = NUM_MIN_DEEP if is_deep else NUM_MIN
             overrides["num"] = max(num_min, min(optional_params["max_results"], NUM_MAX))
         if "country" in optional_params:
             overrides["country"] = cast(str, optional_params["country"]).lower()
@@ -125,24 +124,24 @@ class APISerpentSearchConfig(BaseSearchConfig):
             if param in APISerpentSearchParams.field_names() and param not in overrides:
                 overrides[param] = value
 
-        params = {**APISerpentSearchParams(**overrides).to_request_params(), "q": query}
+        params: Final = {**APISerpentSearchParams(**overrides).to_request_params(), "q": query}
 
         if "search_domain_filter" in optional_params:
-            domains = optional_params["search_domain_filter"]
+            domains: Final = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
                 params["q"] = self._append_domain_filters(str(params["q"]), domains)
 
         return {APISERPENT_PARAMS_KEY: params}
 
     @staticmethod
-    def _append_domain_filters(query: str, domains: List[str]) -> str:
-        domain_clauses = " OR ".join(f"site:{domain}" for domain in domains)
+    def _append_domain_filters(query: str, domains: list[str]) -> str:
+        domain_clauses: Final = " OR ".join(f"site:{domain}" for domain in domains)
         return f"({query}) ({domain_clauses})"
 
     def transform_search_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Optional[LiteLLMLoggingObj],
+        logging_obj: LiteLLMLoggingObj | None,
         **kwargs,
     ) -> SearchResponse:
         """
@@ -151,12 +150,12 @@ class APISerpentSearchConfig(BaseSearchConfig):
         Full format nests results under ``results.organic[]``; simple format
         returns a flat ``results[]`` array. Both expose title/url/snippet.
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
-        raw_results = response_json.get("results") or {}
-        organic = raw_results.get("organic", []) if isinstance(raw_results, dict) else raw_results
+        raw_results: Final = response_json.get("results") or {}
+        organic: Final = raw_results.get("organic", []) if isinstance(raw_results, dict) else raw_results
 
-        results: List[SearchResult] = []
+        results: Final[list[SearchResult]] = []
         for result in organic:
             results.append(
                 SearchResult(

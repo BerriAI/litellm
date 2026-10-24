@@ -1,15 +1,31 @@
 # syntax=docker/dockerfile:1.7
 
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:42df77a9974d6ec8b17a5ee8bc23b532600a44d705acef2409e0933c1251b45f
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:81211e15a86ea1d5357f284482af45730c51de45eaf10ad9ce205d6bfc2df323
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:42df77a9974d6ec8b17a5ee8bc23b532600a44d705acef2409e0933c1251b45f
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:81211e15a86ea1d5357f284482af45730c51de45eaf10ad9ce205d6bfc2df323
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
 # Pinned by digest like the other base images; bump explicitly on Node upgrades.
-ARG UI_BUILD_IMAGE=node:20.18-alpine3.20@sha256:3488b10bf958af7125a176419d2d8a9937d895bf124012aae811651988d2ffe6
+ARG UI_BUILD_IMAGE=node:24.19-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
+# Checksum from https://www.pgbouncer.org/downloads/ (the Wolfi repo only carries 1.24.x)
+ARG PGBOUNCER_VERSION=1.26.0
+ARG PGBOUNCER_SHA256=afd25dd61ee6775d37b40629b87ce08736b3e6955f3057bb212e410fbf21c71d
 
 FROM $UV_IMAGE AS uvbin
+
+FROM $LITELLM_BUILD_IMAGE AS pgbouncer-builder
+ARG PGBOUNCER_VERSION
+ARG PGBOUNCER_SHA256
+USER root
+RUN apk add --no-cache build-base pkgconf libevent-dev openssl-dev curl
+WORKDIR /build
+RUN curl -fsSL -o pgbouncer.tar.gz "https://www.pgbouncer.org/downloads/files/${PGBOUNCER_VERSION}/pgbouncer-${PGBOUNCER_VERSION}.tar.gz" && \
+    echo "${PGBOUNCER_SHA256}  pgbouncer.tar.gz" | sha256sum -c - && \
+    tar xzf pgbouncer.tar.gz --strip-components=1 && \
+    ./configure --prefix=/usr/local --with-openssl=/usr && \
+    make -j"$(nproc)" pgbouncer && \
+    install -m 0755 pgbouncer /usr/local/bin/pgbouncer
 
 # Admin UI builder. Pinned to the build platform so the architecture-independent
 # Next.js static export compiles once natively even in a multi-arch build,
@@ -23,6 +39,7 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 WORKDIR /ui
 
 COPY ui/litellm-dashboard/package.json ui/litellm-dashboard/package-lock.json ./
+COPY ui/litellm-dashboard/vendor/ ./vendor/
 RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
 
 COPY ui/litellm-dashboard/ ./
@@ -40,10 +57,11 @@ COPY --from=uvbin /uvx /usr/local/bin/uvx
 RUN apk add --no-cache \
     bash \
     gcc \
-    python3 \
-    python3-dev \
+    python-3.13 \
+    python-3.13-dev \
     rust \
     openssl \
+    libssl3 \
     openssl-dev \
     nodejs \
     npm \
@@ -51,6 +69,7 @@ RUN apk add --no-cache \
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=0 \
     PATH="/app/.venv/bin:${PATH}"
 
 # Copy dependency metadata first for layer caching
@@ -62,10 +81,12 @@ COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
 RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
     --extra proxy \
     --extra proxy-runtime \
+    --group admin-mcp \
     --extra extra_proxy \
     --extra semantic-router \
     --extra saml \
-    --python python3
+    --extra bedrock-realtime \
+    --python python3.13
 
 # Copy full source tree
 COPY . .
@@ -83,10 +104,12 @@ RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.
 RUN uv sync --frozen --no-default-groups --no-editable \
     --extra proxy \
     --extra proxy-runtime \
+    --group admin-mcp \
     --extra extra_proxy \
     --extra semantic-router \
     --extra saml \
-    --python python3
+    --extra bedrock-realtime \
+    --python python3.13
 
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     npm_config_cache=/root/.npm \
@@ -95,13 +118,32 @@ RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
     sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
+FROM $LITELLM_BUILD_IMAGE AS liteadmin-builder
+COPY --from=uvbin /uv /usr/local/bin/uv
+RUN apk add --no-cache python-3.13
+ADD --checksum=sha256:4fb1847e28e2be30ba76dac94f02c4903291326516a0f4ba772f6ffb8b25d05c \
+    https://github.com/BerriAI/litellm-admin-agent/archive/5661c805ce479a0cf11b842ea133cf8d22cd7e34.tar.gz /tmp/liteadmin.tar.gz
+RUN mkdir /tmp/liteadmin && tar xzf /tmp/liteadmin.tar.gz --strip-components=1 -C /tmp/liteadmin && \
+    uv venv /opt/liteadmin --python python3.13 && \
+    uv pip install --python /opt/liteadmin/bin/python --require-hashes -r /tmp/liteadmin/requirements.txt && \
+    uv pip install --python /opt/liteadmin/bin/python --no-deps /tmp/liteadmin
+
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
+ARG LITELLM_RELEASE_TAG=""
+ENV LITELLM_RELEASE_TAG=${LITELLM_RELEASE_TAG}
 
 USER root
 
+# The base image only configures Chainguard's authenticated apk repo, which
+# requires an enterprise subscription. Add the public Wolfi repo so `apk add`
+# also works for anyone installing extra packages into a running container.
+# https://github.com/BerriAI/litellm/issues/33518
+RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
+
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile
+RUN apk add --no-cache bash openssl libssl3 tzdata nodejs python-3.13 libsndfile libevent
+COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}" \
@@ -115,6 +157,7 @@ ENV PATH="/app/.venv/bin:${PATH}" \
 # ship (manifest-scanning tools attribute everything in it to this image).
 # entrypoint.sh invokes litellm/proxy/prisma_migration.py by source path.
 COPY --from=builder /app/.venv /app/.venv
+COPY --from=liteadmin-builder /opt/liteadmin /opt/liteadmin
 COPY --from=builder /app/docker /app/docker
 COPY --from=builder /app/schema.prisma /app/schema.prisma
 COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
@@ -134,7 +177,8 @@ RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
     find /app/.venv -type d -path "*/tornado/test" -delete && \
     chmod -R a+rX /opt/prisma && \
     test -x /opt/prisma/binaries/node_modules/.bin/prisma && \
-    test -f /opt/prisma/binaries/node_modules/prisma/build/index.js
+    test -f /opt/prisma/binaries/node_modules/prisma/build/index.js && \
+    python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths"
 
 EXPOSE 4000/tcp
 

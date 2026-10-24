@@ -1,13 +1,8 @@
 /* @vitest-environment jsdom */
 import { render } from "@testing-library/react";
+import { withNuqsTestingAdapter } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import HealthStatusPanel from "./HealthStatusPanel";
-
-vi.mock("next/navigation", () => ({
-  usePathname: () => "/models-and-endpoints/health",
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(""),
-}));
 
 const mockHealthCheckComponent = vi.fn((_props: { all_models_on_proxy?: string[] }) => null);
 vi.mock("@/components/model_dashboard/HealthCheckComponent", () => ({
@@ -44,7 +39,7 @@ describe("HealthStatusPanel", () => {
       isLoading: false,
     });
 
-    render(<HealthStatusPanel />);
+    render(<HealthStatusPanel />, { wrapper: withNuqsTestingAdapter() });
 
     expect(mockHealthCheckComponent).toHaveBeenCalled();
     const props = mockHealthCheckComponent.mock.calls[0][0];

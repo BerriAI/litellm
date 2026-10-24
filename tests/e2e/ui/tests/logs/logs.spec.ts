@@ -1,0 +1,381 @@
+import { test, expect, type Locator, type Page as PlaywrightPage } from "@playwright/test";
+import { ADMIN_STORAGE_PATH } from "../../constants";
+import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
+import { Page } from "../../fixtures/pages";
+import {
+  CHAT_MODEL_A,
+  MOCK_RESPONSE_TEXT,
+  sendChatCompletion,
+  sendChatCompletionWithCallId,
+  waitForSpendLog,
+  waitForSpendLogByPrompt,
+} from "../../helpers/traffic";
+import { openPlayground, selectModel, sendMessage } from "../../helpers/playground";
+
+/**
+ * Anchored to traffic this spec generates itself, with a unique prompt and end user per run, so it
+ * neither depends on seeded spend rows nor collides with other specs under parallelism.
+ */
+
+const uniqueSuffix = (): string => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const sectionToggle = (drawer: Locator, label: "Input" | "Output"): Locator =>
+  drawer.getByRole("button", { name: new RegExp(`^${label}\\b`) });
+
+const sectionCopy = (drawer: Locator, label: "Input" | "Output"): Locator =>
+  drawer.getByRole("button", { name: `Copy ${label.toLowerCase()}` });
+
+/** Every tab stays mounted, so the DOM holds four tables at once; scope to the visible one. */
+const requestLogsRows = (page: PlaywrightPage): Locator =>
+  page.locator("table").filter({ visible: true }).first().locator("tbody tr");
+
+const visibleTestId = (page: PlaywrightPage, id: string): Locator => page.getByTestId(id).filter({ visible: true });
+
+/** Open the Logs page and filter the table down to a single request id. */
+async function openLogsForRequest(page: PlaywrightPage, requestId: string): Promise<Locator> {
+  await navigateToPage(page, Page.Logs);
+  await dismissFeedbackPopup(page);
+
+  const search = visibleTestId(page, "datatable-search");
+  await expect(search).toBeVisible({ timeout: 20_000 });
+  await search.fill(requestId);
+
+  const row = requestLogsRows(page).filter({ hasText: requestId });
+  await expect(row, `no logs row for request ${requestId}`).toHaveCount(1, {
+    timeout: 30_000,
+  });
+  return row;
+}
+
+test.describe("Logs page", () => {
+  test.use({
+    storageState: ADMIN_STORAGE_PATH,
+    // The copy buttons go through navigator.clipboard, which rejects without these.
+    permissions: ["clipboard-read", "clipboard-write"],
+  });
+
+  test("log tables fill the available height and empty requests stay centered after resizing", async ({
+    page,
+  }) => {
+    await navigateToPage(page, Page.Logs);
+    await dismissFeedbackPopup(page);
+    await visibleTestId(page, "datatable-search").fill(
+      `missing-request-${uniqueSuffix()}`,
+    );
+    const emptyTitle = page.getByText("No matching requests", { exact: true });
+    await expect(emptyTitle).toBeVisible();
+
+    for (const viewport of [
+      { width: 1440, height: 900 },
+      { width: 1024, height: 720 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await expect
+        .poll(async () => {
+          const frame = await visibleTestId(
+            page,
+            "data-table-frame",
+          ).boundingBox();
+          return frame
+            ? Math.abs(viewport.height - frame.y - frame.height - 24)
+            : Infinity;
+        })
+        .toBeLessThanOrEqual(2);
+      await expect
+        .poll(async () => {
+          const body = await page
+            .locator("table")
+            .filter({ visible: true })
+            .first()
+            .locator("tbody")
+            .boundingBox();
+          const scroller = await visibleTestId(
+            page,
+            "data-table-scroller",
+          ).boundingBox();
+          const message = await emptyTitle.locator("..").boundingBox();
+          if (!body || !message || !scroller) return Infinity;
+          return Math.max(
+            Math.abs(
+              message.x + message.width / 2 - scroller.x - scroller.width / 2,
+            ),
+            Math.abs(message.y + message.height / 2 - body.y - body.height / 2),
+          );
+        })
+        .toBeLessThanOrEqual(4);
+      for (const tab of ["Deleted Keys", "Deleted Teams"]) {
+        await page.getByRole("tab", { name: tab, exact: true }).click();
+        await expect
+          .poll(async () => {
+            const frame = await visibleTestId(
+              page,
+              "data-table-frame",
+            ).boundingBox();
+            return frame
+              ? Math.abs(viewport.height - frame.y - frame.height - 24)
+              : Infinity;
+          })
+          .toBeLessThanOrEqual(2);
+      }
+      await page
+        .getByRole("tab", { name: "Request Logs", exact: true })
+        .click();
+    }
+  });
+
+  test("a chat sent from the Playground lands in Logs with its content", async ({ page, request }) => {
+    const prompt = `logs-playground-prompt-${uniqueSuffix()}`;
+    await openPlayground(page);
+    await selectModel(page, CHAT_MODEL_A);
+    await sendMessage(page, prompt);
+    await expect(page.getByText(MOCK_RESPONSE_TEXT, { exact: false }).first()).toBeVisible({ timeout: 60_000 });
+
+    const requestId = await waitForSpendLogByPrompt(request, prompt);
+
+    const row = await openLogsForRequest(page, requestId);
+    await row.click();
+    const drawer = page.getByRole("dialog").first();
+    await expect(drawer.getByText("Request & Response")).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText(prompt, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText(MOCK_RESPONSE_TEXT, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
+  });
+
+  test("a served request expands to its request and response", async ({ page, request }) => {
+    const prompt = `logs-detail-prompt-${uniqueSuffix()}`;
+    const requestId = await sendChatCompletion(request, {
+      model: CHAT_MODEL_A,
+      prompt,
+    });
+    await waitForSpendLog(request, requestId);
+
+    const row = await openLogsForRequest(page, requestId);
+
+    // Expand: clicking the row opens the detail drawer for that request.
+    await row.click();
+    const drawer = page.getByRole("dialog").first();
+    await expect(drawer).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText("Request & Response")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    // The prompt we sent and the mock server's reply are both rendered.
+    await expect(drawer.getByText(prompt, { exact: false })).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(drawer.getByText(MOCK_RESPONSE_TEXT, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
+  });
+
+  test("a served request's Logs row and drawer show its x-litellm-call-id", async ({ page, request }) => {
+    const prompt = `logs-call-id-prompt-${uniqueSuffix()}`;
+    const { requestId, callId } = await sendChatCompletionWithCallId(request, {
+      model: CHAT_MODEL_A,
+      prompt,
+    });
+    expect(callId, "call id must differ from the provider response id for this check to mean anything").not.toBe(
+      requestId,
+    );
+    await waitForSpendLog(request, requestId);
+
+    await navigateToPage(page, Page.Logs);
+    await dismissFeedbackPopup(page);
+    const search = visibleTestId(page, "datatable-search");
+    await expect(search).toBeVisible({ timeout: 20_000 });
+    const searched = page.waitForResponse(
+      (response) =>
+        response.url().includes("/spend/logs/ui") &&
+        new URL(response.url()).searchParams.get("search") === callId &&
+        response.status() === 200,
+      { timeout: 20_000 },
+    );
+    await search.fill(callId);
+    await searched;
+
+    const row = requestLogsRows(page).filter({ hasText: requestId });
+    await expect(row, `no logs row for call id ${callId}`).toHaveCount(1, { timeout: 30_000 });
+    await expect(row, "the row itself shows only the request id").not.toContainText(callId);
+
+    await row.getByText(requestId).hover();
+    const tooltip = page.locator("[data-slot='tooltip-content']");
+    await expect(tooltip, "hovering the Request ID cell does not list the x-litellm-call-id").toContainText(
+      `x-litellm-call-id: ${callId}`,
+      { timeout: 10_000 },
+    );
+    await tooltip.getByRole("button", { name: "Copy x-litellm-call-id" }).click();
+    if (await page.evaluate(() => window.isSecureContext)) {
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(callId);
+    }
+
+    await row.click();
+    const drawer = page.getByRole("dialog").first();
+    await expect(drawer.getByText("Request & Response")).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText("x-litellm-call-id:"), "drawer header lacks the x-litellm-call-id line").toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(
+      drawer.getByText(callId, { exact: false }).first(),
+      `drawer does not show x-litellm-call-id ${callId}`,
+    ).toBeVisible({ timeout: 10_000 });
+  });
+
+  // Split out because only the copy path needs a secure context; folding it in would
+  // take the drawer-rendering coverage down with it.
+  test("the drawer copies the request and the response to the clipboard", async ({ page, request }) => {
+    // `navigator.clipboard` is undefined outside a secure context, and handleCopy calls
+    // writeText unguarded, so on plain HTTP served from a hostname the click throws and no
+    // toast renders. Skipped rather than weakened so the product gap stays visible.
+    await page.goto("/ui");
+    const isSecure = await page.evaluate(() => window.isSecureContext);
+    test.skip(!isSecure, "origin is not a secure context, so navigator.clipboard is unavailable");
+
+    const prompt = `logs-copy-prompt-${uniqueSuffix()}`;
+    const requestId = await sendChatCompletion(request, {
+      model: CHAT_MODEL_A,
+      prompt,
+    });
+    await waitForSpendLog(request, requestId);
+
+    const row = await openLogsForRequest(page, requestId);
+    await row.click();
+    const drawer = page.getByRole("dialog").first();
+    await expect(drawer).toBeVisible({ timeout: 20_000 });
+
+    // Copy request: the Input card's copy button puts the prompt on the clipboard.
+    await sectionCopy(drawer, "Input").click();
+    await expect(page.getByText("Input copied")).toBeVisible({
+      timeout: 10_000,
+    });
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(prompt);
+
+    // Copy response: the Output card's copy button puts the completion on it.
+    await sectionCopy(drawer, "Output").click();
+    await expect(page.getByText("Output copied")).toBeVisible({
+      timeout: 10_000,
+    });
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(MOCK_RESPONSE_TEXT);
+  });
+
+  test("the Input card collapses and expands", async ({ page, request }) => {
+    const prompt = `logs-collapse-prompt-${uniqueSuffix()}`;
+    const requestId = await sendChatCompletion(request, {
+      model: CHAT_MODEL_A,
+      prompt,
+    });
+    await waitForSpendLog(request, requestId);
+
+    const row = await openLogsForRequest(page, requestId);
+    await row.click();
+
+    const drawer = page.getByRole("dialog").first();
+    await expect(drawer.getByText("Request & Response")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    const toggle = sectionToggle(drawer, "Input");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(drawer.getByText(prompt, { exact: false })).toBeVisible();
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false", { timeout: 10_000 });
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true", { timeout: 10_000 });
+    await expect(drawer.getByText(prompt, { exact: false })).toBeVisible({
+      timeout: 10_000,
+    });
+  });
+
+  test("the trace sidebar collapses and expands again", async ({ page, request }) => {
+    const prompt = `logs-sidebar-prompt-${uniqueSuffix()}`;
+    const requestId = await sendChatCompletion(request, {
+      model: CHAT_MODEL_A,
+      prompt,
+    });
+    await waitForSpendLog(request, requestId);
+
+    const row = await openLogsForRequest(page, requestId);
+    await row.click();
+
+    const drawer = page.getByRole("dialog").first();
+    await expect(drawer.getByText("Request & Response")).toBeVisible({ timeout: 20_000 });
+
+    const toggle = drawer.getByLabel("Collapse trace sidebar");
+    await expect(toggle).toBeVisible({ timeout: 10_000 });
+    await toggle.click();
+
+    const expandToggle = drawer.getByLabel("Expand trace sidebar");
+    await expect(expandToggle).toBeVisible({ timeout: 10_000 });
+    await expandToggle.click({ timeout: 10_000 });
+
+    await expect(drawer.getByLabel("Collapse trace sidebar")).toBeVisible({ timeout: 10_000 });
+    await expect(drawer.getByText(prompt, { exact: false })).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("the JSON view exposes Request and Response tabs", async ({ page, request }) => {
+    const prompt = `logs-json-prompt-${uniqueSuffix()}`;
+    const requestId = await sendChatCompletion(request, {
+      model: CHAT_MODEL_A,
+      prompt,
+    });
+    await waitForSpendLog(request, requestId);
+
+    const row = await openLogsForRequest(page, requestId);
+    await row.click();
+
+    const drawer = page.getByRole("dialog").first();
+    await expect(drawer.getByText("Request & Response")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    await drawer.getByRole("tab", { name: "JSON" }).click();
+
+    const requestTab = drawer.getByRole("tab", { name: "Request" });
+    await expect(requestTab).toBeVisible({ timeout: 10_000 });
+    await requestTab.click();
+    await expect(drawer.getByText(prompt, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
+
+    await drawer.getByRole("tab", { name: "Response" }).click();
+    await expect(drawer.getByText(MOCK_RESPONSE_TEXT, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("the End User filter narrows the table to that customer", async ({ page, request }) => {
+    const endUser = `logs-end-user-${uniqueSuffix()}`;
+    const minePrompt = `logs-filter-mine-${uniqueSuffix()}`;
+    const otherPrompt = `logs-filter-other-${uniqueSuffix()}`;
+
+    const mineId = await sendChatCompletion(request, {
+      model: CHAT_MODEL_A,
+      prompt: minePrompt,
+      endUser,
+    });
+    const otherId = await sendChatCompletion(request, {
+      model: CHAT_MODEL_A,
+      prompt: otherPrompt,
+    });
+    await waitForSpendLog(request, mineId);
+    await waitForSpendLog(request, otherId);
+
+    await navigateToPage(page, Page.Logs);
+    await dismissFeedbackPopup(page);
+
+    // Both requests are in the unfiltered table.
+    await expect(requestLogsRows(page).filter({ hasText: mineId })).toHaveCount(1, { timeout: 30_000 });
+    await expect(requestLogsRows(page).filter({ hasText: otherId })).toHaveCount(1, { timeout: 30_000 });
+
+    await visibleTestId(page, "datatable-filters-trigger").click();
+    const filters = page.getByRole("dialog").filter({ hasText: "Narrow down request logs" });
+    await expect(filters).toBeVisible({ timeout: 10_000 });
+
+    const endUserInput = filters.getByPlaceholder("Search an end user");
+    await endUserInput.click();
+    await endUserInput.fill(endUser);
+    // The combobox popup is portaled to the body, so it is outside the filter
+    // dialog's subtree — scope the option lookup to the page, not the dialog.
+    await page.getByRole("option", { name: endUser, exact: true }).click({ timeout: 30_000 });
+    await filters.getByRole("button", { name: "Apply Filters" }).click();
+
+    // Only the request tagged with this end user survives the filter.
+    await expect(requestLogsRows(page).filter({ hasText: otherId })).toHaveCount(0, { timeout: 30_000 });
+    await expect(requestLogsRows(page).filter({ hasText: mineId })).toHaveCount(1);
+    await expect(requestLogsRows(page)).toHaveCount(1);
+  });
+});

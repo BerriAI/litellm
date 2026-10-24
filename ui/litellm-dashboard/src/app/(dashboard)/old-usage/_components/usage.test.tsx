@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import UsagePage from "./usage";
@@ -48,6 +48,14 @@ const renderUsage = (overrides: Partial<React.ComponentProps<typeof UsagePage>> 
       {...overrides}
     />,
   );
+
+// Width of this window is guarded by "proves the flush window is wide enough".
+const flushPendingRequests = async () => {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -185,18 +193,65 @@ describe("old usage page", () => {
     });
   });
 
-  describe("as a non-admin", () => {
-    it("renders only the All Up tab and skips admin-only queries", async () => {
-      renderUsage({ userRole: "Internal User" });
+  // org_admin is an organization membership role; those users reach the UI as "Internal User".
+  describe.each(["Internal User", "Internal Viewer", "internal_user", "internal_user_viewer", "Org Admin"])(
+    "as %s",
+    (userRole) => {
+      it("shows the admin-only notice instead of the usage dashboard", async () => {
+        renderUsage({ userRole });
+
+        expect(await screen.findByText(/Proxy-wide usage is only available to admin users/i)).toBeInTheDocument();
+        expect(screen.queryByRole("tab", { name: "All Up" })).not.toBeInTheDocument();
+      });
+
+      it("fires no /global/spend or /global/activity request", async () => {
+        renderUsage({ userRole });
+
+        await screen.findByText(/Proxy-wide usage is only available to admin users/i);
+        await flushPendingRequests();
+
+        expect(networking.getProxyUISettings).not.toHaveBeenCalled();
+        expect(networking.adminSpendLogsCall).not.toHaveBeenCalled();
+        expect(networking.adminTopKeysCall).not.toHaveBeenCalled();
+        expect(networking.adminTopModelsCall).not.toHaveBeenCalled();
+        expect(networking.adminTopEndUsersCall).not.toHaveBeenCalled();
+        expect(networking.teamSpendLogsCall).not.toHaveBeenCalled();
+        expect(networking.tagsSpendLogsCall).not.toHaveBeenCalled();
+        expect(networking.allTagNamesCall).not.toHaveBeenCalled();
+        expect(networking.adminspendByProvider).not.toHaveBeenCalled();
+        expect(networking.adminGlobalActivity).not.toHaveBeenCalled();
+        expect(networking.adminGlobalActivityPerModel).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  describe("the admin-only gate", () => {
+    it("proves the flush window is wide enough to catch a leaked request", async () => {
+      renderUsage({ userRole: "Admin" });
+
+      await flushPendingRequests();
+
+      expect(networking.getProxyUISettings).toHaveBeenCalled();
+      expect(networking.adminSpendLogsCall).toHaveBeenCalled();
+      expect(networking.tagsSpendLogsCall).toHaveBeenCalled();
+      expect(networking.adminGlobalActivity).toHaveBeenCalled();
+    });
+
+    it("still lets an admin through, so the notice is a real gate and not a dead branch", async () => {
+      renderUsage({ userRole: "Admin" });
 
       expect(await screen.findByRole("tab", { name: "All Up" })).toBeInTheDocument();
-      expect(screen.queryByRole("tab", { name: "Team Based Usage" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("tab", { name: "Customer Usage" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("tab", { name: "Tag Based Usage" })).not.toBeInTheDocument();
-
+      expect(screen.queryByText(/Proxy-wide usage is only available to admin users/i)).not.toBeInTheDocument();
       await waitFor(() => expect(networking.adminSpendLogsCall).toHaveBeenCalled());
-      expect(networking.teamSpendLogsCall).not.toHaveBeenCalled();
-      expect(networking.adminTopEndUsersCall).not.toHaveBeenCalled();
+    });
+
+    it("does not put the session token in the provider spend query", async () => {
+      renderUsage({ userRole: "Admin", token: "session-jwt-value" });
+
+      await waitFor(() => expect(networking.adminspendByProvider).toHaveBeenCalled());
+      const callArgs = networking.adminspendByProvider.mock.calls[0];
+      expect(callArgs).not.toContain("session-jwt-value");
+      expect(callArgs[0]).toBe("sk-test");
     });
   });
 });

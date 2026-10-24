@@ -1,9 +1,8 @@
-from typing import List, Optional
-
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm.models.budget import LiteLLM_BudgetTableFull
 from litellm.models.end_user import LiteLLM_EndUserTable
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class CustomerResponse(LiteLLM_EndUserTable):
@@ -14,17 +13,17 @@ class CustomerResponse(LiteLLM_EndUserTable):
     the narrow write-allowlist shape LiteLLM_EndUserTable carries for internal use.
     """
 
-    litellm_budget_table: Optional[LiteLLM_BudgetTableFull] = None  # pyright: ignore
+    litellm_budget_table: LiteLLM_BudgetTableFull | None = None  # pyright: ignore
 
 
-class BlockUsersResponse(BaseModel):
-    blocked_users: List[LiteLLM_EndUserTable]
+class BlockUsersResponse(LiteLLMBaseModel):
+    blocked_users: list[LiteLLM_EndUserTable]
 
 
-class UnblockUsersResponse(BaseModel):
-    blocked_users: List[str] = Field(description="User IDs that remain blocked after this unblock call")
+class UnblockUsersResponse(LiteLLMBaseModel):
+    blocked_users: list[str] = Field(description="User IDs that remain blocked after this unblock call")
 
 
-class DeleteCustomersResponse(BaseModel):
+class DeleteCustomersResponse(LiteLLMBaseModel):
     deleted_customers: int
     message: str
