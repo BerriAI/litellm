@@ -1,6 +1,7 @@
+use http::{HeaderMap, header::AUTHORIZATION};
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::settings::resolve_non_empty;
-use litellm_http::request::{has_bearer_auth, without_headers};
+use litellm_http::request::has_bearer_auth;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::DEFAULT_HEADERS,
@@ -14,7 +15,7 @@ use crate::{
         messages::transformation::update_headers_with_anthropic_beta,
     },
     base_llm::{
-        auth::{AuthScheme, Headers, ValidatedEnvironment},
+        auth::{AuthScheme, ValidatedEnvironment},
         messages::{context::MessagesTransformContext, transformation::BaseMessagesConfig},
     },
 };
@@ -31,14 +32,14 @@ pub const OPENROUTER_MESSAGES_CONFIG: OpenRouterAnthropicMessagesConfig =
 impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
     fn validate_environment(
         &self,
-        headers: Headers,
+        mut headers: HeaderMap,
         api_key: Option<&str>,
         _model: &str,
         _optional_params: &MessagesOptionalParams,
         _params: &LitellmParams,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        let headers = without_headers(headers, &["x-api-key"]);
+        headers.remove("x-api-key");
         if has_bearer_auth(&headers) {
             return Ok(ValidatedEnvironment {
                 headers,
@@ -51,8 +52,9 @@ impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
                 environment_variable: API_KEY_ENV,
             },
         ))?;
+        headers.remove(AUTHORIZATION);
         Ok(ValidatedEnvironment {
-            headers: without_headers(headers, &["authorization"]),
+            headers,
             auth: AuthScheme::Credential {
                 placement: CredentialPlacement::Bearer,
                 secret: SecretValue::new(key),
@@ -108,7 +110,11 @@ impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
         DEFAULT_HEADERS
     }
 
-    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+    fn request_headers(
+        &self,
+        headers: HeaderMap,
+        request: &MessagesRequest,
+    ) -> Result<HeaderMap, Error> {
         update_headers_with_anthropic_beta(headers, request)
     }
 }

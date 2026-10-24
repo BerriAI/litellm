@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_llms_types::formats::messages::{
@@ -17,7 +18,7 @@ use crate::{
         auth::AuthScheme,
         messages::{
             context::MessagesTransformContext,
-            transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+            transformation::{BaseMessagesConfig, ValidatedEnvironment},
         },
     },
     openai_like::messages::transformation::{complete_messages_url, portable_cache_control},
@@ -33,7 +34,7 @@ pub const EDENAI_MESSAGES_CONFIG: EdenAIAnthropicMessagesConfig = EdenAIAnthropi
 impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         api_key: Option<&str>,
         _model: &str,
         _optional_params: &MessagesOptionalParams,
@@ -99,7 +100,11 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
         DEFAULT_HEADERS
     }
 
-    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+    fn request_headers(
+        &self,
+        headers: HeaderMap,
+        request: &MessagesRequest,
+    ) -> Result<HeaderMap, Error> {
         update_headers_with_anthropic_beta(headers, request)
     }
 

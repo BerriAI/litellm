@@ -191,11 +191,11 @@ impl<P: litellm_host::protocol::Protocol> litellm_host::interceptors::Intercepto
         _: litellm_host::interceptors::RequestContext,
     ) -> Result<litellm_host::interceptors::WireRequest, P::Error> {
         Ok(litellm_host::interceptors::WireRequest {
-            headers: wire
-                .headers
-                .into_iter()
-                .chain([("x-hook".into(), "called".into())])
-                .collect(),
+            headers: {
+                let mut headers = wire.headers;
+                headers.append("x-hook", http::HeaderValue::from_static("called"));
+                headers
+            },
             ..wire
         })
     }

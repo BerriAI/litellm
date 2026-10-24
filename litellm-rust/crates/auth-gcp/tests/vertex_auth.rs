@@ -65,7 +65,7 @@ async fn secret_names_cover_environment_reads() {
         None
     };
     let auth = auth(Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-    auth.validate_environment(Vec::new(), None, &VertexConfig::default(), &env)
+    auth.validate_environment(http::HeaderMap::new(), None, &VertexConfig::default(), &env)
         .await
         .unwrap();
     get_vertex_ai_location(&VertexConfig::default(), &env);
@@ -84,20 +84,28 @@ async fn explicit_token_and_header_do_not_acquire_adc() {
     let auth = auth(Arc::new(AtomicUsize::new(0)), loads.clone());
     let configured = config(json!({"vertex_project":"project-1"}));
     let explicit = auth
-        .validate_environment(Vec::new(), Some("access-token"), &configured, &|_| None)
+        .validate_environment(
+            http::HeaderMap::new(),
+            Some("access-token"),
+            &configured,
+            &|_| None,
+        )
         .await
         .unwrap();
-    assert_eq!(explicit.headers[0].1, "Bearer access-token");
+    assert_eq!(explicit.headers["authorization"], "Bearer access-token");
     let existing = auth
         .validate_environment(
-            vec![("authorization".into(), "Bearer existing".into())],
+            http::HeaderMap::from_iter([(
+                http::header::AUTHORIZATION,
+                http::HeaderValue::from_static("Bearer existing"),
+            )]),
             None,
             &configured,
             &|_| None,
         )
         .await
         .unwrap();
-    assert_eq!(existing.headers[0].1, "Bearer existing");
+    assert_eq!(existing.headers["authorization"], "Bearer existing");
     assert_eq!(loads.load(Ordering::SeqCst), 0);
 }
 
@@ -109,11 +117,16 @@ async fn provider_is_reused_across_authentication_calls() {
     let auth = auth(calls.clone(), loads.clone());
     for _ in 0..2 {
         let environment = auth
-            .validate_environment(Vec::new(), None, &VertexConfig::default(), &|_| None)
+            .validate_environment(
+                http::HeaderMap::new(),
+                None,
+                &VertexConfig::default(),
+                &|_| None,
+            )
             .await
             .unwrap();
         assert_eq!(environment.project_id, "adc-project");
-        assert_eq!(environment.headers[0].1, "Bearer adc-token");
+        assert_eq!(environment.headers["authorization"], "Bearer adc-token");
     }
     assert_eq!(loads.load(Ordering::SeqCst), 1);
     assert_eq!(calls.load(Ordering::SeqCst), 4);

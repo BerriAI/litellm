@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-google-sdk = ["dep:google-cloud-auth", "dep:http"]
+google-sdk = ["dep:google-cloud-auth"]
 
 [dependencies]
 litellm-auth-types.workspace = true
@@ -21,7 +21,7 @@ veil.workspace = true
 
 gcp_auth = "0.12.7"
 google-cloud-auth = { workspace = true, optional = true }
-http = { workspace = true, optional = true }
+http.workspace = true
 
 [dev-dependencies]
 litellm-error.workspace = true

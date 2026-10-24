@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_llms_types::formats::audio_transcription::AudioTranscriptionResponseData;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -9,7 +10,7 @@ pub struct AudioTranscriptionRequestData {
     pub body: Value,
 }
 
-pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
+pub use crate::base_llm::auth::ValidatedEnvironment;
 
 pub trait BaseAudioTranscriptionConfig: Sync {
     fn secret_names(&self) -> Vec<&'static str>;
@@ -52,7 +53,7 @@ pub trait BaseAudioTranscriptionConfig: Sync {
 
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,

@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 use bytes::Bytes;
 use litellm_auth::{InputSource, SecretValue, TokenProviderHandle};
 use litellm_core_utils::call_arguments::CallArguments;
+use litellm_http::request::string_headers;
 use litellm_llms::base_llm::ocr::{
     error::Error,
     transformation::{OcrCredentialInputs, OcrTransportConfig, response_format},
@@ -56,21 +57,6 @@ pub struct OcrConnectionInputs {
 impl OcrConnectionInputs {
     fn source(&self, name: &str) -> InputSource {
         self.input_sources.get(name).copied().unwrap_or_default()
-    }
-
-    fn header_pairs(&self) -> Result<Vec<(String, String)>, Error> {
-        self.extra_headers
-            .iter()
-            .map(|(name, value)| {
-                value
-                    .as_str()
-                    .map(|value| (name.clone(), value.to_string()))
-                    .ok_or_else(|| Error::RequestField {
-                        path: format!("extra_headers.{name}"),
-                        cause: None,
-                    })
-            })
-            .collect()
     }
 }
 
@@ -207,7 +193,7 @@ impl LiteLLMOcrRequest {
     ) -> Result<Self, Error> {
         let request = Self::new(model, document, custom_llm_provider, optional_params)?;
         let transport = request.transport.clone().with_overrides(
-            connection.header_pairs()?,
+            string_headers("ocr", Some(connection.extra_headers.clone()))?,
             connection.source("extra_headers"),
             connection.timeout,
         );
@@ -275,7 +261,7 @@ mod tests {
         assert!(request.credentials.api_base.is_none());
         assert_eq!(
             request.transport.extra_headers,
-            vec![("x-a".to_string(), "1".to_string())]
+            litellm_http::request::header_map(&[("x-a", "1")])
         );
         assert_eq!(request.transport.extra_headers_source, InputSource::Request);
         assert_eq!(request.transport.timeout, Some(Duration::from_secs(7)));
@@ -300,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn from_inputs_rejects_non_string_header_values_by_path() {
+    fn from_inputs_rejects_non_string_header_values_by_name() {
         let Err(error) = LiteLLMOcrRequest::from_inputs(
             "mistral/model".into(),
             document(),
@@ -315,7 +301,7 @@ mod tests {
         };
         assert!(matches!(
             error,
-            Error::RequestField { ref path, .. } if path == "extra_headers.x-a"
+            Error::Headers(litellm_http::request::HeaderError::NotAString { ref name, .. }) if name == "x-a"
         ));
     }
 }

@@ -248,7 +248,7 @@ async fn interrupt_drops_provider_captures_before_returning() {
     let dropped = Arc::new(AtomicBool::new(false));
     let mut request = ocr_request("azure_ai/mistral-ocr", "https://example.invalid", json!({}));
     request.transport = OcrTransportConfig {
-        extra_headers: vec![("authorization".into(), "Bearer test-key".into())],
+        extra_headers: litellm_http::request::header_map(&[("authorization", "Bearer test-key")]),
         ..request.transport
     };
     request.azure_ad_token_provider = Some(litellm_auth::TokenProviderHandle::new(Arc::new(

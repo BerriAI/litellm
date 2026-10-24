@@ -28,7 +28,7 @@ pub fn outbound_request(
     timeout: Option<Duration>,
 ) -> Result<reqwest::Request, litellm_http::Error> {
     let Authenticated { headers, signer } = authenticated;
-    let request = json(url, &headers, body, timeout)?;
+    let request = json(url, headers, body, timeout)?;
     match signer {
         None => Ok(request),
         Some(signer) => signed(request, &signer),

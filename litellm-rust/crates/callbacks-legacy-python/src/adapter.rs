@@ -5,6 +5,7 @@
 use crate::LoggingOperation;
 use litellm_host_python::PythonOwned;
 
+use http::{HeaderMap, HeaderName, HeaderValue};
 use litellm_host::{
     interceptors::{RawResponse, RequestContext, WireRequest},
     lifecycle::{FailureOrigin, Timing, epoch_seconds},
@@ -21,6 +22,7 @@ use serde_json::Value;
 use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
+    error::Error,
     finalize, is_internal_call,
     python::Streaming,
     setup,
@@ -65,6 +67,31 @@ fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
 
 fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
     !error.is_instance_of::<PyException>(py)
+}
+
+fn header_dict<'py>(py: Python<'py>, headers: &HeaderMap) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    for (name, value) in headers {
+        dict.set_item(name.as_str(), String::from_utf8_lossy(value.as_bytes()))?;
+    }
+    Ok(dict)
+}
+
+fn dict_headers(headers: &Bound<'_, PyDict>) -> PyResult<HeaderMap> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            let name = name.extract::<String>()?;
+            let name = match HeaderName::try_from(name.as_str()) {
+                Ok(parsed) => parsed,
+                Err(source) => return Err(Error::CallbackHeaderName { name, source }.into()),
+            };
+            match HeaderValue::try_from(value.extract::<String>()?) {
+                Ok(value) => Ok((name, value)),
+                Err(source) => Err(Error::CallbackHeaderValue { name, source }.into()),
+            }
+        })
+        .collect()
 }
 
 impl LegacyLogging {
@@ -388,10 +415,7 @@ impl LegacyLogging {
                 body.set_item(name, value)?;
             }
         }
-        let headers = PyDict::new(py);
-        for (name, value) in &wire.headers {
-            headers.set_item(name, value)?;
-        }
+        let headers = header_dict(py, &wire.headers)?;
         self.request = Some(LoggedRequest {
             body: body.clone().unbind(),
             headers: headers.clone().unbind(),
@@ -405,13 +429,9 @@ impl LegacyLogging {
             &headers,
             &wire.url,
         )?;
-        let headers = headers
-            .iter()
-            .map(|(name, value)| Ok((name.extract::<String>()?, value.extract::<String>()?)))
-            .collect::<PyResult<Vec<_>>>()?;
         Ok(HookStep::Ready(Box::new(WireRequest {
             body: from_py(&body)?,
-            headers,
+            headers: dict_headers(&headers)?,
             ..*wire
         })))
     }
@@ -1091,7 +1111,7 @@ assert logger.update['custom_llm_provider'] == 'edenai', logger.update
             };
             let wire = WireRequest {
                 url: "https://provider.invalid/ocr".into(),
-                headers: vec![("x-route".into(), "route".into())],
+                headers: route_headers(),
                 body,
             };
             let (_, step) = send_and_receive(py, &mut logging, wire, &context);
@@ -1147,9 +1167,25 @@ assert logger.update['custom_llm_provider'] == 'edenai', logger.update
     fn route_wire() -> WireRequest {
         WireRequest {
             url: "https://provider.invalid/ocr".into(),
-            headers: vec![("x-route".into(), "route".into())],
+            headers: route_headers(),
             body: json!({}),
         }
+    }
+
+    fn headers(pairs: &[(&str, &str)]) -> http::HeaderMap {
+        pairs
+            .iter()
+            .map(|&(name, value)| {
+                (
+                    http::HeaderName::try_from(name).unwrap(),
+                    http::HeaderValue::try_from(value).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    fn route_headers() -> http::HeaderMap {
+        headers(&[("x-route", "route")])
     }
 
     /// A Python object owning one `LegacyLogging`, so the interpreter's collector sees the
@@ -1394,7 +1430,7 @@ def on_pre_call(args):
         let body = json!({"document": document(DOCUMENT)});
         let wire = before_provider_request(script, body.clone());
         assert_eq!(wire.body, body);
-        assert_eq!(wire.headers, [("x-route".to_string(), "route".to_string())]);
+        assert_eq!(wire.headers, route_headers());
     }
 
     #[rstest::rstest]
@@ -1408,11 +1444,40 @@ def on_pre_call(args):
         );
         assert_eq!(
             wire.headers,
-            [
-                ("x-route".to_string(), "route".to_string()),
-                ("x-callback".to_string(), "edited".to_string()),
-            ]
+            headers(&[("x-route", "route"), ("x-callback", "edited")])
         );
+    }
+
+    #[rstest]
+    #[case::name(
+        c"
+def on_pre_call(args):
+    args['headers']['x bad'] = 'value'
+"
+    )]
+    #[case::value(
+        c"
+def on_pre_call(args):
+    args['headers']['x-callback'] = 'a\\r\\nx-injected: 1'
+"
+    )]
+    fn a_pre_call_header_edit_that_cannot_go_on_the_wire_is_a_value_error(#[case] script: &CStr) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            run(py, &locals, script);
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                ..legacy_call(py, &locals, false)
+            };
+            let Err(error) =
+                logging.before_provider_request(py, Box::new(route_wire()), &route_context())
+            else {
+                panic!("an invalid header edit reached the wire");
+            };
+            assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+            assert!(!error.to_string().contains("x-injected"), "{error}");
+        });
     }
 
     #[rstest::rstest]
@@ -1504,10 +1569,7 @@ def on_pre_call(args):
         );
         assert_eq!(
             wire.headers,
-            [
-                ("x-route".to_string(), "route".to_string()),
-                ("x-retained".to_string(), "sent".to_string()),
-            ]
+            headers(&[("x-route", "route"), ("x-retained", "sent")])
         );
     }
 
@@ -1699,7 +1761,7 @@ def check():
             );
 
             prop_assert_eq!(wire.body, edit.sent(&body));
-            prop_assert_eq!(wire.headers, [("x-route".to_string(), "route".to_string())]);
+            prop_assert_eq!(wire.headers, route_headers());
         }
     }
 }

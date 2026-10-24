@@ -1,15 +1,33 @@
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("invalid request: {context} extra_headers.{name} must be a string, got {actual}")]
-pub struct HeaderError {
-    pub context: &'static str,
-    pub name: String,
-    pub actual: &'static str,
-}
-
+use http::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use litellm_core_utils::core_helpers::json_type_name;
+use litellm_error::Source;
 use serde_json::{Map, Value};
 
 use crate::Error;
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum HeaderError {
+    #[error("invalid request: {context} extra_headers.{name} must be a string, got {actual}")]
+    NotAString {
+        context: &'static str,
+        name: String,
+        actual: &'static str,
+    },
+    #[error("invalid request: {context} extra_headers.{name:?} is not a valid header name")]
+    InvalidName {
+        context: &'static str,
+        name: String,
+        #[source]
+        source: Source,
+    },
+    #[error("invalid request: {context} extra_headers.{name} is not a valid header value")]
+    InvalidValue {
+        context: &'static str,
+        name: HeaderName,
+        #[source]
+        source: Source,
+    },
+}
 
 pub enum HeaderPolicy<'a> {
     All,
@@ -19,7 +37,7 @@ pub enum HeaderPolicy<'a> {
 
 pub fn with_headers(
     builder: reqwest::RequestBuilder,
-    headers: &[(String, String)],
+    headers: &HeaderMap,
     policy: HeaderPolicy<'_>,
 ) -> reqwest::RequestBuilder {
     headers
@@ -28,10 +46,10 @@ pub fn with_headers(
             HeaderPolicy::All => true,
             HeaderPolicy::Only(names) => names
                 .iter()
-                .any(|allowed| name.eq_ignore_ascii_case(allowed)),
+                .any(|allowed| name.as_str().eq_ignore_ascii_case(allowed)),
             HeaderPolicy::Except(names) => !names
                 .iter()
-                .any(|excluded| name.eq_ignore_ascii_case(excluded)),
+                .any(|excluded| name.as_str().eq_ignore_ascii_case(excluded)),
         })
         .fold(builder, |builder, (name, value)| {
             builder.header(name, value)
@@ -49,93 +67,68 @@ pub async fn execute_http_request(
     Ok(client.execute(request).await?)
 }
 
-pub fn header_pairs(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
-    headers
-        .iter()
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|value| (name.to_string(), value.to_string()))
-        })
-        .collect()
-}
-
 pub fn string_headers(
     context: &'static str,
     extra_headers: Option<Map<String, Value>>,
-) -> Result<Vec<(String, String)>, HeaderError> {
+) -> Result<HeaderMap, HeaderError> {
     extra_headers
         .unwrap_or_default()
         .into_iter()
-        .map(|(key, value)| {
-            value
-                .as_str()
-                .map(|value| (key.clone(), value.to_string()))
-                .ok_or_else(|| HeaderError {
-                    context,
-                    name: key,
-                    actual: json_type_name(&value),
-                })
-        })
+        .map(|(name, value)| string_header(context, name, value))
         .collect()
 }
 
-pub fn has_header(headers: &[(String, String)], name: &str) -> bool {
-    headers
-        .iter()
-        .any(|(key, _)| key.eq_ignore_ascii_case(name))
-}
-
-pub fn header_values<'a>(
-    headers: &'a [(String, String)],
-    name: &str,
-) -> impl Iterator<Item = &'a str> {
-    headers
-        .iter()
-        .filter(move |(key, _)| key.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.as_str())
-}
-
-pub fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    header_values(headers, name).next()
-}
-
-pub fn without_headers(headers: Vec<(String, String)>, names: &[&str]) -> Vec<(String, String)> {
-    headers
-        .into_iter()
-        .filter(|(key, _)| !names.iter().any(|name| key.eq_ignore_ascii_case(name)))
-        .collect()
-}
-
-pub fn with_header(
-    headers: Vec<(String, String)>,
-    name: &str,
-    value: String,
-) -> Vec<(String, String)> {
-    without_headers(headers, &[name])
-        .into_iter()
-        .chain([(name.to_ascii_lowercase(), value)])
-        .collect()
+fn string_header(
+    context: &'static str,
+    name: String,
+    value: Value,
+) -> Result<(HeaderName, HeaderValue), HeaderError> {
+    let Value::String(value) = value else {
+        return Err(HeaderError::NotAString {
+            context,
+            actual: json_type_name(&value),
+            name,
+        });
+    };
+    let name = match HeaderName::try_from(name.as_str()) {
+        Ok(parsed) => parsed,
+        Err(source) => {
+            return Err(HeaderError::InvalidName {
+                context,
+                name,
+                source: Source::new(source),
+            });
+        }
+    };
+    match HeaderValue::try_from(value) {
+        Ok(value) => Ok((name, value)),
+        Err(source) => Err(HeaderError::InvalidValue {
+            context,
+            name,
+            source: Source::new(source),
+        }),
+    }
 }
 
 pub fn with_default_headers(
-    headers: Vec<(String, String)>,
-    defaults: &[(&str, &str)],
-) -> Vec<(String, String)> {
-    let missing: Vec<(String, String)> = defaults
+    headers: HeaderMap,
+    defaults: &[(&'static str, &'static str)],
+) -> HeaderMap {
+    defaults
         .iter()
-        .filter(|(name, _)| !has_header(&headers, name))
-        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
-        .collect();
-    headers.into_iter().chain(missing).collect()
+        .fold(headers, |mut headers, &(name, value)| {
+            headers
+                .entry(name)
+                .or_insert(HeaderValue::from_static(value));
+            headers
+        })
 }
 
-pub fn has_bearer_auth(headers: &[(String, String)]) -> bool {
-    headers.iter().any(|(name, value)| {
-        if !name.eq_ignore_ascii_case("authorization") {
+pub fn has_bearer_auth(headers: &HeaderMap) -> bool {
+    headers.get_all(AUTHORIZATION).iter().any(|value| {
+        let Ok(value) = value.to_str() else {
             return false;
-        }
+        };
         let value = value.trim();
         value.len() > 7
             && value
@@ -145,13 +138,27 @@ pub fn has_bearer_auth(headers: &[(String, String)]) -> bool {
     })
 }
 
+#[cfg(any(test, feature = "test-support"))]
+pub fn header_map(pairs: &[(&str, &str)]) -> HeaderMap {
+    pairs
+        .iter()
+        .map(|&(name, value)| {
+            (
+                HeaderName::try_from(name).expect("test header name"),
+                HeaderValue::try_from(value).expect("test header value"),
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use serde_json::json;
 
     use super::*;
 
-    #[rstest::rstest]
+    #[rstest]
     #[case(HeaderPolicy::All, true, true)]
     #[case(HeaderPolicy::Only(&["authorization"]), true, false)]
     #[case(HeaderPolicy::Except(&["authorization"]), false, true)]
@@ -162,11 +169,11 @@ mod tests {
     ) {
         let request = with_headers(
             reqwest::Client::new().get("https://example.com"),
-            &[
-                ("AuThOrIzAtIoN".into(), "Bearer token".into()),
-                ("X-Trace".into(), "first".into()),
-                ("x-trace".into(), "second".into()),
-            ],
+            &header_map(&[
+                ("AuThOrIzAtIoN", "Bearer token"),
+                ("X-Trace", "first"),
+                ("x-trace", "second"),
+            ]),
             policy,
         )
         .build()
@@ -186,10 +193,10 @@ mod tests {
             reqwest::Client::new()
                 .post("https://example.com")
                 .multipart(reqwest::multipart::Form::new().text("file", "abc")),
-            &[
-                ("Content-Type".into(), "application/json".into()),
-                ("CONTENT-LENGTH".into(), "0".into()),
-            ],
+            &header_map(&[
+                ("Content-Type", "application/json"),
+                ("CONTENT-LENGTH", "0"),
+            ]),
             HeaderPolicy::Except(&["content-type", "content-length"]),
         )
         .build()
@@ -204,12 +211,23 @@ mod tests {
     }
 
     #[test]
+    fn string_headers_are_matched_in_any_case() {
+        let headers = string_headers(
+            "chat completions",
+            Some(Map::from_iter([("X-Api-Key".to_string(), json!("k"))])),
+        )
+        .unwrap();
+        assert_eq!(headers, header_map(&[("x-api-key", "k")]));
+        assert_eq!(headers["X-API-KEY"], "k");
+    }
+
+    #[test]
     fn string_headers_rejects_non_string_values() {
         let headers = Map::from_iter([("x-trace".to_string(), json!(7))]);
         let err = string_headers("chat completions", Some(headers)).expect_err("non-string value");
         assert_eq!(
             err,
-            HeaderError {
+            HeaderError::NotAString {
                 context: "chat completions",
                 name: "x-trace".into(),
                 actual: "number"
@@ -217,67 +235,86 @@ mod tests {
         );
     }
 
-    #[test]
-    fn header_lookup_is_case_insensitive() {
-        let headers = vec![("X-Api-Key".to_string(), "k".to_string())];
-        assert!(has_header(&headers, "x-api-key"));
-        assert!(!has_header(&headers, "authorization"));
+    #[rstest]
+    #[case::space_in_name("x trace", "v", true)]
+    #[case::empty_name("", "v", true)]
+    #[case::newline_in_value("x-trace", "a\r\nx-injected: 1", false)]
+    #[case::delete_in_value("x-trace", "\u{7f}", false)]
+    fn string_headers_rejects_what_cannot_go_on_the_wire(
+        #[case] name: &str,
+        #[case] value: &str,
+        #[case] bad_name: bool,
+    ) {
+        let headers = Map::from_iter([(name.to_string(), json!(value))]);
+        let err = string_headers("messages", Some(headers)).expect_err("invalid header");
+        match err {
+            HeaderError::InvalidName {
+                name: ref rejected, ..
+            } => {
+                assert!(bad_name);
+                assert_eq!(rejected, name);
+            }
+            HeaderError::InvalidValue {
+                name: ref rejected, ..
+            } => {
+                assert!(!bad_name);
+                assert_eq!(rejected, name);
+                let report = litellm_error::Report::new(&err).to_string();
+                assert!(!report.contains(value), "{report}");
+            }
+            HeaderError::NotAString { .. } => panic!("value was a string"),
+        }
     }
 
-    #[test]
-    fn header_value_reads_the_first_match_in_any_case() {
-        let headers = vec![
-            ("X-Api-Key".to_string(), "first".to_string()),
-            ("x-api-key".to_string(), "second".to_string()),
-        ];
-        assert_eq!(header_value(&headers, "x-API-key"), Some("first"));
-        assert_eq!(header_value(&headers, "authorization"), None);
-    }
-
-    #[test]
-    fn without_headers_drops_every_casing_of_the_named_headers_and_keeps_order() {
-        let headers = vec![
-            ("X-Api-Key".to_string(), "k".to_string()),
-            ("anthropic-version".to_string(), "v".to_string()),
-            ("AUTHORIZATION".to_string(), "Bearer t".to_string()),
-            ("x-api-key".to_string(), "k2".to_string()),
-        ];
+    #[rstest]
+    #[case::nothing_forwarded(
+        &[],
+        &[("x-version", "1"), ("content-type", "application/json")],
+        &[("x-version", "1"), ("content-type", "application/json")],
+    )]
+    #[case::forwarded_header_wins_in_any_case(
+        &[("X-Version", "custom"), ("x-api-key", "k")],
+        &[("x-version", "1"), ("content-type", "application/json")],
+        &[("x-version", "custom"), ("x-api-key", "k"), ("content-type", "application/json")],
+    )]
+    #[case::repeated_forwarded_header_is_kept(
+        &[("x-version", "a"), ("x-version", "b")],
+        &[("x-version", "1")],
+        &[("x-version", "a"), ("x-version", "b")],
+    )]
+    #[case::no_defaults(&[("x-api-key", "k")], &[], &[("x-api-key", "k")])]
+    fn default_headers_fill_only_missing_names(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] defaults: &[(&'static str, &'static str)],
+        #[case] expected: &[(&str, &str)],
+    ) {
         assert_eq!(
-            without_headers(headers, &["x-api-key", "authorization"]),
-            vec![("anthropic-version".to_string(), "v".to_string())]
+            with_default_headers(header_map(forwarded), defaults),
+            header_map(expected)
         );
     }
 
-    #[test]
-    fn auth_header_detection_is_case_insensitive() {
-        let headers = vec![
-            ("x-trace-id".to_string(), "trace-1".to_string()),
-            ("authorization".to_string(), "Bearer sk-test".to_string()),
-        ];
-
-        assert!(has_header(&headers, "authorization"));
-
-        let headers = vec![("Authorization".to_string(), "Bearer sk-test".to_string())];
-
-        assert!(has_header(&headers, "authorization"));
-
-        let headers = vec![("x-trace-id".to_string(), "trace-1".to_string())];
-        assert!(!has_header(&headers, "authorization"));
-    }
-
-    #[rstest::rstest]
+    #[rstest]
     #[case::bearer("Authorization", "Bearer abc", true)]
     #[case::lowercase("authorization", "bearer abc", true)]
     #[case::blank_token("Authorization", "Bearer    ", false)]
     #[case::empty("authorization", "", false)]
     #[case::basic("Authorization", "Basic abc", false)]
     #[case::different_header("x-api-key", "abc", false)]
-    #[case::non_ascii("authorization", "invali\u{00e9}auth", false)]
     fn bearer_detection_requires_a_non_empty_token(
         #[case] name: &str,
         #[case] value: &str,
         #[case] expected: bool,
     ) {
-        assert_eq!(has_bearer_auth(&[(name.into(), value.into())]), expected);
+        assert_eq!(has_bearer_auth(&header_map(&[(name, value)])), expected);
+    }
+
+    #[test]
+    fn bearer_detection_skips_a_value_that_is_not_visible_ascii() {
+        let headers = HeaderMap::from_iter([(
+            AUTHORIZATION,
+            HeaderValue::from_bytes("Bearer invali\u{00e9}auth".as_bytes()).unwrap(),
+        )]);
+        assert!(!has_bearer_auth(&headers));
     }
 }

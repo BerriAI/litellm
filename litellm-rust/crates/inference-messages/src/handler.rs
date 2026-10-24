@@ -149,7 +149,7 @@ async fn provider_call(
         headers: config.request_headers(
             with_default_headers(validated.headers, config.default_headers()),
             &body,
-        ),
+        )?,
         auth: validated.auth,
     };
 
@@ -506,7 +506,7 @@ mod tests {
             .headers
             .iter()
             .filter(|(name, _)| matches!(name.as_str(), "x-api-key" | "authorization"))
-            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .map(|(name, value)| (name.as_str(), value.to_str().unwrap()))
             .collect();
         assert_eq!(
             (auth.as_slice(), call.wire.url.as_str()),
@@ -690,7 +690,7 @@ mod tests {
             .headers
             .iter()
             .filter(|(name, _)| matches!(name.as_str(), "x-priority" | "x-scoped"))
-            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .map(|(name, value)| (name.as_str(), value.to_str().unwrap()))
             .collect();
         assert_eq!(caller_headers, expected);
     }

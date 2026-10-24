@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_llms_types::{
@@ -18,7 +19,7 @@ use crate::{
         },
     },
     base_llm::{
-        auth::{AuthScheme, Headers, ValidatedEnvironment},
+        auth::{AuthScheme, ValidatedEnvironment},
         messages::{context::MessagesTransformContext, transformation::BaseMessagesConfig},
     },
 };
@@ -101,7 +102,7 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
     /// key goes in `x-api-key`.
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         api_key: Option<&str>,
         _model: &str,
         _optional_params: &MessagesOptionalParams,
@@ -133,7 +134,11 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
         DEFAULT_HEADERS
     }
 
-    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+    fn request_headers(
+        &self,
+        headers: HeaderMap,
+        request: &MessagesRequest,
+    ) -> Result<HeaderMap, Error> {
         update_headers_with_anthropic_beta(headers, request)
     }
 }
@@ -293,10 +298,7 @@ mod tests {
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG.validate_environment(
-            forwarded
-                .iter()
-                .map(|(name, value)| (name.to_string(), value.to_string()))
-                .collect(),
+            litellm_http::request::header_map(forwarded),
             api_key,
             "deepseek-v4-pro",
             &MessagesOptionalParams::default(),
@@ -465,14 +467,11 @@ mod tests {
             "messages": [{"role": "user", "content": "hi"}],
             "safeguards": safeguards
         });
-        let headers: Headers = client
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect();
+        let headers: HeaderMap = litellm_http::request::header_map(client);
         assert_eq!(
             DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG
                 .request_headers(headers.clone(), &request_from(body.clone())),
-            headers
+            Ok(headers)
         );
         assert_eq!(transformed(body)["safeguards"], safeguards);
     }

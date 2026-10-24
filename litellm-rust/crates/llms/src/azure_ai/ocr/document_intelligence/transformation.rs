@@ -1,7 +1,8 @@
 use std::{collections::BTreeSet, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_auth::{InputSource, Sourced};
+use http::{HeaderMap, header::AUTHORIZATION};
+use litellm_auth::{CredentialPlacement, InputSource, Sourced, http::apply_credential};
 use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
 use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
 use litellm_llms_types::serde_compat::{FiniteF64, LaxI64};
@@ -26,7 +27,7 @@ use litellm_llms_types::formats::ocr::{
     LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrResponseFormat, OcrUsageInfo,
 };
 
-const AZURE_DI_SUBSCRIPTION_HEADER: &str = "Ocp-Apim-Subscription-Key";
+const AZURE_DI_SUBSCRIPTION_HEADER: &str = "ocp-apim-subscription-key";
 const AZURE_DI_DEFAULT_WIDTH: f64 = 8.5;
 const AZURE_DI_DEFAULT_HEIGHT: f64 = 11.0;
 
@@ -113,7 +114,7 @@ pub struct AzureDocumentIntelligenceOcrConfig;
 impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     type OcrParams = DocumentIntelligenceParams;
     type ProviderRequest = DocumentIntelligenceRequest;
-    type Environment = Vec<(String, String)>;
+    type Environment = HeaderMap;
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &["pages", "features", "req_format"]
@@ -205,7 +206,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         _model: &str,
         document: OcrDocument,
         _optional_params: &DocumentIntelligenceParams,
-        _headers: &[(String, String)],
+        _headers: &HeaderMap,
     ) -> Result<DocumentIntelligenceRequest, Error> {
         build_request(document)
     }
@@ -437,7 +438,7 @@ async fn read_operation_response(
     http_client: &litellm_http::Client,
     response: reqwest::Response,
     original_url: &str,
-    headers: &[(String, String)],
+    headers: &HeaderMap,
     connection: &OcrConnection,
     native: bool,
     hooks: &dyn CallHooks<Error>,
@@ -481,7 +482,7 @@ async fn read_operation_response(
 async fn poll_operation(
     http_client: &litellm_http::Client,
     url: Url,
-    headers: &[(String, String)],
+    headers: &HeaderMap,
     connection: &OcrConnection,
     native: bool,
     hooks: &dyn CallHooks<Error>,
@@ -591,12 +592,11 @@ impl AzureDocumentIntelligenceOcrConfig {
         connection: &OcrConnection,
         config: &AzureAuthInputs,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-    ) -> Result<Vec<(String, String)>, Error> {
-        if litellm_http::request::has_header(&connection.extra_headers, "authorization")
-            || litellm_http::request::has_header(
-                &connection.extra_headers,
-                AZURE_DI_SUBSCRIPTION_HEADER,
-            )
+    ) -> Result<HeaderMap, Error> {
+        if connection.extra_headers.contains_key(AUTHORIZATION)
+            || connection
+                .extra_headers
+                .contains_key(AZURE_DI_SUBSCRIPTION_HEADER)
         {
             super::super::common_utils::validate_destination(
                 connection,
@@ -617,11 +617,11 @@ impl AzureDocumentIntelligenceOcrConfig {
         });
         if let Some(key) = key {
             super::super::common_utils::validate_destination(connection, key.source())?;
-            return Ok(
-                std::iter::once((AZURE_DI_SUBSCRIPTION_HEADER.into(), key.into_value()))
-                    .chain(connection.extra_headers.clone())
-                    .collect(),
-            );
+            return Ok(apply_credential(
+                connection.extra_headers.clone(),
+                key.value(),
+                CredentialPlacement::Header(AZURE_DI_SUBSCRIPTION_HEADER),
+            )?);
         }
         let token = super::super::common_utils::resolve_entra(auth, config, env_lookup)
             .await?
@@ -630,11 +630,11 @@ impl AzureDocumentIntelligenceOcrConfig {
                 guidance: "set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID",
             })?;
         super::super::common_utils::validate_destination(connection, token.source())?;
-        Ok(
-            std::iter::once(("Authorization".into(), format!("Bearer {}", token.value())))
-                .chain(connection.extra_headers.clone())
-                .collect(),
-        )
+        Ok(apply_credential(
+            connection.extra_headers.clone(),
+            token.value(),
+            CredentialPlacement::Bearer,
+        )?)
     }
 }
 
@@ -873,9 +873,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            headers[0],
-            (AZURE_DI_SUBSCRIPTION_HEADER.into(), "request-key".into())
-        );
+        assert_eq!(headers[AZURE_DI_SUBSCRIPTION_HEADER], "request-key");
     }
 }

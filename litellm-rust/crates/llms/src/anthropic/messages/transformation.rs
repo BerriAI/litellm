@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_auth::CredentialPlacement;
 use litellm_llms_types::{
     formats::messages::{
@@ -22,7 +23,7 @@ use crate::{
     },
     base_llm::{
         auth::AuthScheme,
-        messages::transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+        messages::transformation::{BaseMessagesConfig, ValidatedEnvironment},
     },
 };
 
@@ -71,14 +72,14 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     /// `request_headers` does once the request is final.
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         api_key: Option<&str>,
         _model: &str,
         _optional_params: &MessagesOptionalParams,
         _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        let headers = match optionally_handle_anthropic_oauth(headers, api_key) {
+        let headers = match optionally_handle_anthropic_oauth(headers, api_key)? {
             OauthHandling::Bearer { headers, token } => {
                 return Ok(ValidatedEnvironment {
                     headers,
@@ -109,7 +110,11 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         DEFAULT_HEADERS
     }
 
-    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+    fn request_headers(
+        &self,
+        headers: HeaderMap,
+        request: &MessagesRequest,
+    ) -> Result<HeaderMap, Error> {
         merge_beta_headers(
             headers,
             provider_feature_betas(request, BetaProvider::Anthropic),
@@ -155,17 +160,17 @@ fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {
 }
 
 pub(crate) fn update_headers_with_anthropic_beta(
-    headers: Headers,
+    headers: HeaderMap,
     request: &MessagesRequest,
-) -> Headers {
+) -> Result<HeaderMap, Error> {
     merge_beta_headers(headers, feature_betas(request))
 }
 
 pub(crate) fn update_headers_with_safeguards_beta(
-    headers: Headers,
+    headers: HeaderMap,
     request: &MessagesRequest,
     provider: BetaProvider,
-) -> Headers {
+) -> Result<HeaderMap, Error> {
     merge_beta_headers(
         headers,
         feature_betas(request).union(on_provider(mapped_host_betas(&request.params), provider)),
@@ -428,11 +433,8 @@ mod tests {
         }
     }
 
-    fn headers(pairs: &[(&str, &str)]) -> Headers {
-        pairs
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect()
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        litellm_http::request::header_map(pairs)
     }
 
     fn transform(
@@ -910,14 +912,14 @@ mod tests {
         Some("sk-deployment"),
         &[("ANTHROPIC_API_KEY", "sk-env")],
         &[("anthropic-version", "2023-06-01"), ("anthropic-beta", OAUTH_BETA), BROWSER_ACCESS],
-        Some(("Authorization", OAUTH_TOKEN)),
+        Some(("authorization", OAUTH_TOKEN)),
     )]
     #[case::oauth_api_key(
         &[("x-api-key", OAUTH_TOKEN), ("anthropic-beta", "web-search-2025-03-05")],
         Some(OAUTH_TOKEN),
         &[],
         &[("anthropic-beta", "oauth-2025-04-20,web-search-2025-03-05"), BROWSER_ACCESS],
-        Some(("Authorization", OAUTH_TOKEN)),
+        Some(("authorization", OAUTH_TOKEN)),
     )]
     #[case::forwarded_x_api_key_is_kept_over_the_deployment_key(
         &[("X-API-KEY", "caller-key")],
@@ -959,14 +961,14 @@ mod tests {
         None,
         &[("ANTHROPIC_API_KEY", " \t"), ("ANTHROPIC_AUTH_TOKEN", "env-token")],
         &[],
-        Some(("Authorization", "env-token")),
+        Some(("authorization", "env-token")),
     )]
     #[case::oauth_env_key_as_a_bearer(
         &[],
         None,
         &[("ANTHROPIC_API_KEY", "sk-ant-oat01-env")],
         &[],
-        Some(("Authorization", "sk-ant-oat01-env")),
+        Some(("authorization", "sk-ant-oat01-env")),
     )]
     fn validate_environment_shapes_the_headers_and_names_the_credential(
         #[case] forwarded: &[(&str, &str)],
@@ -1101,7 +1103,7 @@ mod tests {
                 client.clone(),
                 &request(json!({"safeguards": [{"type": "dangerous_tool_use"}]}))
             ),
-            client
+            Ok(client)
         );
     }
 
@@ -1155,7 +1157,7 @@ mod tests {
     ) {
         assert_eq!(
             ANTHROPIC_MESSAGES_CONFIG.request_headers(headers(input), &request(fields)),
-            headers(expected)
+            Ok(headers(expected))
         );
     }
 
@@ -1172,17 +1174,17 @@ mod tests {
         }));
         assert_eq!(
             ANTHROPIC_MESSAGES_CONFIG.request_headers(environment.headers, &all_features),
-            headers(&[
+            Ok(headers(&[
                 BROWSER_ACCESS,
                 (
                     "anthropic-beta",
                     "advanced-tool-use-2025-11-20,advisor-tool-2026-03-01,compact-2026-01-12,compact-2026-09-04,context-management-2025-06-27,fast-mode-2026-02-01,oauth-2025-04-20,per-turn-control-2026-07-01,structured-outputs-2025-11-13"
                 ),
-            ])
+            ]))
         );
         assert_eq!(
             credential(&environment.auth),
-            Some(("Authorization", OAUTH_TOKEN))
+            Some(("authorization", OAUTH_TOKEN))
         );
     }
 
@@ -1205,7 +1207,7 @@ mod tests {
             None
         };
         let _ = ANTHROPIC_MESSAGES_CONFIG.validate_environment(
-            Vec::new(),
+            http::HeaderMap::new(),
             None,
             "claude",
             &MessagesOptionalParams::default(),

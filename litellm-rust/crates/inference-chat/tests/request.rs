@@ -282,7 +282,7 @@ async fn rejects_non_string_extra_headers() {
         })
         .await
         .unwrap_err(),
-        Error::Headers(litellm_http::request::HeaderError {
+        Error::Headers(litellm_http::request::HeaderError::NotAString {
             context: "chat completions",
             name: "x-trace".to_string(),
             actual: "number",

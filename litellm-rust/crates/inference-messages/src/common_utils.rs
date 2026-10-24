@@ -66,7 +66,7 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
 
 pub(super) fn string_headers(
     extra_headers: Option<Map<String, Value>>,
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<http::HeaderMap, Error> {
     shared_string_headers(HEADER_CONTEXT, extra_headers).map_err(Error::from)
 }
 
@@ -111,7 +111,7 @@ mod tests {
         let err = string_headers(Some(headers)).expect_err("non-string header rejected");
         assert_eq!(
             err,
-            Error::Headers(litellm_http::request::HeaderError {
+            Error::Headers(litellm_http::request::HeaderError::NotAString {
                 context: "messages",
                 name: "x-count".to_string(),
                 actual: "number",

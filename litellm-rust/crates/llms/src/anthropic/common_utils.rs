@@ -1,9 +1,7 @@
 use crate::base_llm::messages::context::MessagesModelCapabilities;
+use http::{HeaderMap, HeaderName, HeaderValue, header::AUTHORIZATION};
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::settings::resolve_non_empty;
-use litellm_http::request::{
-    has_header, header_value, header_values, with_header, without_headers,
-};
 use litellm_llms_types::{
     formats::messages::{
         ContentBlock, ContentBlockType, EffortLevel, Message, MessageContent, MessagesTool,
@@ -19,8 +17,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
+    Error,
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
-    base_llm::auth::{AuthScheme, Headers},
+    base_llm::auth::{AuthScheme, header_str, header_value},
 };
 
 pub const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
@@ -30,7 +29,6 @@ const THOUGHT_SIGNATURE_SEPARATOR: &str = "__thought__";
 pub const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
 pub const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 pub const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header(API_KEY_HEADER);
-const AUTHORIZATION: &str = CredentialPlacement::Bearer.header_name();
 
 pub fn supports_effort_tier(capabilities: &MessagesModelCapabilities, level: EffortLevel) -> bool {
     match level {
@@ -130,8 +128,8 @@ pub fn resolve_anthropic_api_key(
 }
 
 /// Whether the caller already forwarded an Anthropic credential, in either header.
-pub fn has_anthropic_credential(headers: &[(String, String)]) -> bool {
-    has_header(headers, API_KEY_HEADER) || has_header(headers, AUTHORIZATION)
+pub fn has_anthropic_credential(headers: &HeaderMap) -> bool {
+    headers.contains_key(API_KEY_HEADER) || headers.contains_key(AUTHORIZATION)
 }
 
 pub fn resolve_anthropic_api_base(
@@ -159,8 +157,11 @@ pub fn complete_anthropic_url(
     format!("{api_base}{MESSAGES_PATH}")
 }
 
-pub fn existing_betas(headers: &[(String, String)]) -> BetaSet {
-    header_values(headers, BETA_HEADER)
+pub fn existing_betas(headers: &HeaderMap) -> BetaSet {
+    headers
+        .get_all(BETA_HEADER)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
         .flat_map(|value| {
             value
                 .parse::<BetaSet>()
@@ -172,12 +173,17 @@ pub fn existing_betas(headers: &[(String, String)]) -> BetaSet {
 /// Python's `_merge_beta_headers`, over every casing of the header at once: the union of what
 /// the caller sent and `added` replaces the header, sorted and deduplicated. Headers without
 /// any beta value stay as they are.
-pub fn merge_beta_headers(headers: Headers, added: BetaSet) -> Headers {
+pub fn merge_beta_headers(headers: HeaderMap, added: BetaSet) -> Result<HeaderMap, Error> {
     let merged = existing_betas(&headers).union(added);
     if merged.is_empty() {
-        return headers;
+        return Ok(headers);
     }
-    with_header(headers, BETA_HEADER, merged.to_string())
+    with_betas(headers, &merged)
+}
+
+pub fn with_betas(mut headers: HeaderMap, betas: &BetaSet) -> Result<HeaderMap, Error> {
+    headers.insert(BETA_HEADER, header_value(BETA_HEADER, betas.to_string())?);
+    Ok(headers)
 }
 
 /// The outcome of Python's `optionally_handle_anthropic_oauth`.
@@ -186,45 +192,57 @@ pub enum OauthHandling {
     /// An OAuth token is the whole credential. The headers carry its companions and no
     /// longer any `x-api-key` or `authorization`, so the bearer is applied on top.
     Bearer {
-        headers: Headers,
+        headers: HeaderMap,
         token: SecretValue,
     },
-    Untouched(Headers),
+    Untouched(HeaderMap),
 }
 
 /// The OAuth token a caller forwarded as `Authorization: Bearer sk-ant-oat…`.
-pub fn forwarded_oauth_bearer(headers: &[(String, String)]) -> Option<OauthToken<'_>> {
-    header_value(headers, AUTHORIZATION)
+pub fn forwarded_oauth_bearer(headers: &HeaderMap) -> Option<OauthToken<'_>> {
+    header_str(headers, AUTHORIZATION.as_str())
         .and_then(|value| value.strip_prefix("Bearer "))
         .and_then(OauthToken::parse)
 }
 
-fn with_oauth_companions(headers: Headers, dropped: &[&str]) -> Headers {
-    merge_beta_headers(
-        without_headers(headers, dropped),
-        BetaSet::from_iter([AnthropicBeta::Oauth20250420]),
-    )
-    .into_iter()
-    .chain([(DIRECT_BROWSER_ACCESS_HEADER.to_string(), "true".to_string())])
-    .collect()
+fn with_oauth_companions(
+    mut headers: HeaderMap,
+    dropped: &[HeaderName],
+) -> Result<HeaderMap, Error> {
+    for name in dropped {
+        headers.remove(name);
+    }
+    let mut headers =
+        merge_beta_headers(headers, BetaSet::from_iter([AnthropicBeta::Oauth20250420]))?;
+    headers.insert(
+        DIRECT_BROWSER_ACCESS_HEADER,
+        HeaderValue::from_static("true"),
+    );
+    Ok(headers)
 }
 
-pub fn optionally_handle_anthropic_oauth(headers: Headers, api_key: Option<&str>) -> OauthHandling {
+pub fn optionally_handle_anthropic_oauth(
+    headers: HeaderMap,
+    api_key: Option<&str>,
+) -> Result<OauthHandling, Error> {
     if let Some(token) =
         forwarded_oauth_bearer(&headers).map(|token| SecretValue::new(token.as_str()))
     {
-        return OauthHandling::Bearer {
-            headers: with_oauth_companions(headers, &[API_KEY_HEADER, AUTHORIZATION]),
+        return Ok(OauthHandling::Bearer {
+            headers: with_oauth_companions(
+                headers,
+                &[HeaderName::from_static(API_KEY_HEADER), AUTHORIZATION],
+            )?,
             token,
-        };
+        });
     }
     if let Some(token) = api_key.and_then(OauthToken::parse) {
-        return OauthHandling::Bearer {
-            headers: with_oauth_companions(headers, &[API_KEY_HEADER]),
+        return Ok(OauthHandling::Bearer {
+            headers: with_oauth_companions(headers, &[HeaderName::from_static(API_KEY_HEADER)])?,
             token: SecretValue::new(token.as_str()),
-        };
+        });
     }
-    OauthHandling::Untouched(headers)
+    Ok(OauthHandling::Untouched(headers))
 }
 
 pub fn is_tool_search_used(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
@@ -620,6 +638,7 @@ pub fn flatten_unencrypted_web_search_results(messages: Vec<Message>) -> Vec<Mes
 #[cfg(test)]
 mod tests {
     use crate::base_llm::messages::context::SupportedEffortTiers;
+    use litellm_http::request::header_map as headers;
     use rstest::{fixture, rstest};
     use serde_json::json;
     use strum::VariantArray;
@@ -641,13 +660,6 @@ mod tests {
 
     fn tools(value: Option<Value>) -> Option<Vec<Recognized<MessagesTool>>> {
         value.map(|tools| serde_json::from_value(tools).unwrap())
-    }
-
-    fn headers(pairs: &[(&str, &str)]) -> Headers {
-        pairs
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect()
     }
 
     fn betas(values: &[&str]) -> BetaSet {
@@ -716,11 +728,7 @@ mod tests {
         #[case] forwarded: &[(&str, &str)],
         #[case] expected: bool,
     ) {
-        let headers: Headers = forwarded
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect();
-        assert_eq!(has_anthropic_credential(&headers), expected);
+        assert_eq!(has_anthropic_credential(&headers(forwarded)), expected);
     }
 
     fn credential(auth: Option<AuthScheme>) -> Option<(&'static str, String)> {
@@ -1440,7 +1448,7 @@ mod tests {
     ) {
         assert_eq!(
             merge_beta_headers(headers(input), betas(added)),
-            headers(expected)
+            Ok(headers(expected))
         );
     }
 
@@ -1528,10 +1536,10 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             optionally_handle_anthropic_oauth(headers(forwarded), api_key),
-            OauthHandling::Bearer {
+            Ok(OauthHandling::Bearer {
                 headers: headers(&expected),
                 token: SecretValue::new(OAUTH_TOKEN),
-            }
+            })
         );
     }
 
@@ -1558,13 +1566,13 @@ mod tests {
     ) {
         assert_eq!(
             optionally_handle_anthropic_oauth(headers(forwarded), api_key),
-            OauthHandling::Bearer {
+            Ok(OauthHandling::Bearer {
                 headers: headers(&[
                     ("anthropic-beta", "oauth-2025-04-20,web-search-2025-03-05"),
                     BROWSER_ACCESS,
                 ]),
                 token: SecretValue::new(OAUTH_TOKEN),
-            }
+            })
         );
     }
 
@@ -1580,7 +1588,7 @@ mod tests {
     ) {
         assert_eq!(
             optionally_handle_anthropic_oauth(headers(forwarded), api_key),
-            OauthHandling::Untouched(headers(forwarded))
+            Ok(OauthHandling::Untouched(headers(forwarded)))
         );
     }
 
@@ -1601,18 +1609,18 @@ mod tests {
     #[case::auth_token_as_a_bearer(
         None,
         &[("ANTHROPIC_AUTH_TOKEN", "env-token")],
-        Some(("Authorization", "env-token")),
+        Some(("authorization", "env-token")),
     )]
     #[case::auth_token_when_the_env_key_is_blank(
         None,
         &[("ANTHROPIC_API_KEY", " \t"), ("ANTHROPIC_AUTH_TOKEN", "env-token")],
-        Some(("Authorization", "env-token")),
+        Some(("authorization", "env-token")),
     )]
-    #[case::oauth_param_as_a_bearer(Some(OAUTH_TOKEN), &[], Some(("Authorization", OAUTH_TOKEN)))]
+    #[case::oauth_param_as_a_bearer(Some(OAUTH_TOKEN), &[], Some(("authorization", OAUTH_TOKEN)))]
     #[case::bearer_prefixed_oauth_env_key_as_a_bearer_once(
         None,
         &[("ANTHROPIC_API_KEY", OAUTH_BEARER)],
-        Some(("Authorization", OAUTH_TOKEN)),
+        Some(("authorization", OAUTH_TOKEN)),
     )]
     #[case::no_credentials(None, &[], None)]
     #[case::blank_everything(Some(""), &[("ANTHROPIC_API_KEY", "  "), ("ANTHROPIC_AUTH_TOKEN", " \t")], None)]

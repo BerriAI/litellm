@@ -10,6 +10,7 @@ litellm-host.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true
+http.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

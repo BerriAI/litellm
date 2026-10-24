@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_llms_types::formats::responses::ResponsesApiResponse;
@@ -39,7 +40,7 @@ impl BaseResponsesApiConfig for OpenRouterResponsesApiConfig {
 
     fn validate_environment(
         &self,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         api_key: Option<&str>,
         lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -128,7 +129,7 @@ mod tests {
         #[case] expected: &str,
     ) {
         let environment = OPENROUTER_RESPONSES_CONFIG
-            .validate_environment(vec![], api_key, &env(secrets))
+            .validate_environment(http::HeaderMap::new(), api_key, &env(secrets))
             .unwrap();
         let AuthScheme::Credential { placement, secret } = environment.auth else {
             panic!("expected a credential");
@@ -137,7 +138,7 @@ mod tests {
         assert_eq!(secret.expose(), expected);
         assert_eq!(
             environment.headers,
-            vec![("content-type".to_owned(), "application/json".to_owned())]
+            litellm_http::request::header_map(&[("content-type", "application/json")])
         );
     }
 
@@ -148,7 +149,11 @@ mod tests {
         #[case] secrets: &'static [(&'static str, &'static str)],
     ) {
         assert!(matches!(
-            OPENROUTER_RESPONSES_CONFIG.validate_environment(vec![], None, &env(secrets)),
+            OPENROUTER_RESPONSES_CONFIG.validate_environment(
+                http::HeaderMap::new(),
+                None,
+                &env(secrets)
+            ),
             Err(Error::Auth(litellm_auth::Error::MissingApiKey {
                 provider: "OpenRouter",
                 environment_variable: "OPENROUTER_API_KEY",
