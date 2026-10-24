@@ -16,6 +16,7 @@ pub struct EndUser {
     pub limits: RateLimits,
 }
 
+#[macro_rules_attribute::apply(crate::db_row)]
 struct EndUserRow {
     spend: Option<f64>,
     blocked: Option<bool>,

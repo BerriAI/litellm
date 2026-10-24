@@ -1,7 +1,14 @@
+macro_rules_attribute::attribute_alias! {
+    #[apply(db_row)] =
+        #[derive(Clone, Debug, PartialEq, sqlx::FromRow)];
+}
+
+mod daily_spend;
 mod end_user;
 mod error;
 mod failure;
 
+pub use daily_spend::{DailyEndUserRow, DailyTeamRow, DailyUserRow};
 pub use end_user::{EndUser, RateLimits, find_end_user};
 pub use error::Error;
 pub use failure::DbFailure;
