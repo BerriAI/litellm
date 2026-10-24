@@ -2264,6 +2264,8 @@ def response_cost_calculator(
     ### VERTEX LOCATION ###
     vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
     region_name: str | None = None,
+    custom_cost_per_token: CostPerToken | None = None,
+    custom_cost_per_second: float | None = None,
 ) -> float:
     """
     Returns
@@ -2292,6 +2294,8 @@ def response_cost_calculator(
                 optional_params=optional_params,
                 custom_pricing=custom_pricing,
                 base_model=base_model,
+                custom_cost_per_token=custom_cost_per_token,
+                custom_cost_per_second=custom_cost_per_second,
                 prompt=prompt,
                 standard_built_in_tools_params=standard_built_in_tools_params,
                 litellm_model_name=litellm_model_name,

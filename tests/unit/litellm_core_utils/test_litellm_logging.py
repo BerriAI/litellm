@@ -21,7 +21,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import pytest_asyncio
-from requests_mock import Mocker
 from mcp.types import AudioContent, CallToolResult, ImageContent, TextContent
 from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
@@ -2045,10 +2044,11 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
     ],
 )
 def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
-    monkeypatch: pytest.MonkeyPatch, api_host: str | None, expected_endpoint: str, requests_mock: Mocker
+    monkeypatch: pytest.MonkeyPatch, api_host: str | None, expected_endpoint: str
 ) -> None:
     """The exporter must post to Langtrace's complete /api/trace path with the key in x-api-key,
     without leaking it into the process-wide OTEL_EXPORTER_OTLP_TRACES_HEADERS."""
+    import requests_mock
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.trace.export import SpanExportResult
 
@@ -2072,10 +2072,12 @@ def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
         assert type(logger) is OpenTelemetry and logger.callback_name == "langtrace"
         exporter: Final = logger._get_span_processor().span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
-        collector: Final = requests_mock.post(expected_endpoint, status_code=200)
-        assert exporter.export([]) is SpanExportResult.SUCCESS
-        assert collector.call_count == 1
-        assert collector.last_request.headers["x-api-key"] == api_key
+        with requests_mock.Mocker() as collector:
+            collector.post(expected_endpoint, status_code=200)
+            assert exporter.export(()) is SpanExportResult.SUCCESS
+        assert [(request.url, request.headers.get("x-api-key")) for request in collector.request_history] == [
+            (expected_endpoint, api_key)
+        ]
         assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
     finally:
         logging_module._in_memory_loggers.clear()
@@ -2228,7 +2230,7 @@ async def test_aresponses_websocket_turn_reaches_a_custom_logger_through_the_asy
 async def test_aresponses_websocket_hands_back_the_provider_failure_without_a_success_log(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     from litellm.responses.main import base_llm_http_handler
 
     success_events = []

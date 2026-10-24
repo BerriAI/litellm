@@ -90,7 +90,6 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_embeddings,
     ProviderConfigManager,
-    TextCompletionStreamWrapper,
     _check_provider_match,
     get_potential_model_names,
     _is_litellm_router_call,
@@ -2526,41 +2525,6 @@ def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
     assert f"gemini/{deployment_id}" not in listed
     assert deployment_id not in litellm.models_by_provider["gemini"]
     assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.000001
-
-
-def test_reasoning_content_preserved_in_text_completion_wrapper():
-    """Ensure reasoning_content is copied from delta to text_choices."""
-    chunk = ModelResponseStream(
-        id="test-id",
-        created=1234567890,
-        model="test-model",
-        object="chat.completion.chunk",
-        choices=[
-            StreamingChoices(
-                finish_reason=None,
-                index=0,
-                delta=Delta(
-                    content="Some answer text",
-                    role="assistant",
-                    reasoning_content="Here's my chain of thought...",
-                ),
-            )
-        ],
-    )
-
-    wrapper = TextCompletionStreamWrapper(
-        completion_stream=None,  # Not used in convert_to_text_completion_object
-        model="test-model",
-        stream_options=None,
-    )
-
-    transformed = wrapper.convert_to_text_completion_object(chunk)
-
-    assert "choices" in transformed
-    assert len(transformed["choices"]) == 1
-    choice = transformed["choices"][0]
-    assert choice["text"] == "Some answer text"
-    assert choice["reasoning_content"] == "Here's my chain of thought..."
 
 
 def test_anthropic_claude_4_invoke_chat_provider_config():

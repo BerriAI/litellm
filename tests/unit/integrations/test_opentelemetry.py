@@ -2324,7 +2324,9 @@ def test_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPat
             body="tls-export-test",
         )
         log_data: Final = ReadableLogRecord(
-            log_record=record, resource=Resource({}), instrumentation_scope=InstrumentationScope("tls-export-test")
+            log_record=record,
+            resource=Resource({}),
+            instrumentation_scope=InstrumentationScope("tls-export-test"),
         )
         result: Final = exporter.export([log_data])
         assert result is LogRecordExportResult.SUCCESS, f"log export failed: {result}"
@@ -6717,6 +6719,13 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
     must be bounded and must shut down whatever it drops (LIT-5437: threads accumulated
     until pods were OOMKilled)."""
 
+    def setUp(self) -> None:
+        processor: Final = BatchSpanProcessor(InMemorySpanExporter())
+        try:
+            self.bsp_thread_name = processor._batch_processor._worker_thread.name
+        finally:
+            processor.shutdown()
+
     def _logger(self, cap=3, exporter="console"):
         logger = OpenTelemetry(
             config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True),
@@ -6732,12 +6741,7 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
         logger._tracer_provider_cache.clear()
 
     def _live_exporter_threads(self):
-        probe: Final = BatchSpanProcessor(InMemorySpanExporter())
-        try:
-            worker_name: Final = probe._batch_processor._worker_thread.name
-        finally:
-            probe.shutdown()
-        return [t for t in threading.enumerate() if t.name == worker_name]
+        return [t for t in threading.enumerate() if t.name == self.bsp_thread_name]
 
     def _wait_for_exporter_threads(self, expected, timeout=10.0):
         """Dropped providers are shut down off-thread, so poll instead of sleeping."""

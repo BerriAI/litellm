@@ -2,6 +2,7 @@
 event loop: the preset does no network I/O, and a custom exporter mints the JWT
 lazily on its first export (in the BatchSpanProcessor worker thread)."""
 
+import json
 from typing import Final
 
 import httpx
@@ -101,6 +102,7 @@ def test_agentops_exporter_mints_jwt_lazily(
         assert exporter.export([]) is SpanExportResult.SUCCESS
         assert exporter.export([]) is SpanExportResult.SUCCESS
         assert auth.call_count == 1
+        assert [json.loads(call.request.content) for call in auth.calls] == [{"api_key": "ak"}]
         assert [request.headers.get("Authorization") for request in collector.request_history] == [
             "Bearer jwt-xyz",
             "Bearer jwt-xyz",
@@ -109,17 +111,20 @@ def test_agentops_exporter_mints_jwt_lazily(
         exporter.shutdown()
 
 
-@pytest.mark.parametrize(("status", "payload"), ((500, {}), (200, {}), (200, {"token": 123})))
+@pytest.mark.parametrize(("status", "payload"), ((500, {}), (200, {}), (200, {"token": 123}), (None, {})))
 def test_agentops_exporter_tolerates_fetch_failure(
     requests_mock: Mocker,
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
-    status: int,
+    status: int | None,
     payload: dict[str, object],
 ) -> None:
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_HEADERS", raising=False)
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", raising=False)
-    auth: Final = respx_mock.post(agentops_mod._AGENTOPS_AUTH_ENDPOINT).respond(status, json=payload)
+    route: Final = respx_mock.post(agentops_mod._AGENTOPS_AUTH_ENDPOINT)
+    auth: Final = (
+        route.mock(side_effect=httpx.ConnectError("auth down")) if status is None else route.respond(status, json=payload)
+    )
     collector: Final = requests_mock.post(_AGENTOPS_ENDPOINT, status_code=200)
     exporter: Final = _build_agentops_exporter(
         ExporterSpec(kind=_AGENTOPS_EXPORTER_KIND, endpoint=_AGENTOPS_ENDPOINT, options={"api_key": "ak"})

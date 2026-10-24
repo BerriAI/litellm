@@ -7,8 +7,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SpanExportResult
-from requests_mock import Mocker
 
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
@@ -515,6 +513,22 @@ class TestLangfuseOtelIntegration:
             # Endpoint assertion removed as side effect is gone
 
 
+def _exported_auth_headers(exporter):
+    import requests_mock
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    with requests_mock.Mocker() as collector:
+        collector.post(requests_mock.ANY, status_code=200)
+        assert exporter.export(()) is SpanExportResult.SUCCESS
+    return [
+        (
+            request.url,
+            {name: request.headers[name] for name in ("Authorization", "x-langfuse-ingestion-version")},
+        )
+        for request in collector.request_history
+    ]
+
+
 class TestLangfuseOtelKeyDynamicConfig:
     """Key/team-scoped Langfuse credentials must define the full export target
     (OTLP endpoint + auth), not just auth headers on the init-time exporter."""
@@ -593,7 +607,7 @@ class TestLangfuseOtelKeyDynamicConfig:
             assert logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_secret_key=None)) is None
             assert logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_public_key=None)) is None
 
-    def test_key_dynamic_params_create_otlp_exporter_without_global_env(self, requests_mock: Mocker) -> None:
+    def test_key_dynamic_params_create_otlp_exporter_without_global_env(self):
         """Without global LANGFUSE_* env vars, a request carrying key-scoped Langfuse
         credentials must get a tracer exporting via OTLP HTTP to that key's host."""
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
@@ -619,17 +633,15 @@ class TestLangfuseOtelKeyDynamicConfig:
 
         exporter = span_processors[0].span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
-        assert exporter._endpoint == "https://langfuse.example.com/api/public/otel/v1/traces"
-
         import base64
 
         expected_auth = base64.b64encode(b"key_public:key_secret").decode()
-        collector: Final = requests_mock.post("https://langfuse.example.com/api/public/otel/v1/traces", status_code=200)
-        assert exporter.export([]) is SpanExportResult.SUCCESS
-        assert collector.call_count == 1
-        assert {
-            key: collector.last_request.headers[key] for key in ("Authorization", "x-langfuse-ingestion-version")
-        } == {"Authorization": f"Basic {expected_auth}", "x-langfuse-ingestion-version": "4"}
+        assert _exported_auth_headers(exporter) == [
+            (
+                "https://langfuse.example.com/api/public/otel/v1/traces",
+                {"Authorization": f"Basic {expected_auth}", "x-langfuse-ingestion-version": "4"},
+            )
+        ]
 
     def test_key_dynamic_params_reuse_cached_provider(self):
         with self._clean_env():
@@ -648,7 +660,7 @@ class TestLangfuseOtelKeyDynamicConfig:
         assert tracer is logger.tracer
         assert logger._tracer_provider_cache == {}
 
-    def test_key_credentials_never_passed_to_debug_logger(self, requests_mock: Mocker) -> None:
+    def test_key_credentials_never_passed_to_debug_logger(self):
         """The span-processor debug logs must receive a redacted header value, so the
         key-scoped Langfuse secret never enters a log record regardless of downstream
         handler configuration, while the exporter still gets the real header."""
@@ -682,12 +694,12 @@ class TestLangfuseOtelKeyDynamicConfig:
         provider = next(iter(logger._tracer_provider_cache.values())).provider
         exporter = provider._active_span_processor._span_processors[0].span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
-        collector: Final = requests_mock.post("https://langfuse.example.com/api/public/otel/v1/traces", status_code=200)
-        assert exporter.export([]) is SpanExportResult.SUCCESS
-        assert collector.call_count == 1
-        assert {
-            key: collector.last_request.headers[key] for key in ("Authorization", "x-langfuse-ingestion-version")
-        } == {"Authorization": f"Basic {secret}", "x-langfuse-ingestion-version": "4"}
+        assert _exported_auth_headers(exporter) == [
+            (
+                "https://langfuse.example.com/api/public/otel/v1/traces",
+                {"Authorization": f"Basic {secret}", "x-langfuse-ingestion-version": "4"},
+            )
+        ]
 
 
 class TestLangfuseOtelResponsesAPI:
