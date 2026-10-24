@@ -7,7 +7,7 @@ Actual plugin files are hosted on GitHub/GitLab/Bitbucket or as a zip archive on
 any HTTPS host (S3, Artifactory, a static file server).
 
 Endpoints:
-/claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (unauthenticated; `?key=` adds the key's granted skills)
+/claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (unauthenticated; `Authorization: Bearer` or `?key=` adds the key's granted skills)
 /claude-code/plugins           - POST - Register a new plugin (create-only, proxy admin only)
 /claude-code/plugins           - GET  - List plugins visible to the key (enabled, plus granted disabled ones)
 /claude-code/plugins/{name}    - GET  - Get plugin details (403 on a disabled plugin the key is not granted)
@@ -108,6 +108,12 @@ async def get_prisma_client() -> object:
 _get_prisma_client: Final = get_prisma_client
 
 
+def _marketplace_credential(request: Request, key: str | None) -> str | None:
+    if key:
+        return f"Bearer {key}"
+    return request.headers.get("authorization") or None
+
+
 @router.get(
     "/claude-code/marketplace.json",
     tags=["Claude Code Marketplace"],
@@ -120,9 +126,11 @@ async def get_marketplace(request: Request, key: str | None = None):
     - claude plugin marketplace add <url>
     - claude plugin install <name>@<marketplace>
 
-    Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
-    the key is authenticated and the catalog also holds the disabled plugins granted
-    to it through `object_permission.skills` or an access group on the key or its team.
+    Without a credential the catalog holds the enabled (public) plugins. With an
+    `Authorization: Bearer sk-...` header or `?key=sk-...` the key is authenticated and
+    the catalog also holds the disabled plugins granted to it through
+    `object_permission.skills` or an access group on the key or its team. The header keeps
+    the key out of URLs and access logs; `?key=` wins when both are sent.
 
     Returns:
         Marketplace catalog with list of available plugins and their git sources.
@@ -131,14 +139,16 @@ async def get_marketplace(request: Request, key: str | None = None):
         ```bash
         claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json
         claude plugin marketplace add "http://localhost:4000/claude-code/marketplace.json?key=sk-..."
+        curl -H "Authorization: Bearer sk-..." http://localhost:4000/claude-code/marketplace.json
         claude plugin install my-plugin@litellm
         ```
     """
     try:
         prisma_client: Final = await get_prisma_client()
 
+        credential: Final = _marketplace_credential(request, key)
         caller: Final[UserAPIKeyAuth | None] = (
-            await user_api_key_auth(request=request, api_key=f"Bearer {key}") if key else None
+            await user_api_key_auth(request=request, api_key=credential) if credential else None
         )
         visibility: Final[SkillVisibility] = await resolve_skill_visibility(caller)
         plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(

@@ -2384,9 +2384,11 @@ export interface paths {
          *     - claude plugin marketplace add <url>
          *     - claude plugin install <name>@<marketplace>
          *
-         *     Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
-         *     the key is authenticated and the catalog also holds the disabled plugins granted
-         *     to it through `object_permission.skills` or an access group on the key or its team.
+         *     Without a credential the catalog holds the enabled (public) plugins. With an
+         *     `Authorization: Bearer sk-...` header or `?key=sk-...` the key is authenticated and
+         *     the catalog also holds the disabled plugins granted to it through
+         *     `object_permission.skills` or an access group on the key or its team. The header keeps
+         *     the key out of URLs and access logs; `?key=` wins when both are sent.
          *
          *     Returns:
          *         Marketplace catalog with list of available plugins and their git sources.
@@ -2395,6 +2397,7 @@ export interface paths {
          *         ```bash
          *         claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json
          *         claude plugin marketplace add "http://localhost:4000/claude-code/marketplace.json?key=sk-..."
+         *         curl -H "Authorization: Bearer sk-..." http://localhost:4000/claude-code/marketplace.json
          *         claude plugin install my-plugin@litellm
          *         ```
          */
