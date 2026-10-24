@@ -937,15 +937,18 @@ def _usage_field(usage: object, name: str) -> object:
     return getattr(usage, name, None)
 
 
-def _reported_cost_value(value: object) -> float | None:
-    raw: Final[object] = value
-    if isinstance(value, bool):
+def _cost_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    if isinstance(value, int | float):
-        return float(value)
+    return float(value)
+
+
+def _reported_cost_value(value: object) -> float | None:
+    """A reported cost is a number, or a breakdown whose total lives under ``total_cost``."""
+    raw: Final[object] = value
     if isinstance(value, Mapping):
-        return _reported_cost_value(_usage_field(raw, "total_cost"))
-    return None
+        return _cost_number(_usage_field(raw, "total_cost"))
+    return _cost_number(value)
 
 
 def provider_reported_usage_cost(usage: object, custom_llm_provider: str | None) -> float | None:
