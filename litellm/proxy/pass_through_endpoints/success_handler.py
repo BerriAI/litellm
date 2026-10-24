@@ -461,7 +461,7 @@ class PassThroughEndpointLogging:
                 **kwargs,
             )
             return
-        elif self.is_langfuse_route(url_route):
+        elif self.is_langfuse_route(url_route, custom_llm_provider):
             # Don't log langfuse pass-through requests
             return
         elif self.is_transcribe_route(custom_llm_provider) and TranscribePassthroughLoggingHandler.is_priced_job_start(
@@ -568,7 +568,9 @@ class PassThroughEndpointLogging:
     def is_openrouter_decisions_route(self, url_route: str, custom_llm_provider: str | None) -> bool:
         return custom_llm_provider == "openrouter" and urlparse(url_route).path.endswith("/alpha/decisions")
 
-    def is_langfuse_route(self, url_route: str):
+    def is_langfuse_route(self, url_route: str, custom_llm_provider: str | None = None):
+        if custom_llm_provider == "langfuse":
+            return True
         parsed_url: Final = urlparse(url_route)
         for route in self.TRACKED_LANGFUSE_ROUTES:
             if route in parsed_url.path:
