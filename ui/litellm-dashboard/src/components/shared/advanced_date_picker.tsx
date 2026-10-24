@@ -184,13 +184,13 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
           // Check if this matches any preset option
           const matchingOption = getMatchingOption(newValue);
-          setSelectedOption(matchingOption);
+          setSelectedOption(pickedPreset ?? matchingOption);
         }
       }
     } catch (error) {
       console.warn("Invalid date format:", error);
     }
-  }, [startDate, endDate, validation.isValid, getMatchingOption]);
+  }, [startDate, endDate, validation.isValid, getMatchingOption, pickedPreset]);
 
   // Update tempValue when inputs change
   useEffect(() => {
