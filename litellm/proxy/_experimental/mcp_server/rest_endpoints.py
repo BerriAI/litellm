@@ -247,6 +247,7 @@ if MCP_AVAILABLE:
         MCPInfo,
         MCPServer,
         _aggregate_server_key,
+        _dispatch_mcp_tool_search,
         _fire_mcp_tool_call_logging,
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
@@ -345,7 +346,6 @@ if MCP_AVAILABLE:
             coerce_top_k,
             handle_agent_search,
             handle_mcp_tool_call,
-            handle_mcp_tool_search,
             handle_skill_search,
         )
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -381,10 +381,10 @@ if MCP_AVAILABLE:
             virtual_oauth2_headers,
         ) = _extract_mcp_headers_from_request(request, user_api_key_dict)
         if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
-            return await handle_mcp_tool_search(
+            return await _dispatch_mcp_tool_search(
                 query=tool_arguments.get("query", ""),
                 top_k=coerce_top_k(tool_arguments.get("top_k", 5)),
-                user_api_key_dict=user_api_key_dict,
+                user_api_key_auth=user_api_key_dict,
                 client_ip=rest_client_ip,
                 mcp_auth_header=virtual_mcp_auth_header,
                 mcp_server_auth_headers=virtual_mcp_server_auth_headers,
