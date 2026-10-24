@@ -6483,7 +6483,7 @@ def get_model_cost_mutation_generation() -> int:
     return _model_cost_mutation_generation
 
 
-def _invalidate_model_cost_lowercase_map() -> None:
+def invalidate_model_cost_caches() -> None:
     """Invalidate the case-insensitive lookup map for model_cost.
 
     Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
@@ -6496,6 +6496,9 @@ def _invalidate_model_cost_lowercase_map() -> None:
     # Clear LRU caches that depend on model_cost data
     _cached_get_model_info.cache_clear()
     cached_get_model_info_helper.cache_clear()
+
+
+_invalidate_model_cost_lowercase_map: Final = invalidate_model_cost_caches
 
 
 def _rebuild_model_cost_lowercase_map() -> dict[str, str]:

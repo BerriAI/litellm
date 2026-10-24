@@ -495,6 +495,12 @@ def install_loaded_catalog(
         GetModelCostMap._base_registry = registry  # pyright: ignore[reportPrivateUsage]  # this installer alone owns catalog adoption
         GetModelCostMap._snapshot_loaded_catalog(base_rows)  # pyright: ignore[reportPrivateUsage]  # this installer alone owns catalog adoption
         _reresolve_saved_registrations(registry)
+        api_module: Final = sys.modules.get("litellm.litellm_core_utils.model_cost_api")
+        if api_module is not None:
+            from litellm.litellm_core_utils.model_cost_api import (
+                _prepare_owner_layers,  # pyright: ignore[reportPrivateUsage]  # optional loaded API install hook
+            )
+            _prepare_owner_layers(registry)
         composed: Final = _model_cost_dict_from_native_rows(_MODEL_COST_LAYERS.compose(registry))
         _cost_map_source_info.source = provenance["source"]
         _cost_map_source_info.url = provenance["url"]
@@ -505,6 +511,11 @@ def install_loaded_catalog(
         )
         _cost_map_source_info.source_revision = catalog.revision
         _cost_map_source_info.etag = catalog.etag
+        if api_module is not None:
+            from litellm.litellm_core_utils.model_cost_api import (
+                _installed_catalog_changed,  # pyright: ignore[reportPrivateUsage]  # optional loaded API provenance hook
+            )
+            _installed_catalog_changed(provenance)
         if _MODEL_COST_LAYERS.identities:
             from litellm import utils
 
@@ -637,12 +648,14 @@ def _native_revalidation(
     etag: str | None,
     client: _SyncGetClient | None = None,
     seed: int | None = None,
+    installed_url: str | None = None,
+    use_current_source: bool = True,
 ) -> LoadedCatalog | ModelCostMapUnavailable:
     state, step = Revalidation(
         url,
         installed_revision=revision,
         installed_etag=etag,
-        installed_url=_cost_map_source_info.url,
+        installed_url=_cost_map_source_info.url if use_current_source else installed_url,
         seed=seed,
         max_attempts=max_attempts,
         timeout_seconds=timeout_seconds,
@@ -755,12 +768,14 @@ async def _native_revalidation_async(
     etag: str | None,
     client: _AsyncGetClient | None = None,
     seed: int | None = None,
+    installed_url: str | None = None,
+    use_current_source: bool = True,
 ) -> LoadedCatalog | ModelCostMapUnavailable:
     state, step = Revalidation(
         url,
         installed_revision=revision,
         installed_etag=etag,
-        installed_url=_cost_map_source_info.url,
+        installed_url=_cost_map_source_info.url if use_current_source else installed_url,
         seed=seed,
         max_attempts=max_attempts,
         timeout_seconds=timeout_seconds,
