@@ -109,6 +109,15 @@ def map_aiohttp_exceptions() -> Generator[None, None, None]:
         raise mapped_exc(message) from exc
 
 
+def _unread_payload(content: object) -> bytes:
+    """Bytes the upstream sent before the connection dropped that aiohttp buffered but never handed out, since its
+    reads raise the stored payload error ahead of the buffer."""
+    if not isinstance(content, aiohttp.StreamReader):
+        return b""
+    buffered: Final = b"".join(content._buffer)  # pyright: ignore[reportPrivateUsage]  # no public read drains it
+    return buffered[content._buffer_offset :]  # pyright: ignore[reportPrivateUsage]  # see above
+
+
 class AiohttpResponseStream(httpx.AsyncByteStream):
     CHUNK_SIZE = 1024 * 16
 
@@ -125,6 +134,12 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             raise httpx.ReadError(str(e)) from e
         except aiohttp.http_exceptions.TransferEncodingError as e:
             raise httpx.ReadError(str(e)) from e
+        except aiohttp.ClientPayloadError:
+            unread: Final = _unread_payload(self._aiohttp_response.content)
+            if unread:
+                yield unread
+            with map_aiohttp_exceptions():
+                raise
         except Exception:
             # For other exceptions, use the normal mapping
             with map_aiohttp_exceptions():
