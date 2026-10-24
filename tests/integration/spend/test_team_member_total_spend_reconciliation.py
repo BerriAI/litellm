@@ -9,7 +9,7 @@ from typing import Final
 
 import httpx
 import pytest
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -21,6 +21,7 @@ from tests.integration._support.provider import PROVIDER_URL, SharedProvider
 from tests.integration._support.wire import Reply
 
 _CALL_COST: Final = 0.02
+JSON_VALUE: Final = TypeAdapter(JsonValue)
 _LEGACY_SPEND: Final = 612.4
 _LEGACY_TOTAL: Final = 148.1
 _HEALTHY_SPEND: Final = 12.25
@@ -91,6 +92,7 @@ def _served(gateway: Gateway, provider: SharedProvider, model: str, key: str) ->
         key=key,
     )
     assert response.status_code == 200, response.text
+    assert len(provider.received()) == 1
 
 
 def _reset_spend(gateway: Gateway, team_id: str, user_id: str, reset_to: float) -> httpx.Response:
@@ -106,8 +108,11 @@ def _membership_figures(row: JsonValue) -> tuple[str, tuple[float, float]]:
 
 
 def _reported_memberships(gateway: Gateway, path: str, params: dict[str, str]) -> dict[str, tuple[float, float]]:
-    body: Final = gateway.get(path, params)
-    teams: Final = [body] if "team_memberships" in body else [object_value(team) for team in list_value(body["teams"])]
+    """/team/info answers with one team object, /team/list with a list of them."""
+    response: Final = gateway.request("GET", path, params=params)
+    assert response.status_code == 200, f"GET {path}: {response.status_code} {response.text}"
+    body: Final = JSON_VALUE.validate_json(response.content)
+    teams: Final = [object_value(body)] if isinstance(body, dict) else [object_value(team) for team in list_value(body)]
     return dict(_membership_figures(row) for team in teams for row in list_value(team["team_memberships"]))
 
 

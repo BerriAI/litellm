@@ -34,7 +34,8 @@ export function describeBudgetResetSchedule(
     return {
       label: "Never resets",
       resetAt: null,
-      tooltip: "This budget has no reset window, so Current Cycle Spend accumulates for as long as the membership exists.",
+      tooltip:
+        "This budget has no reset window, so Current Cycle Spend accumulates for as long as the membership exists.",
     };
   }
   return {
