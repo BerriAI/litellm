@@ -12,6 +12,7 @@ from typing_extensions import ReadOnly, Required, TypedDict
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.audio_utils.utils import normalize_transcription_language_to_bcp47
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
@@ -348,7 +349,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     value=value, optional_params=optional_params
                 )
             elif key == "input_audio_transcription" and value is not None:
-                optional_params["inputAudioTranscription"] = {}
+                optional_params["inputAudioTranscription"] = self._map_input_audio_transcription(value)
             elif key == "turn_detection" and value is not None:
                 value_typed = cast(OpenAIRealtimeTurnDetection, value)
                 if (
@@ -464,6 +465,23 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if GeminiRealtimeConfig._is_text_only_live_model(model) and "AUDIO" in normalized:
             return tuple(modality for modality in normalized if modality != "AUDIO") or ("TEXT",)
         return normalized
+
+    @staticmethod
+    def _map_input_audio_transcription(value: object) -> dict[str, object]:
+        """Map OpenAI ``input_audio_transcription`` to Gemini ``AudioTranscriptionConfig``.
+
+        OpenAI clients pin the caller's language with ``language`` (bare ISO-639-1 such
+        as ``tr``, or BCP-47). Gemini Live otherwise auto-detects the language per
+        utterance and short telephony utterances are often transcribed in the wrong
+        language, so the hint is forwarded as ``languageCodes``. The transcription
+        ``model`` and ``prompt`` have no Gemini equivalent and are dropped.
+        """
+        if not isinstance(value, dict):
+            return {}
+        language = value.get("language")
+        if not isinstance(language, str) or not language.strip():
+            return {}
+        return {"languageCodes": [normalize_transcription_language_to_bcp47(language.strip())]}
 
     @staticmethod
     def _finalize_gemini_live_setup(model: str, setup: dict[str, object]) -> dict[str, object]:
