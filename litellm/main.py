@@ -139,6 +139,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.realtime_api.main import realtime_health_check
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
+from litellm.router_utils.common_utils import get_router_deployment_id
 from litellm.router_utils.reasoning_effort_capability import (
     model_group_from_metadata,
     reasoning_effort_needs_allowing,
@@ -1253,20 +1254,6 @@ def _build_custom_pricing_entry(
     return entry
 
 
-def _get_router_deployment_id(kwargs: dict) -> str | None:
-    for metadata_key in ("litellm_metadata", "metadata"):
-        metadata = kwargs.get(metadata_key) or {}
-        if not isinstance(metadata, dict):
-            continue
-        deployment_model_info = metadata.get("model_info") or {}
-        if not isinstance(deployment_model_info, dict):
-            continue
-        deployment_id = deployment_model_info.get("id")
-        if deployment_id is not None:
-            return str(deployment_id)
-    return None
-
-
 def _register_custom_pricing_for_request(
     model: str,
     custom_llm_provider: str,
@@ -1291,7 +1278,7 @@ def _register_custom_pricing_for_request(
         model_info=model_info,
     )
     shared_key: Final = f"{custom_llm_provider}/{model}"
-    deployment_id: Final = _get_router_deployment_id(kwargs)
+    deployment_id: Final = get_router_deployment_id(kwargs)
     if deployment_id is None:
         litellm.register_model({shared_key: keep_registered_mode(shared_key, entry)}, persist_across_reloads=False)
         return

@@ -2,9 +2,9 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Annotated, Final, TypeVar
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
@@ -533,3 +533,30 @@ def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mappin
     )
     verbose_router_logger.warning(warning)
     return warning
+
+
+class _DeploymentModelInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: object = None
+
+
+class _RouterRequestMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    model_info: Annotated[_DeploymentModelInfo | object, Field(union_mode="left_to_right")] = None
+
+
+_ROUTER_REQUEST_METADATA: Final[TypeAdapter[_RouterRequestMetadata | object]] = TypeAdapter(
+    Annotated[_RouterRequestMetadata | object, Field(union_mode="left_to_right")]
+)
+
+
+def _deployment_id_in(metadata: object) -> str | None:
+    parsed: Final = _ROUTER_REQUEST_METADATA.validate_python(metadata)
+    if not isinstance(parsed, _RouterRequestMetadata) or not isinstance(parsed.model_info, _DeploymentModelInfo):
+        return None
+    return None if parsed.model_info.id is None else str(parsed.model_info.id)
+
+
+def get_router_deployment_id(kwargs: dict) -> str | None:
+    """The Router deployment id stamped on a routed call's metadata, or None for a direct SDK call."""
+    return next(filter(None, map(_deployment_id_in, (kwargs.get("litellm_metadata"), kwargs.get("metadata")))), None)

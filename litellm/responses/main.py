@@ -59,6 +59,7 @@ from litellm.responses.mcp.round_billing import (
 )
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.common_utils import get_router_deployment_id
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_reasoning_effort_levels,
     model_group_from_metadata,
@@ -1715,8 +1716,9 @@ def responses(
             custom_llm_provider=custom_llm_provider,
         )
 
-        litellm_logging_obj.custom_cost_per_token = _per_call_cost_per_token(litellm_params)
-        litellm_logging_obj.custom_cost_per_second = litellm_params.cost_per_second
+        if get_router_deployment_id(kwargs) is None:
+            litellm_logging_obj.custom_cost_per_token = _per_call_cost_per_token(litellm_params)
+            litellm_logging_obj.custom_cost_per_second = litellm_params.cost_per_second
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
         input = with_compaction_items_as_summaries(
             with_compaction_items_as_params(ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input))

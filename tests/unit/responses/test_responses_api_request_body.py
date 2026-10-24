@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -335,7 +336,9 @@ async def test_aresponses_sends_the_declared_reasoning_effort_level_rounded_up(
 
 
 def _effort_levels_disabled_by(entry: dict) -> tuple[str, ...]:
-    return tuple(level for level in ("none", "minimal", "low") if entry.get(f"supports_{level}_reasoning_effort") is False)
+    return tuple(
+        level for level in ("none", "minimal", "low") if entry.get(f"supports_{level}_reasoning_effort") is False
+    )
 
 
 def _gpt_5_row_disabling_a_level(provider: str) -> tuple[str, str]:
@@ -625,7 +628,8 @@ async def test_aresponses_websocket_strips_responses_routing_prefix_from_openai_
     from litellm.responses.main import _aresponses_websocket
 
     with patch.object(
-        import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
+        import_module("litellm.responses.main").base_llm_http_handler,
+        "async_responses_websocket",
         new_callable=AsyncMock,
     ) as mock_ws:
         await _aresponses_websocket(
@@ -647,7 +651,8 @@ async def test_aresponses_websocket_keeps_routing_hints_out_of_the_relay_kwargs(
     from litellm.responses.main import _aresponses_websocket
 
     with patch.object(
-        import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
+        import_module("litellm.responses.main").base_llm_http_handler,
+        "async_responses_websocket",
         new_callable=AsyncMock,
     ) as mock_ws:
         await _aresponses_websocket(
@@ -673,7 +678,9 @@ _ORIGINAL_WS_INPUT = [
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("nested", [False, True])
-async def test_aresponses_websocket_forwards_the_routed_input_in_the_first_frame(nested: bool):  # test-quality-ok: the first frame handed to the relay is the only place the routed input is observable before the provider socket
+async def test_aresponses_websocket_forwards_the_routed_input_in_the_first_frame(
+    nested: bool,
+):  # test-quality-ok: the first frame handed to the relay is the only place the routed input is observable before the provider socket
     from unittest.mock import MagicMock
 
     from litellm.responses.main import _aresponses_websocket
@@ -684,7 +691,8 @@ async def test_aresponses_websocket_forwards_the_routed_input_in_the_first_frame
     )
 
     with patch.object(
-        import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
+        import_module("litellm.responses.main").base_llm_http_handler,
+        "async_responses_websocket",
         new_callable=AsyncMock,
     ) as mock_ws:
         await _aresponses_websocket(
@@ -713,7 +721,8 @@ async def test_aresponses_websocket_forwards_the_first_frame_verbatim_when_routi
     first_message = '{"type": "response.create", "model": "gpt-5.6",  "input": [{"role": "user", "content": "hi"}]}'
 
     with patch.object(
-        import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
+        import_module("litellm.responses.main").base_llm_http_handler,
+        "async_responses_websocket",
         new_callable=AsyncMock,
     ) as mock_ws:
         await _aresponses_websocket(
@@ -970,9 +979,7 @@ async def test_injection_points_reach_a_foundry_deployment_of_an_openai_model(mo
     Azure OpenAI one the Foundry deployment got Anthropic marks the Responses transform then stripped."""
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://other-deployment.openai.azure.com")
     injected_client = AsyncHTTPHandler()
-    mock_post = AsyncMock(
-        return_value=MockResponse(_minimal_responses_api_payload("resp_foundry", "gpt-6-astra"), 200)
-    )
+    mock_post = AsyncMock(return_value=MockResponse(_minimal_responses_api_payload("resp_foundry", "gpt-6-astra"), 200))
     injected_client.post = mock_post
 
     await litellm.aresponses(
@@ -1412,3 +1419,49 @@ async def test_responses_opencode_session_uses_effective_destination(
     assert sent.headers.get("x-opencode-session") == (None if explicit_base else "conversation-123")
     assert sent.headers["authorization"] == "Bearer test-key"
     assert json.loads(sent.content) == {"model": "gpt-6-luna", "input": "hello"}
+
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+
+
+@pytest.mark.asyncio
+async def test_router_responses_deployment_pricing_keeps_inherited_cache_rates(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model_cost: Final[dict[str, object]] = getattr(litellm, "model_cost")
+    monkeypatch.setattr(litellm, "model_cost", dict(model_cost))
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    rates: Final = {"input_cost_per_token": 1e-5, "output_cost_per_token": 2e-5}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "nano",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake-api-key", **rates},
+                "model_info": {"id": "nano-deployment"},
+            }
+        ]
+    )
+    payload: Final[dict[str, object]] = _minimal_responses_api_payload("resp_router_cache", "gpt-5.4-nano")
+    usage: Final = _JSON_OBJECT.validate_python(payload["usage"])
+    cached_tokens: Final = 8
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={**payload, "usage": {**usage, "input_tokens_details": {"cached_tokens": cached_tokens}}},
+        )
+    )
+
+    response: Final = await router.aresponses(model="nano", input="hi")
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.usage is not None
+    uncached_input: Final = response.usage.input_tokens - cached_tokens
+    full_price: Final = (
+        response.usage.input_tokens * rates["input_cost_per_token"]
+        + response.usage.output_tokens * rates["output_cost_per_token"]
+    )
+    floor: Final = (
+        uncached_input * rates["input_cost_per_token"] + response.usage.output_tokens * rates["output_cost_per_token"]
+    )
+    assert floor < _response_cost(response) < full_price
