@@ -49,6 +49,7 @@ def _bare_manager() -> MOD.MCPServerManager:
     """
     mgr = MOD.MCPServerManager.__new__(MOD.MCPServerManager)
     mgr._listed_tools_by_server_id = {}
+    mgr._blocked_tools_by_server_id = {}
     mgr.check_allowed_or_banned_tools = lambda name, server: True
     mgr.validate_allowed_params = lambda tool_name, arguments, server: None
 
