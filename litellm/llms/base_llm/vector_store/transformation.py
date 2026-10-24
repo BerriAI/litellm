@@ -222,14 +222,8 @@ class BaseVectorStoreConfig:
         return api_base
 
     def get_vector_store_url(self, api_base: str, encoded_vector_store_id: str) -> str:
-        """
-        Url of one vector store, for retrieve, update and delete.
-
-        Appends the id to ``api_base`` (the output of ``get_complete_url``), so this
-        default only works when ``api_base`` has no query string. A provider whose
-        ``get_complete_url`` adds one, e.g. Azure's ``?api-version=``, must override
-        this to put the id in the path before the query.
-        """
+        """Url of one vector store for retrieve, update and delete. Providers whose
+        ``get_complete_url`` adds a query string, like Azure, override this."""
         return f"{api_base}/{encoded_vector_store_id}"
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

@@ -18,7 +18,6 @@ class AzureOpenAIVectorStoreConfig(OpenAIVectorStoreConfig):
         )
 
     def get_vector_store_url(self, api_base: str, encoded_vector_store_id: str) -> str:
-        # api_base ends in ``?api-version=...``; the id must go before the query param
         path, _, query = api_base.partition("?")
         url: Final = f"{path}/{encoded_vector_store_id}"
         return f"{url}?{query}" if query else url
