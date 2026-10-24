@@ -1,7 +1,10 @@
 import pytest
 
 from litellm.llms.openai_like import dynamic_config
-from litellm.llms.openai_like.dynamic_config import create_responses_config_class
+from litellm.llms.openai_like.dynamic_config import (
+    create_config_class,
+    create_responses_config_class,
+)
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -139,3 +142,36 @@ class TestForceStoreFalse:
             headers={},
         )
         assert params["store"] is True
+
+
+class TestFunctionCallingParams:
+    def test_unmapped_model_preserves_tool_parameters(self) -> None:
+        """Unmapped or newly added models on OpenAI-compatible providers should default to supporting tools."""
+        config = create_config_class(_provider("unmapped_fc"))()
+        params = config.get_supported_openai_params("unmapped/custom-model")
+        for tool_param in ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"):
+            assert tool_param in params
+
+    def test_provider_disabled_function_calling_strips_tool_parameters(self) -> None:
+        """When provider_info explicitly sets supports_function_calling: False, tool params must be stripped."""
+        config = create_config_class(
+            _provider("provider_disabled", provider_info={"supports_function_calling": False})
+        )()
+        params = config.get_supported_openai_params("any-model")
+        for tool_param in ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"):
+            assert tool_param not in params
+
+    def test_model_explicitly_disabled_strips_tool_parameters(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When a model is explicitly mapped with supports_function_calling: False, tool params must be stripped."""
+        import litellm
+
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "test_slug/disabled-model",
+            {"supports_function_calling": False},
+        )
+        config = create_config_class(_provider("test_slug"))()
+        params = config.get_supported_openai_params("disabled-model")
+        for tool_param in ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"):
+            assert tool_param not in params
+

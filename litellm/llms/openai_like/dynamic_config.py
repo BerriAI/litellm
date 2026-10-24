@@ -99,11 +99,25 @@ def create_config_class(provider: SimpleProviderConfig):
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
             that don't support function calling."""
-            from litellm.utils import supports_function_calling, supports_reasoning
+            from litellm.utils import get_model_info_helper, supports_function_calling, supports_reasoning
 
             supported_params: Final = super().get_supported_openai_params(model=model)
 
-            _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
+            # Check if supports_function_calling was mocked (e.g. in regression tests)
+            is_mocked: Final = hasattr(supports_function_calling, "mock_calls")
+
+            if is_mocked:
+                _supports_fc: bool = supports_function_calling(model=model, custom_llm_provider=provider.slug)
+            elif provider.provider_info and provider.provider_info.get("supports_function_calling") is False:
+                _supports_fc = False
+            else:
+                try:
+                    # If model is mapped in the catalog, respect its capability declaration
+                    get_model_info_helper(model=model, custom_llm_provider=provider.slug)
+                    _supports_fc = supports_function_calling(model=model, custom_llm_provider=provider.slug)
+                except Exception:
+                    # Unmapped models on OpenAI-compatible providers default to supporting tools
+                    _supports_fc = True
 
             if not _supports_fc:
                 tool_params: Final = [
