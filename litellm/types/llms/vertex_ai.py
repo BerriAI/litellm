@@ -68,6 +68,7 @@ class PartType(TypedDict, total=False):
     thoughtSignature: str
     media_resolution: Literal["low", "medium", "high"]
     video_metadata: ReadOnly[VideoMetadataType]
+    media_processing: ReadOnly[str]
 
 
 class HttpxFunctionCall(TypedDict, total=False):
