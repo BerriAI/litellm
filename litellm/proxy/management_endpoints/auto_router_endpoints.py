@@ -54,6 +54,7 @@ from litellm.proxy.management_helpers.auto_router_permissions import (
 from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.daily_activity_sql import build_where_clause
+from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
@@ -179,7 +180,7 @@ class _ShadowEvalAttemptRow(Protocol):
 
 
 class _ShadowEvalFunnelTable(Protocol):
-    async def create_many(self, data: Sequence[Mapping[str, object]], skip_duplicates: bool) -> int: ...
+    async def create_many(self, data: Sequence[Mapping[str, object]], *, skip_duplicates: bool) -> int: ...
 
 
 class _ShadowEvalAttemptTable(Protocol):
@@ -204,21 +205,37 @@ def _user_rows(prisma_client: "PrismaClient") -> _UserRowsTable:
     return UserRepository(prisma_client).table
 
 
+class _ShadowEvalJobRepository(PrismaTableRepository[_ShadowEvalJobRow]):
+    table_name = "litellm_shadowevaljob"
+
+
+class _ShadowEvalFunnelRepository(PrismaTableRepository[object]):
+    table_name = "litellm_shadowevalfunnel"
+
+
+class _ShadowEvalAttemptRepository(PrismaTableRepository[_ShadowEvalAttemptRow]):
+    table_name = "litellm_shadowevalattempt"
+
+
 def _shadow_eval_jobs(prisma_client: "PrismaClient") -> _ShadowEvalJobTable:
-    return prisma_client.db.litellm_shadowevaljob
+    return _ShadowEvalJobRepository(prisma_client).table
 
 
 def _shadow_eval_funnel(prisma_client: "PrismaClient") -> _ShadowEvalFunnelTable:
-    return prisma_client.db.litellm_shadowevalfunnel  # pyright: ignore[reportAttributeAccessIssue]  # generated client
+    return _ShadowEvalFunnelRepository(prisma_client).table
 
 
 def _shadow_eval_attempts(prisma_client: "PrismaClient") -> _ShadowEvalAttemptTable:
-    return prisma_client.db.litellm_shadowevalattempt
+    return _ShadowEvalAttemptRepository(prisma_client).table
 
 
 async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
     async with db_span("auto_router_report_query", sql_relation(query)):
         return await prisma_client.db.query_raw(query, *args)
+
+
+async def _execute_raw(prisma_client: "PrismaClient", query: str, *args: object) -> int:
+    return await prisma_client.db.execute_raw(query, *args)
 
 
 async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> LiteLLM_TeamTable | None:
@@ -1788,7 +1805,7 @@ async def start_shadow_eval(
     # deliberate. Sweep and claim filter on exact (target_type, id) pairs so a team id
     # that happens to equal a key hash never matches the other kind's slot.
     for target_type, ids in requested_by_type:
-        await prisma_client.db.execute_raw(_SWEEP_FINISHED_JOBS_SQL, list(ids), target_type)
+        await _execute_raw(prisma_client, _SWEEP_FINISHED_JOBS_SQL, list(ids), target_type)
     claimed: Final = await _shadow_eval_jobs(prisma_client).find_many(
         where={
             "OR": [
@@ -2005,8 +2022,8 @@ async def stop_shadow_eval_job(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     stamp: Final = datetime.now(timezone.utc)
     operator: Final = user_api_key_dict.user_id or "operator"
-    claimed: Final = await prisma_client.db.execute_raw(
-        _STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat()
+    claimed: Final = await _execute_raw(
+        prisma_client, _STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat()
     )
     legs: Final = _LEG_ROWS.validate_python(
         await _shadow_eval_jobs(prisma_client).find_many(where={"group_id": job_id}) or ()

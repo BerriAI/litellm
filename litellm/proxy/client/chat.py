@@ -59,7 +59,7 @@ class ChatClient:
         frequency_penalty: float | None = None,
         user: str | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Create a chat completion.
 
@@ -184,7 +184,8 @@ class ChatClient:
             response.raise_for_status()
 
             # Parse SSE stream
-            for line in response.iter_lines():
+            lines: Final[Iterator[object]] = response.iter_lines()
+            for line in lines:
                 if line:
                     line = _SSE_LINE.validate_python(line).decode("utf-8")
                     if line.startswith("data: "):

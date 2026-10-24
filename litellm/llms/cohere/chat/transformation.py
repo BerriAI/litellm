@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -221,7 +221,8 @@ class CohereChatConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         ## Load Config
-        for k, v in litellm.CohereChatConfig.get_config().items():
+        config: Final[Mapping[str, object]] = litellm.CohereChatConfig.get_config()
+        for k, v in config.items():
             if (
                 k not in optional_params
             ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in

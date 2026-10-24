@@ -7,8 +7,11 @@ from enum import Enum
 from types import MappingProxyType
 from typing import (
     Final,
+    Protocol,
     TypeAlias,
 )
+
+from pydantic import TypeAdapter
 
 from .payload import (
     JsonBody,
@@ -23,6 +26,8 @@ from .payload import (
     rehydrate_slots,
     write_field,
 )
+
+_OPAQUE_VALUE: Final = TypeAdapter(object)
 
 ANTHROPIC_DELTA_FIELDS: Final = MappingProxyType({"text_delta": "text", "input_json_delta": "partial_json"})
 
@@ -80,6 +85,15 @@ def opens_like_sse(head: bytes) -> bool | None:
     return False
 
 
+class _ValuedEnum(Protocol):
+    @property
+    def value(self) -> object: ...
+
+
+def _enum_value(member: _ValuedEnum) -> object:
+    return member.value
+
+
 def responses_event_type(chunk: object) -> str | None:
     """The event type of a Responses API stream event, or None for any other chunk.
 
@@ -90,7 +104,7 @@ def responses_event_type(chunk: object) -> str | None:
     if isinstance(chunk, (bytes, str)):
         return None
     kind: Final = read_field(chunk, "type")
-    value: Final = kind.value if isinstance(kind, Enum) else kind
+    value: Final = _enum_value(kind) if isinstance(kind, Enum) else kind
     return value if isinstance(value, str) and value.startswith("response.") else None
 
 
@@ -173,7 +187,7 @@ class AnthropicSSERestorer:
             return block
         line: Final = lines[data_lines[0]]
         try:
-            parsed: Final[object] = json.loads(line[len("data:") :])
+            parsed: Final = _OPAQUE_VALUE.validate_python(json.loads(line[len("data:") :]))
         except ValueError:
             return block
         event: Final = as_object(parsed)

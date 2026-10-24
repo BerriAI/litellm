@@ -106,6 +106,26 @@ def test_generate_content_response_parses_function_call() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ([], r"argument after \*\* must be a mapping, not list"),
+        (["candidates"], "list indices must be integers or slices, not str"),
+    ],
+)
+def test_generate_content_response_non_object_body_raises_the_error_of_the_failing_lookup(
+    body: JsonValue, message: str
+) -> None:
+    with pytest.raises(TypeError, match=message) as raised:
+        GoogleGenAIConfig().transform_generate_content_response(
+            model="gemini-2.5-flash",
+            raw_response=httpx.Response(200, json=body),
+            logging_obj=SimpleNamespace(model_call_details={}),
+        )
+
+    assert raised.type is TypeError
+
+
 def test_generate_content_request_preserves_tool_declarations() -> None:
     tools: Final = [
         {

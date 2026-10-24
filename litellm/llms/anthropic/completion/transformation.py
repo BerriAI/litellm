@@ -7,6 +7,7 @@ Litellm provider slug: `anthropic_text/<model_name>`
 import json
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -112,7 +113,7 @@ class AnthropicTextConfig(BaseConfig):
     ) -> dict:
         prompt: Final = self._get_anthropic_text_prompt_from_messages(messages=messages, model=model)
         ## Load Config
-        config: Final = litellm.AnthropicTextConfig.get_config()
+        config: Final[Mapping[str, object]] = MappingProxyType(litellm.AnthropicTextConfig.get_config())
         for k, v in config.items():
             if (
                 k not in optional_params

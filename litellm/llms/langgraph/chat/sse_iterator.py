@@ -9,9 +9,12 @@ import uuid
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class LangGraphSSEStreamIterator:
@@ -60,7 +63,7 @@ class LangGraphSSEStreamIterator:
                 return None
 
             try:
-                data: Final = json.loads(json_str)
+                data: Final = _DECODED_JSON.validate_python(json.loads(json_str))
                 return self._process_data(data)
             except json.JSONDecodeError:
                 verbose_logger.debug("Skipping non-JSON SSE line: %s", line[:100])

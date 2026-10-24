@@ -3217,12 +3217,13 @@ async def update_useful_links(
         )
 
 
-def _validated_labeled_tiers(
-    tier_labels: dict[ComplexityTier, str],  # mutable-ok: Pydantic materializes JSON object fields as dicts
-) -> tuple[tuple[ComplexityTier, str], ...]:
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _validated_labeled_tiers(tier_labels: object) -> tuple[tuple[ComplexityTier, str], ...]:
     """Validate tier labels once for both prompt-preview transports."""
     try:
-        return ComplexityRouterConfig(tier_labels=tier_labels).labeled_tiers()
+        return ComplexityRouterConfig.model_validate({"tier_labels": tier_labels}).labeled_tiers()
     except (TypeError, ValidationError) as e:
         raise ProxyException(
             message=f"tier_labels must be a JSON object of tier name to display name: {e}",
@@ -3237,7 +3238,7 @@ def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[Complexity
     if not tier_labels:
         return None
     try:
-        parsed: Final = json.loads(tier_labels)
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(tier_labels))
     except JSONDecodeError as e:
         raise ProxyException(
             message=f"tier_labels must be a JSON object of tier name to display name: {e}",

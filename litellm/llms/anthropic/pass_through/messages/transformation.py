@@ -722,7 +722,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> AnthropicMessagesResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final[AnthropicMessagesResponse] = raw_response.json()
         except Exception:
             raise AnthropicError(message=raw_response.text, status_code=raw_response.status_code)
         response: Final = AnthropicMessagesResponse(**raw_response_json)

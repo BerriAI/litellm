@@ -13,6 +13,8 @@ from collections.abc import Set as AbstractSet
 from typing import Any, Final, Literal, Protocol, overload
 from urllib.parse import quote
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -21,6 +23,7 @@ if typing.TYPE_CHECKING:
 
 MCP_SERVERS_TARGET: Final = "mcp_servers"
 MCP_OAUTH_TOKENS_TARGET: Final = "mcp_oauth_tokens"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class ASGIScopeFields(Protocol):
@@ -243,7 +246,7 @@ def _parse_mcp_info_dict(mcp_info: object) -> Mapping[str, object] | None:
         return mcp_info
     if isinstance(mcp_info, str):
         try:
-            parsed: Final[object] = json.loads(mcp_info)
+            parsed: Final = _DECODED_JSON.validate_python(json.loads(mcp_info))
         except (ValueError, TypeError):
             return None
         return parsed if isinstance(parsed, dict) else None

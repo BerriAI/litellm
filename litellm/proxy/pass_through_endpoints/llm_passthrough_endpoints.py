@@ -1305,7 +1305,7 @@ async def handle_bedrock_count_tokens(
         verbose_proxy_logger.error("BedrockError in handle_bedrock_count_tokens: %s", e)
         from litellm.litellm_core_utils.llm_response_utils.get_headers import get_response_headers
 
-        provider_headers: Final = getattr(getattr(e, "response", None), "headers", None)
+        provider_headers: Final = e.response.headers
         raise HTTPException(
             status_code=e.status_code,
             detail={"error": e.message},

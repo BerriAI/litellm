@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -41,7 +41,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict[str, str],
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -151,7 +151,7 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         self,
         headers: dict[str, str],
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

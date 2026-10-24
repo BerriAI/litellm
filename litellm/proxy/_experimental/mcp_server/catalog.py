@@ -1173,12 +1173,9 @@ async def list_gateway_catalog(
 
             try:
                 page: Final = await fetch_optional_catalog_page(context, request, server, allowed, cursor)
+                page_meta: Final[Mapping[str, object]] = page.meta or {}
                 return page.model_copy(
-                    update={
-                        "meta": {
-                            key: value for key, value in (page.meta or {}).items() if key != SERVER_OUTCOMES_META_KEY
-                        }
-                    }
+                    update={"meta": {key: value for key, value in page_meta.items() if key != SERVER_OUTCOMES_META_KEY}}
                 )
             except Exception as error:
                 if cursor is not None:

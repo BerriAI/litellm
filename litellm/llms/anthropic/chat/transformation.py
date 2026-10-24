@@ -831,6 +831,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "else": "conditional (else): {}",
             "not": "must not match: {}",
         }
+        schema_fields: Final[Mapping[str, object]] = MappingProxyType(schema)
         min_items: Final = schema.get("minItems")
         enforced_min_items: Final = (
             isinstance(min_items, int) and not isinstance(min_items, bool) and min_items in (0, 1)
@@ -845,7 +846,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         for field, label in constraint_labels.items():
             if field not in schema or field not in unsupported_fields:
                 continue
-            value = schema[field]
+            value = schema_fields[field]
             # A falsy boolean constraint (e.g. ``uniqueItems: false``) imposes no
             # real requirement, so don't add a misleading advisory note for it.
             if isinstance(value, bool) and not value:
@@ -869,7 +870,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         drops_conflicting_type: Final = _enum_conflicts_with_declared_type(schema)
 
-        for key, value in schema.items():
+        for key, value in schema_fields.items():
             if key in unsupported_fields:
                 continue
             if key == "type" and drops_conflicting_type:
@@ -2385,7 +2386,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params["tools"] = tools
 
         ## Load Config
-        config: Final = litellm.AnthropicConfig.get_config(model=model)
+        config: Final[Mapping[str, object]] = MappingProxyType(litellm.AnthropicConfig.get_config(model=model))
         for k, v in config.items():
             if (
                 k not in optional_params

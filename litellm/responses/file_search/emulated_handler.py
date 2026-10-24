@@ -15,7 +15,7 @@ import json
 import time
 import uuid
 from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast  # noqa: TID251  # see kwargs-ok / cast-ok markers
+from typing import TYPE_CHECKING, Final, TypeAlias, cast  # noqa: TID251  # see cast-ok markers
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -517,7 +517,7 @@ async def aresponses_with_emulated_file_search(
     model: str,
     tools: Iterable[ToolParam] | None = None,
     # Pass-through params — forwarded as-is to the underlying aresponses call
-    **kwargs: Any,  # kwargs-ok: `object` would surface the caller's partially-unknown dict at its call site
+    **kwargs: object,  # kwargs-ok: pass-through params forwarded as-is to the underlying aresponses call
 ) -> ResponsesAPIResponse:
     """
     Emulated file_search for providers that don't support it natively.

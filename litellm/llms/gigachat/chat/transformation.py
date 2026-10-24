@@ -273,7 +273,7 @@ class GigaChatConfig(BaseConfig):
         # Default to None (don't set function_call)
         return None
 
-    def _upload_image(self, image_url: str) -> str | None:
+    def _upload_image(self, image_url: str) -> object:
         """
         Upload image to GigaChat and return file_id.
 
@@ -293,7 +293,7 @@ class GigaChatConfig(BaseConfig):
             verbose_logger.error("Failed to upload image: %s", e)
             return None
 
-    def _transform_list_content(self, content: Sequence) -> tuple[str, Sequence[str]]:
+    def _transform_list_content(self, content: Sequence) -> tuple[str, Sequence[object]]:
         """
         Extract text and image attachments from a multimodal message content list.
 
@@ -304,7 +304,7 @@ class GigaChatConfig(BaseConfig):
             Tuple of (combined text, list of attachment file ids)
         """
         texts: Final[list[str]] = []  # mutable-ok: accumulator
-        attachments: Final[list[str]] = []  # mutable-ok: accumulator
+        attachments: Final[list[object]] = []  # mutable-ok: accumulator
         for part in content:
             if isinstance(part, dict):
                 if part.get("type") == "text":

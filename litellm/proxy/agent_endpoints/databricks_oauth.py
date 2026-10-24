@@ -48,6 +48,7 @@ _DEFAULT_SCOPE: Final = "all-apis"
 _TOKEN_EXPIRY_BUFFER_SECONDS: Final = 60
 _DEFAULT_TTL_SECONDS: Final = 3600
 _OAUTH_BLOCK: Final = TypeAdapter(Mapping[str, object])
+_TOKEN_RESPONSE_BODY: Final = TypeAdapter(object)
 
 
 def _resolve_secret(value: object) -> str | None:
@@ -275,7 +276,7 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
         except httpx.HTTPError as exc:
             raise ValueError(f"Databricks App OAuth token request failed: {exc}") from exc
 
-        body: Final[object] = response.json()
+        body: Final = _TOKEN_RESPONSE_BODY.validate_python(response.json())
         if not isinstance(body, dict):
             raise ValueError(
                 f"Databricks App OAuth token response returned non-object JSON (got {type(body).__name__})"

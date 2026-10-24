@@ -3,7 +3,6 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain, groupby
-from operator import itemgetter
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -279,6 +278,14 @@ def _with_kept_parts(block: object, tool_result: Mapping[str, object], parts: _K
     return {**tool_result, "content": [_restored_part(part, parts.get(index)) for index, part in enumerate(blocks)]}
 
 
+def _entry_tool_use_id(entry: tuple[str, _KeptParts]) -> str:
+    return entry[0]
+
+
+def _entry_kept_parts(entry: tuple[str, _KeptParts]) -> _KeptParts:
+    return entry[1]
+
+
 def _restored_block(block: object, kept: Mapping[str, Iterator[_KeptParts]]) -> object:
     match as_str_mapping(block):
         case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result if (
@@ -293,13 +300,15 @@ def _restored_block(block: object, kept: Mapping[str, Iterator[_KeptParts]]) -> 
 
 def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: object) -> Sequence[object]:
     blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
-    by_id: Final = tuple(sorted(chain.from_iterable(map(_tool_result_non_string_texts, blocks)), key=itemgetter(0)))
+    by_id: Final = tuple(
+        sorted(chain.from_iterable(map(_tool_result_non_string_texts, blocks)), key=_entry_tool_use_id)
+    )
     if not any(parts for _, parts in by_id):
         return rewritten
     kept_in_order: Final = MappingProxyType(
         {
-            tool_use_id: iter(tuple(map(itemgetter(1), group)))
-            for tool_use_id, group in groupby(by_id, key=itemgetter(0))
+            tool_use_id: iter(tuple(map(_entry_kept_parts, group)))
+            for tool_use_id, group in groupby(by_id, key=_entry_tool_use_id)
         }
     )
     return [_with_user_blocks(message, partial(_restored_block, kept=kept_in_order)) for message in rewritten]

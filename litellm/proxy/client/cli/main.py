@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from typing import Final, Literal, Protocol
 
 import click
+from pydantic import TypeAdapter
 
 from litellm._version import version as litellm_version
 from litellm.litellm_core_utils.cli_token_utils import load_cli_token
@@ -89,10 +90,13 @@ class LazyCommands(MutableMapping[str, click.Command]):
         return len(self._loaders)
 
 
+_MODULE_ATTRIBUTE: Final = TypeAdapter(object)
+
+
 def _command_in(module: str, attribute: str) -> Callable[[], click.Command]:
     @functools.cache
     def load() -> click.Command:
-        match getattr(importlib.import_module(module, __package__), attribute):
+        match _MODULE_ATTRIBUTE.validate_python(getattr(importlib.import_module(module, __package__), attribute)):
             case click.Command() as command:
                 return command
             case _:

@@ -49,11 +49,12 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final
+from typing import Final, Protocol
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.newrelic import NewRelicInitParams
@@ -63,6 +64,10 @@ try:
     import newrelic.agent as _newrelic_agent
 except ImportError:
     _newrelic_agent = None
+
+
+class _SupportsTimestamp(Protocol):
+    def timestamp(self) -> float: ...
 
 
 class NewRelicLogger(CustomLogger):
@@ -126,13 +131,13 @@ class NewRelicLogger(CustomLogger):
                 verbose_logger.error("Failed to initialize New Relic agent: %s. Integration will be disabled.", e)
                 self.enabled = False
 
-    def _get_newrelic_params(self) -> dict:
+    def _get_newrelic_params(self) -> Mapping[str, object]:
         """
         Get the newrelic_params from litellm.newrelic_params
 
         These are params specific to initializing the NewRelicLogger e.g. turn_off_message_logging
         """
-        dict_newrelic_params: dict = {}
+        dict_newrelic_params: Mapping[str, object] = {}
         if litellm.newrelic_params is not None:
             if isinstance(litellm.newrelic_params, NewRelicInitParams):
                 dict_newrelic_params = litellm.newrelic_params.model_dump()
@@ -401,9 +406,9 @@ class NewRelicLogger(CustomLogger):
             return choices[0].get("finish_reason") or "unknown"
         return "unknown"
 
-    def _to_epoch_ms(self, t: Any) -> float:
+    def _to_epoch_ms(self, t: datetime | float) -> float:
         """Convert a datetime or float timestamp to epoch milliseconds."""
-        if hasattr(t, "timestamp"):
+        if has_attributes(t, _SupportsTimestamp, "timestamp"):
             return t.timestamp() * 1000.0
         return float(t) * 1000.0
 
@@ -518,13 +523,13 @@ class NewRelicLogger(CustomLogger):
         sequence = 0
 
         # Extract timestamps, preferring StandardLoggingPayload
-        start_time = None
+        start_time: datetime | float | None = None
         if standard_logging_object:
             start_time = standard_logging_object.get("startTime")
         if not start_time:
             start_time = kwargs.get("start_time")
 
-        end_time = None
+        end_time: datetime | float | None = None
         if standard_logging_object:
             end_time = standard_logging_object.get("endTime")
         if not end_time:

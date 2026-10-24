@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, List, Optional, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 router = APIRouter()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class ManagedVectorStoreRow(Protocol):
@@ -348,11 +350,11 @@ async def update_vector_store(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        update_data = data.model_dump(exclude_unset=True)
-        vector_store_id: Final[str] = update_data.pop("vector_store_id")
+        update_data = data.model_dump(exclude_unset=True, exclude={"vector_store_id"})
+        vector_store_id: Final = data.vector_store_id
         if update_data.get("vector_store_metadata") is not None:
             update_data["vector_store_metadata"] = safe_dumps(
-                update_data["vector_store_metadata"]
+                _DECODED_JSON.validate_python(update_data["vector_store_metadata"])
             )
 
         updated = await managed_vector_store_table(prisma_client).update(

@@ -1,6 +1,7 @@
 import io
 import os
 import pathlib
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -594,3 +595,24 @@ def test_transform_response_wraps_malformed_words_with_the_raw_body(words: objec
         DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
 
     assert str(exc_info.value).endswith(f"\nResponse: {raw_response.text}")
+
+
+@pytest.mark.parametrize(
+    ("payload", "error"),
+    [
+        ({"results": None}, "'NoneType' object is not subscriptable"),
+        (_deepgram_payload({"transcript": "hello", "words": 5}, {}), "object of type 'int' has no len()"),
+        (
+            {**_deepgram_payload({"transcript": "hello"}, {}), "metadata": None},
+            "'NoneType' object is not subscriptable",
+        ),
+    ],
+)
+def test_transform_response_wraps_the_error_of_the_failing_lookup_in_a_malformed_body(payload: object, error: str):
+    raw_response: Final = httpx.Response(200, json=payload)
+
+    with pytest.raises(ValueError, match="Error transforming Deepgram response: ") as exc_info:
+        DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
+
+    assert exc_info.type is ValueError
+    assert str(exc_info.value) == f"Error transforming Deepgram response: {error}\nResponse: {raw_response.text}"

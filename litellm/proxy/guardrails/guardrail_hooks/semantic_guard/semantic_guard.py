@@ -6,13 +6,14 @@ via embedding similarity. Smarter than regex (understands intent), lighter
 than an LLM call (~20-50ms per request for embedding).
 """
 
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none, require_attributes
 from litellm.proxy.guardrails.guardrail_hooks.semantic_guard.route_loader import (
     SemanticGuardRouteLoader,
 )
@@ -188,17 +189,21 @@ def _extract_user_text(messages: list) -> str:
     return ""
 
 
-def _extract_response_text(response: Any) -> str:
+class _MessageContent(Protocol):
+    @property
+    def content(self) -> object: ...
+
+
+def _extract_response_text(response: object) -> str:
     """Extract text from every LLM response choice."""
-    if hasattr(response, "choices") and response.choices:
-        text_parts: Final[list[str]] = []
-        for choice in response.choices:
-            if hasattr(choice, "message") and choice.message:
-                text = _content_to_text(choice.message.content)
-                if text:
-                    text_parts.append(text)
-        return "\n".join(text_parts)
-    return ""
+    text_parts: Final[list[str]] = []
+    for choice in attribute_items(response, "choices"):
+        message = attribute_or_none(choice, "message")
+        if message:
+            text = _content_to_text(require_attributes(message, _MessageContent, "content").content)
+            if text:
+                text_parts.append(text)
+    return "\n".join(text_parts)
 
 
 def _content_to_text(content: object) -> str:

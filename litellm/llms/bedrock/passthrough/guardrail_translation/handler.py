@@ -544,7 +544,7 @@ class _StreamFrame(TypedDict):
 
 
 def _unpack_uint32(buffer: bytes) -> int:
-    return struct.unpack("!I", buffer)[0]
+    return int.from_bytes(buffer, "big")
 
 
 def _collect_stream_delta_text_holders(delta: object) -> list[_DeltaHolder]:
@@ -1255,7 +1255,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             headers_bytes = frame_raw[12 : 12 + orig_hdrs_len]
 
             try:
-                payload_dict = json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
+                payload_dict = _BODY_BY_REFERENCE.validate_python(
+                    json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
+                )
                 for local_idx, (_, container, key) in enumerate(
                     _collect_stream_delta_text_holders(payload_dict.get("delta"))
                 ):

@@ -30,6 +30,7 @@ from litellm.harness.types import (
     ToolCall,
     ToolResult,
 )
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.llms.base_llm.harness.transformation import (
     BaseCLIHarnessConfig,
     HarnessSessionSetup,
@@ -231,12 +232,12 @@ def _system_events(event: Mapping[str, object], state: ClaudeCodeStreamState) ->
     return event_list()
 
 
-def _record_result(event: Mapping[str, Any], state: ClaudeCodeStreamState) -> Sequence[Event]:
+def _record_result(event: Mapping[str, object], state: ClaudeCodeStreamState) -> Sequence[Event]:
     state.result_seen = True
     state.is_error = bool(event.get("is_error", False))
     result = event.get("result")
     state.result_text = result if isinstance(result, str) else None
-    state.errors = [str(e) for e in event.get("errors") or ()]  # mutable-ok: mirrors the JSON errors array
+    state.errors = [str(e) for e in iter_items(event.get("errors") or ())]  # mutable-ok: mirrors the JSON errors array
     state.structured_output = event.get("structured_output")
     if event.get("session_id"):
         state.session_id = str(event["session_id"])

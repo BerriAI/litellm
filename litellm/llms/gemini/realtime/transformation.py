@@ -5,13 +5,14 @@ This file contains the transformation logic for the Gemini realtime API.
 import json
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from typing_extensions import ReadOnly, Required, TypedDict
 
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
@@ -167,16 +168,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return True
 
     @staticmethod
-    def _usage_detail_alias(details: Mapping[str, int | None] | None, defaults: dict[str, int]) -> dict[str, int]:
-        if not isinstance(details, dict):
+    def _usage_detail_alias(details: object, defaults: dict[str, int]) -> dict[str, object]:
+        detail_mapping: Final = as_str_mapping(details)
+        if detail_mapping is None or not isinstance(details, dict):
             return dict(defaults)
         return {
             **defaults,
-            **{key: value for key, value in details.items() if value is not None},
+            **{key: value for key, value in detail_mapping.items() if value is not None},
         }
 
     @staticmethod
-    def _add_pipecat_usage_detail_aliases(usage_dict: dict[str, Any]) -> dict[str, object]:
+    def _add_pipecat_usage_detail_aliases(usage_dict: dict[str, object]) -> dict[str, object]:
         usage_dict.setdefault(
             "input_token_details",
             GeminiRealtimeConfig._usage_detail_alias(

@@ -119,7 +119,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
 
     @staticmethod
     def _parse_task_response(raw_response: httpx.Response) -> _RunwayTaskResponse:
-        return raw_response.json()
+        return _parse_runway_task_response(raw_response)
 
     def get_supported_openai_params(self, model: str) -> list:
         """

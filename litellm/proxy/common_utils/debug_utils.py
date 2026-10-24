@@ -11,12 +11,14 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PYTHON_GC_THRESHOLD
 from litellm.litellm_core_utils.bug_report import EnvironmentReport
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.bug_report_config import build_proxy_environment_report
@@ -26,6 +28,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 router: Final = APIRouter()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 # Configure garbage collection thresholds from environment variables
@@ -885,8 +888,8 @@ def init_verbose_loggers():
             return
         if os.path.isfile(worker_config):
             return
-        _settings: Final = json.loads(worker_config)
-        if not isinstance(_settings, dict):
+        _settings: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(worker_config)))
+        if _settings is None:
             return
 
         debug: Final = _settings.get("debug", None)

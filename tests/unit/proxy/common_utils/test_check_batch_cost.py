@@ -4260,6 +4260,17 @@ class TestCreatorTurnedOffMessageLogging:
         assert await instance._creator_turned_off_message_logging(self._job()) is expected
 
     @pytest.mark.asyncio
+    async def test_a_job_without_creator_fields_falls_back_to_the_proxy_setting(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+        instance: Final = self._instance()
+
+        assert await instance._creator_turned_off_message_logging(SimpleNamespace(id="job-1")) is False
+
+    @pytest.mark.asyncio
     async def test_a_team_that_turned_off_message_logging_covers_its_keys(self, monkeypatch):
         from types import SimpleNamespace
 

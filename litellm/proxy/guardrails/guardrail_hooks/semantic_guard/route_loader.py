@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import yaml
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 
 
 ROUTE_TEMPLATES_DIR: Final = os.path.join(os.path.dirname(__file__), "route_templates")
+_DECODED_YAML: Final = TypeAdapter(object)
 
 
 class SemanticGuardRouteLoader:
@@ -55,7 +57,7 @@ class SemanticGuardRouteLoader:
         if not os.path.exists(file_path):
             raise ValueError(f"SemanticGuard: custom routes file not found: {file_path}")
         with open(file_path, "r") as f:
-            data: Final = yaml.safe_load(f)
+            data: Final = _DECODED_YAML.validate_python(yaml.safe_load(f))
         if isinstance(data, list):
             return data
         if isinstance(data, dict):

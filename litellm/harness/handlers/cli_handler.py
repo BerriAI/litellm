@@ -70,10 +70,10 @@ async def send_stdin(proc: Process, data: str) -> None:
 
 
 async def private_dir_for(sandbox: Sandbox) -> str:
-    tempdir = getattr(sandbox, "tempdir", None)
+    tempdir: Final = sandbox.tempdir if hasattr(sandbox, "tempdir") else None
     if tempdir is None:
         raise SandboxError(f"{type(sandbox).__name__} has no tempdir(); CLI harnesses need a private config dir")
-    path: str = await tempdir()
+    path: Final = await tempdir()
     return path
 
 

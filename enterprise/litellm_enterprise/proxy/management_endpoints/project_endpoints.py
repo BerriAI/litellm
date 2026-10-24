@@ -36,6 +36,7 @@ from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.project_repository import ProjectRepository
+from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
@@ -71,6 +72,16 @@ def _verification_token_table(
     prisma_client: PrismaClient,
 ) -> TableActions["prisma_models.LiteLLM_VerificationToken"]:
     return VerificationTokenRepository(prisma_client).table
+
+
+class _WriterVerificationTokenRepository(PrismaTableRepository["prisma_models.LiteLLM_VerificationToken"]):
+    table_name = "litellm_verificationtoken"
+
+
+def _writer_verification_token_table(
+    prisma_client: PrismaClient,
+) -> TableActions["prisma_models.LiteLLM_VerificationToken"]:
+    return _WriterVerificationTokenRepository(prisma_client, use_writer=True).table
 
 
 def _budget_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_BudgetTable"]:
@@ -849,7 +860,7 @@ async def update_project(
                 else None
             )
             if current_project is not None and data.team_id != current_project.team_id:
-                mismatched_key_count: Final = await prisma_client.writer_db.litellm_verificationtoken.count(
+                mismatched_key_count: Final = await _writer_verification_token_table(prisma_client).count(
                     where={
                         "project_id": data.project_id,
                         "OR": [{"team_id": {"not": data.team_id}}, {"team_id": None}],

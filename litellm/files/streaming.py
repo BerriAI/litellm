@@ -1,7 +1,7 @@
 import datetime
 import traceback
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Final, Optional, cast
+from typing import TYPE_CHECKING, Final, Optional, cast
 
 import anyio
 
@@ -163,7 +163,7 @@ class FileContentStreamingResponse:
         merged_hidden_params: Final = cast(
             "StandardLoggingHiddenParams",
             {
-                **cast(dict[str, Any], payload.get("hidden_params") or {}),
+                **(payload.get("hidden_params") or {}),
                 **self._hidden_params,
             },
         )

@@ -23,6 +23,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class ClarifaiConfig(OpenAIGPTConfig):
@@ -114,7 +115,7 @@ class ClarifaiConfig(OpenAIGPTConfig):
         )
         ## Reponse
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise OpenAIError(
                 status_code=raw_response.status_code,

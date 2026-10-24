@@ -190,7 +190,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         payload: Final = json.dumps(request_body)
         empty_files: Final = cast(RequestFiles, [])
-        return cast(tuple[dict[str, Any], RequestFiles | None], (payload, empty_files))
+        return cast(tuple[dict[str, object], RequestFiles | None], (payload, empty_files))
 
     def transform_image_edit_response(
         self,

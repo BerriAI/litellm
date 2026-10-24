@@ -7,6 +7,7 @@ records the reported values without recomputing them.
 """
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -89,7 +90,7 @@ def _parse_total_tokens(raw_value: str | None) -> int | None:
     return total_tokens
 
 
-def parse_upstream_reported_usage(headers: httpx.Headers) -> UpstreamReportedUsage | None:
+def parse_upstream_reported_usage(headers: Mapping[str, str]) -> UpstreamReportedUsage | None:
     """Read the reported totals off an upstream pass-through response.
 
     Returns ``None`` when neither header is present, which is the normal case

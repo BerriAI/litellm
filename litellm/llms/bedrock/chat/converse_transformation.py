@@ -12,7 +12,8 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -21,6 +22,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     filter_exceptions_from_params,
     filter_internal_params,
     map_finish_reason,
@@ -160,6 +162,14 @@ _TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _JSON_VALUE: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_AS_RECEIVED: Final = TypeAdapter(list[object])
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ToolCallInContent(TypedDict):
+    name: ReadOnly[str]
+
+
+_TOOL_CALL_IN_CONTENT: Final = TypeAdapter(_ToolCallInContent)
 CLAUDE_ON_BEDROCK_INVOKE_REMEDY: Final = " This model runs tool search on Bedrock through `bedrock/invoke/<model>`."
 _DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
@@ -2453,9 +2463,17 @@ class AmazonConverseConfig(BaseConfig):
         if message.content is not None:
             try:
                 tool_call_names: Final = self.get_tool_call_names(tools)
-                json_content: Final = json.loads(message.content)
-                if json_content.get("type") == "function" and json_content.get("name") in tool_call_names:
-                    tool_calls: Final = [ChatCompletionMessageToolCall(function=Function(**json_content))]
+                json_content: Final = as_str_mapping(_JSON_VALUE.validate_python(json.loads(message.content)))
+                if (
+                    json_content is not None
+                    and json_content.get("type") == "function"
+                    and json_content.get("name") in tool_call_names
+                ):
+                    tool_calls: Final = [
+                        ChatCompletionMessageToolCall(
+                            function=Function(**_TOOL_CALL_IN_CONTENT.validate_python(json_content))
+                        )
+                    ]
 
                     message.tool_calls = tool_calls
                     message.content = None

@@ -21,6 +21,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -126,6 +127,13 @@ def _sanitize_inbound_headers(
     return sanitized or None
 
 
+def _logged_inbound_headers(details: Mapping[str, object]) -> Mapping[object, object] | None:
+    litellm_params: Final = as_str_mapping(details.get("litellm_params", {}))
+    metadata: Final = as_str_mapping(litellm_params.get("metadata", {})) if litellm_params is not None else None
+    headers: Final = metadata.get("headers", None) if metadata is not None else None
+    return headers if isinstance(headers, dict) else None
+
+
 def _extract_inbound_headers(
     request_data: dict,
     logging_obj: Optional["LiteLLMLoggingObj"],
@@ -163,7 +171,7 @@ def _extract_inbound_headers(
     if logging_obj and getattr(logging_obj, "model_call_details", None):
         try:
             details: Final = logging_obj.model_call_details or {}
-            headers = details.get("litellm_params", {}).get("metadata", {}).get("headers", None)
+            headers = _logged_inbound_headers(details)
             if headers:
                 return _sanitize_inbound_headers(headers, extra_allowlist=extra_allowlist)
         except Exception:
@@ -283,7 +291,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         )
         self.num_retries: int = num_retries or 0
         self.headers = headers or {}
-        self.extra_headers = extra_headers or []
+        self.extra_headers: Sequence[object] = extra_headers or []
 
         # If api_key is provided, add it as x-api-key header
         if api_key:

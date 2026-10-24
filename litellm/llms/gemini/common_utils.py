@@ -2,9 +2,9 @@ import base64
 import datetime
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
@@ -389,7 +389,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
     def get_base_model(model: str) -> str | None:
         return model.replace("gemini/", "")
 
-    def process_model_name(self, models: list[dict[str, str]]) -> list[str]:
+    def process_model_name(self, models: Iterable[Mapping[str, str]]) -> list[str]:
         litellm_model_names: Final = []
         for model in models:
             stripped_model_name = model["name"].replace("models/", "")
@@ -416,9 +416,11 @@ class GeminiModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from Gemini. Status code: {response.status_code}, Response: {response.json()}"
             )
 
-        models: Final[list[dict[str, str]]] = response.json()["models"]
+        listing: Final = cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+            Mapping[str, Iterable[Mapping[str, str]]], _JSON_VALUE.validate_python(response.json())
+        )
 
-        litellm_model_names: Final = self.process_model_name(models)
+        litellm_model_names: Final = self.process_model_name(listing["models"])
         return litellm_model_names
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

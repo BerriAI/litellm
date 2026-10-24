@@ -2,6 +2,7 @@
 Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 """
 
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
@@ -110,6 +111,10 @@ def _remember_trace_id(litellm_call_id: object, logged: LangfuseLoggedEvent) -> 
     in_memory_trace_id_cache.set_cache(litellm_call_id=litellm_call_id, service_name="langfuse", trace_id=trace_id)
 
 
+def _params_without_model(config: Mapping[str, object]) -> Mapping[str, object]:
+    return {k: v for k, v in config.items() if k != "model"}
+
+
 class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogger):
     def __init__(
         self,
@@ -182,12 +187,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         return compiled_prompt
 
     def _get_optional_params_from_langfuse(self, langfuse_prompt_client: PROMPT_CLIENT) -> dict:
-        config: Final = langfuse_prompt_client.config
-        optional_params: Final = {}
-        for k, v in config.items():
-            if k != "model":
-                optional_params[k] = v
-        return optional_params
+        return dict(_params_without_model(langfuse_prompt_client.config))
 
     async def async_get_chat_completion_prompt(
         self,

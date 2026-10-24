@@ -40,6 +40,7 @@ class GroqExecutedToolIdentity(LiteLLMBaseModel):
 
 
 _EXECUTED_TOOLS_ADAPTER: Final = TypeAdapter(tuple[GroqExecutedToolIdentity, ...])
+_ATTRIBUTE_VALUE: Final = TypeAdapter(object)
 
 
 class GroqChatConfig(OpenAILikeChatConfig):
@@ -324,7 +325,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
 
-        original_service_tier: Final[object] = getattr(model_response, "service_tier")
+        original_service_tier: Final = _ATTRIBUTE_VALUE.validate_python(getattr(model_response, "service_tier"))
         mapped_service_tier: Final[Literal["auto", "default", "flex"]] = self._map_groq_service_tier(
             original_service_tier=original_service_tier
         )

@@ -6,7 +6,7 @@ on the LiteLLM gateway. Blocks or alerts when unregistered servers are found.
 """
 
 from collections.abc import Mapping
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
 
@@ -20,6 +20,9 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LITELLM_PROXY_MCP_SERVER_URL_PREFIX,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+
+if TYPE_CHECKING:
+    from litellm.caching.caching import DualCache
 
 
 class MCPSecurityGuardrail(CustomGuardrail):
@@ -40,7 +43,7 @@ class MCPSecurityGuardrail(CustomGuardrail):
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        cache: Any,
+        cache: "DualCache",
         data: dict,
         call_type: str,
     ) -> Exception | str | dict | None:

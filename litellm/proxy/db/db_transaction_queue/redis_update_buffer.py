@@ -11,6 +11,7 @@ from datetime import datetime
 from functools import reduce
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
+from pydantic import TypeAdapter
 from redis.exceptions import RedisError
 
 from litellm._internal_context import with_service_target
@@ -98,6 +99,7 @@ _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
 )
 
 _ValueT = TypeVar("_ValueT")
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _spend_log_json_default(value: object) -> str:
@@ -109,7 +111,7 @@ def _encode_spend_log_row(row: SpendLogRow) -> str:
 
 
 def _decode_spend_log_row(encoded: str) -> dict[str, object] | None:
-    decoded: Final = json.loads(encoded)
+    decoded: Final = _DECODED_JSON.validate_python(json.loads(encoded))
     return decoded if isinstance(decoded, dict) else None
 
 

@@ -44,7 +44,7 @@ from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEnc
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
 from litellm.litellm_core_utils.url_utils import safe_get
-from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client, header_value
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
@@ -247,7 +247,7 @@ def get_image_dimensions(
             client: Final = get_httpx_client()
             response: Final[httpx.Response] = safe_get(client, data)
             max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
-            content_length: Final[str | None] = response.headers.get("Content-Length")
+            content_length: Final[str | None] = header_value(response.headers, "Content-Length")
             if content_length is not None and int(content_length) > max_bytes:
                 pass  # skip download; img_data stays None
             else:

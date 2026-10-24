@@ -18,6 +18,7 @@ from typing import Final, Literal, Protocol, TypeAlias
 import jwt
 from fastapi import HTTPException
 from jwt.types import Options
+from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
@@ -38,6 +39,7 @@ _ALLOWED_ID_TOKEN_ALGORITHMS: Final = (
     "PS512",
 )
 _JWKS_CACHE_TTL_SECONDS: Final = 3600
+_DECODED_JSON: Final = TypeAdapter(object)
 _jwks_cache: Final = InMemoryCache(default_ttl=_JWKS_CACHE_TTL_SECONDS)
 
 JwksFetcher: TypeAlias = Callable[
@@ -103,7 +105,7 @@ async def _fetch_issuer_jwks(binding: MCPOAuthIdentityBinding) -> Sequence[Mappi
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response: Final = await client.get(jwks_url)
     response.raise_for_status()
-    document: Final = response.json()
+    document: Final = _DECODED_JSON.validate_python(response.json())
     keys: Final = document.get("keys") if isinstance(document, dict) else None
     if not isinstance(keys, list):
         raise TypeError(f"JWKS document at {jwks_url} has no 'keys' array")
@@ -116,7 +118,7 @@ async def _discover_jwks_url(issuer: str) -> str:
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response: Final = await client.get(discovery_url)
     response.raise_for_status()
-    metadata: Final = response.json()
+    metadata: Final = _DECODED_JSON.validate_python(response.json())
     jwks_uri: Final = metadata.get("jwks_uri") if isinstance(metadata, dict) else None
     if not isinstance(jwks_uri, str) or not jwks_uri:
         raise ValueError(f"OIDC discovery at {discovery_url} returned no jwks_uri")

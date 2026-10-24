@@ -6,7 +6,7 @@ Filters MCP tools semantically for /chat/completions and /responses endpoints.
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import ContextWindowExceededError
@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
 
     from litellm.router import Router
+
+_Tool: Final = TypeVar("_Tool")
 
 
 class SemanticToolFilterContextWindowError(Exception):
@@ -265,9 +267,9 @@ class SemanticMCPToolFilter:
     async def filter_tools(
         self,
         query: str,
-        available_tools: list[Any],
+        available_tools: list[_Tool],
         top_k: int | None = None,
-    ) -> list[Any]:
+    ) -> list[_Tool]:
         """
         Filter tools semantically based on query.
 
@@ -390,7 +392,7 @@ class SemanticMCPToolFilter:
         separator: Final = client_name[-len(canonical) - 1]
         return separator in ("_", "-")
 
-    def _get_tools_by_names(self, tool_names: Sequence[str], available_tools: Sequence[object]) -> list[object]:
+    def _get_tools_by_names(self, tool_names: Sequence[str], available_tools: Sequence[_Tool]) -> list[_Tool]:
         """
         Get tools from available_tools by their names, preserving the
         semantic router's ordering.
@@ -406,13 +408,13 @@ class SemanticMCPToolFilter:
         # Exact matches win over suffix matches when both are present, and
         # each incoming tool is returned at most once even if two canonical
         # names happen to be tail-compatible with the same incoming name.
-        available_by_name: Final[dict[str, object]] = {}
+        available_by_name: Final[dict[str, _Tool]] = {}
         for tool in available_tools:
             client_name, _ = self.extract_tool_info(tool)
             if client_name and client_name not in available_by_name:
                 available_by_name[client_name] = tool
 
-        matched: Final[list[object]] = []
+        matched: Final[list[_Tool]] = []
         used_ids: Final[set[int]] = set()
         for canonical in tool_names:
             tool = available_by_name.get(canonical)

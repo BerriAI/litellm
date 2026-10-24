@@ -3045,7 +3045,7 @@ async def ui_view_spend_logs(
         )
         sql_params.extend([page_size, skip])
 
-        data: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
+        data: Final[Sequence[Mapping[str, object]]] = await _query_raw(prisma_client, sql_query, *sql_params)
 
         if request_id is not None and not is_v2 and not is_admin_view:
             await _assert_user_owns_fetched_spend_rows(
@@ -3064,7 +3064,7 @@ async def ui_view_spend_logs(
 
         return await _build_ui_spend_logs_response(
             prisma_client,
-            data,
+            list(data),
             total_records,
             page,
             page_size,

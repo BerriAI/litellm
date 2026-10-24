@@ -5,10 +5,10 @@ Attachments define WHERE policies apply, separate from the policy definitions.
 This allows the same policy to be attached to multiple scopes.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypedDict
+from typing import TYPE_CHECKING, Final, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.repositories.table_repositories import PolicyAttachmentRepository
@@ -102,7 +102,7 @@ class AttachmentRegistry:
         self._initialized = True
         verbose_proxy_logger.info("Loaded %s policy attachments", len(self._attachments))
 
-    def _parse_attachment(self, attachment_data: dict[str, Any]) -> PolicyAttachment:
+    def _parse_attachment(self, attachment_data: Mapping[str, object]) -> PolicyAttachment:
         """
         Parse an attachment from raw configuration data.
 
@@ -112,15 +112,17 @@ class AttachmentRegistry:
         Returns:
             Parsed PolicyAttachment object
         """
-        return PolicyAttachment(
-            policy=attachment_data.get("policy", ""),
-            scope=attachment_data.get("scope"),
-            teams=attachment_data.get("teams"),
-            keys=attachment_data.get("keys"),
-            models=attachment_data.get("models"),
-            tags=attachment_data.get("tags"),
-            priority=attachment_data.get("priority"),
-            default=attachment_data.get("default", False),
+        return PolicyAttachment.model_validate(
+            {
+                "policy": attachment_data.get("policy", ""),
+                "scope": attachment_data.get("scope"),
+                "teams": attachment_data.get("teams"),
+                "keys": attachment_data.get("keys"),
+                "models": attachment_data.get("models"),
+                "tags": attachment_data.get("tags"),
+                "priority": attachment_data.get("priority"),
+                "default": attachment_data.get("default", False),
+            }
         )
 
     def get_attached_policies(

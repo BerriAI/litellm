@@ -1,14 +1,18 @@
 import json
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
+
 from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
+
+_DECODED_DISK_VALUE: Final = TypeAdapter(object)
 
 
 class DiskCache(BaseCache):
@@ -44,7 +48,7 @@ class DiskCache(BaseCache):
         original_cached_response: Final = self.disk_cache.get(key)
         if original_cached_response:
             try:
-                cached_response = json.loads(original_cached_response)
+                cached_response = _DECODED_DISK_VALUE.validate_python(json.loads(original_cached_response))
             except Exception:
                 cached_response = original_cached_response
             return cached_response

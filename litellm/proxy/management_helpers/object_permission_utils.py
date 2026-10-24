@@ -310,7 +310,7 @@ async def _resolve_mcp_server_identifiers_to_ids(
         identifiers=identifiers,
         prisma_client=prisma_client,
     ):
-        server_id = getattr(server, "server_id", None)
+        server_id = server.server_id
         if not server_id:
             continue
         for identifier in identifiers:

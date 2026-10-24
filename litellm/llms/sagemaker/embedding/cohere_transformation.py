@@ -10,7 +10,8 @@ be of type Object`.
 Reference: https://docs.cohere.com/v2/reference/embed
 """
 
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -25,6 +26,7 @@ from litellm.llms.bedrock.embed.cohere_transformation import (
     BedrockCohereEmbeddingConfig,
 )
 from litellm.llms.cohere.embed.v1_transformation import CohereEmbeddingConfig
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..common_utils import SagemakerError
@@ -123,7 +125,7 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

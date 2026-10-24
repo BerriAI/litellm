@@ -2021,8 +2021,13 @@ def get_bedrock_response_stream_shape():
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
 
 
+class _ModeledErrorMetadata(TypedDict, total=False):
+    httpStatusCode: ReadOnly[int]
+
+
 def _modeled_error_status(member: Shape) -> int | None:
-    status: Final = (member.metadata or {}).get("error", {}).get("httpStatusCode")
+    error: Final[_ModeledErrorMetadata] = (member.metadata or {}).get("error", {})
+    status: Final = error.get("httpStatusCode")
     return None if status is None else int(status)
 
 
