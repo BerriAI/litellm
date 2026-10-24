@@ -89,6 +89,7 @@ from litellm.litellm_core_utils.get_litellm_params import (
     with_control_options,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import (
+    get_provider_affinity_header,
     invalid_provider_routing_hints_message,
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
@@ -130,6 +131,7 @@ from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantl
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -798,6 +800,11 @@ def _model_response_from_cached_dict(cached_response_dict: Mapping[str, object])
 
 def _transcription_response_from_cached_dict(cached_response_dict: Mapping[str, object]) -> TranscriptionResponse:
     return TranscriptionResponse(**cached_response_dict)
+
+
+def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str, object]) -> TextCompletionResponse:
+    fields: Final = {key: value for key, value in cached_response_dict.items() if key != "stream"}
+    return TextCompletionResponse(stream=bool(cached_response_dict.get("stream", False)), **fields)
 
 
 async def _async_streaming(response, model, custom_llm_provider, args):
@@ -3558,7 +3565,7 @@ def _complete_nadir(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
         encoding=_get_encoding(),
         api_key=api_key,
         logging_obj=ctx.logging,
-        client=ctx.client,
+        client=_dispatch_client_http(ctx),
     )
     ctx.logging.post_call(input=ctx.messages, api_key=api_key, original_response=response)
 
@@ -4195,6 +4202,7 @@ _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
+_OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 
 
 _AWS_BEDROCK_CLIENT_CREDENTIAL_KEYS: Final = (
@@ -4739,7 +4747,7 @@ def _complete_petals(ctx: CompletionDispatchContext) -> _CompletionDispatchResul
     )
     if stream is True:  ## [BETA]
         # Fake streaming for petals
-        resp_string: Final = model_response["choices"][0]["message"]["content"]
+        resp_string: Final = _OPAQUE_VALUE_ADAPTER.validate_python(model_response["choices"][0]["message"]["content"])
         return CustomStreamWrapper(
             resp_string,
             model,
@@ -5990,19 +5998,28 @@ def completion(
             },
         )
         litellm_params: Final = with_control_options(requested_litellm_params, control_options)
-        if litellm_params.get("provider_affinity_header") is not None:
+        affinity_api_base: Final = (
+            str(client.base_url)
+            if isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            else get_openai_credentials(api_base=api_base).api_base
+            if custom_llm_provider == "openai"
+            else api_base
+        )
+        default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
+        if litellm_params.get("provider_affinity_header") is not None or default_affinity_header is not None:
             try:
                 headers = add_provider_affinity_header(
                     headers=headers or litellm.headers or MappingProxyType({}),
                     litellm_params=MappingProxyType(
                         {
-                            "provider_affinity_header": litellm_params["provider_affinity_header"],
+                            "provider_affinity_header": litellm_params.get("provider_affinity_header"),
                             "litellm_session_id": kwargs.get("litellm_session_id"),
                             "session_id": kwargs.get("session_id"),
                             "metadata": metadata,
                             "litellm_metadata": kwargs.get("litellm_metadata"),
                         }
                     ),
+                    default_header=default_affinity_header,
                 )
             except ValueError as affinity_error:
                 raise litellm.BadRequestError(
@@ -7708,7 +7725,7 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
         init_response: Final = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict) or isinstance(init_response, TextCompletionResponse):  ## CACHING SCENARIO
             if isinstance(init_response, dict):
-                response = TextCompletionResponse(**init_response)
+                response = _text_completion_response_from_cached_dict(init_response)
             else:
                 response = init_response
         elif asyncio.iscoroutine(init_response):
@@ -7888,7 +7905,6 @@ def text_completion(
             tokenizer: Final = get_encoding("p50k_base")
             ## if it's a 2d list - each element in the list is a text_completion() request
             if len(prompt) > 0 and isinstance(prompt[0], list):
-                responses: Final = [None for x in prompt]  # init responses
 
                 def process_prompt(i, individual_prompt):
                     decoded_prompt: Final = tokenizer.decode(individual_prompt)
@@ -7905,16 +7921,16 @@ def text_completion(
                     text_completion_response["object"] = "text_completion"
                     text_completion_response["created"] = response.get("created", None)
                     text_completion_response["model"] = response.get("model", None)
-                    return response["choices"][0]
+                    return response.choices[0]
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     completed_futures: Final = [
                         executor.submit(process_prompt, i, individual_prompt)
                         for i, individual_prompt in enumerate(prompt)
                     ]
-                    for i, future in enumerate(concurrent.futures.as_completed(completed_futures)):
-                        responses[i] = future.result()
-                    text_completion_response.choices = responses
+                    text_completion_response.choices = [
+                        future.result() for future in concurrent.futures.as_completed(completed_futures)
+                    ]
 
                 return text_completion_response
     # else:

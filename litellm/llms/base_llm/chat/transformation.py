@@ -94,9 +94,10 @@ class BaseConfig(ABC):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("_")
             and not isinstance(
                 v,
@@ -513,7 +514,7 @@ class BaseConfig(ABC):
     def apply_assembled_streaming_response_metadata(
         self,
         response: "ModelResponse",
-        chunks: list[Any],
+        chunks: list[object],
     ) -> None:
         """Hook for providers to merge chunk metadata into assembled streaming responses."""
         return

@@ -5,10 +5,11 @@ import logging
 import re
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
 
 import litellm
 from litellm._logging import verbose_logger
@@ -58,6 +59,13 @@ def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
 
 
+def decoded_json_object(value: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(value)
+    if mapping is not None:
+        return mapping
+    raise AttributeError(f"{type(value).__name__!r} object has no attribute 'get'", name="get", obj=value)
+
+
 @runtime_checkable
 class _SupportsIter(Protocol):
     def __iter__(self) -> Iterator[object]: ...
@@ -70,6 +78,24 @@ class _SupportsGetItem(Protocol):
 
 def attribute_or_none(source: object, name: str) -> object:
     return getattr(source, name, None)
+
+
+_Shape: Final = TypeVar("_Shape")
+
+
+def has_attributes(
+    value: object,
+    shape: type[_Shape],
+    *names: str,
+) -> TypeIs[_Shape]:  # guard-ok: hasattr sees what __getattr__ serves, which Protocol isinstance skips on 3.12+
+    return all(hasattr(value, name) for name in names)
+
+
+def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shape:
+    if has_attributes(value, shape, *names):
+        return value
+    missing: Final = next(name for name in names if not hasattr(value, name))
+    raise AttributeError(f"'{type(value).__name__}' object has no attribute '{missing}'", name=missing, obj=value)
 
 
 def iter_items(value: object) -> Iterable[object]:
@@ -634,11 +660,14 @@ def preserve_upstream_non_openai_attributes(
         for key in candidate_keys
     )
     if all(value is None or isinstance(value, (str, int, float, bool)) for _, value in candidate_values):
-        for key, value in candidate_values:
-            setattr(model_response, key, value)
+        _assign_attributes(model_response, candidate_values)
         return
-    for key, value in original_chunk.model_dump(include=frozenset(candidate_keys)).items():
-        setattr(model_response, key, value)
+    _assign_attributes(model_response, original_chunk.model_dump(include=frozenset(candidate_keys)).items())
+
+
+def _assign_attributes(target: object, values: Iterable[tuple[str, object]]) -> None:
+    for key, value in values:
+        setattr(target, key, value)
 
 
 def safe_deep_copy(data):
@@ -764,6 +793,10 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
         Filtered data structure with Exception and callable objects removed, or None if the
         entire input was an Exception or callable
     """
+    return _filter_exceptions_from_params(data, max_depth)
+
+
+def _filter_exceptions_from_params(data: object, max_depth: int) -> object:
     if max_depth <= 0:
         return data
 
@@ -785,7 +818,7 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
             if isinstance(v, Exception) or (callable(v) and not isinstance(v, type)):
                 continue
             try:
-                filtered = filter_exceptions_from_params(v, max_depth - 1)
+                filtered = _filter_exceptions_from_params(v, max_depth - 1)
                 if filtered is not None:
                     result[k] = filtered
             except Exception:
@@ -799,7 +832,7 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
             if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
                 continue
             try:
-                filtered = filter_exceptions_from_params(item, max_depth - 1)
+                filtered = _filter_exceptions_from_params(item, max_depth - 1)
                 if filtered is not None:
                     result_list.append(filtered)
             except Exception:
