@@ -6726,6 +6726,7 @@ async def _run_upstream_reporting_passthrough(
     status_code: int = 200,
     cost_per_request: float | None = None,
     request_headers: Mapping[str, str] | None = None,
+    upstream_body: bytes = b'{"answer": "ok"}',
 ) -> tuple[list[object], MagicMock]:
     """Drive a generic pass-through against an upstream that reports its own
     cost/usage. Returns (recorded standard logging payloads, proxy logging mock)."""
@@ -6735,7 +6736,7 @@ async def _run_upstream_reporting_passthrough(
         _FakeUpstreamTransport(
             status_code=status_code,
             headers={"content-type": "application/json", **upstream_headers},
-            stream=_RecordingUpstreamByteStream((b'{"answer": "ok"}',)),
+            stream=_RecordingUpstreamByteStream((upstream_body,)),
         ),
         timeout=None,
     )
@@ -6812,6 +6813,50 @@ async def test_passthrough_records_zero_when_upstream_reports_nothing():
     assert len(payloads) == 1
     assert payloads[0]["response_cost"] == 0.0
     assert payloads[0]["total_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_passthrough_records_tokens_reported_in_the_response_body():
+    """
+    A generic pass-through target (no provider handler, no x-litellm-* headers)
+    that writes a ``usage`` object in its JSON body, here a decisions API with
+    the Anthropic-style ``input_tokens``/``output_tokens`` keys. Before this,
+    the counts were dropped and the spend row showed 0 tokens.
+    """
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {},
+        upstream_body=b'{"answers": {"is_spam": {"type": "noul", "noul": 0.93}}, "usage": {"input_tokens": 1874, "output_tokens": 0}}',
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["prompt_tokens"] == 1874
+    assert payloads[0]["completion_tokens"] == 0
+    assert payloads[0]["total_tokens"] == 1874
+
+
+@pytest.mark.asyncio
+async def test_passthrough_records_openai_shaped_body_usage():
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {},
+        upstream_body=b'{"choices": [], "usage": {"prompt_tokens": 40, "completion_tokens": 12, "total_tokens": 52}}',
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["prompt_tokens"] == 40
+    assert payloads[0]["completion_tokens"] == 12
+    assert payloads[0]["total_tokens"] == 52
+
+
+@pytest.mark.asyncio
+async def test_passthrough_upstream_total_tokens_header_wins_over_body_usage():
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {"x-litellm-response-cost": "0.000415", "x-litellm-total-tokens": "930"},
+        upstream_body=b'{"answer": "ok", "usage": {"input_tokens": 1874, "output_tokens": 0}}',
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.000415
+    assert payloads[0]["total_tokens"] == 930
 
 
 @pytest.mark.asyncio
