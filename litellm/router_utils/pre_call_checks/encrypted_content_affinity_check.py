@@ -51,6 +51,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_encrypted_reasoning_from_messages,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.common_utils import as_excluded_deployment_ids, as_retry_skipped_deployment_ids
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import Deployment
 from litellm.utils import get_order_filtered_deployments
@@ -181,6 +182,14 @@ class EncryptedContentAffinityCheck(CustomLogger):
             ),
             None,
         )
+
+    @staticmethod
+    def _deployment_model_id(deployment: Mapping[str, object]) -> str | None:
+        model_info: Final = deployment.get("model_info")
+        if not isinstance(model_info, Mapping):
+            return None
+        deployment_id: Final = cast(Mapping[str, object], model_info).get("id")  # cast-ok: narrowed by isinstance
+        return None if deployment_id is None else str(deployment_id)
 
     @staticmethod
     def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
@@ -345,7 +354,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
         typed_healthy_deployments: Final = cast(list[dict[str, object]], healthy_deployments)
         if not self._is_enabled_for_model_group(model):
             return typed_healthy_deployments
-        target_order: Final = _REQUEST_KWARGS_ADAPTER.validate_python(request_kwargs).get("_target_order")
+        typed_request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(request_kwargs)
+        target_order: Final = typed_request_kwargs.get("_target_order")
         candidates: Final = (
             get_order_filtered_deployments(typed_healthy_deployments, target_order=target_order)
             if isinstance(target_order, int)
@@ -375,8 +385,22 @@ class EncryptedContentAffinityCheck(CustomLogger):
             model_id,
         )
 
+        excluded_ids: Final = frozenset(
+            as_excluded_deployment_ids(typed_request_kwargs.get("_excluded_deployment_ids"))
+        )
+        retry_skipped_ids: Final = frozenset(
+            as_retry_skipped_deployment_ids(typed_request_kwargs.get("_retry_skipped_deployment_ids"))
+        )
+        not_excluded_candidates: Final = [
+            candidate for candidate in candidates if self._deployment_model_id(candidate) not in excluded_ids
+        ]
+        untried_candidates: Final = [
+            candidate
+            for candidate in not_excluded_candidates
+            if self._deployment_model_id(candidate) not in retry_skipped_ids
+        ] or not_excluded_candidates
         deployment: Final = self._find_deployment_by_model_id(
-            healthy_deployments=candidates,
+            healthy_deployments=untried_candidates,
             model_id=model_id,
         )
         if deployment is not None:
@@ -392,7 +416,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
         # Follow-up switched model_name (LIT-2531): pin by Azure resource instead.
         boundary_matches, _originating = self._find_deployments_on_same_encryption_boundary(
-            healthy_deployments=candidates,
+            healthy_deployments=untried_candidates,
             model_id=model_id,
         )
         if boundary_matches:

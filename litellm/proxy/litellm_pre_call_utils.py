@@ -358,6 +358,8 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "fallback_depth",
     "_target_order",
     "attempted_targets",
+    "_excluded_deployment_ids",
+    "_retry_skipped_deployment_ids",
     "proxy_server_request",
     "standard_logging_object",
     "secret_fields",
@@ -439,6 +441,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "_pipeline_managed_guardrails",
     "client_disconnected",
     "error_information",
+    "_failover_excluded_ids",
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
 

@@ -21051,9 +21051,9 @@ def test_router_retry_skip_stamp_feeds_deployment_ids_to_skip_on_retry(
     ],
 )
 def test_router_as_retry_skipped_deployment_ids_keeps_only_a_tuple_of_strings(value, expected):
-    from litellm.router import _as_retry_skipped_deployment_ids
+    from litellm.router_utils.common_utils import as_retry_skipped_deployment_ids
 
-    assert _as_retry_skipped_deployment_ids(value) == expected
+    assert as_retry_skipped_deployment_ids(value) == expected
 
 
 @pytest.mark.parametrize(
