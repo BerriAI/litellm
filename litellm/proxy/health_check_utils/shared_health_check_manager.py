@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._internal_context import with_service_target
@@ -40,6 +40,7 @@ class SharedHealthCheckManager:
         self.health_check_ttl = health_check_ttl
         self.lock_ttl = lock_ttl
         self.pod_id = f"pod_{int(time.time() * 1000)}"
+        self._release_lock_script: Callable[..., Awaitable[int]] | None = None
 
     @staticmethod
     def get_health_check_lock_key() -> str:
@@ -92,21 +93,38 @@ class SharedHealthCheckManager:
             verbose_proxy_logger.error("Error acquiring health check lock: %s", str(e))
             return False
 
+    _COMPARE_AND_DELETE_LOCK_SCRIPT = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
+
     @with_service_target(HEALTH_CHECKS_TARGET)
     async def release_health_check_lock(self) -> None:
-        """Release the global health check lock."""
+        """Release only this pod's lock using an atomic compare-and-delete."""
         if self.redis_cache is None:
             return
 
+        lock_key: Final = self.get_health_check_lock_key()
+        script_register: Final[Callable[[str], Callable[..., Awaitable[int]]] | None] = getattr(
+            self.redis_cache, "async_register_script", None
+        )
+        if not callable(script_register):
+            verbose_proxy_logger.warning("Cannot atomically release health check lock; leaving it to expire")
+            return
+
         try:
-            lock_key: Final = self.get_health_check_lock_key()
-            # Only release if we own the lock
-            current_owner: Final = await self.redis_cache.async_get_cache(lock_key)
-            if current_owner == self.pod_id:
-                await self.redis_cache.async_delete_cache(lock_key)
+            script: Final = self._release_lock_script or script_register(self._COMPARE_AND_DELETE_LOCK_SCRIPT)
+            if self._release_lock_script is None:
+                self._release_lock_script = script
+            result: Final = await script(keys=[lock_key], args=[json.dumps(self.pod_id)])
+            if int(result or 0) == 1:
                 verbose_proxy_logger.info("Pod %s released health check lock", self.pod_id)
-        except Exception as e:
-            verbose_proxy_logger.error("Error releasing health check lock: %s", str(e))
+        except Exception as exc:
+            self._release_lock_script = None
+            verbose_proxy_logger.warning("Atomic health check lock release failed; leaving it to expire: %s", exc)
 
     @with_service_target(HEALTH_CHECKS_TARGET)
     async def get_cached_health_check_results(self) -> dict[str, Any] | None:
