@@ -95,6 +95,7 @@ _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
     {
         "/models",
         "/v1/models",
+        "/claude_code_gateway/v1/models",
         "/utils/token_counter",
         "/utils/transform_request",
         "/responses/input_tokens",

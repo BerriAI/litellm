@@ -912,6 +912,7 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
         and RouteChecks.is_llm_api_route(route=route)
         and route != "/v1/models"
         and route != "/models"
+        and route != "/claude_code_gateway/v1/models"
     ):
         if math.isfinite(litellm.max_budget) and global_proxy_spend > litellm.max_budget:
             raise litellm.BudgetExceededError(
@@ -1029,6 +1030,7 @@ async def check_tools_allowlist(
 MODEL_DISCOVERY_ROUTES: Final = frozenset(
     {
         "/v1/models",
+        "/claude_code_gateway/v1/models",
         "/models",
         "/model/info",
         "/v1/model/info",

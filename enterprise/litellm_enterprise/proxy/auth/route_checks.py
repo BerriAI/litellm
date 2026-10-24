@@ -43,7 +43,7 @@ class EnterpriseRouteChecks:
 
     # Routes that should remain accessible even when LLM API endpoints are disabled.
     # These are read-only model listing routes needed by the Admin UI.
-    LLM_API_EXEMPT_ROUTES = ["/models", "/v1/models"]
+    LLM_API_EXEMPT_ROUTES = ["/models", "/v1/models", "/claude_code_gateway/v1/models"]
 
     @staticmethod
     def should_call_route(route: str):
