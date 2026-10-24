@@ -43,7 +43,6 @@ def test_groq_llama_metadata_in_main_and_backup(model: str):
     assert info["mode"] == "chat"
     assert info["supports_function_calling"] is True
     assert info["supports_parallel_function_calling"] is True
-    assert info["supports_response_schema"] is True
     assert info["supports_tool_choice"] is True
 
 

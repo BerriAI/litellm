@@ -39238,7 +39238,6 @@
         "source": "https://groq.com/pricing",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "groq/llama-3.3-70b-specdec": {
@@ -39252,7 +39251,6 @@
         "source": "https://groq.com/pricing",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "groq/llama-3.3-70b-versatile": {
@@ -39266,7 +39264,6 @@
         "source": "https://groq.com/pricing",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "groq/llama-guard-3-8b": {
