@@ -8688,8 +8688,7 @@ export interface paths {
          *     - key: str (path parameter) - The key to regenerate
          *     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
          *         - key: Optional[str] - The key to regenerate.
-         *         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-         *         - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
+         *         - new_key: Optional[str] - The new key to use. Must start with 'sk-' and be at least 16 characters long.
          *         - key_alias: Optional[str] - User-friendly key alias
          *         - user_id: Optional[str] - User ID associated with key
          *         - team_id: Optional[str] - Team ID associated with key
@@ -8987,8 +8986,7 @@ export interface paths {
          *     - key: str (path parameter) - The key to regenerate
          *     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
          *         - key: Optional[str] - The key to regenerate.
-         *         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-         *         - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
+         *         - new_key: Optional[str] - The new key to use. Must start with 'sk-' and be at least 16 characters long.
          *         - key_alias: Optional[str] - User-friendly key alias
          *         - user_id: Optional[str] - User ID associated with key
          *         - team_id: Optional[str] - Team ID associated with key
@@ -42112,8 +42110,6 @@ export interface components {
             models: unknown[] | null;
             /** New Key */
             new_key?: string | null;
-            /** New Master Key */
-            new_master_key?: string | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organization Id */
             organization_id?: string | null;

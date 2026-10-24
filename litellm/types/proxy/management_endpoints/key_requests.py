@@ -134,5 +134,4 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     duration: str | None = None
     spend: float | None = None
     metadata: dict[Any, Any] | None = None
-    new_master_key: str | None = None
     grace_period: str | None = None  # Duration to keep old key valid (e.g. "24h", "2d"); None = immediate revoke
