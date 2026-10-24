@@ -6027,7 +6027,11 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model_id=optional_params.get("model_id"),
         )
-        if mock_response or mock_tool_calls or mock_timeout:
+        if should_run_mock_completion(
+            mock_response=mock_response,
+            mock_tool_calls=mock_tool_calls,
+            mock_timeout=mock_timeout,
+        ):
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
             return mock_completion(
                 model,
