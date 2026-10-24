@@ -237,6 +237,7 @@ dev = [
     "pytest-timeout==2.4.0",
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
+    "tenacity==8.5.0",
 ]
 e2e-dev = [
     "playwright==1.61.0",
@@ -268,7 +269,6 @@ ci = [
     # These are lazily imported at call sites; keep them out of core deps to
     # avoid bloating the base SDK install (google-generativeai pulls grpcio +
     # protobuf, Pillow is a compiled C extension).
-    "tenacity==8.5.0",
     "google-generativeai==0.8.6",
     "Pillow==12.3.0; python_version == '3.10'",
     "Pillow==13.0.0; python_version >= '3.11'",
