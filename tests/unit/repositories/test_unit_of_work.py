@@ -39,6 +39,9 @@ class FakeBatch:
         self.litellm_projecttable = FakeBatchTable("litellm_projecttable", self.calls)
         self.litellm_endusertable = FakeBatchTable("litellm_endusertable", self.calls)
 
+    def execute_raw(self, query: str, *args: object) -> None:
+        self.calls.append(("execute_raw", {"query": query}, {"args": args}))
+
     async def commit(self) -> None:
         self.commit_count += 1
 
@@ -192,3 +195,21 @@ async def test_budget_cascade_raising_inside_block_skips_commit():
         await _blow_up_mid_transaction()
 
     assert batch.commit_count == 0
+
+
+async def test_membership_total_spend_repair_is_queued_on_the_cascade_batch_ahead_of_the_reset():
+    batch = FakeBatch()
+
+    async with budget_cascade_unit_of_work(lambda: batch) as uow:
+        uow.team_memberships.queue_total_spend_repair(["budget-1", "budget-2"])
+        uow.team_memberships.queue_spend_zero(where={"budget_id": "budget-1"})
+        assert batch.commit_count == 0
+
+    assert batch.commit_count == 1
+    repair, reset = batch.calls
+    assert repair[0] == "execute_raw"
+    assert repair[2] == {"args": (["budget-1", "budget-2"],)}
+    assert "total_spend = spend" in repair[1]["query"]
+    assert "budget_id = ANY($1::text[])" in repair[1]["query"]
+    assert "spend > total_spend" in repair[1]["query"]
+    assert reset == ("litellm_teammembership.update_many", {"budget_id": "budget-1"}, {"spend": 0})

@@ -908,6 +908,7 @@ class ResetBudgetJob:
             db_span("reset_budget_cascade", "LiteLLM_BudgetTable"),
             budget_cascade_unit_of_work(self._new_batch) as uow,
         ):
+            uow.team_memberships.queue_total_spend_repair(cascade.budget_ids)
             _queue_budget_linked_resets(uow.team_memberships, cascade)
             _queue_budget_linked_resets(uow.keys, cascade, extra=_LINKED_KEYS_WHERE)
             _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)
