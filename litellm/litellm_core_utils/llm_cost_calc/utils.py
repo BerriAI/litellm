@@ -53,16 +53,11 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 
 CacheWriteTTL = Literal["5m", "30m", "1hr", "12hr"]
-_CACHE_WRITE_RATE_KEYS: Final[Mapping[CacheWriteTTL, str | None]] = MappingProxyType(
+_CACHE_WRITE_RATE_KEYS: Final[Mapping[CacheWriteTTL, str]] = MappingProxyType(
     {
-        "5m": None,
-        "30m": None,
         "1hr": "cache_creation_input_token_cost_above_1hr",
         "12hr": "cache_creation_input_token_cost_above_12hr",
     }
-)
-_TTL_SPECIFIC_CACHE_WRITE_RATE_KEYS: Final[Mapping[CacheWriteTTL, str]] = MappingProxyType(
-    {ttl: key for ttl, key in _CACHE_WRITE_RATE_KEYS.items() if key is not None}
 )
 
 
@@ -423,7 +418,7 @@ def _get_tiered_base_costs(
     return rates, MappingProxyType(
         {
             ttl: tier_rate(tier, key) if tier.get(key) is not None else cache_creation_rate
-            for ttl, key in _TTL_SPECIFIC_CACHE_WRITE_RATE_KEYS.items()
+            for ttl, key in _CACHE_WRITE_RATE_KEYS.items()
         }
     )
 
@@ -763,7 +758,7 @@ def _get_token_base_cost(
             completion_base_cost = output_image_cost
     cache_creation_cost = get_cost_per_unit(model_info, cache_creation_cost_key, default_value=None)
     cache_creation_keys_by_ttl: Mapping[CacheWriteTTL, str] = MappingProxyType(
-        {ttl: get_service_tier_cost_key(key, service_tier) for ttl, key in _TTL_SPECIFIC_CACHE_WRITE_RATE_KEYS.items()}
+        {ttl: get_service_tier_cost_key(key, service_tier) for ttl, key in _CACHE_WRITE_RATE_KEYS.items()}
     )
     cache_read_cost = get_cost_per_unit(model_info, cache_read_cost_key, default_value=None)
 
@@ -850,7 +845,7 @@ def _get_token_base_cost(
                             ttl: _first_present_key(
                                 model_info,
                                 get_service_tier_cost_key(
-                                    f"{_TTL_SPECIFIC_CACHE_WRITE_RATE_KEYS[ttl]}_above_{threshold_str}_tokens",
+                                    f"{_CACHE_WRITE_RATE_KEYS[ttl]}_above_{threshold_str}_tokens",
                                     service_tier,
                                 ),
                                 key,
