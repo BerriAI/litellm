@@ -110,9 +110,7 @@ func resourceLiteLLMUnifiedAccessGroup() *schema.Resource {
 func buildUnifiedAccessGroupData(d *schema.ResourceData) map[string]interface{} {
 	data := map[string]interface{}{
 		"access_group_name": d.Get("access_group_name").(string),
-	}
-	if v, ok := d.GetOk("description"); ok {
-		data["description"] = v
+		"description":       d.Get("description").(string),
 	}
 	for _, key := range unifiedAccessGroupListFields {
 		data[key] = d.Get(key)
@@ -125,6 +123,8 @@ func setUnifiedAccessGroupFields(d *schema.ResourceData, group unifiedAccessGrou
 	d.Set("access_group_name", group.AccessGroupName)
 	if group.Description != nil {
 		d.Set("description", *group.Description)
+	} else {
+		d.Set("description", "")
 	}
 	d.Set("access_model_names", group.AccessModelNames)
 	d.Set("access_mcp_server_ids", group.AccessMCPServerIDs)
@@ -235,9 +235,11 @@ func resourceLiteLLMUnifiedAccessGroupDelete(d *schema.ResourceData, m interface
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("error deleting unified access group: %s - %s", resp.Status, string(body))
+	if resp.StatusCode != http.StatusNotFound {
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("error deleting unified access group: %s - %s", resp.Status, string(body))
+		}
 	}
 
 	log.Printf("[INFO] Successfully deleted unified access group with ID: %s", d.Id())

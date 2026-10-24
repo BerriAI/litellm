@@ -207,3 +207,84 @@ func TestUnifiedAccessGroupDelete(t *testing.T) {
 		t.Fatalf("expected ID to be cleared after delete, got %q", d.Id())
 	}
 }
+
+func TestUnifiedAccessGroupUpdateClearsDescription(t *testing.T) {
+	var updatePayload map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "PUT":
+			if err := json.NewDecoder(r.Body).Decode(&updatePayload); err != nil {
+				t.Errorf("failed to decode update payload: %v", err)
+			}
+			w.Write(unifiedAccessGroupJSON("uag-123"))
+		case "GET":
+			w.Write(unifiedAccessGroupJSON("uag-123"))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := unifiedAccessGroupTestData(t, map[string]interface{}{
+		"access_group_name": "prod-group",
+	})
+	d.SetId("uag-123")
+
+	if err := resourceLiteLLMUnifiedAccessGroupUpdate(d, client); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	if _, ok := updatePayload["description"]; !ok {
+		t.Fatalf("expected description to be sent so it can be cleared, payload: %v", updatePayload)
+	}
+	if updatePayload["description"] != "" {
+		t.Fatalf("expected description '' in payload, got %v", updatePayload["description"])
+	}
+}
+
+func TestUnifiedAccessGroupReadClearsDescription(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := json.Marshal(unifiedAccessGroupResponse{
+			AccessGroupID:   "uag-123",
+			AccessGroupName: "prod-group",
+			Description:     nil,
+		})
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := unifiedAccessGroupTestData(t, map[string]interface{}{
+		"description": "before",
+	})
+	d.SetId("uag-123")
+
+	if err := resourceLiteLLMUnifiedAccessGroupRead(d, client); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	if d.Get("description").(string) != "" {
+		t.Fatalf("expected description cleared to '' when proxy returns null, got %q", d.Get("description").(string))
+	}
+}
+
+func TestUnifiedAccessGroupDeleteNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"detail":"Access group 'uag-gone' not found"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := unifiedAccessGroupTestData(t, map[string]interface{}{})
+	d.SetId("uag-gone")
+
+	if err := resourceLiteLLMUnifiedAccessGroupDelete(d, client); err != nil {
+		t.Fatalf("expected nil error on 404 delete, got: %v", err)
+	}
+	if d.Id() != "" {
+		t.Fatalf("expected ID to be cleared after 404 delete, got %q", d.Id())
+	}
+}
