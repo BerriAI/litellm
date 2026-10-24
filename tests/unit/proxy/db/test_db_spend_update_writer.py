@@ -36,6 +36,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
@@ -2219,6 +2220,56 @@ async def test_update_database_returns_only_after_every_rollup_is_enqueued():
     (team_row,) = daily_team.values()
     assert (user_row["api_requests"], user_row["spend"]) == (1, 0.1)
     assert (team_row["api_requests"], team_row["spend"]) == (1, 0.1)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_waits_for_an_in_flight_rollup_enqueue():
+    """
+    Regression for LIT-6027. The rollup enqueue runs in the untracked cost-callback task, so
+    the shutdown sequence (flush, drain_logging_tasks, flush) only sees it if update_database
+    registers it as a logging task. A rollup still in flight when the drain starts must be
+    finished by the time the drain returns, so the second flush commits it.
+    """
+    db_writer: Final = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    rollup_started: Final = asyncio.Event()
+    release_rollup: Final = asyncio.Event()
+
+    async def slow_rollup(**kwargs):
+        rollup_started.set()
+        await release_rollup.wait()
+        await db_writer.spend_update_queue.add_update(
+            update=SpendUpdateQueueItem(entity_type=Litellm_EntityType.KEY, entity_id="t1", response_cost=0.1)
+        )
+
+    db_writer._batch_database_updates = slow_rollup
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+    ):
+        cost_callback: Final = asyncio.create_task(
+            db_writer.update_database(
+                token="t1",
+                user_id="u1",
+                end_user_id=None,
+                team_id=None,
+                org_id=None,
+                kwargs={"model": "gpt-4o-mini", "custom_llm_provider": "openai"},
+                completion_response=MagicMock(),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                response_cost=0.1,
+            )
+        )
+        await asyncio.wait_for(rollup_started.wait(), timeout=1)
+        asyncio.get_running_loop().call_later(0.05, release_rollup.set)
+        await drain_logging_tasks(timeout=1)
+        spend: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+        await cost_callback
+
+    assert spend["key_list_transactions"] == {"t1": 0.1}
 
 
 @pytest.mark.asyncio
