@@ -2619,6 +2619,10 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled = True
         return True
 
+    @property
+    def async_success_claimed(self) -> bool:
+        return self._async_success_scheduled
+
     def mark_logging_complete(
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
