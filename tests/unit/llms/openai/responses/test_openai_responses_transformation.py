@@ -21,6 +21,7 @@ from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ResponseAPIUsage,
     ResponseCompletedEvent,
+    ResponseInputParam,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
@@ -4153,6 +4154,232 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
         assert "temperature" in request_body
         assert "custom_field" in request_body
         assert request_body["custom_field"] == "custom_value"
+
+
+_MALFORMED_MARKERS: Final = ("yes", 1, {"mode": "bogus"}, {"mode": "explicit", "ttl": "1h"})
+_MALFORMED_MARKER_IDS: Final = ("string", "int", "bogus-mode", "bad-ttl")
+_VALID_MARKERS: Final = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
+_VALID_MARKER_IDS: Final = ("explicit", "explicit-30m")
+_PARTS: Final[Mapping[str, Mapping[str, object]]] = {
+    "input_text": {"type": "input_text", "text": "Say ok"},
+    "input_image": {"type": "input_image", "image_url": "https://example.com/a.png"},
+    "input_file": {"type": "input_file", "file_id": "file-abc"},
+}
+_CONFIGS: Final = (OpenAIResponsesAPIConfig(), AzureOpenAIResponsesAPIConfig())
+_CONFIG_IDS: Final = ("openai", "azure")
+
+
+def _marked_message(part_type: str, marker: object) -> list[dict[str, object]]:
+    return [{"type": "message", "role": "user", "content": [{**_PARTS[part_type], "prompt_cache_breakpoint": marker}]}]
+
+
+def _transformed_input(
+    config: BaseResponsesAPIConfig, input: str | list[dict[str, object]], litellm_params: GenericLiteLLMParams
+) -> object:
+    request: Final = config.transform_responses_api_request(
+        model="gpt-6.1-sol",
+        input=cast("ResponseInputParam", input),  # cast-ok: plain dicts shaped like the SDK's input items
+        response_api_optional_request_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return request["input"]
+
+
+def _single_part(transformed_input: object) -> Mapping[str, object]:
+    (item,) = cast(list[Mapping[str, object]], transformed_input)
+    (part,) = cast(list[Mapping[str, object]], item["content"])
+    return part
+
+
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+@pytest.mark.parametrize("part_type", tuple(_PARTS))
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_malformed_prompt_cache_breakpoint_is_dropped_under_deployment_drop_params(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, part_type: str, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    transformed: Final = _transformed_input(
+        config, _marked_message(part_type, marker), GenericLiteLLMParams(drop_params=True)
+    )
+    assert _single_part(transformed) == _PARTS[part_type]
+
+
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_malformed_prompt_cache_breakpoint_is_dropped_under_global_drop_params(
+    monkeypatch: pytest.MonkeyPatch, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    transformed: Final = _transformed_input(_CONFIGS[0], _marked_message("input_text", marker), GenericLiteLLMParams())
+    assert _single_part(transformed) == _PARTS["input_text"]
+
+
+@pytest.mark.parametrize("drop_params", (False, None), ids=("false", "null"))
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_malformed_prompt_cache_breakpoint_is_forwarded_verbatim_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, marker: object, drop_params: bool | None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=drop_params)) == input
+
+
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_a_non_flag_deployment_drop_params_keeps_the_marker_like_the_param_mapper_does(
+    monkeypatch: pytest.MonkeyPatch, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params="maybe")) == input
+
+
+@pytest.mark.parametrize("drop_params", (True, False), ids=("drop", "keep"))
+@pytest.mark.parametrize("marker", _VALID_MARKERS, ids=_VALID_MARKER_IDS)
+def test_valid_prompt_cache_breakpoint_reaches_the_wire_under_both_settings(
+    monkeypatch: pytest.MonkeyPatch, marker: Mapping[str, str], drop_params: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=drop_params)) == input
+
+
+def test_prompt_cache_breakpoint_unknown_key_is_trimmed_under_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", {"mode": "explicit", "note": "kept"})
+    dropped: Final = _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(dropped)["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+def test_malformed_prompt_cache_breakpoint_on_a_tool_output_part_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    marked_output: Final = [{"type": "input_text", "text": "42", "prompt_cache_breakpoint": "yes"}]
+    input: Final[list[dict[str, object]]] = [{"type": "function_call_output", "call_id": "call_1", "output": marked_output}]
+    (item,) = cast(
+        list[Mapping[str, object]], _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True))
+    )
+    assert item["output"] == [{"type": "input_text", "text": "42"}]
+
+
+@pytest.mark.parametrize("input", ("hi", [{"type": "message", "role": "user", "content": "hi"}]), ids=("string", "unmarked"))
+def test_input_without_a_marker_is_untouched_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, input: str | list[dict[str, object]]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True)) == input
+
+
+def _transformed_input_for(
+    model: str,
+    input: list[dict[str, object]],
+    litellm_params: GenericLiteLLMParams,
+    config: BaseResponsesAPIConfig = _CONFIGS[0],
+) -> object:
+    request: Final = config.transform_responses_api_request(
+        model=model,
+        input=cast("ResponseInputParam", input),  # cast-ok: plain dicts shaped like the SDK's input items
+        response_api_optional_request_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return request["input"]
+
+
+@pytest.mark.parametrize(
+    "marker", (*_VALID_MARKERS, *_MALFORMED_MARKERS), ids=(*_VALID_MARKER_IDS, *_MALFORMED_MARKER_IDS)
+)
+def test_every_prompt_cache_breakpoint_is_dropped_under_drop_params_for_a_model_without_breakpoints(
+    monkeypatch: pytest.MonkeyPatch, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    dropped: Final = _transformed_input_for("gpt-5.4-mini", input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(dropped) == _PARTS["input_text"]
+    assert _transformed_input_for("gpt-5.4-mini", input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("o4-mini", "ft:gpt-4o-mini-2024-07-18:my-org::abc123", "ft:o4-mini-2025-04-16:my-org::abc123"),
+    ids=("o-series", "fine-tune-of-older-gpt", "fine-tune-of-o-series"),
+)
+def test_a_valid_marker_is_dropped_under_drop_params_on_a_model_known_to_lack_breakpoints(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", {"mode": "explicit"})
+    dropped: Final = _transformed_input_for(model, input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+def test_a_cost_map_entry_registered_under_the_deployment_name_keeps_a_valid_marker_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    registered: Final = {"id": "litellm-qa-sol-alias", "supports_vision": True, "input_cost_per_token": 1e-6}
+    monkeypatch.setitem(litellm.model_cost, "litellm-qa-sol-alias", registered)
+    valid: Final = _marked_message("input_text", {"mode": "explicit"})
+    assert _transformed_input_for("litellm-qa-sol-alias", valid, GenericLiteLLMParams(drop_params=True), config) == valid
+
+
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+def test_a_valid_marker_survives_drop_params_on_a_deployment_name_with_unknown_breakpoint_support(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm_params: Final = GenericLiteLLMParams(drop_params=True)
+    valid: Final = _marked_message("input_text", {"mode": "explicit"})
+    malformed: Final = _marked_message("input_text", {"mode": "explicit", "ttl": "1h"})
+    assert _transformed_input_for("litellm-qa-sol-alias", valid, litellm_params, config) == valid
+    dropped: Final = _transformed_input_for("litellm-qa-sol-alias", malformed, litellm_params, config)
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
+def _declaring_base_model(where: str, base_model: str) -> GenericLiteLLMParams:
+    if where == "litellm_params":
+        return GenericLiteLLMParams(drop_params=True, base_model=base_model)
+    return GenericLiteLLMParams(drop_params=True, model_info={"base_model": base_model})
+
+
+@pytest.mark.parametrize("where", ("litellm_params", "model_info"))
+def test_a_declared_base_model_decides_whether_a_valid_marker_survives_drop_params(
+    monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", {"mode": "explicit"})
+    kept: Final = _transformed_input_for("gpt-5.4-mini-prod", input, _declaring_base_model(where, "gpt-6.1-sol"))
+    assert kept == input
+    dropped: Final = _transformed_input_for("prod-deployment", input, _declaring_base_model(where, "gpt-5.4-mini"))
+    assert _single_part(dropped) == _PARTS["input_text"]
+
+
+@pytest.mark.parametrize("content", ("Say ok", [{"type": "input_text", "text": "Say ok"}]), ids=("string", "parts"))
+@pytest.mark.parametrize("marker", (_VALID_MARKERS[0], "yes"), ids=("explicit", "string"))
+def test_a_prompt_cache_breakpoint_on_the_message_item_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, content: object, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    unmarked: Final[dict[str, object]] = {"type": "message", "role": "user", "content": content}
+    input: Final = [{**unmarked, "prompt_cache_breakpoint": marker}]
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True)) == [unmarked]
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+def test_cache_control_still_marks_a_part_whose_own_marker_is_malformed_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    part: Final = {"type": "input_text", "text": "Say ok", "cache_control": {"type": "ephemeral"}}
+    input: Final = [{"type": "message", "role": "user", "content": [{**part, "prompt_cache_breakpoint": "yes"}]}]
+    transformed: Final = _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(transformed) == {
+        "type": "input_text",
+        "text": "Say ok",
+        "prompt_cache_breakpoint": {"mode": "explicit"},
+    }
 
 
 @pytest.mark.asyncio
