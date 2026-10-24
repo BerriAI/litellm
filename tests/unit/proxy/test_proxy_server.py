@@ -49,6 +49,113 @@ from litellm.proxy.proxy_server import (  # Replace with the actual module where
 )
 from litellm.proxy.utils import ProxyLogging
 
+
+@pytest.mark.parametrize("root_path", ["", "/gateway"])
+@pytest.mark.parametrize(
+    ("path", "anthropic_envelope"),
+    [
+        ("/v1/messages", True),
+        ("/v1/messages/count_tokens", True),
+        ("/v1/chat/completions", False),
+        ("/v1/responses", False),
+    ],
+)
+@pytest.mark.parametrize("failure", ["missing_key", "malformed_json"])
+async def test_pre_handler_errors_use_endpoint_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+    root_path: str,
+    path: str,
+    anthropic_envelope: bool,
+    failure: str,
+) -> None:
+    import httpx2
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-local-envelope-regression")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    application: Final = FastAPI()
+    application.mount(root_path or "/", app)
+    headers: Final = {"Authorization": "Bearer sk-local-envelope-regression"} if failure == "malformed_json" else {}
+    payload: Final = b'{"model":' if failure == "malformed_json" else b'{"model":"local-only"}'
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=application),
+        base_url="http://testserver",
+    ) as client:
+        response: Final = await client.post(root_path + path, content=payload, headers=headers)
+
+    assert response.status_code == (400 if failure == "malformed_json" else 401), response.text
+    message: Final = response.json()["error"]["message"]
+    assert message.startswith(
+        "Invalid JSON payload:" if failure == "malformed_json" else "Authentication Error, No api key passed in."
+    )
+    expected: Final = (
+        {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error" if failure == "malformed_json" else "authentication_error",
+                "message": message,
+            },
+        }
+        if anthropic_envelope
+        else {
+            "error": {
+                "type": "invalid_request_error" if failure == "malformed_json" else "auth_error",
+                "message": message,
+                "param": "request_body" if failure == "malformed_json" else "None",
+                "code": "400" if failure == "malformed_json" else "401",
+            },
+        }
+    )
+    assert response.json() == expected
+
+
+@pytest.mark.parametrize("path", ["/v1/messages", "/v1/messages/count_tokens"])
+@pytest.mark.parametrize("include_call_id", [False, True])
+async def test_messages_global_error_preserves_status_and_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    include_call_id: bool,
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"include_call_id_in_error_body": include_call_id})
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [(b"x-request-id", b"request-envelope")],
+        }
+    )
+    error: Final = ProxyException(
+        message="Model access denied",
+        type="user_model_access_denied",
+        param="model",
+        code=403,
+        headers={"x-litellm-call-id": "call-envelope", "retry-after": "12"},
+        provider_specific_fields={"model": "restricted-model"},
+    )
+    response: Final = await proxy_server.openai_exception_handler(request, error)
+
+    assert response.status_code == 403
+    assert response.headers["x-litellm-call-id"] == "call-envelope"
+    assert response.headers["retry-after"] == "12"
+    assert json.loads(response.body) == {
+        "type": "error",
+        "request_id": "request-envelope",
+        "error": {
+            "type": "permission_error",
+            "message": "Model access denied",
+            "provider_specific_fields": {"model": "restricted-model"},
+            **({"litellm_call_id": "call-envelope"} if include_call_id else {}),
+        },
+    }
+
+
 @pytest.fixture
 def admin_mcp_proxy(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     from litellm.proxy import proxy_server

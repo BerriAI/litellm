@@ -187,14 +187,14 @@ class TestProxyExceptionAnthropicEnvelope:
         request = MagicMock()
         request.headers = {}
 
-        response = ep._anthropic_error_json_response(
+        response = ep.anthropic_error_json_response(
             ProxyException(message="Rate limit exceeded", type="rate_limit_error", param=None, code=429),
             request,
         )
         assert response.status_code == 429
         assert json.loads(response.body)["error"]["type"] == "rate_limit_error"
 
-        fallback = ep._anthropic_error_json_response(
+        fallback = ep.anthropic_error_json_response(
             ProxyException(message="boom", type="None", param=None, code=None),
             request,
         )
@@ -217,7 +217,7 @@ class TestProxyExceptionAnthropicEnvelope:
             provider_specific_fields=provider_specific_fields,
         )
         with patch("litellm.proxy.proxy_server.general_settings", general_settings):
-            return ep._anthropic_error_json_response(exc, request)
+            return ep.anthropic_error_json_response(exc, request)
 
     def test_anthropic_error_copies_the_call_id_into_the_error_when_opted_in(self):
         """With include_call_id_in_error_body on, error.litellm_call_id is byte-identical to

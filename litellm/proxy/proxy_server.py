@@ -823,6 +823,7 @@ except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
 from fastapi.exception_handlers import http_exception_handler
+from starlette._utils import get_route_path
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.websockets import WebSocketState
 
@@ -2157,6 +2158,10 @@ class UserAPIKeyCacheTTLEnum(enum.Enum):
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     log_model_access_denial(exc)
+    if get_route_path(request.scope) in ("/v1/messages", "/v1/messages/count_tokens"):
+        from litellm.proxy.anthropic_endpoints.endpoints import anthropic_error_json_response
+
+        return anthropic_error_json_response(exc, request)
     headers: Final = exc.headers
     error_dict: Final = with_call_id(
         JSON_OBJECT.validate_python(exc.to_dict()),
