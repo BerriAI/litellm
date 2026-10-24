@@ -2074,7 +2074,7 @@ class MCPServerManager:
         }
         """
         self._listed_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}  # mutable-ok: refreshed per tools/list
-        self._blocked_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}
+        self._blocked_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}  # mutable-ok: caller-scoped cache
         self._listed_tools_generations: dict[str, int] = {}  # mutable-ok: bumped per server save
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
