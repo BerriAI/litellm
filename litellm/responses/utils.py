@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, ReasoningSummaryLevel
 from litellm.types.llms.openai import (
     AllMessageValues,
+    InputTokensDetails,
     OutputTokensDetails,
     ResponseAPIUsage,
     ResponseInputParam,
@@ -23,6 +24,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import DecodedResponseId
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
     PromptTokensDetailsWrapper,
     SpecialEnums,
@@ -39,6 +41,17 @@ def _apply_nested_drop_params(params: dict[str, object], additional_drop_params:
 def _output_token_detail(details: object, field: str) -> int | None:
     value: Final = getattr(details, field, None)
     return value if isinstance(value, int) else None
+
+
+def _cache_write_lifetimes(cache_write_tokens_details: object) -> CacheCreationTokenDetails | None:
+    """OpenAI Responses splits `cache_write_tokens` into `ttl_30m_tokens` and `ttl_12h_tokens`."""
+    ttl_30m_tokens: Final = _output_token_detail(cache_write_tokens_details, "ttl_30m_tokens")
+    ttl_12h_tokens: Final = _output_token_detail(cache_write_tokens_details, "ttl_12h_tokens")
+    if ttl_30m_tokens is None and ttl_12h_tokens is None:
+        return None
+    return CacheCreationTokenDetails(
+        ephemeral_30m_input_tokens=ttl_30m_tokens, ephemeral_12h_input_tokens=ttl_12h_tokens
+    )
 
 
 def _is_object_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a list is a Sequence of anything
@@ -1247,7 +1260,11 @@ class ResponseAPILoggingUtils:
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if response_api_usage.input_tokens_details:
             if isinstance(response_api_usage.input_tokens_details, dict):
-                prompt_tokens_details = PromptTokensDetailsWrapper(**response_api_usage.input_tokens_details)
+                input_details: Final = InputTokensDetails.model_validate(response_api_usage.input_tokens_details)
+                prompt_tokens_details = PromptTokensDetailsWrapper(
+                    **input_details.model_dump(exclude={"cache_write_tokens_details"}),
+                    cache_creation_token_details=_cache_write_lifetimes(input_details.cache_write_tokens_details),
+                )
             else:
                 prompt_tokens_details = PromptTokensDetailsWrapper(
                     cached_tokens=getattr(response_api_usage.input_tokens_details, "cached_tokens", None),
@@ -1259,6 +1276,9 @@ class ResponseAPILoggingUtils:
                     ),
                     video_tokens=getattr(response_api_usage.input_tokens_details, "video_tokens", None),
                     cache_write_tokens=getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None),
+                    cache_creation_token_details=_cache_write_lifetimes(
+                        getattr(response_api_usage.input_tokens_details, "cache_write_tokens_details", None)
+                    ),
                     cache_type=getattr(response_api_usage.input_tokens_details, "cache_type", None),
                     web_search_requests=getattr(response_api_usage.input_tokens_details, "web_search_requests", None),
                     google_maps_grounding_requests=getattr(
