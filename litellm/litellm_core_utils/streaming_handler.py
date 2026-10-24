@@ -24,6 +24,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR,
     get_hidden_params,
@@ -72,7 +73,9 @@ _SYNC_ITER_EXHAUSTED: Final = object()
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
-_USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
+_USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset(
+    {LlmProviders.OPENROUTER.value, LlmProviders.OPENCODE_GO.value}
+)
 
 
 def _next_sync_or_exhausted(it: Iterator[object]) -> object:
@@ -1953,11 +1956,17 @@ class CustomStreamWrapper:
     def _propagate_usage_cost_to_hidden_params(
         response: "ModelResponse",
         custom_llm_provider: str | None,
+        chunks: Sequence[object] = (),
     ) -> None:
+        """The builder's usage only keeps declared fields, so provider blocks like usage.opencode are read off the chunks."""
         if custom_llm_provider not in _USAGE_COST_HEADER_PROVIDERS:
             return
-        _usage: Final[Usage | None] = getattr(response, "usage", None)
-        _cost: Final = CustomStreamWrapper._resolve_provider_reported_cost(getattr(_usage, "cost", None))
+        usages: Final = (
+            getattr(response, "usage", None),
+            *(chunk_usage(chunk) for chunk in reversed(chunks)),
+        )
+        costs: Final = (provider_reported_usage_cost(usage, custom_llm_provider) for usage in usages)
+        _cost: Final = next((cost for cost in costs if cost is not None), None)
         if _cost is not None:
             if "additional_headers" not in response.hidden_params:
                 response.hidden_params["additional_headers"] = {}
@@ -2099,7 +2108,9 @@ class CustomStreamWrapper:
                 complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self._new_usage_chunk()
                 if complete_streaming_response is not None:
-                    self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
+                    self._propagate_usage_cost_to_hidden_params(
+                        complete_streaming_response, self.custom_llm_provider, self.chunks
+                    )
 
                     setattr(
                         response,
@@ -2318,7 +2329,9 @@ class CustomStreamWrapper:
             complete_streaming_response: Final = await self._async_build_complete_streaming_response()
             response: Final = self._new_usage_chunk()
             if complete_streaming_response is not None:
-                self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
+                self._propagate_usage_cost_to_hidden_params(
+                    complete_streaming_response, self.custom_llm_provider, self.chunks
+                )
 
                 setattr(
                     response,

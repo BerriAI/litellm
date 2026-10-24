@@ -12,6 +12,7 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
@@ -1352,14 +1353,27 @@ def stream_chunk_builder_text_completion(
 _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
 
 
-def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
+def _logged_provider(logging_obj: Optional["Logging"]) -> object:
     if logging_obj is None:
-        return False
+        return None
     provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
-    return provider in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
+    return provider
 
 
-def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> float | None:
+def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
+    return _logged_provider(logging_obj) in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
+
+
+def _stream_builder_response_cost(
+    response: ModelResponse, logging_obj: Optional["Logging"], chunks: Sequence[object]
+) -> float | None:
+    if _logged_provider(logging_obj) == LlmProviders.OPENCODE_GO.value:
+        # usage.opencode only survives on the chunks, the assembled Usage keeps declared fields
+        reported: Final = (
+            provider_reported_usage_cost(chunk_usage(chunk), LlmProviders.OPENCODE_GO.value)
+            for chunk in reversed(chunks)
+        )
+        return next((cost for cost in reported if cost is not None), None)
     usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
     if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
         return float(usage_cost)
@@ -1397,8 +1411,10 @@ def _set_hidden_response_cost(response: ModelResponse, response_cost: float) -> 
     hidden_params["response_cost"] = response_cost
 
 
-def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
-    response_cost: Final = _stream_builder_response_cost(response, logging_obj)
+def _set_stream_builder_response_cost(
+    response: ModelResponse, logging_obj: Optional["Logging"], chunks: Sequence[object]
+) -> None:
+    response_cost: Final = _stream_builder_response_cost(response, logging_obj, chunks)
     if response_cost is None:
         return
     _set_hidden_response_cost(response, response_cost)
@@ -1550,7 +1566,11 @@ def stream_chunk_builder(
                     break
 
             _stamp_streaming_usage_cost(usage, response, logging_obj)
-            _set_stream_builder_response_cost(response, logging_obj)
+            _set_stream_builder_response_cost(
+                response,
+                logging_obj,
+                chunks,  # pyright: ignore[reportUnknownArgumentType]  # legacy chunk list is untyped
+            )
 
             processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
             return response
@@ -1734,7 +1754,11 @@ def stream_chunk_builder(
                 break
 
         _stamp_streaming_usage_cost(usage, response, logging_obj)
-        _set_stream_builder_response_cost(response, logging_obj)
+        _set_stream_builder_response_cost(
+            response,
+            logging_obj,
+            chunks,  # pyright: ignore[reportUnknownArgumentType]  # legacy chunk list is untyped
+        )
 
         processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
         return response
