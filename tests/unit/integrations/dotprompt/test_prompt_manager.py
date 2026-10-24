@@ -677,6 +677,27 @@ def test_prompt_initializer_registers_flat_db_prompt_under_base_id():
     assert template.content == "AHOY {{name}}"
 
 
+def test_prompt_initializer_accepts_params_without_dotprompt_content():
+    from types import SimpleNamespace
+
+    from litellm.integrations.dotprompt import prompt_initializer
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
+
+    litellm_params = SimpleNamespace(
+        prompt_data={"content": "AHOY {{name}}", "metadata": {"model": "gpt-4o-mini"}},
+    )
+    prompt_spec = PromptSpec(
+        prompt_id="agent-prompt",
+        litellm_params=PromptLiteLLMParams(prompt_integration="dotprompt"),
+    )
+
+    dotprompt_manager = prompt_initializer(litellm_params, prompt_spec)
+
+    template = dotprompt_manager.prompt_manager.get_prompt("agent-prompt")
+    assert template is not None
+    assert template.content == "AHOY {{name}}"
+
+
 def _swap_prompt_manager_and_spec(ignore_prompt_manager_model: bool) -> tuple[DotpromptManager, PromptSpec]:
     manager = DotpromptManager(
         prompt_data={"content": "You are a pirate assistant.", "metadata": {"model": "gpt-4o-mini"}},

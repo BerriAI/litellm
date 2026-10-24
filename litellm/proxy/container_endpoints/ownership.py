@@ -1,13 +1,14 @@
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.resource_ownership import (
     get_primary_resource_owner_scope,
@@ -111,12 +112,10 @@ def _get_response_id(response: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-@runtime_checkable
 class _SupportsModelDump(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-@runtime_checkable
 class _SupportsPydanticDict(Protocol):
     def dict(self) -> Mapping[str, object]: ...
 
@@ -124,9 +123,9 @@ class _SupportsPydanticDict(Protocol):
 def _dump_response(response: object) -> Mapping[str, object]:
     if isinstance(response, dict):
         return dict(response)
-    if isinstance(response, _SupportsModelDump):
+    if has_attributes(response, _SupportsModelDump, "model_dump"):
         return response.model_dump()
-    if isinstance(response, _SupportsPydanticDict):
+    if has_attributes(response, _SupportsPydanticDict, "dict"):
         return response.dict()
     return {"id": _get_response_id(response)}
 

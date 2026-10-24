@@ -98,10 +98,10 @@ class TestEmbedding:
 
 
 class TestErrors:
-    def test_a_non_object_body_fails_naming_the_body(self, eden_key, respx_mock):
+    def test_a_non_object_body_fails_as_an_invalid_response_object(self, eden_key, respx_mock):
         respx_mock.post(EDEN_EMBEDDINGS_URL).mock(return_value=httpx.Response(200, json=["unexpected"]))
 
-        with pytest.raises(litellm.APIConnectionError, match="unexpected"):
+        with pytest.raises(litellm.APIConnectionError, match="Invalid response object"):
             litellm.embedding(model=MODEL, input="hello")
 
     def test_middleware_401_maps_to_authentication_error(self, eden_key, respx_mock):

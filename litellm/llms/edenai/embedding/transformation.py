@@ -5,7 +5,7 @@ per-request cost at the top level of the body.
 Docs: https://www.edenai.co/docs/v3/llms/embeddings
 """
 
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 import httpx
 
@@ -16,7 +16,7 @@ from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 from litellm.utils import convert_to_model_response_object
 
-from ..common_utils import EdenAIException, endpoint_url, json_headers, object_body, pick, reported_cost
+from ..common_utils import EdenAIException, endpoint_url, json_headers, pick, reported_cost
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -90,13 +90,14 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
     ) -> EmbeddingResponse:
         body: Final = _json_body(raw_response)
         logging_obj.post_call(original_response=body)
-        cost: Final = reported_cost(body)
         response: Final[EmbeddingResponse] = convert_to_model_response_object(
-            response_object=object_body(body),
+            response_object=cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+                dict[str, object], body
+            ),
             model_response_object=model_response,
             response_type="embedding",
         )
-        set_response_cost_in_hidden_params(response, cost)
+        set_response_cost_in_hidden_params(response, reported_cost(body))
         return response
 
     def get_error_class(

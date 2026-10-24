@@ -53,7 +53,6 @@ from typing import (
     get_args,
     get_origin,
     get_type_hints,
-    runtime_checkable,
 )
 
 import anyio
@@ -362,6 +361,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
     iter_items,
     normalize_drop_params,
+    require_attributes,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1923,16 +1923,13 @@ def _strip_operation_id_method_suffix(operation_id: str) -> str:
     return operation_id
 
 
-@runtime_checkable
 class _SupportsValues(Protocol):
-    def values(self) -> Iterable[object]: ...
+    def values(self) -> Iterable[JsonValue]: ...
 
 
 def _openapi_path_items(openapi_schema: JsonObject) -> Iterable[JsonObject]:
-    paths: Final = openapi_schema.get("paths", {})
-    if isinstance(paths, _SupportsValues):
-        return (path_item for path_item in paths.values() if isinstance(path_item, dict))
-    raise AttributeError(f"'{type(paths).__name__}' object has no attribute 'values'")
+    paths: Final = require_attributes(openapi_schema.get("paths", {}), _SupportsValues, "values")
+    return (path_item for path_item in paths.values() if isinstance(path_item, dict))
 
 
 def ensure_unique_openapi_operation_ids(
@@ -2018,7 +2015,6 @@ from starlette.routing import BaseRoute
 from litellm.proxy.common_utils.openapi_route import OpenAPISchema, serve_openapi_off_the_event_loop
 
 
-@runtime_checkable
 class _OpenAPIQueryParam(Protocol):
     @property
     def name(self) -> object: ...
@@ -2028,9 +2024,8 @@ class _OpenAPIQueryParam(Protocol):
 
 
 def _query_param_name_and_required(param: object) -> tuple[object, object]:
-    if isinstance(param, _OpenAPIQueryParam):
-        return param.name, param.required
-    raise AttributeError(f"'{type(param).__name__}' object has no attribute 'name' or 'required'")
+    fields: Final = require_attributes(param, _OpenAPIQueryParam, "name", "required")
+    return fields.name, fields.required
 
 
 def _inject_websocket_stubs_into_openapi_schema(openapi_schema: dict, websocket_routes: list) -> dict:
@@ -16044,26 +16039,20 @@ async def _get_caller_byok_team_scope(
     return key_team_scope | set(user_row.teams or [])
 
 
-@runtime_checkable
 class _SupportsGet(Protocol):
     def get(self, key: str, default: object = None, /) -> object: ...
 
 
 def _with_get(value: object) -> _SupportsGet:
-    if isinstance(value, _SupportsGet):
-        return value
-    raise AttributeError(f"'{type(value).__name__}' object has no attribute 'get'")
+    return require_attributes(value, _SupportsGet, "get")
 
 
-@runtime_checkable
 class _SupportsLower(Protocol):
     def lower(self) -> object: ...
 
 
 def _lowered(value: object) -> object:
-    if isinstance(value, _SupportsLower):
-        return value.lower()
-    raise AttributeError(f"'{type(value).__name__}' object has no attribute 'lower'")
+    return require_attributes(value, _SupportsLower, "lower").lower()
 
 
 def _byok_row_outside_caller_teams(model_info_dict: object, allowed_team_ids: set[str] | None) -> bool:

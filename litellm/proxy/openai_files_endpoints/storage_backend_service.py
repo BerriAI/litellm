@@ -12,6 +12,7 @@ from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.llms.base_llm.files.storage_backend import BaseFileStorageBackend
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
@@ -260,13 +261,9 @@ class StorageBackendFileService:
         )
 
         # Store in managed files
-        managed_files_writer: Final = managed_files_obj if isinstance(managed_files_obj, ManagedFileIdWriter) else None
-        if managed_files_writer is None:
-            raise AttributeError(
-                f"'{type(managed_files_obj).__name__}' object has no attribute 'store_unified_file_id'",
-                name="store_unified_file_id",
-                obj=managed_files_obj,
-            )
+        managed_files_writer: Final = require_attributes(
+            managed_files_obj, ManagedFileIdWriter, "store_unified_file_id"
+        )
         await managed_files_writer.store_unified_file_id(
             file_id=base64_unified_file_id,
             file_object=file_object,

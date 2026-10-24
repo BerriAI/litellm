@@ -49,11 +49,12 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Final
+from typing import Final, Protocol
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.newrelic import NewRelicInitParams
@@ -63,6 +64,10 @@ try:
     import newrelic.agent as _newrelic_agent
 except ImportError:
     _newrelic_agent = None
+
+
+class _SupportsTimestamp(Protocol):
+    def timestamp(self) -> float: ...
 
 
 class NewRelicLogger(CustomLogger):
@@ -403,7 +408,7 @@ class NewRelicLogger(CustomLogger):
 
     def _to_epoch_ms(self, t: datetime | float) -> float:
         """Convert a datetime or float timestamp to epoch milliseconds."""
-        if isinstance(t, datetime):
+        if has_attributes(t, _SupportsTimestamp, "timestamp"):
             return t.timestamp() * 1000.0
         return float(t) * 1000.0
 

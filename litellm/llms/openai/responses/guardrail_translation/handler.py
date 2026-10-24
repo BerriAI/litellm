@@ -36,7 +36,7 @@ from collections.abc import Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, Union, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, Union, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -47,6 +47,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     OpenAiResponsesToChatCompletionStreamIterator,
     tool_call_dict_from_output_item,
 )
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -237,7 +238,6 @@ class ResponsesStreamChunk(TypedDict, total=False):
     content_index: ReadOnly[int]
 
 
-@runtime_checkable
 class _StreamEventFields(Protocol):
     def get(self, key: str, /) -> object: ...
 
@@ -1283,7 +1283,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             {position: chain((rewritten,), repeat("")) for position, rewritten in rewrites_by_position.items()}
         )
         for event in stream_events:
-            if not isinstance(event, _StreamEventFields):
+            if not has_attributes(event, _StreamEventFields, "get"):
                 continue
             event_type = event.get("type")
             output_index = event.get("output_index")

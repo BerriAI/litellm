@@ -20,7 +20,6 @@ from typing import (
     TypedDict,
     Union,
     cast,
-    runtime_checkable,
 )
 from uuid import NAMESPACE_URL, uuid5
 
@@ -45,6 +44,7 @@ from litellm.constants import (
 )
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.internal_call_metadata import requests_background
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -491,15 +491,12 @@ _PROVIDER_FILE_ID_KEYS: Final = tuple(dict.fromkeys(chain.from_iterable(_PROVIDE
 _PROVIDER_FILE_RETRIEVE_RETRY_DELAYS_SECONDS: Final = (0.5, 1.0, 2.0)
 
 
-@runtime_checkable
 class _SupportsKeyedGet(Protocol):
     def get(self, key: str, default: object, /) -> object: ...
 
 
 def _keyed_get(source: object, key: str, default: object = None) -> object:
-    if isinstance(source, _SupportsKeyedGet):
-        return source.get(key, default)
-    raise AttributeError(f"{type(source).__name__!r} object has no attribute 'get'", name="get", obj=source)
+    return require_attributes(source, _SupportsKeyedGet, "get").get(key, default)
 
 
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):

@@ -72,5 +72,5 @@ def migrate(ctx: click.Context, check_only: bool, dry_run: bool):
         raise click.ClickException(f"Unexpected residual_legacy in the proxy response: {residual!r}")
     if residual > 0:
         rich.print(f"[yellow]Residual legacy values remaining: {residual}[/yellow]")
-    else:
+    elif residual == 0:
         rich.print("[green]No legacy values remaining (residual_legacy == 0).[/green]")

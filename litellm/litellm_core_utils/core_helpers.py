@@ -5,10 +5,11 @@ import logging
 import re
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
 
 import litellm
 from litellm._logging import verbose_logger
@@ -77,6 +78,24 @@ class _SupportsGetItem(Protocol):
 
 def attribute_or_none(source: object, name: str) -> object:
     return getattr(source, name, None)
+
+
+_Shape: Final = TypeVar("_Shape")
+
+
+def has_attributes(
+    value: object,
+    shape: type[_Shape],
+    *names: str,
+) -> TypeIs[_Shape]:  # guard-ok: hasattr sees what __getattr__ serves, which Protocol isinstance skips on 3.12+
+    return all(hasattr(value, name) for name in names)
+
+
+def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shape:
+    if has_attributes(value, shape, *names):
+        return value
+    missing: Final = next(name for name in names if not hasattr(value, name))
+    raise AttributeError(f"'{type(value).__name__}' object has no attribute '{missing}'", name=missing, obj=value)
 
 
 def iter_items(value: object) -> Iterable[object]:

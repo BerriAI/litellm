@@ -10,10 +10,11 @@ from typing import (
     Final,
     Literal,
     Optional,
+    Protocol,
 )
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
@@ -22,7 +23,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none, iter_items
+from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none, iter_items, require_attributes
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -96,6 +97,10 @@ def _string_tool_arguments(calls: Sequence[object]) -> Iterator[tuple[object, st
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
     pass
+
+
+class _DeepCopyable(Protocol):
+    def model_copy(self, *, deep: bool) -> object: ...
 
 
 class LLMShieldProxyGuardrail(CustomGuardrail):
@@ -678,15 +683,13 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             yield chunk
 
     @staticmethod
-    def _chunk_for_choice(last_chunk: object, index: int) -> BaseModel | None:
+    def _chunk_for_choice(last_chunk: object, index: int) -> object | None:
         """A single-choice copy of the last chunk, carrying only `index`.
 
         Emitting one choice per chunk keeps a flush from reading as content on a
         choice it does not belong to.
         """
-        if not isinstance(last_chunk, BaseModel):
-            return None
-        chunk: Final = last_chunk.model_copy(deep=True)
+        chunk: Final = require_attributes(last_chunk, _DeepCopyable, "model_copy").model_copy(deep=True)
         raw_choices: Final = attribute_or_none(chunk, "choices")
         if not raw_choices:
             return None

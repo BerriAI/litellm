@@ -273,16 +273,25 @@ async def test_compactifai_async_completion(respx_mock):
     assert response.usage.total_tokens == 23
 
 
-def test_compactifai_non_object_response_body_keeps_the_error_class():
+@pytest.mark.parametrize(
+    ("body", "json_mode", "error", "message"),
+    [
+        ([], None, TypeError, r"argument after \*\* must be a mapping, not list"),
+        ({"choices": None}, True, TypeError, "'NoneType' object is not iterable"),
+        ({"choices": [{"message": "hi"}]}, True, AttributeError, "'str' object has no attribute 'get'"),
+        ({"choices": [{"message": {"tool_calls": [5]}}]}, True, TypeError, "'int' object is not subscriptable"),
+    ],
+)
+def test_compactifai_malformed_response_body_raises_the_error_of_the_failing_lookup(body, json_mode, error, message):
     from unittest.mock import MagicMock
 
     from litellm.llms.compactifai.chat.transformation import CompactifAIChatConfig
 
     raw_response = httpx.Response(
-        200, json=[], request=httpx.Request("POST", "https://api.compactif.ai/v1/chat/completions")
+        200, json=body, request=httpx.Request("POST", "https://api.compactif.ai/v1/chat/completions")
     )
 
-    with pytest.raises((TypeError, AttributeError)):
+    with pytest.raises(error, match=message) as raised:
         CompactifAIChatConfig().transform_response(
             model="cai-llama-3-1-8b-slim",
             raw_response=raw_response,
@@ -293,4 +302,7 @@ def test_compactifai_non_object_response_body_keeps_the_error_class():
             optional_params={},
             litellm_params={},
             encoding=None,
+            json_mode=json_mode,
         )
+
+    assert raised.type is error

@@ -4,16 +4,16 @@ Utility functions for A2A protocol.
 
 import hashlib
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import has_attributes
 
 if TYPE_CHECKING:
     from a2a.types import SendMessageRequest, SendStreamingMessageRequest
 
 
-@runtime_checkable
 class _SupportsModelDump(Protocol):
     def model_dump(self, *, mode: str) -> object: ...
 
@@ -134,7 +134,9 @@ class A2ARequestUtils:
         # mirrors how the response side already works (it operates on model_dump).
         input_message: Final = A2ARequestUtils.get_input_message_from_request(request)
         input_text: Final = A2ARequestUtils.extract_text_from_message(
-            input_message.model_dump(mode="json") if isinstance(input_message, _SupportsModelDump) else input_message
+            input_message.model_dump(mode="json")
+            if has_attributes(input_message, _SupportsModelDump, "model_dump")
+            else input_message
         )
         prompt_tokens: Final = A2ARequestUtils.count_tokens(input_text)
 

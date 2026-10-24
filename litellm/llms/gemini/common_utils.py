@@ -4,14 +4,13 @@ import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import httpx
-from pydantic import InstanceOf, JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -133,8 +132,6 @@ def is_gemini_image_model(model: str) -> bool:
 
 
 _JSON_VALUE: Final = TypeAdapter(object)
-_MODELS: Final = TypeAdapter(Iterable[Mapping[str, object]])
-_MODEL_NAME: Final = TypeAdapter(InstanceOf[str])
 
 
 def _parse_image_config_string(raw_image_config: str, model: str) -> object:
@@ -392,10 +389,10 @@ class GeminiModelInfo(BaseLLMModelInfo):
     def get_base_model(model: str) -> str | None:
         return model.replace("gemini/", "")
 
-    def process_model_name(self, models: Iterable[Mapping[str, object]]) -> list[str]:
+    def process_model_name(self, models: Iterable[Mapping[str, str]]) -> list[str]:
         litellm_model_names: Final = []
         for model in models:
-            stripped_model_name = _MODEL_NAME.validate_python(model["name"]).replace("models/", "")
+            stripped_model_name = model["name"].replace("models/", "")
             litellm_model_name = "gemini/" + stripped_model_name
             litellm_model_names.append(litellm_model_name)
         return litellm_model_names
@@ -419,9 +416,11 @@ class GeminiModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from Gemini. Status code: {response.status_code}, Response: {response.json()}"
             )
 
-        listing: Final = decoded_json_object(_JSON_VALUE.validate_python(response.json()))
+        listing: Final = cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+            Mapping[str, Iterable[Mapping[str, str]]], _JSON_VALUE.validate_python(response.json())
+        )
 
-        litellm_model_names: Final = self.process_model_name(_MODELS.validate_python(listing["models"]))
+        litellm_model_names: Final = self.process_model_name(listing["models"])
         return litellm_model_names
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

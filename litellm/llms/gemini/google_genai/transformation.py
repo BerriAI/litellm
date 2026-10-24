@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 import httpx
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
@@ -400,7 +399,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             )
 
         logging_obj.model_call_details["httpx_response"] = raw_response
-        response: Final = self.convert_citation_sources_to_citations(dict(decoded_json_object(decoded)))
+        response: Final = self.convert_citation_sources_to_citations(
+            cast(dict[str, object], decoded)  # cast-ok: the body passes through unvalidated, as before it was typed
+        )
 
         return GenerateContentResponse(**response)
 

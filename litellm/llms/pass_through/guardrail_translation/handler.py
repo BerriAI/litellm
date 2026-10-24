@@ -13,6 +13,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -217,7 +218,6 @@ class _EventStreamEndpointChecker(Protocol):
     def event_stream_endpoint_is_de_anonymizable(self, endpoint: str, model: str, body: object) -> bool: ...
 
 
-@runtime_checkable
 class _EventStreamDeAnonymizer(Protocol):
     async def de_anonymize_event_stream(
         self,
@@ -421,7 +421,7 @@ class LlmPassthroughRouteHandler(BaseTranslation):
     @staticmethod
     def _resolve_event_stream_de_anonymizer(provider: str | None) -> Callable[..., Awaitable[bytes]] | None:
         handler_cls: Final = _get_provider_handlers().get(provider or "")
-        if not isinstance(handler_cls, _EventStreamDeAnonymizer):
+        if not has_attributes(handler_cls, _EventStreamDeAnonymizer, "de_anonymize_event_stream"):
             return None
         return handler_cls.de_anonymize_event_stream
 

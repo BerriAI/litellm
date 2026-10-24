@@ -5,7 +5,7 @@ for every image model in the catalog with the real per-request cost at the top l
 Docs: https://www.edenai.co/docs/v3/llms/image-generation
 """
 
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 import httpx
 
@@ -16,7 +16,7 @@ from litellm.types.llms.openai import AllMessageValues, OpenAIImageGenerationOpt
 from litellm.types.utils import ImageResponse
 from litellm.utils import convert_to_model_response_object
 
-from ..common_utils import EdenAIException, endpoint_url, json_headers, object_body, pick, reported_cost
+from ..common_utils import EdenAIException, endpoint_url, json_headers, pick, reported_cost
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -107,13 +107,14 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
     ) -> ImageResponse:
         body: Final = _json_body(raw_response)
         logging_obj.post_call(original_response=body)
-        cost: Final = reported_cost(body)
         response: Final[ImageResponse] = convert_to_model_response_object(
-            response_object=object_body(body),
+            response_object=cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+                dict[str, object], body
+            ),
             model_response_object=model_response,
             response_type="image_generation",
         )
-        set_response_cost_in_hidden_params(response, cost)
+        set_response_cost_in_hidden_params(response, reported_cost(body))
         return response
 
     def get_error_class(

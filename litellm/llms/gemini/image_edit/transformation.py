@@ -1,11 +1,10 @@
 import base64
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import TypeAdapter
 
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
@@ -20,6 +19,7 @@ from litellm.llms.gemini.image_usage_transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.llms.vertex_ai import GenerateContentResponseBody
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     FileTypes,
@@ -34,8 +34,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-_JSON_VALUES: Final = TypeAdapter(Iterable[object])
 
 
 class _JsonResponse(Protocol):
@@ -145,16 +143,18 @@ class GeminiImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        payload: Final = decoded_json_object(response_json)
+        payload: Final = cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+            GenerateContentResponseBody, response_json
+        )
         candidates: Final = payload.get("candidates", [])
         data_list: Final[list[ImageObject]] = []
 
-        for candidate in _JSON_VALUES.validate_python(candidates):
-            content = decoded_json_object(candidate).get("content", {})
-            parts = decoded_json_object(content).get("parts", [])
-            for part in _JSON_VALUES.validate_python(parts):
-                inline_data = decoded_json_object(part).get("inlineData")
-                image_data = decoded_json_object(inline_data).get("data") if inline_data else None
+        for candidate in candidates:
+            content = candidate.get("content", {})
+            parts = content.get("parts", [])
+            for part in parts:
+                inline_data = part.get("inlineData")
+                image_data = inline_data.get("data") if inline_data else None
                 if image_data:
                     data_list.append(
                         ImageObject(
