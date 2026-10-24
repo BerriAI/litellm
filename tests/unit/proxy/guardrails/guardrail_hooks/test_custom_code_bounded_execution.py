@@ -1,15 +1,30 @@
 import asyncio
+import json
+import re
 import threading
 import time
+from io import StringIO
+from typing import Final
 
 import pytest
 
+from litellm.proxy.guardrails.guardrail_hooks.custom_code._regex_worker import _main as regex_worker
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
     ExecutionTimeoutError,
     SandboxExit,
     await_with_timeout,
     call_off_loop_with_timeout,
     call_with_timeout,
+)
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
+    CustomCodeExecutionError,
+    CustomCodeGuardrail,
+)
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
+    regex_find_all,
+    regex_match,
+    regex_match_all,
+    regex_replace,
 )
 
 
@@ -186,3 +201,127 @@ async def test_await_with_timeout_cancels_the_code_when_the_caller_is_cancelled(
         await waiting
 
     assert await asyncio.wait_for(interrupted.wait(), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_regex_near_match_does_not_hold_the_execution_timeout() -> None:
+    guardrail: Final = CustomCodeGuardrail(
+        custom_code=(
+            "def apply_guardrail(inputs, request_data, input_type):\n"
+            '    regex_match(inputs["texts"][0], "(a+)+$")\n'
+            "    return allow()\n"
+        ),
+        guardrail_name="regex-near-match",
+        execution_timeout=0.1,
+    )
+    started: Final = time.monotonic()
+    with pytest.raises(CustomCodeExecutionError, match=r"exceeded its 0\.1s execution timeout"):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["a" * 26 + "!"]}, request_data={"model": "m"}, input_type="request"
+        )
+    await asyncio.to_thread(_join_worker_threads)
+    assert time.monotonic() - started < 0.8
+    assert _worker_threads() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "operation",
+    [
+        'regex_match(inputs["texts"][0], "(a|aa)+$")',
+        'regex_match_all(inputs["texts"][0], "(a|aa)+$")',
+        'regex_replace(inputs["texts"][0], "(a|aa)+$", "x")',
+        'regex_find_all(inputs["texts"][0], "(a|aa)+$")',
+    ],
+)
+async def test_regex_deadline_cannot_be_swallowed_as_a_failed_match(operation: str, asynchronous: bool) -> None:
+    guardrail: Final = CustomCodeGuardrail(
+        custom_code=(
+            f"{'async ' if asynchronous else ''}def apply_guardrail(inputs, request_data, input_type):\n"
+            "    try:\n"
+            f"        {operation}\n"
+            "    except Exception:\n"
+            "        return allow()\n"
+            "    return allow()\n"
+        ),
+        guardrail_name="regex-deadline",
+        execution_timeout=0.1,
+    )
+    started: Final = time.monotonic()
+    with pytest.raises(CustomCodeExecutionError, match=r"exceeded its 0\.1s execution timeout"):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["a" * 32 + "!"]}, request_data={"model": "m"}, input_type="request"
+        )
+    await asyncio.to_thread(_join_worker_threads)
+    assert time.monotonic() - started < 0.8
+    assert _worker_threads() == []
+
+
+@pytest.mark.parametrize(
+    ("text", "pattern", "flags"),
+    [
+        ("café", r"\w+", re.ASCII),
+        ("café", r"\w+", re.UNICODE),
+        ("123-45-6789\u200d", r"\b\d{3}-\d{2}-\d{4}\b", 0),
+        ("123-45-6789\u200c", r"\b\d{3}-\d{2}-\d{4}\b", 0),
+        ("a\u0301", r"\w+", 0),
+        ("²", r"\w+", 0),
+        ("\u001c", r"\s+", 0),
+        ("a\u200d", r"a\b\W", 0),
+        ("²", r"[^\W]+", 0),
+        ("HELLO", "hello", re.IGNORECASE),
+        ("first\nsecond", "^second$", re.MULTILINE),
+        ("first\nsecond", ".+", re.DOTALL),
+        ("hello", "h e l l o", re.VERBOSE),
+        ("hello", "(h)(ello)", 0),
+        ("hello", "(", 0),
+    ],
+)
+def test_regex_primitives_preserve_standard_matching_results(text: str, pattern: str, flags: int) -> None:
+    try:
+        expected_match: Final = bool(re.search(pattern, text, flags))
+        expected_fullmatch: Final = bool(re.fullmatch(pattern, text, flags))
+        expected_replacement: Final = re.sub(pattern, "x", text, flags=flags)
+        expected_matches: Final = re.findall(pattern, text, flags)
+    except re.error:
+        assert (regex_match(text, pattern, flags), regex_match_all(text, pattern, flags)) == (False, False)
+        assert (regex_replace(text, pattern, "x", flags), regex_find_all(text, pattern, flags)) == (text, [])
+        return
+    assert (regex_match(text, pattern, flags), regex_match_all(text, pattern, flags)) == (
+        expected_match,
+        expected_fullmatch,
+    )
+    assert (regex_replace(text, pattern, "x", flags), regex_find_all(text, pattern, flags)) == (
+        expected_replacement,
+        expected_matches,
+    )
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [("search", True), ("fullmatch", False), ("sub", "[REDACTED]\u200d"), ("findall", ["123-45-6789"])],
+)
+def test_regex_worker_protocol_preserves_unicode_and_separates_debug_output(operation: str, expected: object) -> None:
+    output: Final = StringIO()
+    errors: Final = StringIO()
+    request: Final = json.dumps((operation, "123-45-6789\u200d", r"\b\d{3}-\d{2}-\d{4}\b", int(re.DEBUG), "[REDACTED]"))
+
+    assert regex_worker(request, output, errors) == 0
+    assert json.loads(output.getvalue()) == expected
+    assert errors.getvalue()
+
+
+def test_regex_worker_reports_invalid_patterns_without_a_success_result() -> None:
+    output: Final = StringIO()
+    errors: Final = StringIO()
+
+    assert regex_worker(json.dumps(("search", "hello", "(", 0, "")), output, errors) == 65
+    assert output.getvalue() == ""
+    assert errors.getvalue()
+
+
+@pytest.mark.parametrize("payload", ["[]", '["unknown", "text", "pattern", 0, ""]'])
+def test_regex_worker_rejects_invalid_requests_instead_of_returning_false(payload: str) -> None:
+    with pytest.raises(ValueError, match=r"invalid regex request|unknown regex operation"):
+        regex_worker(payload, StringIO(), StringIO())
