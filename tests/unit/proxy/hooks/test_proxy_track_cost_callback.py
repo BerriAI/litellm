@@ -1,35 +1,38 @@
 import asyncio
 import json
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
-from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
-    _get_budget_reservation_from_metadata,
     ProxyDBLogger,
+    _get_budget_reservation_from_metadata,
     _should_track_cost_callback,
     _update_database_and_spend_counters,
+    is_pre_routing_rejection,
     run_spend_event,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
-from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 
@@ -3559,3 +3562,87 @@ async def test_batch_accounting_does_not_retry_after_a_search_allowance_update(m
     assert sum(counter.totals.values()) == 5
     assert outcome.failed is True
     assert outcome.retryable_failure is False
+
+
+_PRE_ROUTING_REJECTIONS: Final[tuple[Exception, ...]] = (
+    ProxyException(message="Invalid API key", type=ProxyErrorTypes.token_not_found_in_db, param="key", code=401),
+    ProxyException(message="expired", type=ProxyErrorTypes.expired_key, param="key", code=401),
+    ProxyException(message="no access", type=ProxyErrorTypes.key_model_access_denied, param="model", code=403),
+    ProxyException(message="Invalid JSON payload", type="invalid_request_error", param="request_body", code=400),
+    litellm.BudgetExceededError(current_cost=1.0, max_budget=0.5),
+    litellm.BudgetExceededError(current_cost=1.0, max_budget=0.5, llm_provider="anthropic"),
+    ProxyModelNotFoundError(route="/chat/completions", model_name="4.6"),
+    HTTPException(status_code=401, detail="unauthorized"),
+)
+
+_LOGGED_FAILURES: Final[tuple[Exception, ...]] = (
+    litellm.AuthenticationError(message="bad provider key", llm_provider="anthropic", model="claude-haiku-4-5"),
+    litellm.RateLimitError(message="slow down", llm_provider="anthropic", model="claude-haiku-4-5"),
+    HTTPException(status_code=429, detail="Max parallel requests reached"),
+    HTTPException(status_code=400, detail={"error": "Violated guardrail policy"}),
+    ProxyException(message="db down", type=ProxyErrorTypes.internal_server_error, param=None, code=500),
+    Exception("Test exception"),
+)
+
+
+@pytest.mark.parametrize("exception", _PRE_ROUTING_REJECTIONS)
+def test_is_pre_routing_rejection_matches_proxy_rejections(exception: Exception) -> None:
+    assert is_pre_routing_rejection(exception) is True
+
+
+@pytest.mark.parametrize("exception", _LOGGED_FAILURES)
+def test_is_pre_routing_rejection_keeps_provider_guardrail_and_rate_limit_failures(exception: Exception) -> None:
+    assert is_pre_routing_rejection(exception) is False
+
+
+class _RecordingSpendWriter:
+    def __init__(self) -> None:
+        self.rows: list[Mapping[str, object]] = []  # mutable-ok: test double records the spend rows written
+
+    async def update_database(self, **kwargs: object) -> None:
+        self.rows.append(kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("flag_enabled", "exception", "rows_written"),
+    [
+        (
+            True,
+            ProxyException(
+                message="Invalid API key", type=ProxyErrorTypes.token_not_found_in_db, param="key", code=401
+            ),
+            0,
+        ),
+        (True, litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), 0),
+        (True, ProxyModelNotFoundError(route="/chat/completions", model_name="4.6"), 0),
+        (True, litellm.AuthenticationError(message="bad key", llm_provider="anthropic", model="claude-haiku-4-5"), 1),
+        (
+            False,
+            ProxyException(
+                message="Invalid API key", type=ProxyErrorTypes.token_not_found_in_db, param="key", code=401
+            ),
+            1,
+        ),
+        (False, litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), 1),
+    ],
+    ids=["flag-bad-key", "flag-budget", "flag-unknown-model", "flag-provider-error-kept", "off-bad-key", "off-budget"],
+)
+async def test_async_post_call_failure_hook_disable_pre_routing_error_logs(
+    flag_enabled: bool, exception: Exception, rows_written: int
+) -> None:
+    writer: Final = _RecordingSpendWriter()
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="test_api_key", user_id="u", team_id="t", request_route="/chat/completions"
+    )
+    request_data: Final = {
+        "model": "anthropic-haiku-4-5",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {},
+        "proxy_server_request": {"request_id": "req-1"},
+    }
+    with patch("litellm.proxy.proxy_server.general_settings", {"disable_pre_routing_error_logs": flag_enabled}):
+        await ProxyDBLogger(spend_writer=lambda: cast(DBSpendUpdateWriter, writer)).async_post_call_failure_hook(
+            request_data=request_data, original_exception=exception, user_api_key_dict=user_api_key_dict
+        )
+    assert len(writer.rows) == rows_written

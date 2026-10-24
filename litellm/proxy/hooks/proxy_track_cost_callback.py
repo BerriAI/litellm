@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
 
+from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
@@ -24,7 +25,7 @@ from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSet
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_team_object,
@@ -38,6 +39,7 @@ from litellm.proxy.db.db_spend_update_writer import (
 )
 from litellm.proxy.hooks.search_free_tier import apply_search_free_tier
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_route
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
@@ -396,6 +398,8 @@ class _ProxyDBLogger(CustomLogger):
         request_route: Final = user_api_key_dict.request_route
         if (
             ProxyDBLogger._should_track_errors_in_db() is False
+            or ProxyDBLogger._skips_pre_routing_rejections()
+            and is_pre_routing_rejection(original_exception)
             or request_route is not None
             and not (
                 RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
@@ -862,14 +866,39 @@ class _ProxyDBLogger(CustomLogger):
 
         If users want to disable error tracking, they can set the disable_error_logs flag in the general_settings
         """
-        from litellm.proxy.proxy_server import general_settings
-
-        if general_settings.get("disable_error_logs") is True:
+        if _general_setting_enabled("disable_error_logs"):
             return False
         return
 
+    @staticmethod
+    def _skips_pre_routing_rejections() -> bool:
+        """``general_settings.disable_pre_routing_error_logs`` keeps requests the proxy rejected before
+        selecting a deployment out of the spend logs, so a client retrying a bad key or an exhausted
+        budget cannot flood ``LiteLLM_SpendLogs`` with zero-spend rows."""
+        return _general_setting_enabled("disable_pre_routing_error_logs")
+
+
+def _general_setting_enabled(name: str) -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return name in general_settings and general_settings[name] is True
+
 
 ProxyDBLogger: Final = _ProxyDBLogger
+
+_PRE_ROUTING_REJECTION_STATUS_CODES: Final = frozenset(("400", "401", "403", "404", "422"))
+_PRE_ROUTING_AUTH_STATUS_CODES: Final = frozenset((401, 403))
+
+
+def is_pre_routing_rejection(exception: Exception) -> bool:
+    """True for a request the proxy rejected before any provider call: a bad, expired or over-budget key,
+    model access denied, an unknown model or an unparsable body. Provider errors, guardrail blocks and
+    proxy rate limits (429) are not pre-routing rejections."""
+    if isinstance(exception, (ProxyModelNotFoundError, litellm.BudgetExceededError)):
+        return True
+    if isinstance(exception, ProxyException):
+        return str(exception.code) in _PRE_ROUTING_REJECTION_STATUS_CODES
+    return isinstance(exception, HTTPException) and exception.status_code in _PRE_ROUTING_AUTH_STATUS_CODES
 
 
 def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
