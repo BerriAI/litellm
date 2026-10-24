@@ -7,12 +7,19 @@ VERIA-39 regression tests:
   models the caller is not authorized to use.
 """
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+
+def _router_without_other_teams_deployments() -> MagicMock:
+    router: Final = MagicMock()
+    router.model_owned_by_other_teams.return_value = False
+    return router
 
 
 def _models(file_content_as_dict):
@@ -627,7 +634,7 @@ async def test_pre_call_does_not_skip_for_spoofed_provider():
     )
     user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice", models=["*"])
 
-    mock_router = MagicMock()
+    mock_router = _router_without_other_teams_deployments()
     mock_router.model_list = []
     mock_router.resolve_model_name_from_model_id.return_value = "my-openai-model"
 
@@ -699,7 +706,7 @@ async def test_count_input_file_usage_decodes_model_embedded_file_id():
         ) as mock_afile_content,
         patch(
             "litellm.proxy.proxy_server.llm_router",
-            MagicMock(),
+            _router_without_other_teams_deployments(),
         ),
         patch(
             "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
@@ -1424,7 +1431,7 @@ async def test_pre_call_enforces_project_otpm_limit_for_batch():
 
     with (
         patch("litellm.proxy.proxy_server.general_settings", {}),
-        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", _router_without_other_teams_deployments()),
         patch(
             "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
             return_value={"custom_llm_provider": "openai"},
@@ -1478,7 +1485,7 @@ async def test_pre_call_enforces_project_itpm_limit_for_batch():
 
     with (
         patch("litellm.proxy.proxy_server.general_settings", {}),
-        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", _router_without_other_teams_deployments()),
         patch(
             "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
             return_value={"custom_llm_provider": "openai"},
@@ -1538,7 +1545,7 @@ async def test_pre_call_enforces_project_otpm_limit_for_non_routing_row_model():
 
     with (
         patch("litellm.proxy.proxy_server.general_settings", {}),
-        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", _router_without_other_teams_deployments()),
         patch(
             "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
             return_value={"custom_llm_provider": "openai"},
@@ -1605,7 +1612,7 @@ async def test_pre_call_charges_each_row_model_against_its_own_project_quota():
 
     with (
         patch("litellm.proxy.proxy_server.general_settings", {}),
-        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", _router_without_other_teams_deployments()),
         patch(
             "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
             return_value={"custom_llm_provider": "openai"},
@@ -2132,7 +2139,7 @@ def _enqueued_batch_patches():
     afile_content_mock = AsyncMock(return_value=mock_content)
     return afile_content_mock, (
         patch("litellm.proxy.proxy_server.general_settings", {}),
-        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", _router_without_other_teams_deployments()),
         patch(
             "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
             return_value={"custom_llm_provider": "openai"},
