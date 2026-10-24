@@ -84,7 +84,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
 
         return ssl_config
 
-    def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
+    def _construct_url(self, api_base: str, query_params: RealtimeQueryParams, realtime_mode: str = "realtime") -> str:
         """
         Construct the backend websocket URL with the client's query parameters.
 
@@ -101,7 +101,8 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_base = api_base.replace("http://", "ws://")
         url = URL(api_base)
         # Set the correct path
-        url = url.copy_with(path="/v1/realtime")
+        path: Final = "/v1/realtime/translations" if realtime_mode == "translation" else "/v1/realtime"
+        url = url.copy_with(path=path)
         upstream_params: Final = tuple(
             (key, value) for key, value in query_params.items() if not (drops_model and key == "model")
         )
@@ -140,6 +141,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: object | None = None,
         litellm_metadata: dict | None = None,
+        realtime_mode: str = "realtime",
         **kwargs: object,
     ):
         import websockets
@@ -153,13 +155,15 @@ class OpenAIRealtime(OpenAIChatCompletion):
         # Use all query params if provided, else fallback to just model
         if query_params is None:
             query_params = {"model": model}
-        url: Final = self._construct_url(api_base, query_params)
+        url: Final = self._construct_url(api_base, query_params, realtime_mode=realtime_mode)
 
         try:
             # Get provider-specific SSL configuration
             ssl_config: Final = self._get_ssl_config(url)
 
-            openai_beta_realtime: Final = client_sent_openai_beta_realtime_header(websocket)
+            openai_beta_realtime: Final = realtime_mode != "translation" and client_sent_openai_beta_realtime_header(
+                websocket
+            )
             if not openai_beta_realtime:
                 verbose_logger.debug(
                     "OpenAI Realtime: connecting with GA protocol (no OpenAI-Beta header). "
@@ -196,6 +200,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     ),
                     event_normalizer=self._make_event_normalizer(),
                     usage_meter=self._make_usage_meter(),
+                    translation_session=realtime_mode == "translation",
                 )
                 await realtime_streaming.bidirectional_forward()
 

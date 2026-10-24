@@ -1,7 +1,11 @@
+import asyncio
 import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from litellm.types.realtime import RealtimeQueryParams
@@ -526,3 +530,83 @@ async def test_realtime_query_params_preserve_missing_model(monkeypatch):
 
     called_kwargs = mock_async_realtime.call_args.kwargs
     assert called_kwargs["query_params"] == {"intent": "transcription"}
+
+
+class _BackendConnection:
+    def __init__(self, connection):
+        self.connection = connection
+
+    async def __aenter__(self):
+        return self.connection
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+
+def test_translation_url_uses_dedicated_path():
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
+
+    handler = OpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://api.openai.com/v1",
+        query_params={"model": "gpt-realtime-translate"},
+        realtime_mode="translation",
+    )
+    assert url == "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("beta_client", (False, True))
+async def test_translation_websocket_uses_direct_transport(beta_client: bool) -> None:
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
+
+    backend: Final = AsyncMock()
+    pending: Final = asyncio.Event()
+
+    async def receive_backend() -> str:
+        await pending.wait()
+        return ""
+
+    backend.recv.side_effect = receive_backend
+    websocket: Final = MagicMock()
+    websocket.scope = {"headers": [(b"openai-beta", b"realtime=v1")] if beta_client else []}
+    websocket.receive_text = AsyncMock(
+        side_effect=(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "translation", "audio": {"output": {"language": "fr"}}},
+                }
+            ),
+            RuntimeError("connection closed"),
+        )
+    )
+    websocket.close = AsyncMock()
+    logging_obj: Final = MagicMock(dispatch_success_handlers=AsyncMock(), dispatch_failure_handlers=AsyncMock())
+    handler: Final = OpenAIRealtime()
+    expected_url: Final = "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
+    assert (
+        handler._construct_url(
+            api_base="https://api.openai.com/v1",
+            query_params={"model": "gpt-realtime-translate"},
+            realtime_mode="translation",
+        )
+        == expected_url
+    )
+
+    with patch("websockets.connect", return_value=_BackendConnection(backend)) as connect:
+        await handler.async_realtime(
+            model="gpt-realtime-translate",
+            websocket=websocket,
+            logging_obj=logging_obj,
+            api_base="https://api.openai.com/v1",
+            api_key="sk-test",
+            query_params={"model": "gpt-realtime-translate"},
+            realtime_mode="translation",
+        )
+
+    connect.assert_called_once()
+    assert connect.call_args.args[0] == expected_url
+    assert "OpenAI-Beta" not in connect.call_args.kwargs["additional_headers"]
+    sent: Final = TypeAdapter(Mapping[str, object]).validate_json(backend.send.call_args_list[0].args[0])
+    assert sent["session"] == {"audio": {"output": {"language": "fr"}}}

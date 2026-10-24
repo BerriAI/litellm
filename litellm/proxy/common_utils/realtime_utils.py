@@ -1,3 +1,4 @@
+import json
 from functools import lru_cache
 from typing import Final
 
@@ -10,7 +11,7 @@ def realtime_request_body(model: str | None) -> bytes:
     Generate the realtime websocket request body. Cached with LRU semantics to avoid repeated
     string formatting work while keeping memory usage bounded.
     """
-    return f'{{"model": "{model or ""}"}}'.encode()
+    return json.dumps({"model": model}).encode()
 
 
 _realtime_request_body: Final = realtime_request_body

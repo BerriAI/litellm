@@ -102,6 +102,7 @@ from litellm.utils import (
     client,
     get_non_default_completion_params,
     get_optional_params_image_gen,
+    get_optional_params_transcription,
     get_prompt_cache_min_tokens,
     get_supported_openai_params,
     get_token_count,
@@ -1221,6 +1222,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/images/generations",
                             "/v1/realtime",
                             "/v1/realtime/transcription_sessions",
+                            "/v1/realtime/translations",
+                            "/v1/realtime/translations/client_secrets",
+                            "/v1/realtime/translations/calls",
                             "/v1/images/variations",
                             "/v1/images/edits",
                             "/v1/batch",
@@ -10458,6 +10462,25 @@ def test_get_provider_audio_transcription_config_resolves_for_every_provider() -
     assert unexpected == {}
     assert isinstance(configs[LlmProviders.OPENAI], litellm.OpenAIWhisperAudioTranscriptionConfig)
 
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        ("groq", "whisper-large-v3"),
+        ("deepgram", "nova-3"),
+        ("mistral", "voxtral-mini-latest"),
+        ("elevenlabs", "scribe_v1"),
+        ("fireworks_ai", "whisper-v3"),
+    ],
+)
+def test_openai_sdk_transcription_params_pass_through_to_other_providers(custom_llm_provider: str, model: str) -> None:
+    hints: Final = {"stream": True, "languages": ["en"], "keywords": ["LiteLLM"]}
+
+    params: Final = get_optional_params_transcription(model=model, custom_llm_provider=custom_llm_provider, **hints)
+
+    forwarded: Final = {**params.get("extra_body", {}), **params}
+    assert {key: forwarded.get(key) for key in hints} == hints
 
 @pytest.mark.parametrize(
     ("model", "optional_params", "expected_response_format"),

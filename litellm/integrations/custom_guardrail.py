@@ -974,6 +974,12 @@ class CustomGuardrail(CustomLogger):
         enrich_http_exception_with_guardrail_context(result, self)
         raise result
 
+    def runs_post_call_deployment_hook(self, request_data: Mapping[str, object]) -> bool:
+        return (
+            isinstance(request_data.get("guardrails"), list)
+            and self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is True
+        )
+
     async def async_post_call_success_deployment_hook(
         self,
         request_data: dict,
@@ -983,12 +989,7 @@ class CustomGuardrail(CustomLogger):
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
         """
-        # should run guardrail
-        litellm_guardrails: Final = request_data.get("guardrails")
-        if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
-            return None
-
-        if self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is not True:
+        if not self.runs_post_call_deployment_hook(request_data):
             return None
 
         target: Final = self._deployment_hook_target()

@@ -10996,7 +10996,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get_3"];
+        get: operations["websocket_realtime_websocket_endpoint_get_5"];
         put?: never;
         post?: never;
         delete?: never;
@@ -11014,7 +11014,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Proxy Realtime Calls */
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
         post: operations["proxy_realtime_calls_openai_v1_realtime_calls_post"];
         delete?: never;
         options?: never;
@@ -11031,7 +11034,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Realtime Client Secret */
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
         post: operations["create_realtime_client_secret_openai_v1_realtime_client_secrets_post"];
         delete?: never;
         options?: never;
@@ -13970,7 +13976,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get"];
+        get: operations["websocket_realtime_websocket_endpoint_get_3"];
         put?: never;
         post?: never;
         delete?: never;
@@ -13988,7 +13994,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Proxy Realtime Calls */
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
         post: operations["proxy_realtime_calls_realtime_calls_post"];
         delete?: never;
         options?: never;
@@ -14005,7 +14014,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Realtime Client Secret */
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
         post: operations["create_realtime_client_secret_realtime_client_secrets_post"];
         delete?: never;
         options?: never;
@@ -14031,6 +14043,66 @@ export interface paths {
          *     endpoint and encrypts the ephemeral key returned under `client_secret.value`.
          */
         post: operations["create_realtime_transcription_session_realtime_transcription_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/realtime/translations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: realtime_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_realtime_websocket_endpoint_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/realtime/translations/calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
+        post: operations["proxy_realtime_calls_realtime_translations_calls_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/realtime/translations/client_secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
+        post: operations["create_realtime_client_secret_realtime_translations_client_secrets_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -21654,7 +21726,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get_2"];
+        get: operations["websocket_realtime_websocket_endpoint_get_4"];
         put?: never;
         post?: never;
         delete?: never;
@@ -21672,7 +21744,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Proxy Realtime Calls */
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
         post: operations["proxy_realtime_calls_v1_realtime_calls_post"];
         delete?: never;
         options?: never;
@@ -21689,7 +21764,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Realtime Client Secret */
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
         post: operations["create_realtime_client_secret_v1_realtime_client_secrets_post"];
         delete?: never;
         options?: never;
@@ -21715,6 +21793,66 @@ export interface paths {
          *     endpoint and encrypts the ephemeral key returned under `client_secret.value`.
          */
         post: operations["create_realtime_transcription_session_v1_realtime_transcription_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/realtime/translations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: realtime_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_realtime_websocket_endpoint_get_2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/realtime/translations/calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
+        post: operations["proxy_realtime_calls_v1_realtime_translations_calls_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/realtime/translations/client_secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
+        post: operations["create_realtime_client_secret_v1_realtime_translations_client_secrets_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -28452,7 +28590,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "acreate_realtime_client_secret" | "arealtime_calls" | "acreate_realtime_transcription_session" | "acreate_realtime_translation_client_secret" | "arealtime_translation_calls" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -47842,6 +47980,54 @@ export interface components {
              */
             success_definition: string;
         };
+        /** TranscriptionDetectedLanguage */
+        TranscriptionDetectedLanguage: {
+            /** Code */
+            code: string;
+        };
+        /** TranscriptionResponse */
+        TranscriptionResponse: {
+            /** Languages */
+            languages?: components["schemas"]["TranscriptionDetectedLanguage"][] | null;
+            /** Text */
+            text?: string | null;
+            /** Usage */
+            usage?: components["schemas"]["TranscriptionUsageDurationObject"] | components["schemas"]["TranscriptionUsageTokensObject"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** TranscriptionUsageDurationObject */
+        TranscriptionUsageDurationObject: {
+            /** Seconds */
+            seconds: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "duration";
+        };
+        /** TranscriptionUsageInputTokenDetailsObject */
+        TranscriptionUsageInputTokenDetailsObject: {
+            /** Audio Tokens */
+            audio_tokens: number;
+            /** Text Tokens */
+            text_tokens: number;
+        };
+        /** TranscriptionUsageTokensObject */
+        TranscriptionUsageTokensObject: {
+            input_token_details?: components["schemas"]["TranscriptionUsageInputTokenDetailsObject"] | null;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Total Tokens */
+            total_tokens: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "tokens";
+        };
         /** TransformRequestBody */
         TransformRequestBody: {
             call_type: components["schemas"]["CallTypes"];
@@ -52542,7 +52728,8 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TranscriptionResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -66589,7 +66776,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get_3: {
+    websocket_realtime_websocket_endpoint_get_5: {
         parameters: {
             query?: never;
             header?: never;
@@ -69944,7 +70131,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get: {
+    websocket_realtime_websocket_endpoint_get_3: {
         parameters: {
             query?: never;
             header?: never;
@@ -70018,6 +70205,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RealtimeTranscriptionSessionResponse"];
+                };
+            };
+        };
+    };
+    websocket_realtime_websocket_endpoint_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    proxy_realtime_calls_realtime_translations_calls_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/sdp": string;
+            };
+        };
+        responses: {
+            /** @description WebRTC SDP answer */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    create_realtime_client_secret_realtime_translations_client_secrets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "gpt-realtime-translate",
+                 *       "session": {
+                 *         "model": "gpt-realtime-translate",
+                 *         "type": "translation"
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    expires_after?: {
+                        /**
+                         * Anchor
+                         * @default created_at
+                         */
+                        anchor?: string | null;
+                        /** Seconds */
+                        seconds?: number | null;
+                    } | null;
+                    /** Model */
+                    model?: string | null;
+                    session?: ({
+                        audio?: ({
+                            input?: ({
+                                /** Format */
+                                format?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** Noise Reduction */
+                                noise_reduction?: {
+                                    [key: string]: unknown;
+                                } | null;
+                                transcription?: ({
+                                    /** Delay */
+                                    delay?: string | null;
+                                    /** Keywords */
+                                    keywords?: string[] | null;
+                                    /** Language */
+                                    language?: string | null;
+                                    /** Languages */
+                                    languages?: string[] | null;
+                                    /** Model */
+                                    model?: string | null;
+                                    /** Prompt */
+                                    prompt?: string | null;
+                                } & {
+                                    [key: string]: unknown;
+                                }) | null;
+                                /** Turn Detection */
+                                turn_detection?: {
+                                    [key: string]: unknown;
+                                } | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
+                            output?: ({
+                                /** Format */
+                                format?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** Language */
+                                language?: string | null;
+                                /** Voice */
+                                voice?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
+                        } & {
+                            [key: string]: unknown;
+                        }) | null;
+                        /** Include */
+                        include?: string[] | null;
+                        /** Instructions */
+                        instructions?: string | null;
+                        /** Max Output Tokens */
+                        max_output_tokens?: number | string | null;
+                        /** Model */
+                        model?: string | null;
+                        /** Output Modalities */
+                        output_modalities?: string[] | null;
+                        /** Prompt */
+                        prompt?: {
+                            [key: string]: unknown;
+                        } | null;
+                        /** Tool Choice */
+                        tool_choice?: unknown | null;
+                        /** Tools */
+                        tools?: {
+                            [key: string]: unknown;
+                        }[] | null;
+                        /** Tracing */
+                        tracing?: unknown | null;
+                        /** Truncation */
+                        truncation?: unknown | null;
+                        /** Type */
+                        type?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealtimeClientSecretResponse"];
                 };
             };
         };
@@ -77219,7 +77573,8 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TranscriptionResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -80813,7 +81168,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get_2: {
+    websocket_realtime_websocket_endpoint_get_4: {
         parameters: {
             query?: never;
             header?: never;
@@ -80887,6 +81242,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RealtimeTranscriptionSessionResponse"];
+                };
+            };
+        };
+    };
+    websocket_realtime_websocket_endpoint_get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    proxy_realtime_calls_v1_realtime_translations_calls_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/sdp": string;
+            };
+        };
+        responses: {
+            /** @description WebRTC SDP answer */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    create_realtime_client_secret_v1_realtime_translations_client_secrets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "gpt-realtime-translate",
+                 *       "session": {
+                 *         "model": "gpt-realtime-translate",
+                 *         "type": "translation"
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    expires_after?: {
+                        /**
+                         * Anchor
+                         * @default created_at
+                         */
+                        anchor?: string | null;
+                        /** Seconds */
+                        seconds?: number | null;
+                    } | null;
+                    /** Model */
+                    model?: string | null;
+                    session?: ({
+                        audio?: ({
+                            input?: ({
+                                /** Format */
+                                format?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** Noise Reduction */
+                                noise_reduction?: {
+                                    [key: string]: unknown;
+                                } | null;
+                                transcription?: ({
+                                    /** Delay */
+                                    delay?: string | null;
+                                    /** Keywords */
+                                    keywords?: string[] | null;
+                                    /** Language */
+                                    language?: string | null;
+                                    /** Languages */
+                                    languages?: string[] | null;
+                                    /** Model */
+                                    model?: string | null;
+                                    /** Prompt */
+                                    prompt?: string | null;
+                                } & {
+                                    [key: string]: unknown;
+                                }) | null;
+                                /** Turn Detection */
+                                turn_detection?: {
+                                    [key: string]: unknown;
+                                } | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
+                            output?: ({
+                                /** Format */
+                                format?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** Language */
+                                language?: string | null;
+                                /** Voice */
+                                voice?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
+                        } & {
+                            [key: string]: unknown;
+                        }) | null;
+                        /** Include */
+                        include?: string[] | null;
+                        /** Instructions */
+                        instructions?: string | null;
+                        /** Max Output Tokens */
+                        max_output_tokens?: number | string | null;
+                        /** Model */
+                        model?: string | null;
+                        /** Output Modalities */
+                        output_modalities?: string[] | null;
+                        /** Prompt */
+                        prompt?: {
+                            [key: string]: unknown;
+                        } | null;
+                        /** Tool Choice */
+                        tool_choice?: unknown | null;
+                        /** Tools */
+                        tools?: {
+                            [key: string]: unknown;
+                        }[] | null;
+                        /** Tracing */
+                        tracing?: unknown | null;
+                        /** Truncation */
+                        truncation?: unknown | null;
+                        /** Type */
+                        type?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealtimeClientSecretResponse"];
                 };
             };
         };

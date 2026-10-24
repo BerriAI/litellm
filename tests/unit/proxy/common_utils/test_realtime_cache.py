@@ -1,6 +1,8 @@
-from typing import Any, cast
+from collections.abc import Mapping
+from typing import Any, Final, cast
 
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.proxy.common_utils.realtime_utils import realtime_request_body
 from litellm.proxy.proxy_server import _realtime_query_params_template
@@ -38,6 +40,13 @@ def test_realtime_request_body_caches_each_model_separately():
     assert gpt4o_body_first == b'{"model": "gpt-4o"}'
     assert gpt4o_mini_body == b'{"model": "gpt-4o-mini"}'
     assert gpt4o_body_first is not gpt4o_mini_body
+
+
+@pytest.mark.parametrize("model", (None, "requested", 'model"with\\quotes', "model\nwith-newline"))
+def test_realtime_request_body_preserves_model_names(model: str | None) -> None:
+    body: Final = TypeAdapter(Mapping[str, object]).validate_json(realtime_request_body(model))
+
+    assert body["model"] == model
 
 
 def test_realtime_query_params_template_caches_each_pair_separately():

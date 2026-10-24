@@ -144,6 +144,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     populate_request_with_path_params,
     read_raw_json_body,
     read_request_body,
+    resolve_realtime_route_model,
     rewrite_request_model,
     safe_get_request_headers,
     safe_get_request_query_params,
@@ -1183,8 +1184,18 @@ async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
     return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
 
 
+async def user_api_key_auth_realtime_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
+    route_path: Final[object] = websocket.scope.get("path")
+    model: Final = resolve_realtime_route_model(
+        model=websocket.query_params.get("model"),
+        intent=websocket.query_params.get("intent"),
+        is_translation=isinstance(route_path, str) and route_path.endswith("/realtime/translations"),
+    )
+    return await user_api_key_auth_websocket_for_model(websocket, model=model)
+
+
 async def user_api_key_auth_live_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
-    return await user_api_key_auth_websocket_for_model(websocket, model=None)
+    return await user_api_key_auth_websocket_for_model(websocket, model="")
 
 
 def _has_required_baggage_tag_mapping() -> bool:

@@ -10,13 +10,28 @@ Pins (PR2):
 from __future__ import annotations
 
 import io
+import json
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import AbstractContextManager
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import respx
+from fastapi.testclient import TestClient
+from openai import AsyncOpenAI
+from starlette.datastructures import FormData, UploadFile
 
+import litellm
+from litellm.caching.caching import Cache
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy import proxy_server
+from litellm.proxy.route_llm_request import route_request
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+from litellm.types.utils import TranscriptionResponse
 
 
 @pytest.fixture
@@ -119,9 +134,7 @@ def patched_transcription(monkeypatch):
         return data
 
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
-    monkeypatch.setattr(
-        proxy_server, "check_file_size_under_limit", lambda **kwargs: True
-    )
+    monkeypatch.setattr(proxy_server, "check_file_size_under_limit", lambda **kwargs: True)
 
     async def _form_data(request):
         from starlette.datastructures import FormData, UploadFile
@@ -151,6 +164,47 @@ def patched_transcription_error(monkeypatch, patched_transcription):
 
     monkeypatch.setattr(proxy_server, "route_request", _raise)
     yield
+
+
+@pytest.fixture
+def patched_transcription_stream(monkeypatch, patched_transcription):
+    class _FakeEvent:
+        def model_dump_json(self, exclude_unset: bool = False) -> str:
+            return '{"type":"transcript.text.done","text":"hello world"}'
+
+    class _FakeAsyncStream:
+        def __init__(self):
+            self.closed = False
+
+        def __aiter__(self):
+            async def _events():
+                yield _FakeEvent()
+
+            return _events()
+
+        async def aclose(self):
+            self.closed = True
+
+    async def _form_data(request):
+        from starlette.datastructures import FormData, UploadFile
+
+        upload = UploadFile(
+            filename="audio.mp3",
+            file=io.BytesIO(b"\x00\x01\x02"),
+        )
+        return FormData([("file", upload), ("model", "gpt-transcribe"), ("stream", "true")])
+
+    stream = _FakeAsyncStream()
+
+    async def _llm_call():
+        return stream
+
+    async def _fake_route_request(*args, **kwargs):
+        return _llm_call()
+
+    monkeypatch.setattr(proxy_server, "get_form_data", _form_data)
+    monkeypatch.setattr(proxy_server, "route_request", _fake_route_request)
+    yield stream
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
@@ -254,3 +308,438 @@ def test_audio_transcription_error(client, auth_as, patched_transcription_error,
         response = client.post(path, files=files, data=data)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
+def test_audio_transcription_stream_returns_sse(client, auth_as, patched_transcription_stream, path):
+    files = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    data = {"model": "gpt-transcribe", "stream": "true"}
+    with auth_as():
+        response = client.post(path, files=files, data=data)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text == 'data: {"type":"transcript.text.done","text":"hello world"}\n\n'
+    assert patched_transcription_stream.closed is True
+
+
+@pytest.mark.usefixtures("patched_transcription_stream")
+@pytest.mark.parametrize("configuration", ["default", "policy"])
+def test_streaming_transcription_keeps_streaming_with_output_guardrails(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    configuration: str,
+) -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="transcription-output",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=configuration == "default",
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    if configuration == "policy":
+        pipeline: Final = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="transcription-output")])
+        proxy_server.proxy_logging_obj.pre_call_hook.side_effect = lambda **kwargs: {
+            **kwargs["data"],
+            "metadata": {"_guardrail_pipelines": [("transcription-policy", pipeline)]},
+        }
+
+    with auth_as():
+        response: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "gpt-transcribe", "stream": "true"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert '"text":"hello world"' in response.text
+
+
+@pytest.mark.usefixtures("patched_transcription_stream")
+def test_streamed_transcription_returns_the_litellm_call_and_model_headers(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://upstream.example/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    content=b'data: {"type":"transcript.text.done","text":"hello world"}\n\n',
+                    headers={"content-type": "text/event-stream"},
+                )
+            )
+        ),
+    )
+
+    async def route_to_the_sdk(
+        data: Mapping[str, object], route_type: str, llm_router: object, user_model: object
+    ) -> object:
+        return litellm.atranscription(
+            model="openai/gpt-transcribe",
+            file=data["file"],
+            stream=True,
+            client=upstream,
+            litellm_call_id=data["litellm_call_id"],
+            model_info={"id": "transcription-deployment"},
+        )
+
+    monkeypatch.setattr(proxy_server, "route_request", route_to_the_sdk)
+
+    with auth_as():
+        response: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "gpt-transcribe", "stream": "true"},
+            headers={"x-litellm-call-id": "streamed-transcription-call"},
+        )
+
+    assert response.status_code == 200
+    assert '"text":"hello world"' in response.text
+    assert response.headers["x-litellm-call-id"] == "streamed-transcription-call"
+    assert response.headers["x-litellm-model-id"] == "transcription-deployment"
+    assert "x-litellm-response-cost" not in response.headers
+    proxy_server.proxy_logging_obj.update_request_status.assert_called_once_with(
+        litellm_call_id="streamed-transcription-call", status="success"
+    )
+
+
+class _TranscriptRedactor(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="transcript-redactor", event_hook=GuardrailEventHooks.post_call)
+
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: object, response: object
+    ) -> None:
+        if isinstance(response, TranscriptionResponse):
+            response.text = "[REDACTED]"
+
+
+def _streams_when_asked(request: httpx.Request) -> httpx.Response:
+    if b'name="stream"' in request.content:
+        return httpx.Response(
+            200,
+            content=b'data: {"type":"transcript.text.done","text":"my pin is 1234"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+    return httpx.Response(200, json={"text": "my pin is 1234", "usage": {"type": "duration", "seconds": 2}})
+
+
+def _sse_events(body: str) -> tuple[object, ...]:
+    return tuple(json.loads(frame.removeprefix("data: ")) for frame in body.split("\n\n") if frame)
+
+
+@pytest.mark.usefixtures("patched_transcription_stream")
+@pytest.mark.parametrize("deployment_guardrails", (["transcript-redactor"], None))
+def test_streamed_transcription_honors_a_deployment_post_call_guardrail(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_guardrails: list[str] | None,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_TranscriptRedactor()])
+    respx_mock.post("https://transcribe-upstream.example/v1/audio/transcriptions").mock(side_effect=_streams_when_asked)
+    deployment_params: Final = {
+        "model": "openai/gpt-transcribe",
+        "api_key": "sk-test",
+        "api_base": "https://transcribe-upstream.example/v1",
+    }
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-transcribe",
+                    "litellm_params": (
+                        {**deployment_params, "guardrails": deployment_guardrails}
+                        if deployment_guardrails
+                        else deployment_params
+                    ),
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "route_request", route_request)
+
+    with auth_as():
+        response: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "gpt-transcribe", "stream": "true"},
+        )
+
+    assert response.status_code == 200
+    if deployment_guardrails:
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert _sse_events(response.text) == (
+            {"type": "transcript.text.delta", "delta": "[REDACTED]"},
+            {"type": "transcript.text.done", "text": "[REDACTED]", "usage": {"type": "duration", "seconds": 2}},
+        )
+    else:
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert '"text":"my pin is 1234"' in response.text
+
+
+@pytest.mark.usefixtures("patched_transcription_stream")
+def test_cached_guarded_transcription_still_streams_to_a_stream_client(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_TranscriptRedactor()])
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    upstream_route: Final = respx_mock.post("https://transcribe-upstream.example/v1/audio/transcriptions").mock(
+        side_effect=_streams_when_asked
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-transcribe",
+                    "litellm_params": {
+                        "model": "openai/gpt-transcribe",
+                        "api_key": "sk-test",
+                        "api_base": "https://transcribe-upstream.example/v1",
+                        "guardrails": ["transcript-redactor"],
+                    },
+                }
+            ],
+            cache_responses=True,
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "route_request", route_request)
+
+    with auth_as():
+        responses: Final = [
+            client.post(
+                "/v1/audio/transcriptions",
+                files={"file": ("sample.wav", b"audio", "audio/wav")},
+                data={"model": "gpt-transcribe", "stream": "true"},
+            )
+            for _ in range(2)
+        ]
+
+    assert upstream_route.call_count == 1
+    assert [response.headers["content-type"].split(";")[0] for response in responses] == ["text/event-stream"] * 2
+    assert _sse_events(responses[1].text)[-1] == {
+        "type": "transcript.text.done",
+        "text": "[REDACTED]",
+        "usage": {"type": "duration", "seconds": 2},
+    }
+
+
+@pytest.mark.usefixtures("patched_transcription_stream")
+def test_streamed_transcription_frames_keep_the_provider_event_shape(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_events: Final = (
+        {"type": "transcript.text.delta", "delta": "hello"},
+        {"type": "transcript.text.done", "text": "hello", "usage": {"type": "duration", "seconds": 2}},
+    )
+    upstream: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://upstream.example/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    content="".join(f"data: {json.dumps(event)}\n\n" for event in provider_events).encode(),
+                    headers={"content-type": "text/event-stream"},
+                )
+            )
+        ),
+    )
+
+    async def route_to_the_sdk(
+        data: Mapping[str, object], route_type: str, llm_router: object, user_model: object
+    ) -> object:
+        return litellm.atranscription(
+            model="openai/gpt-transcribe", file=data["file"], stream=data["stream"], client=upstream
+        )
+
+    monkeypatch.setattr(proxy_server, "route_request", route_to_the_sdk)
+
+    with auth_as():
+        response: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "gpt-transcribe", "stream": "true"},
+        )
+
+    assert response.status_code == 200
+    assert _sse_events(response.text) == provider_events
+
+
+async def _scribe_stream_form(request: object) -> FormData:
+    return FormData(
+        [
+            ("file", UploadFile(filename="sample.wav", file=io.BytesIO(b"audio"))),
+            ("model", "scribe"),
+            ("stream", "true"),
+        ]
+    )
+
+
+@pytest.mark.usefixtures("patched_transcription")
+def test_transcription_stream_form_field_reaches_other_providers_as_sent(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = respx_mock.post("https://elevenlabs.example/v1/speech-to-text").mock(
+        return_value=httpx.Response(200, json={"text": "hello world", "language_code": "en"})
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "scribe",
+                    "litellm_params": {
+                        "model": "elevenlabs/scribe_v1",
+                        "api_key": "sk-test",
+                        "api_base": "https://elevenlabs.example",
+                    },
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "route_request", route_request)
+    monkeypatch.setattr(proxy_server, "get_form_data", _scribe_stream_form)
+
+    with auth_as():
+        response: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "scribe", "stream": "true"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "hello world"
+    assert b'name="stream"\r\n\r\ntrue\r\n' in upstream.calls.last.request.content
+
+
+def _streams_chat_and_transcription(request: httpx.Request) -> httpx.Response:
+    sse_body: Final = (
+        b'data: {"id":"chat-1","object":"chat.completion.chunk","created":0,"model":"gpt-4o",'
+        b'"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+        if request.url.path.endswith("/chat/completions")
+        else b'data: {"type":"transcript.text.done","text":"hello world"}\n\n'
+    )
+    return httpx.Response(
+        200,
+        content=sse_body,
+        headers={"content-type": "text/event-stream", "x-ratelimit-remaining-requests": "99"},
+    )
+
+
+def _litellm_header_names(response: httpx.Response) -> frozenset[str]:
+    return frozenset(name for name in response.headers if name.startswith("x-litellm-"))
+
+
+def test_streamed_transcription_carries_the_headers_a_streamed_chat_completion_carries(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.route(host="stream-upstream.example").mock(side_effect=_streams_chat_and_transcription)
+    upstream: Final = {"api_key": "sk-test", "api_base": "https://stream-upstream.example/v1"}
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", **upstream}},
+                {"model_name": "gpt-transcribe", "litellm_params": {"model": "openai/gpt-transcribe", **upstream}},
+            ]
+        ),
+    )
+
+    with auth_as():
+        chat: Final = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+        )
+        transcription: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "gpt-transcribe", "stream": "true"},
+        )
+
+    assert chat.status_code == 200
+    assert transcription.status_code == 200
+    assert transcription.headers["content-type"].startswith("text/event-stream")
+    assert _litellm_header_names(chat) - _litellm_header_names(transcription) <= {"x-litellm-overhead-duration-ms"}
+    assert transcription.headers["x-litellm-model-name"] == "openai/gpt-transcribe"
+    assert transcription.headers["llm_provider-x-ratelimit-remaining-requests"] == "99"
+    assert ("x-litellm-response-cost" in transcription.headers) == ("x-litellm-response-cost" in chat.headers)
+
+
+class _FailsAfterTwoDeltas(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'data: {"type":"transcript.text.delta","delta":"hello "}\n\n'
+        yield b'data: {"type":"transcript.text.delta","delta":"world"}\n\n'
+        raise httpx.ReadError("upstream connection dropped")
+
+
+@pytest.mark.usefixtures("patched_transcription_stream")
+def test_streamed_transcription_error_mid_stream_ends_with_an_error_event_and_runs_the_failure_hook(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://upstream.example/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, stream=_FailsAfterTwoDeltas(), headers={"content-type": "text/event-stream"}
+                )
+            )
+        ),
+    )
+
+    async def route_to_the_sdk(
+        data: Mapping[str, object], route_type: str, llm_router: object, user_model: object
+    ) -> object:
+        return litellm.atranscription(model="openai/gpt-transcribe", file=data["file"], stream=True, client=upstream)
+
+    failure_hook: Final = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "post_call_failure_hook", failure_hook)
+    monkeypatch.setattr(proxy_server, "route_request", route_to_the_sdk)
+
+    with auth_as():
+        response: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "gpt-transcribe", "stream": "true"},
+        )
+
+    frames: Final = tuple(
+        json.loads(line.removeprefix("data: ")) for line in response.text.splitlines() if line.startswith("data: ")
+    )
+    assert response.status_code == 200
+    assert tuple(frame.get("delta") for frame in frames[:2]) == ("hello ", "world")
+    assert len(frames) == 3
+    assert "upstream connection dropped" in frames[2]["error"]["message"]
+    assert set(frames[2]["error"]) == {"message", "type", "param", "code"}
+    failure_hook.assert_awaited_once()
+    assert isinstance(failure_hook.await_args.kwargs["original_exception"], httpx.ReadError)

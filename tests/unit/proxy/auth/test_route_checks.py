@@ -783,6 +783,52 @@ def test_realtime_webrtc_http_routes_classified_as_llm_api(route):
     assert RouteChecks.is_management_route(route=route) is False
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/realtime/translations",
+        "/v1/realtime/translations",
+        "/realtime/translations/client_secrets",
+        "/v1/realtime/translations/client_secrets",
+        "/realtime/translations/calls",
+        "/v1/realtime/translations/calls",
+    ],
+)
+def test_realtime_translation_routes_allowed_for_openai_virtual_keys(route):
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["openai_routes"],
+    )
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+    assert RouteChecks.is_management_route(route=route) is False
+    assert (
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=valid_token,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/openai/v1/realtime/translations",
+        "/openai/v1/realtime/translations/client_secrets",
+        "/openai/v1/realtime/translations/calls",
+    ],
+)
+def test_openai_prefixed_realtime_translation_routes_denied_for_openai_virtual_keys(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["openai_routes"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert f"Tried to call route: {route}" in str(exc_info.value.detail)
+
+
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     """Test that virtual key is denied when route is not in the allowed LiteLLMRoutes group"""
 

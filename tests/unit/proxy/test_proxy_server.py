@@ -39,6 +39,7 @@ from fastapi import FastAPI, HTTPException, WebSocket
 
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
+from starlette.testclient import WebSocketTestSession
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -3456,6 +3457,91 @@ def test_live_session_pre_call_abort_releases_reservations(
         _start_live_session_and_wait_for_reply(client_no_auth)
 
     assert released_for_frame == ["budget", "slot"]
+    route_call.assert_not_awaited()
+
+
+def _receive_until_closed(websocket: WebSocketTestSession) -> None:
+    while True:
+        websocket.receive_text()
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "expected_upstream_url"),
+    (
+        pytest.param(
+            {"model": "openai/gateway-transcribe", "api_base": "https://gateway.example/v1"},
+            "wss://gateway.example/v1/realtime?model=gateway-transcribe&intent=transcription",
+            id="gateway",
+        ),
+        pytest.param(
+            {"model": "xai/grok-voice", "api_base": "https://api.x.ai/v1"},
+            "wss://api.x.ai/v1/realtime?model=grok-voice&intent=transcription",
+            id="xai",
+        ),
+        pytest.param(
+            {"model": "openai/gpt-live-transcribe", "api_base": "https://api.openai.com/v1"},
+            "wss://api.openai.com/v1/realtime?intent=transcription",
+            id="openai",
+        ),
+    ),
+)
+def test_realtime_transcription_websocket_keeps_the_model_upstream_except_on_openai_hosts(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_params: Mapping[str, str],
+    expected_upstream_url: str,
+) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[{"model_name": "team-transcriber", "litellm_params": {**litellm_params, "api_key": "fake"}}]
+        ),
+    )
+    connect: Final = MagicMock(side_effect=RuntimeError("upstream url captured"))
+    monkeypatch.setattr("websockets.connect", connect)
+
+    with (
+        client_no_auth.websocket_connect(
+            "/v1/realtime?model=team-transcriber&intent=transcription",
+            headers={"Authorization": "Bearer test-api-key"},
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect),
+    ):
+        _receive_until_closed(websocket)
+
+    assert connect.call_args.args[0] == expected_upstream_url
+
+
+def test_openai_prefixed_translation_websocket_takes_the_openai_websocket_pass_through(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _OPENAI_WS_DISABLED_REFUSAL
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth_websocket, lambda: UserAPIKeyAuth())
+
+    with client_no_auth.websocket_connect(
+        "/openai/v1/realtime/translations?model=gpt-realtime-translate",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        refusal: Final = websocket.receive_json()
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+
+    assert refusal["error"]["message"] == _OPENAI_WS_DISABLED_REFUSAL.message
+    assert closed.value.code == 1008
     route_call.assert_not_awaited()
 
 

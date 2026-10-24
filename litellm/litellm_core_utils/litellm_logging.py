@@ -3234,6 +3234,7 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
         if not self.should_run_logging(event_type="sync_success"):  # prevent double logging
             return
+        provider_transcription: Final = result if isinstance(result, TranscriptionResponse) else None
         start_time, end_time, result, request_logging_payload = self._prepare_success_logging(
             start_time=start_time,
             end_time=end_time,
@@ -3248,7 +3249,12 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: (
-                ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None
+                ModelResponse
+                | TextCompletionResponse
+                | ResponsesAPIResponse
+                | InteractionsAPIResponse
+                | TranscriptionResponse
+                | None
             ) = None
             if "complete_streaming_response" in self.model_call_details and not for_async_request:
                 return  # break out of this.
@@ -3264,7 +3270,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details["complete_streaming_response"] = complete_streaming_response
                 self._surface_response_headers_from_result(complete_streaming_response)
                 self.model_call_details["response_cost"] = self.response_cost_calculator(
-                    result=complete_streaming_response
+                    result=complete_streaming_response if provider_transcription is None else provider_transcription
                 )
                 self._add_continued_partial_spend(complete_streaming_response)
                 self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
@@ -3275,7 +3281,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 ## STANDARDIZED LOGGING PAYLOAD
                 if not for_async_request:
                     self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
-                        logged_streaming_response, start_time, end_time
+                        logged_streaming_response if provider_transcription is None else provider_transcription,
+                        start_time,
+                        end_time,
                     )
                     standard_logging_payload: Final[StandardLoggingPayload | None] = self.model_call_details.get(
                         "standard_logging_object"
@@ -3802,6 +3810,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 kwargs=self.model_call_details, messages=self.model_call_details.get("messages")
             )
         )
+        provider_transcription: Final = result if isinstance(result, TranscriptionResponse) else None
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -3821,9 +3830,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ## BUILD COMPLETE STREAMED RESPONSE
         if "async_complete_streaming_response" in self.model_call_details:
             return  # break out of this.
-        complete_streaming_response: Final[
-            ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None
-        ] = self._get_assembled_streaming_response(
+        complete_streaming_response: Final = self._get_assembled_streaming_response(
             result=result,
             start_time=start_time,
             end_time=end_time,
@@ -3845,7 +3852,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     get_base_model_from_metadata(model_call_details=self.model_call_details)
                     # base_model defaults to None if not set on model_info
                     self.model_call_details["response_cost"] = self.response_cost_calculator(
-                        result=complete_streaming_response
+                        result=complete_streaming_response if provider_transcription is None else provider_transcription
                     )
 
                 verbose_logger.debug("Model=%s; cost=%s", self.model, self.model_call_details["response_cost"])
@@ -3874,7 +3881,9 @@ class Logging(LiteLLMLoggingBaseClass):
             ## STANDARDIZED LOGGING PAYLOAD
             try:
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
-                    logged_streaming_response, start_time, end_time
+                    logged_streaming_response if provider_transcription is None else provider_transcription,
+                    start_time,
+                    end_time,
                 )
             except Exception:  # noqa: BLE001  # payload build must never block later callbacks (slot release)
                 verbose_logger.exception(
@@ -4736,10 +4745,17 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         is_async: bool,
         streaming_chunks: list[object],
-    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None:
+    ) -> (
+        ModelResponse
+        | TextCompletionResponse
+        | ResponsesAPIResponse
+        | InteractionsAPIResponse
+        | TranscriptionResponse
+        | None
+    ):
         if self.stream is not True:
             return None
-        if isinstance(result, ModelResponse) or isinstance(result, TextCompletionResponse):
+        if isinstance(result, (ModelResponse, TextCompletionResponse, TranscriptionResponse)):
             return result
         elif isinstance(
             result,

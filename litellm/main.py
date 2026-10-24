@@ -36,6 +36,8 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
+from openai import AsyncStream, Stream
+from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_never, overload
 
@@ -799,7 +801,7 @@ def _model_response_from_cached_dict(cached_response_dict: Mapping[str, object])
 
 
 def _transcription_response_from_cached_dict(cached_response_dict: Mapping[str, object]) -> TranscriptionResponse:
-    return TranscriptionResponse(**cached_response_dict)
+    return TranscriptionResponse.model_validate(cached_response_dict)
 
 
 async def _async_streaming(response, model, custom_llm_provider, args):
@@ -8176,7 +8178,10 @@ async def amoderation(
 
 
 @client
-async def atranscription(*args, **kwargs) -> TranscriptionResponse:
+async def atranscription(
+    *args,  # noqa: ANN002  # public SDK wrapper preserves positional call compatibility
+    **kwargs,  # noqa: ANN003  # kwargs-ok: public SDK wrapper preserves keyword call compatibility
+) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:
     """
     Calls openai + azure whisper endpoints.
 
@@ -8220,6 +8225,14 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
+        if isinstance(response, AsyncStream):
+            if file is not None:
+                calculated_duration = calculate_request_duration(file)
+                if calculated_duration is not None:
+                    response._litellm_audio_duration = (  # pyright: ignore[reportAttributeAccessIssue]  # SDK omits it
+                        calculated_duration
+                    )
+            return response
         if not isinstance(response, TranscriptionResponse):
             raise ValueError(
                 f"Invalid response from transcription provider, expected TranscriptionResponse, but got {type(response)}"
@@ -8232,9 +8245,9 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         if response is not None and not isinstance(response, Coroutine) and file is not None:
             existing_duration: Final = getattr(response, "duration", None)
             if existing_duration is None:
-                calculated_duration: Final = calculate_request_duration(file)
-                if calculated_duration is not None:
-                    response.hidden_params["audio_transcription_duration"] = calculated_duration
+                sync_calculated_duration: Final = calculate_request_duration(file)
+                if sync_calculated_duration is not None:
+                    response.set_audio_transcription_duration(sync_calculated_duration)
 
         return response
     except Exception as e:
@@ -8248,16 +8261,55 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         )
 
 
+def _validate_gpt_transcription_request(
+    model: str,
+    pricing_model: str,
+    custom_llm_provider: str,
+    response_format: str | None,
+    drop_params: object,
+) -> str | None:
+    model_cost_key: Final = next(
+        (
+            key
+            for key in (f"{custom_llm_provider}/{pricing_model}", pricing_model)
+            if (as_str_mapping(litellm.model_cost.get(key)) or {}).get("litellm_provider") == custom_llm_provider
+        ),
+        None,
+    )
+    model_info: Final = (
+        get_model_info(model=pricing_model, custom_llm_provider=custom_llm_provider)
+        if model_cost_key is not None
+        else None
+    )
+    provider_specific_entry: Final = model_info.get("provider_specific_entry") if model_info is not None else None
+    if (
+        provider_specific_entry is None
+        or provider_specific_entry.get("transcription_json_or_text_only") != 1
+        or response_format in (None, "json", "text")
+    ):
+        return response_format
+    if litellm.drop_params is True or normalize_drop_params(drop_params) is True:
+        return None
+    raise litellm.UnsupportedParamsError(
+        message=f"{model} only supports response_format 'json' or 'text'",
+        model=model,
+        llm_provider=custom_llm_provider,
+    )
+
+
 @client
 def transcription(
     model: str,
     file: FileTypes,
     ## OPTIONAL OPENAI PARAMS ##
     language: str | None = None,
+    languages: Sequence[str] | None = None,
+    keywords: Sequence[str] | None = None,
     prompt: str | None = None,
     response_format: Literal["json", "text", "srt", "verbose_json", "vtt"] | None = None,
     timestamp_granularities: list[Literal["word", "segment"]] | None = None,
     temperature: int | None = None,  # openai defaults this to 0
+    stream: bool | None = None,
     ## LITELLM PARAMS ##
     user: str | None = None,
     timeout=600,  # default to 10 minutes
@@ -8268,7 +8320,11 @@ def transcription(
     custom_llm_provider=None,
     base_url: str | None = None,
     **kwargs,
-) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
+) -> (
+    TranscriptionResponse
+    | Stream[TranscriptionStreamEvent]
+    | Coroutine[Any, Any, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+):
     """
     Calls openai + azure whisper endpoints.
 
@@ -8306,18 +8362,35 @@ def transcription(
 
     api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    configured_base_model: Final = litellm_params_dict.get("base_model")
+    pricing_model: Final = (
+        configured_base_model.removeprefix(f"{custom_llm_provider}/")
+        if isinstance(configured_base_model, str)
+        else model
+    )
+
+    supported_response_format: Final = _validate_gpt_transcription_request(
+        model=model,
+        pricing_model=pricing_model,
+        custom_llm_provider=custom_llm_provider,
+        response_format=response_format,
+        drop_params=kwargs.get("drop_params"),
+    )
+
     optional_params: Final = get_optional_params_transcription(
         model=model,
         language=language,
+        languages=languages,
+        keywords=keywords,
         prompt=prompt,
-        response_format=response_format,
+        response_format=supported_response_format,
         timestamp_granularities=timestamp_granularities,
         temperature=temperature,
+        stream=stream,
         custom_llm_provider=custom_llm_provider,
         **non_default_params,
     )
-
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     litellm_logging_obj.update_environment_variables(
         model=model,
@@ -8335,11 +8408,18 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
     )
 
-    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse] | None = None
+    response: (
+        TranscriptionResponse
+        | Stream[TranscriptionStreamEvent]
+        | AsyncStream[TranscriptionStreamEvent]
+        | Coroutine[Any, Any, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+        | None
+    ) = None
 
     provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
         model=model,
         provider=LlmProviders(custom_llm_provider),
+        base_model=pricing_model,
     )
 
     uses_openai_transport: Final = custom_llm_provider in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS and not (
@@ -8350,7 +8430,7 @@ def transcription(
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
-        api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+        azure_api_version: Final = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
 
         azure_ad_token: Final = kwargs.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
 
@@ -8369,7 +8449,7 @@ def transcription(
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
-            api_version=api_version,
+            api_version=azure_api_version,
             azure_ad_token=azure_ad_token,
             max_retries=max_retries,
             litellm_params=litellm_params_dict,
@@ -8500,15 +8580,19 @@ def transcription(
 
     # Store duration in _hidden_params for cost calculation without
     # exposing it in the response body (see sync path comment above).
-    if response is not None and not isinstance(response, Coroutine):
-        existing_duration: Final = getattr(response, "duration", None)
-        if existing_duration is None:
-            calculated_duration: Final = calculate_request_duration(file)
+    if (
+        response is not None
+        and not isinstance(response, Coroutine)
+        and (isinstance(response, (Stream, AsyncStream)) or getattr(response, "duration", None) is None)
+    ):
+        calculated_duration: Final = calculate_request_duration(file)
+        if isinstance(response, (Stream, AsyncStream)):
             if calculated_duration is not None:
-                response_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
-                    dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+                response._litellm_audio_duration = (  # pyright: ignore[reportAttributeAccessIssue]  # SDK omits it
+                    calculated_duration
                 )
-                response_hidden_params["audio_transcription_duration"] = calculated_duration
+        elif calculated_duration is not None:
+            response.set_audio_transcription_duration(calculated_duration)
 
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")

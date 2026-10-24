@@ -12055,6 +12055,188 @@ async def test_websocket_auth_hands_the_reservation_to_the_socket_state():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/realtime/translations", "/v1/realtime/translations"))
+@pytest.mark.parametrize("query", (b"", b"model=gpt-realtime-translate"), ids=("default_model", "explicit_model"))
+async def test_translation_websocket_auth_enforces_the_default_model_budget(
+    monkeypatch: pytest.MonkeyPatch, path: str, query: bytes
+) -> None:
+    from fastapi import WebSocket
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_realtime_websocket
+
+    model: Final = "gpt-realtime-translate"
+    token: Final = UserAPIKeyAuth(
+        token="test-key",
+        models=[model],
+        model_max_budget={model: {"max_budget": 5.0, "budget_duration": "1d"}},
+    )
+    limiter, _ = await _real_model_budget_limiter(key_spend={model: 10.0})
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_key_within_model_budget(user_api_key_dict=token, model=model)
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return token
+
+    attrs: Final = {
+        **_proxy_server_attrs_for_custom_auth(user_custom_auth=authenticate),
+        "prisma_client": None,
+        "model_max_budget_limiter": limiter,
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    websocket: Final = WebSocket(
+        scope={
+            "type": "websocket",
+            "path": path,
+            "headers": [(b"authorization", b"Bearer sk-test")],
+            "query_string": query,
+        },
+        receive=AsyncMock(),
+        send=AsyncMock(),
+    )
+
+    with pytest.raises(HTTPException) as denied:
+        await user_api_key_auth_realtime_websocket(websocket)
+
+    assert denied.value.status_code == 403
+    assert model in str(denied.value.detail)
+    assert "budget" in str(denied.value.detail).lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/realtime/translations/client_secrets", "/v1/realtime/translations/client_secrets"))
+async def test_translation_client_secret_auth_enforces_the_session_model_budget(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    model: Final = "gpt-realtime-translate"
+    token: Final = UserAPIKeyAuth(
+        token="test-key",
+        models=[model],
+        model_max_budget={model: {"max_budget": 5.0, "budget_duration": "1d"}},
+    )
+    limiter, _ = await _real_model_budget_limiter(key_spend={model: 10.0})
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return token
+
+    attrs: Final = {
+        **_proxy_server_attrs_for_custom_auth(user_custom_auth=authenticate),
+        "prisma_client": None,
+        "model_max_budget_limiter": limiter,
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    body: Final = json.dumps({"session": {"type": "translation", "model": model}}).encode()
+    request: Final = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [(b"authorization", b"Bearer sk-test"), (b"content-type", b"application/json")],
+            "query_string": b"",
+        },
+        receive=AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False}),
+    )
+
+    with pytest.raises(ProxyException) as denied:
+        await user_api_key_auth(request=request, api_key="Bearer sk-test")
+
+    assert denied.value.type == "budget_exceeded"
+    assert model in denied.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/realtime", "/v1/realtime", "/openai/v1/realtime"))
+async def test_managed_agent_transcription_websocket_without_a_model_is_refused(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    from fastapi import WebSocket
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_realtime_websocket
+    from litellm.types.agents import AgentResponse
+
+    token: Final = UserAPIKeyAuth(token="test-key")
+    token.managed_agent_policy = AgentResponse.model_validate(
+        {"agent_id": "agent", "agent_name": "Agent", "agent_card_params": {}, "execution_mode": "both"}
+    )
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return token
+
+    attrs: Final = {**_proxy_server_attrs_for_custom_auth(user_custom_auth=authenticate), "prisma_client": None}
+    for name, value in attrs.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    websocket: Final = WebSocket(
+        scope={
+            "type": "websocket",
+            "path": path,
+            "headers": [(b"authorization", b"Bearer sk-test")],
+            "query_string": b"intent=transcription",
+        },
+        receive=AsyncMock(),
+        send=AsyncMock(),
+    )
+
+    with pytest.raises(HTTPException) as denied:
+        await user_api_key_auth_realtime_websocket(websocket)
+
+    assert denied.value.status_code == 403
+    assert "Managed inference requires an explicit or configured model" in str(denied.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/openai_passthrough/v1/realtime", "/v1/responses", "/vertex_ai/live"))
+async def test_non_realtime_websocket_auth_checks_no_default_transcription_model(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    from fastapi import WebSocket
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    exhausted_model: Final = "gpt-realtime-whisper"
+    token: Final = UserAPIKeyAuth(
+        token="test-key",
+        model_max_budget={exhausted_model: {"max_budget": 5.0, "budget_duration": "1d"}},
+    )
+    limiter, _ = await _real_model_budget_limiter(key_spend={exhausted_model: 10.0})
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_key_within_model_budget(user_api_key_dict=token, model=exhausted_model)
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return token
+
+    attrs: Final = {
+        **_proxy_server_attrs_for_custom_auth(user_custom_auth=authenticate),
+        "prisma_client": None,
+        "model_max_budget_limiter": limiter,
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    websocket: Final = WebSocket(
+        scope={
+            "type": "websocket",
+            "path": path,
+            "headers": [(b"authorization", b"Bearer sk-test")],
+            "query_string": b"intent=transcription",
+        },
+        receive=AsyncMock(),
+        send=AsyncMock(),
+    )
+
+    assert await user_api_key_auth_websocket(websocket) is token
+
+
+@pytest.mark.asyncio
 async def test_admission_and_budget_reservation_read_the_key_spend_counter_with_one_redis_mget():
     from fastapi import Request
     from starlette.datastructures import URL
