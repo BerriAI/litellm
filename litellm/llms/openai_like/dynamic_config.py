@@ -110,15 +110,24 @@ def create_config_class(provider: SimpleProviderConfig):
             def _check_supports_fc() -> bool:
                 if is_mocked:
                     return bool(supports_function_calling(model=model, custom_llm_provider=provider.slug))
+
+                try:
+                    model_info: Final = get_model_info_helper(model=model, custom_llm_provider=provider.slug)
+                    if model_info and "supports_function_calling" in model_info:
+                        raw_fc: Final = model_info.get("supports_function_calling")
+                        if raw_fc is not None:
+                            # State 3: Model row in catalog explicitly declares capability -> takes precedence
+                            return bool(raw_fc)
+                except (ModelNotMappedError, KeyError, ValueError):
+                    pass
+
+                # State 4: Provider-wide explicit False applies when model has no explicit declaration
                 if provider.provider_info and provider.provider_info.get("supports_function_calling") is False:
                     return False
-                try:
-                    # If model is mapped in the catalog, respect its capability declaration
-                    get_model_info_helper(model=model, custom_llm_provider=provider.slug)
-                    return bool(supports_function_calling(model=model, custom_llm_provider=provider.slug))
-                except (ModelNotMappedError, KeyError, ValueError):
-                    # Unmapped models on OpenAI-compatible providers default to supporting tools
-                    return True
+
+                # State 1 (unmapped model) & State 2 (mapped model with missing/None declaration):
+                # default to preserving tool parameters for OpenAI-compatible providers
+                return True
 
             _supports_fc: Final = _check_supports_fc()
 
