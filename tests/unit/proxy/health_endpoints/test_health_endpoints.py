@@ -4248,6 +4248,100 @@ async def test_health_endpoint_keeps_a_team_only_public_name_off_a_team_less_key
     probe.assert_not_awaited()
 
 
+_PROVIDER_PREFIXED_MODEL_LIST = [
+    {
+        "model_name": "openai/gpt-5.4-nano",
+        "litellm_params": {"model": "openai/gpt-5.4-nano"},
+        "model_info": {"id": "id-prefixed-nano"},
+    },
+    {
+        "model_name": "gpt-5.4-mini",
+        "litellm_params": {"model": "openai/gpt-5.4-mini"},
+        "model_info": {"id": "id-mini"},
+    },
+    {
+        "model_name": "claude-haiku-5-5",
+        "litellm_params": {"model": "anthropic/claude-haiku-5-5"},
+        "model_info": {"id": "id-haiku"},
+    },
+]
+_PROVIDER_PREFIXED_CACHED_RESULTS = {
+    "healthy_endpoints": [
+        {"model": "openai/gpt-5.4-nano", "model_id": "id-prefixed-nano"},
+        {"model": "openai/gpt-5.4-mini", "model_id": "id-mini"},
+        {"model": "anthropic/claude-haiku-5-5", "model_id": "id-haiku"},
+    ],
+    "unhealthy_endpoints": [],
+    "healthy_count": 3,
+    "unhealthy_count": 0,
+}
+_PROVIDER_WILDCARD_KEY = UserAPIKeyAuth(api_key="hashed-test-key", models=["openai/*"])
+_RESTRICTED_TEAM_KEY = UserAPIKeyAuth(
+    api_key="hashed-test-key", models=[], team_id="team-a", team_models=["gpt-5.4-mini"]
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "expected_ids"),
+    [(_PROVIDER_WILDCARD_KEY, {"id-prefixed-nano", "id-mini"}), (_RESTRICTED_TEAM_KEY, {"id-mini"})],
+)
+async def test_health_endpoint_probes_the_deployments_auth_lets_the_key_request(caller, expected_ids):
+    probed = await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, caller)
+
+    assert probed == expected_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "expected_ids"),
+    [(_PROVIDER_WILDCARD_KEY, ["id-prefixed-nano", "id-mini"]), (_RESTRICTED_TEAM_KEY, ["id-mini"])],
+)
+async def test_health_endpoint_returns_the_deployments_auth_lets_the_key_request_on_background_cache_path(
+    caller, expected_ids
+):
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _PROVIDER_PREFIXED_MODEL_LIST,
+        _router_for(_PROVIDER_PREFIXED_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_PROVIDER_PREFIXED_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(response=Response(), user_api_key_dict=caller, model=None, model_id=None)
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == expected_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_background_health_checks", [False, True])
+async def test_health_endpoint_refuses_a_deployment_the_team_allowlist_forbids(use_background_health_checks):
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with (
+        _proxy_health_globals(
+            _PROVIDER_PREFIXED_MODEL_LIST,
+            _router_for(_PROVIDER_PREFIXED_MODEL_LIST),
+            use_background_health_checks=use_background_health_checks,
+            health_check_results=_PROVIDER_PREFIXED_CACHED_RESULTS,
+        ),
+        patch(  # test-quality-ok: the probe must never run; the endpoint has no injection seam for it
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save", new_callable=AsyncMock
+        ) as probe,
+        pytest.raises(HTTPException) as refused,
+    ):
+        await health_endpoint(
+            response=Response(), user_api_key_dict=_RESTRICTED_TEAM_KEY, model=None, model_id="id-prefixed-nano"
+        )
+
+    assert refused.value.status_code == 403
+    probe.assert_not_awaited()
+
+
 def test_resolve_targeted_model_ids_lets_model_id_win_over_model():
     resolve = _health_endpoints_module._resolve_targeted_model_ids
 
