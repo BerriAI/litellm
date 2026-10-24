@@ -2780,6 +2780,19 @@ class MCPRequestHandler:
         return resolved
 
     @staticmethod
+    async def _key_toolset_tool_permissions(
+        object_permission: LiteLLM_ObjectPermissionTable | None,
+        *,
+        requires_fresh_policy: bool = False,
+    ) -> Mapping[str, Sequence[str]]:
+        try:
+            return await MCPRequestHandler._toolset_tool_permissions(
+                object_permission, requires_fresh_policy=requires_fresh_policy
+            )
+        except Exception as e:
+            raise UnloadableEntitlementError("key MCP toolset entitlement could not be resolved") from e
+
+    @staticmethod
     async def _toolset_tools_for_server(
         object_permission: LiteLLM_ObjectPermissionTable | None,
         server_id: str,
@@ -3114,12 +3127,11 @@ class MCPRequestHandler:
         # Tools granted through the key's toolsets restrict this server exactly
         # as direct tool permissions do; union with any direct grants so the
         # tool-level check sees the key's full effective tool scope
-        try:
-            key_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
-                key_obj_perm, server_id, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
+        key_toolset_tools: Final = (
+            await MCPRequestHandler._key_toolset_tool_permissions(
+                key_obj_perm, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
             )
-        except Exception as e:
-            raise UnloadableEntitlementError("key MCP toolset entitlement could not be resolved") from e
+        ).get(server_id)
 
         key_group_tools: Final = await MCPRequestHandler._key_access_group_tools_for_server(
             user_api_key_auth, server_id
@@ -3409,23 +3421,17 @@ class MCPRequestHandler:
             # servers referenced by the key's toolset grants are part of the key's
             # scope on every path (list, call, REST), subject to the same team/org
             # ceilings as any other key-level grant
-            toolset_ids: Final = key_object_permission.mcp_toolsets or []
-            toolset_servers: Final = (
-                list(
-                    (
-                        await global_mcp_server_manager.resolve_toolset_tool_permissions(
-                            toolset_ids=toolset_ids,
-                            requires_fresh_policy=user_api_key_auth.requires_fresh_policy,
-                        )
-                    ).keys()
+            toolset_servers: Final = list(
+                await MCPRequestHandler._key_toolset_tool_permissions(
+                    key_object_permission, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
                 )
-                if toolset_ids
-                else []
             )
 
             # Combine all lists
             all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers + toolset_servers
             return list(MCPRequestHandler._server_grants_with_group_scope(set(all_servers), key_object_permission))
+        except UnloadableEntitlementError:
+            raise
         except Exception as e:
             verbose_logger.warning("Failed to get allowed MCP servers for key: %s", e)
             return []

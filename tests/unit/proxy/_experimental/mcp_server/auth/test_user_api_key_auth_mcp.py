@@ -59,15 +59,29 @@ def test_incoming_guardrail_bearer_requires_exact_authorization_header(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "resolution", ["valid", "deleted", "empty", "database_error", "fresh_database_error", "cache_error", "no_database"]
+    "resolution",
+    [
+        "not_declared",
+        "not_declared_empty",
+        "valid",
+        "deleted",
+        "empty",
+        "database_error",
+        "fresh_database_error",
+        "cache_error",
+        "no_database",
+    ],
 )
 @pytest.mark.parametrize("direct_tools", [None, ["read_status"], [MCP_ALL_TOOLS_WILDCARD]])
-async def test_key_declared_toolset_never_becomes_unrestricted_when_unloadable(
+@pytest.mark.parametrize("server_grant", ["key", "team"])
+async def test_key_toolset_policy_is_consistent_for_servers_and_tools(
     monkeypatch: pytest.MonkeyPatch,
     resolution: str,
     direct_tools: Sequence[str] | None,
+    server_grant: str,
 ) -> None:
     from litellm.proxy import proxy_server
+    from litellm.proxy.auth import auth_checks
     from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
     row: Final = MCPToolset(
@@ -91,26 +105,36 @@ async def test_key_declared_toolset_never_becomes_unrestricted_when_unloadable(
     )
     monkeypatch.setattr(proxy_server, "prisma_client", None if resolution == "no_database" else client)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setitem(proxy_server.general_settings, "require_key_mcp_access_defined", False)
+    team: Final = LiteLLM_TeamTable(
+        team_id="toolset-team",
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="team-scope", mcp_servers=["probe"]),
+    )
+    monkeypatch.setattr(auth_checks, "get_team_object", AsyncMock(return_value=team))
     auth: Final = UserAPIKeyAuth(
+        team_id="toolset-team" if server_grant == "team" else None,
         object_permission=LiteLLM_ObjectPermissionTable(
             object_permission_id="key-toolset-scope",
-            mcp_servers=["probe"],
-            mcp_toolsets=["status-only"],
+            mcp_servers=["probe"] if server_grant == "key" else [],
+            mcp_toolsets=None
+            if resolution == "not_declared"
+            else []
+            if resolution == "not_declared_empty"
+            else ["status-only"],
             mcp_tool_permissions={} if direct_tools is None else {"probe": list(direct_tools)},
         ),
     ).model_copy(update={"requires_fresh_policy": resolution == "fresh_database_error"})
-    expected: Final = (
-        None
-        if resolution == "valid" and direct_tools == [MCP_ALL_TOOLS_WILDCARD]
-        else ["read_status"]
-        if resolution == "valid"
-        else []
+    allowed: Final = resolution in ("valid", "not_declared", "not_declared_empty")
+    unrestricted: Final = direct_tools == [MCP_ALL_TOOLS_WILDCARD] or (
+        resolution in ("not_declared", "not_declared_empty") and direct_tools is None
     )
+    expected: Final = None if allowed and unrestricted else ["read_status"] if allowed else []
 
+    assert await MCPRequestHandler.get_allowed_mcp_servers(auth) == (["probe"] if allowed else [])
     assert await MCPRequestHandler.get_allowed_tools_for_server("probe", auth) == expected
-    assert await MCPRequestHandler.is_tool_allowed_for_server("read_status", "probe", auth) is (resolution == "valid")
+    assert await MCPRequestHandler.is_tool_allowed_for_server("read_status", "probe", auth) is allowed
     assert await MCPRequestHandler.is_tool_allowed_for_server("write_record", "probe", auth) is (
-        resolution == "valid" and direct_tools == [MCP_ALL_TOOLS_WILDCARD]
+        allowed and unrestricted
     )
 
 
@@ -5021,10 +5045,10 @@ async def test_tool_permission_servers_included_in_allowed_servers():
         transport=MCPTransport.http,
     )
     try:
-        perm = MagicMock()
-        perm.mcp_servers = []
-        perm.mcp_access_groups = []
-        perm.mcp_tool_permissions = {"server_id_123": ["tool_a", "tool_b"]}
+        perm: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-tool-scope",
+            mcp_tool_permissions={"server_id_123": ["tool_a", "tool_b"]},
+        )
 
         user_api_key_auth = UserAPIKeyAuth(
             api_key="test-key",
