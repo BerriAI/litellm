@@ -1,4 +1,5 @@
 import asyncio
+import json
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -6,6 +7,7 @@ import pytest
 from httpx import Request, Response
 from pydantic import BaseModel, computed_field
 
+import litellm
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.types.integrations.datadog import (
@@ -558,3 +560,44 @@ async def test_raised_intake_error_preserves_datadog_requeue_behavior(datadog_en
     await logger.async_send_batch()
 
     assert [event["message"] for event in logger.log_queue] == ['{"event": 0}', '{"event": 1}']
+
+
+@pytest.mark.asyncio
+async def test_failure_hook_redacts_exception_payload_when_redaction_on(datadog_env, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    secret = "secret-prompt-marker"
+    await logger.async_post_call_failure_hook(
+        request_data={"metadata": {}},
+        original_exception=litellm.BadRequestError(
+            message=f"Unsupported content: {secret}", model="gpt-4o", llm_provider="openai"
+        ),
+        user_api_key_dict=type("UserKey", (), {})(),
+        traceback_str=f"Traceback ... {secret} ...",
+    )
+
+    message = json.loads(logger.log_queue[0]["message"])
+    assert secret not in json.dumps(message)
+    assert message["exception"] == "redacted-by-litellm"
+    assert message["traceback"] == "redacted-by-litellm"
+    assert message["error_class"] == "BadRequestError"
+
+
+@pytest.mark.asyncio
+async def test_failure_hook_keeps_exception_payload_when_redaction_off(datadog_env, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    secret = "secret-prompt-marker"
+    await logger.async_post_call_failure_hook(
+        request_data={"metadata": {}},
+        original_exception=Exception(f"boom {secret}"),
+        user_api_key_dict=type("UserKey", (), {})(),
+        traceback_str="trace",
+    )
+
+    message = json.loads(logger.log_queue[0]["message"])
+    assert message["exception"] == f"boom {secret}"

@@ -24,7 +24,7 @@ PhaseAttributes: TypeAlias = Mapping[str, str | int | float | bool]
 @cache
 def _otel_runtime() -> (
     tuple[
-        Callable[[str], AbstractContextManager[Span | None]],
+        Callable[..., AbstractContextManager[Span | None]],
         Callable[..., None],
         Callable[[str, PhaseEventAttributes | None], None],
         Callable[[PhaseAttributes], None],
@@ -45,7 +45,7 @@ def _otel_runtime() -> (
 
 
 @contextmanager
-def phase_span(name: str) -> Generator[Span | None]:
+def phase_span(name: str, *, redact_content: bool = False) -> Generator[Span | None]:
     """Run a request phase inside a live active span so its DB/service calls nest.
 
     Yields ``None`` (a plain no-op) when the OTel SDK is unavailable or V2 is not
@@ -55,7 +55,7 @@ def phase_span(name: str) -> Generator[Span | None]:
     if runtime is None:
         yield None
         return
-    with runtime[0](name) as span:
+    with runtime[0](name, redact_content=redact_content) as span:
         yield span
 
 

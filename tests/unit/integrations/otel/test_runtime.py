@@ -71,6 +71,36 @@ def test_wrappers_no_op_when_runtime_absent(monkeypatch):
     assert runtime.seed_request_identity({"token": "sk-x"}, model="gpt-4o") is None
 
 
+def test_phase_span_forwards_redact_content_to_registered_logger(monkeypatch):
+    """``redact_content`` must reach the v2 logger through the runtime shim: an
+    exception raised inside the forwarded span carries only the redaction marker,
+    even with the global flag off."""
+    pytest.importorskip("opentelemetry")
+
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    import litellm
+    import litellm.integrations.otel.logger as otel_logger
+    from litellm.integrations.otel import OpenTelemetryV2Config
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.plumbing import providers
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory", legacy_compat=True, baggage_team_metadata_keys=[])
+    exporter = InMemorySpanExporter()
+    logger = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter))
+    monkeypatch.setattr(otel_logger, "_registered_v2_logger", lambda: logger)
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    secret = "secret-prompt-marker"
+    with pytest.raises(RuntimeError):
+        with runtime.phase_span("auth", redact_content=True):
+            raise RuntimeError(f"auth exploded: {secret}")
+    (span,) = exporter.get_finished_spans()
+    assert secret not in str(dict(span.attributes or {}))
+    assert secret not in str([dict(e.attributes or {}) for e in span.events])
+    assert secret not in str(span.status.description or "")
+
+
 def test_phase_event_no_ops_when_runtime_absent(monkeypatch):
     monkeypatch.setattr(runtime, "_otel_runtime", lambda: None)
 
