@@ -95,3 +95,47 @@ pub async fn lock_team(
         .await?;
     Ok(())
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TeamMemberSpend {
+    pub team_id: String,
+    pub user_id: String,
+    pub cost: f64,
+}
+
+pub async fn add_team_member_spend(
+    transaction: &mut Transaction<'_, Postgres>,
+    members: &[TeamMemberSpend],
+) -> Result<(), Error> {
+    if members.is_empty() {
+        return Ok(());
+    }
+    let mut members = members.to_vec();
+    members.sort_by(|left, right| {
+        (&left.team_id, &left.user_id).cmp(&(&right.team_id, &right.user_id))
+    });
+    let mut teams: Vec<&str> = members
+        .iter()
+        .map(|member| member.team_id.as_str())
+        .collect();
+    teams.dedup();
+    for team in teams {
+        lock_team(transaction, team).await?;
+    }
+    let rows = serde_json::Value::Array(
+        members
+            .iter()
+            .map(|member| {
+                serde_json::json!({
+                    "user_id": member.user_id,
+                    "team_id": member.team_id,
+                    "cost": member.cost,
+                })
+            })
+            .collect(),
+    );
+    sqlx::query_file!("queries/spend/upsert_team_member_spend.sql", rows)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
