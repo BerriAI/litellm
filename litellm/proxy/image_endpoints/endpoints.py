@@ -45,6 +45,37 @@ MASK_ARRAY_FIELD: Final = "mask[]"
 BRACKETED_FILE_FIELDS: Final = frozenset({IMAGE_ARRAY_FIELD, MASK_ARRAY_FIELD})
 
 
+def resolve_image_generation_prompt_after_guardrails(
+    data: dict,
+    *,
+    prompt_before_hook: object,
+) -> None:
+    """
+    Restore `data["prompt"]` after `pre_call_hook` and drop temporary messages.
+
+    The image-generation endpoint copies `prompt` into chat-shaped `messages` so
+    guardrails can run. Unified image handlers rewrite `data["prompt"]` and leave
+    `messages` unchanged; chat-shaped handlers rewrite `messages` instead.
+    Prefer a prompt that was changed relative to `prompt_before_hook`; otherwise
+    rebuild from `messages` (issue #46473).
+    """
+    messages = data.get("messages")
+    prompt_after_hook = data.get("prompt")
+    if isinstance(messages, list) and messages:
+        messages_prompt = get_str_from_messages(messages)
+        if (
+            isinstance(prompt_after_hook, str)
+            and prompt_before_hook is not None
+            and prompt_after_hook != prompt_before_hook
+        ):
+            data["prompt"] = prompt_after_hook
+        else:
+            data["prompt"] = messages_prompt
+    data.pop("messages", None)
+
+
+
+
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
     """
     Read a FastAPI UploadFile into a BytesIO and set .name so OpenAI SDK
@@ -145,10 +176,9 @@ async def image_generation(
             user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
         )
 
-        messages: Final = data.get("messages")
-        if isinstance(messages, list) and messages:
-            data["prompt"] = get_str_from_messages(messages)
-        data.pop("messages", None)
+        resolve_image_generation_prompt_after_guardrails(
+            data, prompt_before_hook=prompt_value
+        )
 
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call: Final = await route_request(
