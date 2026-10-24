@@ -249,5 +249,18 @@
       "/v1/responses",
       "/v1/messages"
     ]
+    },
+  "obscurify": {
+    "base_url": "https://obscurify.ai/v1",
+    "api_key_env": "OBSCURIFY_API_KEY",
+    "api_base_env": "OBSCURIFY_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   }
 }
