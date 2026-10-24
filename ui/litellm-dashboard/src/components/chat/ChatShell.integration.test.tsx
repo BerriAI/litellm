@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders as render } from "@/../tests/test-utils";
+import { renderWithProviders } from "@/../tests/test-utils";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import ChatShell from "./ChatShell";
+
+const render = (children: React.ReactElement) => renderWithProviders(<ThemeProvider>{children}</ThemeProvider>);
 
 const { mockPush, mockUsePathname, mockUseChatShell, mockUseMediaQuery } = vi.hoisted(() => ({
   mockPush: vi.fn(),
@@ -98,7 +101,7 @@ describe("ChatShell", () => {
       ["Logs", "/ui/chat/logs"],
     ]) {
       await user.click(screen.getByRole("button", { name: "Workspace" }));
-      await user.click(await screen.findByRole("menuitem", { name: label, exact: true }));
+      await user.click(await screen.findByRole("menuitem", { name: label }));
       expect(mockPush).toHaveBeenCalledWith(href);
     }
   });
@@ -113,8 +116,8 @@ describe("ChatShell", () => {
     );
     expect(screen.getByRole("button", { name: "Workspace" })).toHaveAttribute("aria-current", "page");
     await user.click(screen.getByRole("button", { name: "Workspace" }));
-    expect(await screen.findByRole("menuitem", { name: "Usage", exact: true })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("menuitem", { name: "Logs", exact: true })).not.toHaveAttribute("aria-current");
+    expect(await screen.findByRole("menuitem", { name: "Usage" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("menuitem", { name: "Logs" })).not.toHaveAttribute("aria-current");
   });
 
   it("should collapse and reopen the desktop rail", async () => {
@@ -127,7 +130,7 @@ describe("ChatShell", () => {
     await user.click(screen.getByRole("button", { name: "Close sidebar" }));
     expect(screen.getByRole("button", { name: "Open sidebar" })).toHaveAttribute("aria-expanded", "false");
     await user.click(screen.getByRole("button", { name: "Switch workspace, current: Chat" }));
-    expect(await screen.findByRole("menuitem", { name: "AI Gateway", exact: true })).toBeInTheDocument();
+    expect(await screen.findByRole("menuitem", { name: "AI Gateway" })).toBeInTheDocument();
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Open sidebar" }));
     expect(screen.getByRole("button", { name: "Close sidebar" })).toHaveAttribute("aria-expanded", "true");

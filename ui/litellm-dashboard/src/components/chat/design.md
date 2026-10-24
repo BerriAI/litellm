@@ -180,6 +180,8 @@ The desktop sidebar follows Moyai: 240px wide, 230px below 1250px, and 52px when
 
 At 600px and below, a compact header keeps the workspace switcher beside the labelled menu button, visible even when the navigation Sheet is closed. The same navigation renders once inside the existing `Sheet`. Choosing a route or conversation closes the Sheet. Do not render two concurrent conversation lists: they each own a search shortcut listener. The collapsed desktop list remains mounted for keyboard search, but is visually hidden. The Chat layout owns an authenticated `PluginModeProvider` so returning to AI Gateway clears a previously selected plugin.
 
+When an organization configures a custom logo, show it above the account row at the bottom of the expanded sidebar and mobile navigation. Use the configured light and dark variants, falling back to the available variant when only one is set. Leave this space absent without custom branding. The Chat icon and workspace switcher remain the product identity at the top; the organization logo is separate and is hidden with the account row when the sidebar collapses.
+
 The landing page reuses Moyai's left-aligned 720px home content, dot/grid backdrop, 46px heading, 132px editor and compact starter rows. `ChatModelPicker` sits at the right of the composer action row, matching Moyai's model selector position. Selecting a model chooses chat or image generation. Preserve LiteLLM's existing model access and request behavior; do not copy Moyai product or backend logic.
 
 ### ScrollArea
