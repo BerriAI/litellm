@@ -923,3 +923,341 @@ class TestCacheControl:
         content = self._template(body)[0]["content"]
         assert "cache_control" not in content[0]
         assert content[1].get("cache_control") == {"type": "ephemeral"}
+
+class TestNormalizeReasoningContent:
+    """Unit tests for normalize_reasoning_content."""
+
+    from litellm.llms.sap.chat.handler import normalize_reasoning_content
+
+    _normalize_reasoning_content = staticmethod(normalize_reasoning_content)
+
+    def test_list_reasoning_content_mapped_to_thinking_blocks(self):
+        """List-shaped reasoning_content is converted to thinking_blocks."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Latin.",
+                    "reasoning_content": [
+                        {"content": "Romans spoke Latin.", "signature": "sig1"},
+                        {"content": "That is well known.", "signature": "sig2"},
+                    ],
+                }
+            }]
+        }
+        out = self._normalize_reasoning_content(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["thinking_blocks"] == [
+            {"type": "thinking", "thinking": "Romans spoke Latin.", "signature": "sig1"},
+            {"type": "thinking", "thinking": "That is well known.", "signature": "sig2"},
+        ]
+        assert msg["reasoning_content"] == "Romans spoke Latin.\nThat is well known."
+
+    def test_string_reasoning_content_unchanged(self):
+        """String reasoning_content is left as-is (already the right type)."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "42",
+                    "reasoning_content": "I thought about it.",
+                }
+            }]
+        }
+        out = self._normalize_reasoning_content(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["reasoning_content"] == "I thought about it."
+        assert "thinking_blocks" not in msg
+
+    def test_no_reasoning_content_unchanged(self):
+        """A message without reasoning_content is not modified."""
+        raw = {"choices": [{"message": {"role": "assistant", "content": "Hi."}}]}
+        out = self._normalize_reasoning_content(raw)
+        assert out == raw
+
+    def test_empty_list_reasoning_content_sets_none(self):
+        """An empty list produces None for reasoning_content and empty thinking_blocks."""
+        raw = {"choices": [{"message": {"reasoning_content": []}}]}
+        out = self._normalize_reasoning_content(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["thinking_blocks"] == []
+        assert msg["reasoning_content"] is None
+
+    def test_multiple_choices_all_normalized(self):
+        """All choices in the response are normalized."""
+        raw = {
+            "choices": [
+                {"message": {"reasoning_content": [{"content": "thought A", "signature": None}]}},
+                {"message": {"reasoning_content": [{"content": "thought B", "signature": "s"}]}},
+            ]
+        }
+        out = self._normalize_reasoning_content(raw)
+        assert out["choices"][0]["message"]["reasoning_content"] == "thought A"
+        assert out["choices"][1]["message"]["reasoning_content"] == "thought B"
+
+
+    def test_null_content_in_block_uses_empty_string(self):
+        """Explicit null content value must not leak None into thinking field."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "reasoning_content": [{"content": None, "signature": "s"}],
+                }
+            }]
+        }
+        out = self._normalize_reasoning_content(raw)
+        block = out["choices"][0]["message"]["thinking_blocks"][0]
+        assert block["thinking"] == ""
+        assert out["choices"][0]["message"]["reasoning_content"] is None
+
+    def test_transform_response_normalizes_list_reasoning_content(self):
+        """Production path: transform_response must produce a ModelResponse
+        with thinking_blocks populated when the raw payload carries a
+        list-shaped reasoning_content.
+        """
+        import json
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+
+        final_result = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gemini-test",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The answer is 42.",
+                    "reasoning_content": [
+                        {"content": "Let me think.", "signature": "sig1"},
+                        {"content": "Yes, 42.", "signature": "sig2"},
+                    ],
+                },
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+        raw_response = MagicMock()
+        raw_response.text = json.dumps({"final_result": final_result})
+        raw_response.json.return_value = {"final_result": final_result}
+
+        response = config.transform_response(
+            model="gemini-test",
+            raw_response=raw_response,
+            model_response=MagicMock(),
+            logging_obj=MagicMock(),
+            api_key="test",
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        choice = response.choices[0]
+        assert hasattr(choice.message, "thinking_blocks"), "thinking_blocks missing from message"
+        assert choice.message.thinking_blocks == [
+            {"type": "thinking", "thinking": "Let me think.", "signature": "sig1"},
+            {"type": "thinking", "thinking": "Yes, 42.", "signature": "sig2"},
+        ]
+        assert choice.message.reasoning_content == "Let me think.\nYes, 42."
+
+
+class TestNormalizeChoice:
+    """Unit tests for normalize_choice (message and delta shapes)."""
+
+    from litellm.llms.sap.chat.handler import normalize_choice, normalize_reasoning_content
+
+    _normalize_choice = staticmethod(normalize_choice)
+    _normalize_reasoning_content = staticmethod(normalize_reasoning_content)
+
+    def test_message_list_reasoning_content_normalized(self):
+        choice = {
+            "index": 0,
+            "message": {"role": "assistant", "content": "hi", "reasoning_content": [{"content": "thought", "signature": "s1"}]},
+            "finish_reason": "stop",
+        }
+        result = self._normalize_choice(choice)
+        msg = result["message"]
+        assert msg["reasoning_content"] == "thought"
+        assert msg["thinking_blocks"] == [{"type": "thinking", "thinking": "thought", "signature": "s1"}]
+
+    def test_delta_list_reasoning_content_normalized(self):
+        choice = {
+            "index": 0,
+            "delta": {"role": "assistant", "reasoning_content": [{"content": "delta thought", "signature": None}]},
+            "finish_reason": None,
+        }
+        result = self._normalize_choice(choice)
+        delta = result["delta"]
+        assert delta["reasoning_content"] == "delta thought"
+        assert delta["thinking_blocks"][0]["thinking"] == "delta thought"
+
+    def test_string_reasoning_content_unchanged(self):
+        choice = {"index": 0, "message": {"reasoning_content": "already a string"}}
+        assert self._normalize_choice(choice) == choice
+
+    def test_no_reasoning_content_unchanged(self):
+        choice = {"index": 0, "delta": {"content": "hello"}}
+        assert self._normalize_choice(choice) == choice
+
+    def test_normalize_reasoning_content_covers_delta_path(self):
+        raw = {
+            "id": "c1",
+            "object": "chat.completion.chunk",
+            "choices": [
+                {"index": 0, "delta": {"reasoning_content": [{"content": "stream thought", "signature": "sig"}]}, "finish_reason": None}
+            ],
+        }
+        result = self._normalize_reasoning_content(raw)
+        delta = result["choices"][0]["delta"]
+        assert delta["reasoning_content"] == "stream thought"
+        assert delta["thinking_blocks"][0]["type"] == "thinking"
+
+
+class TestMessagesToSapTemplateReasoningContent:
+    """_messages_to_sap_template must forward reasoning_content on assistant turns."""
+
+    def test_assistant_message_with_reasoning_content_is_preserved(self):
+        from litellm.llms.sap.chat.transformation import _messages_to_sap_template
+
+        messages = [
+            {"role": "user", "content": "What is 22?"},
+            {
+                "role": "assistant",
+                "content": "4",
+                "reasoning_content": [
+                    {"content": "Simple arithmetic.", "signature": "sig1"}
+                ],
+            },
+            {"role": "user", "content": "Are you sure?"},
+        ]
+        result = _messages_to_sap_template(messages)
+        assistant_msg = result[1]
+        assert assistant_msg["reasoning_content"] == [
+            {"content": "Simple arithmetic.", "signature": "sig1"}
+        ]
+
+    def test_litellm_normalized_assistant_message_round_trips_signature(self):
+        """After a non-streaming SAP call, the ModelResponse has reasoning_content: str
+        and thinking_blocks: list (LiteLLM native format). Replaying it as a history
+        message must not raise and must preserve the signature.
+        """
+        from litellm.llms.sap.chat.transformation import _messages_to_sap_template
+
+        signature = "EtwHCkABGAIqQKNbQn0Uz=="
+        messages = [
+            {"role": "user", "content": "Translate it."},
+            {
+                "role": "assistant",
+                "content": "The text is Lorem Ipsum.",
+                "reasoning_content": "Lorem ipsum is pseudo-Latin...",
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "Lorem ipsum is pseudo-Latin...", "signature": signature}
+                ],
+            },
+            {"role": "user", "content": "Summarise it."},
+        ]
+
+        result = _messages_to_sap_template(messages)
+        assistant = next(m for m in result if m.get("role") == "assistant")
+
+        reasoning = assistant.get("reasoning_content")
+        assert isinstance(reasoning, list)
+        assert any(block.get("signature") == signature for block in reasoning)
+
+    def test_streaming_assembled_assistant_message_round_trips_signature(self):
+        """After a streaming SAP call, normalize_reasoning_content runs on every chunk.
+        The assembled assistant message has the same LiteLLM-native shape as the
+        non-streaming case. Verify the signature survives the round-trip.
+        """
+        from litellm.llms.sap.chat.handler import normalize_reasoning_content
+        from litellm.llms.sap.chat.transformation import _messages_to_sap_template
+
+        signature = "EtwHCkABGAIqQKNbQn0Uz=="
+        thinking_text = "Lorem ipsum is pseudo-Latin..."
+        sap_final_result = {
+            "id": "msg_stream_01",
+            "object": "chat.completion",
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "The text is Lorem Ipsum.",
+                        "reasoning_content": [{"content": thinking_text, "signature": signature}],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        normalized = normalize_reasoning_content(sap_final_result)
+        assembled_message = {"role": "assistant", **normalized["choices"][0]["message"]}
+
+        messages = [
+            {"role": "user", "content": "Translate it."},
+            assembled_message,
+            {"role": "user", "content": "Summarize it."},
+        ]
+
+        result = _messages_to_sap_template(messages)
+        assistant = next(m for m in result if m.get("role") == "assistant")
+
+        reasoning = assistant.get("reasoning_content")
+        assert isinstance(reasoning, list)
+        assert any(block.get("signature") == signature for block in reasoning)
+
+
+class TestDenormalizeReasoningContent:
+    from litellm.llms.sap.chat.handler import denormalize_reasoning_content
+
+    _denormalize = staticmethod(denormalize_reasoning_content)
+
+    def test_thinking_blocks_rebuilt_into_sap_reasoning_content(self):
+        message = {
+            "role": "assistant",
+            "content": "hello",
+            "thinking_blocks": [{"type": "thinking", "thinking": "step one", "signature": "sig1"}],
+            "reasoning_content": "step one",
+        }
+        result = self._denormalize(message)
+        assert result["reasoning_content"] == [{"content": "step one", "signature": "sig1"}]
+        assert "thinking_blocks" not in result
+
+    def test_string_reasoning_content_without_thinking_blocks_is_dropped(self):
+        message = {
+            "role": "assistant",
+            "content": "hello",
+            "reasoning_content": "some thought from another provider",
+        }
+        result = self._denormalize(message)
+        assert "reasoning_content" not in result
+        assert "thinking_blocks" not in result
+        assert result["content"] == "hello"
+
+    def test_non_assistant_message_is_returned_unchanged(self):
+        message = {"role": "user", "content": "hi", "reasoning_content": "should stay"}
+        assert self._denormalize(message) is message
+
+    def test_assistant_without_reasoning_fields_is_returned_unchanged(self):
+        message = {"role": "assistant", "content": "hi"}
+        assert self._denormalize(message) is message
+
+    def test_validate_dict_accepts_denormalized_message_from_string_reasoning_content(self):
+        from litellm.llms.sap.chat.models import SAPAssistantMessage
+        from litellm.llms.sap.chat.transformation import validate_dict
+
+        message = {
+            "role": "assistant",
+            "content": "done",
+            "reasoning_content": "raw string from openai o-series",
+        }
+        result = validate_dict(self._denormalize(message), SAPAssistantMessage)
+        assert result["role"] == "assistant"
+        assert "reasoning_content" not in result or result.get("reasoning_content") is None
