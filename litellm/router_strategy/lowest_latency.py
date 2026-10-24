@@ -452,17 +452,22 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 continue  # skip to next one
 
             _deployment_tpm = (
-                _deployment.get("tpm", None)
-                or _deployment.get("litellm_params", {}).get("tpm", None)
-                or _deployment.get("model_info", {}).get("tpm", None)
-                or float("inf")
+                _deployment["tpm"]
+                if _deployment.get("tpm", None) is not None
+                else _deployment["litellm_params"]["tpm"]
+                if _deployment.get("litellm_params", {}).get("tpm", None) is not None
+                else _deployment["model_info"]["tpm"]
+                if _deployment.get("model_info", {}).get("tpm", None) is not None
+                else float("inf")
             )
-
             _deployment_rpm = (
-                _deployment.get("rpm", None)
-                or _deployment.get("litellm_params", {}).get("rpm", None)
-                or _deployment.get("model_info", {}).get("rpm", None)
-                or float("inf")
+                _deployment["rpm"]
+                if _deployment.get("rpm", None) is not None
+                else _deployment["litellm_params"]["rpm"]
+                if _deployment.get("litellm_params", {}).get("rpm", None) is not None
+                else _deployment["model_info"]["rpm"]
+                if _deployment.get("model_info", {}).get("rpm", None) is not None
+                else float("inf")
             )
             item_latency = item_map.get("latency_normalized", [])
             item_ttft_latency = item_map.get("time_to_first_token_seconds", [])
