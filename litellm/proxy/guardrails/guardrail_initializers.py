@@ -177,6 +177,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
             output_parse_pii=True,
             event_hook=_presidio_output_mode(litellm_params.mode, include_mcp=True),
             _callback_role="restore",
+            mask_response_content=True,
         )
         if run_input and litellm_params.output_parse_pii
         else None
