@@ -419,9 +419,7 @@ def test_no_master_key_preserves_caller_authorization_unless_auth_is_enabled(
 
 
 @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.true_passthrough])
-def test_custom_auth_is_stripped_in_no_auth_dev_mode(
-    auth_type: MCPAuth, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_custom_auth_is_stripped_in_no_auth_dev_mode(auth_type: MCPAuth, monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import _openapi_forwarded_extra_headers
     from litellm.proxy._experimental.mcp_server.operations import _prepare_mcp_server_headers
@@ -6432,53 +6430,46 @@ class TestMCPServerManager:
         )
 
     @pytest.mark.asyncio
-    async def test_pre_call_tool_check_allowed_tools_takes_precedence(self):
-        """Test that allowed_tools list takes precedence over disallowed_tools list"""
-        manager = MCPServerManager()
+    @pytest.mark.parametrize("denied_name", ["delete_records", "guarded-delete_records"])
+    async def test_pre_call_tool_check_deny_overrides_allow_and_agrees_with_listing(self, denied_name: str) -> None:
+        from litellm.proxy._experimental.mcp_server.operations import filter_tools_by_allowed_tools
 
-        # Create server with both allowed_tools and disallowed_tools
-        # Note: The logic in check_allowed_or_banned_tools prioritizes allowed_tools
-        server = MCPServer(
-            server_id="test-server",
-            name="test-server",
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="guarded",
+            name="guarded",
             transport=MCPTransport.stdio,
-            allowed_tools=["tool1", "tool2"],
-            disallowed_tools=["tool2", "tool3"],  # tool2 is in both lists
+            allowed_tools=["read_status", "delete_records"],
+            disallowed_tools=[denied_name],
         )
+        tools: Final = [
+            MCPTool(name="guarded-" + name, input_schema={"type": "object"})
+            for name in ("read_status", "delete_records", "write_record")
+        ]
+        assert [tool.name for tool in filter_tools_by_allowed_tools(tools, server)] == ["guarded-read_status"]
 
-        # Mock dependencies - set object_permission and object_permission_id to None
-        # so permission checks return None (no restrictions)
-        user_api_key_auth: Final = UserAPIKeyAuth()
-        proxy_logging_obj = _mock_proxy_logging()
+        for denied_tool in ("delete_records", "write_record"):
+            with pytest.raises(HTTPException) as exc_info:
+                await manager.pre_call_tool_check(
+                    name=denied_tool,
+                    arguments={},
+                    server_name="guarded",
+                    user_api_key_auth=None,
+                    proxy_logging_obj=None,
+                    server=server,
+                )
+            assert exc_info.value.status_code == 403
+            assert "Tool " + denied_tool + " is not allowed for server guarded" in exc_info.value.detail["error"]
 
-        # Mock the async methods that pre_call_tool_check calls
-        proxy_logging_obj.create_mcp_request_object_from_kwargs = MagicMock(return_value={})
-        proxy_logging_obj.convert_mcp_to_llm_format = MagicMock(return_value={})
-        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
-
-        # tool2 should be allowed since it's in allowed_tools (takes precedence)
-        await manager.pre_call_tool_check(
-            name="tool2",
-            arguments={"param": "value"},
-            server_name="test-server",
-            user_api_key_auth=user_api_key_auth,
-            proxy_logging_obj=proxy_logging_obj,
+        allowed_result: Final = await manager.pre_call_tool_check(
+            name="read_status",
+            arguments={},
+            server_name="guarded",
+            user_api_key_auth=None,
+            proxy_logging_obj=None,
             server=server,
         )
-
-        # tool3 should be blocked since it's not in allowed_tools
-        with pytest.raises(HTTPException) as exc_info:
-            await manager.pre_call_tool_check(
-                name="tool3",
-                arguments={"param": "value"},
-                server_name="test-server",
-                user_api_key_auth=user_api_key_auth,
-                proxy_logging_obj=proxy_logging_obj,
-                server=server,
-            )
-
-        assert exc_info.value.status_code == 403
-        assert "Tool tool3 is not allowed for server test-server" in exc_info.value.detail["error"]
+        assert allowed_result == {}
 
     async def test_get_tools_from_server_add_prefix(self):
         """Verify _get_tools_from_server respects add_prefix True/False."""
@@ -21535,9 +21526,7 @@ class TestMCPUpstreamRateLimitRetry:
     async def test_fetch_tools_with_timeout_reports_429_when_backoff_would_pass_listing_timeout(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.5
-        )
+        monkeypatch.setattr("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.5)
         manager: Final = MCPServerManager()
         client: Final = MagicMock()
         client.list_tools = AsyncMock(side_effect=_upstream_http_status_error(429, {"Retry-After": "5"}))
@@ -21578,9 +21567,7 @@ class TestMCPUpstreamRateLimitRetry:
     async def test_get_tools_page_retry_attempt_is_bounded_by_listing_timeout(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.05
-        )
+        monkeypatch.setattr("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT", 0.05)
         manager: Final = MCPServerManager()
         server: Final = MCPServer(server_id="notes", name="notes", transport=MCPTransport.http)
         manager.registry = {server.server_id: server}
