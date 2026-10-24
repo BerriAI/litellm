@@ -19,8 +19,15 @@ from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import timedelta
+from itertools import accumulate
 from types import MappingProxyType, TracebackType
-from typing import Final, Generic, Protocol, TypeVar
+from typing import (
+    Final,
+    Generic,
+    Protocol,
+    TypeVar,
+    cast,  # noqa: TID251  # Redis pipeline stubs require a typed boundary
+)
 
 from litellm._internal_context import (
     REDIS_FAMILIES_METADATA_KEY,
@@ -51,6 +58,7 @@ class RegisteredScript(Protocol):
 class _RedisPipeline(Protocol):
     def mget(self, keys: Sequence[str]) -> object: ...
     def evalsha(self, sha: str, numkeys: int, *keys_and_args: _ScriptArg) -> object: ...
+    def script_load(self, script: str) -> object: ...
     def incrbyfloat(self, name: str, amount: float) -> object: ...
     def expire(self, name: str, time: timedelta) -> object: ...
     def set(self, name: str, value: str, ex: timedelta | None = None) -> object: ...
@@ -90,22 +98,25 @@ class _Op(Generic[_T]):
     def resolve(self, replies: Sequence[object]) -> _T:
         raise NotImplementedError
 
+    @property
+    def script_source(self) -> str | None:
+        return None
+
     async def run_alone(self) -> _T:
         raise NotImplementedError
 
-    def settle(self, replies: Sequence[object]) -> Awaitable[None] | None:
-        """Resolve from pipeline replies; return a coroutine when the op has to be retried on its own."""
+    def settle(self, replies: Sequence[object]) -> bool:
         failure: Final = next((reply for reply in replies if isinstance(reply, Exception)), None)
         if failure is None:
             try:
                 self.future.set_result(self.resolve(replies))
             except Exception as e:  # noqa: BLE001  # a reply this op cannot decode fails this op alone
                 self.future.set_exception(e)
-            return None
+            return False
         if _is_missing_script(failure):
-            return self._settle_alone()
+            return True
         self.future.set_exception(failure)
-        return None
+        return False
 
     async def _settle_alone(self) -> None:
         try:
@@ -156,7 +167,7 @@ class _MGet(_Op[Mapping[str, object]]):
 
 
 class _Script(_Op[object]):
-    __slots__ = ("_args", "_keys", "_redis_cache", "_run", "_sha")
+    __slots__ = ("_args", "_keys", "_redis_cache", "_run", "_sha", "_source")
 
     def __init__(
         self,
@@ -167,11 +178,16 @@ class _Script(_Op[object]):
         args: Sequence[_ScriptArg],
     ) -> None:
         super().__init__()
+        self._source: Final = source
         self._redis_cache: Final = redis_cache
         self._sha: Final = hashlib.sha1(source.encode()).hexdigest()  # noqa: S324  # EVALSHA identifies scripts by SHA-1
         self._run: Final = run
         self._keys: Final[tuple[str, ...]] = tuple(keys)
         self._args: Final[tuple[_ScriptArg, ...]] = tuple(args)
+
+    @property
+    def script_source(self) -> str:
+        return self._source
 
     def enqueue(self, pipe: _RedisPipeline) -> int:
         namespaced: Final = tuple(self._redis_cache.check_and_fix_namespace(key=key) for key in self._keys)
@@ -367,16 +383,27 @@ class RedisBatch:
                         op.future.cancel()
                 await asyncio.gather(*(op.run_settled_hooks() for op in ops))
 
-    async def _flush_pipeline(self, ops: Sequence[_Op[object]]) -> None:
+    async def _flush_pipeline(
+        self,
+        ops: Sequence[_Op[object]],
+        scripts_to_load: tuple[str, ...] = (),
+        reloaded: bool = False,
+    ) -> None:
         start_time: Final = time.time()
         target, metadata = _pipeline_service_event(ops)
         widths: list[int] = []  # mutable-ok: filled while enqueuing
 
-        async def run() -> list[object]:
+        async def run() -> Sequence[object]:
             client: Final = self.redis_cache.init_async_client()
             async with client.pipeline(transaction=False) as pipe:
-                widths.extend(op.enqueue(pipe) for op in ops)
-                return await pipe.execute(raise_on_error=False)
+                pipeline: Final = cast(  # cast-ok: Redis Cluster flushes take the separate path
+                    _RedisPipeline, pipe
+                )
+                for source in scripts_to_load:
+                    pipeline.script_load(source)
+                widths.extend(op.enqueue(pipeline) for op in ops)
+                replies: Final = await pipeline.execute(raise_on_error=False)
+                return replies[len(scripts_to_load) :]
 
         try:
             replies: Final = await _run_under_circuit_breaker(self.redis_cache._circuit_breaker, self.name, run)  # pyright: ignore[reportPrivateUsage]  # same breaker as the cache's own methods
@@ -408,15 +435,23 @@ class RedisBatch:
                     event_metadata=metadata,
                 )
             )
-        retries: list[Awaitable[None]] = []  # mutable-ok: collected while slicing replies
-        offset = 0
-        for op, width in zip(ops, widths):
-            retry = op.settle(replies[offset : offset + width])
-            offset += width
-            if retry is not None:
-                retries.append(retry)
-        if retries:
-            await asyncio.gather(*retries)
+        reply_offsets: Final = tuple(accumulate(widths, initial=0))
+        missing_ops: Final = tuple(
+            op
+            for index, op in enumerate(ops)
+            if op.settle(replies[reply_offsets[index] : reply_offsets[index + 1]])
+        )
+        if not missing_ops:
+            return
+        if reloaded:
+            await asyncio.gather(
+                *(op._settle_alone() for op in missing_ops)  # pyright: ignore[reportPrivateUsage]  # batch owns its ops
+            )
+            return
+        sources_to_load: Final = tuple(
+            dict.fromkeys(source for op in missing_ops if (source := op.script_source) is not None)
+        )
+        await self._flush_pipeline(missing_ops, sources_to_load, reloaded=True)
 
 
 MIXED_PIPELINE_TARGET: Final = "mixed"
