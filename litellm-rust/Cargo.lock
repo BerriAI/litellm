@@ -3770,6 +3770,7 @@ dependencies = [
  "http-body-util",
  "hyper 1.10.1",
  "hyper-util",
+ "ipnet",
  "litellm-auth-types",
  "litellm-config",
  "litellm-core-utils",

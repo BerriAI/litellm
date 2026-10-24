@@ -14,7 +14,10 @@ Run with:
 
 import os
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack
+from types import MappingProxyType
 from typing import Final
 
 from uvicorn.main import main as uvicorn_main
@@ -22,11 +25,13 @@ from uvicorn.main import main as uvicorn_main
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 from litellm.proxy.db.pgbouncer import (
     PGBOUNCER_MANAGED_SHUTDOWN_SECONDS,
+    ManagedPgBouncerRuntime,
     PgBouncerError,
     PgBouncerSettings,
     export_pooled_database_url,
     pgbouncer_startup_signals,
     start_in_container_pgbouncer,
+    start_managed_pgbouncer,
 )
 
 GATEWAY_APP: Final = "gateway.main:app"
@@ -65,11 +70,92 @@ def pool_database_url(
     )
 
 
+def managed_pool_database_url(
+    settings: DatabaseURLSettings,
+    pgbouncer: PgBouncerSettings,
+    environ: Mapping[str, str],
+) -> ManagedPgBouncerRuntime | PgBouncerError | None:
+    upstream_url: Final = environ.get("DATABASE_URL")
+    if not upstream_url:
+        return None
+    effective_settings: Final = pgbouncer if pgbouncer.enabled else pgbouncer.model_copy(update={"enabled": True})
+    return start_managed_pgbouncer(effective_settings, upstream_url, token_auth=settings.token_auth())
+
+
+def _pooled_child_environments(
+    python_environment: Mapping[str, str],
+    rust_environment: Mapping[str, str],
+    pooler: ManagedPgBouncerRuntime | None,
+) -> tuple[Mapping[str, str], Mapping[str, str]]:
+    if pooler is None:
+        return (
+            MappingProxyType({**python_environment, "LITELLM_PGBOUNCER_ENABLED": "false"}),
+            rust_environment,
+        )
+    pooled_values: Final = {
+        "DATABASE_URL": pooler.pooled_url,
+        "LITELLM_PGBOUNCER_POOLED_DATABASE_URL": "true",
+    }
+    return (
+        MappingProxyType(
+            {
+                **python_environment,
+                **pooled_values,
+                "LITELLM_PGBOUNCER_ENABLED": "false",
+            }
+        ),
+        MappingProxyType({**rust_environment, **pooled_values}),
+    )
+
+
 def _serve(argv: Sequence[str]) -> None:
     uvicorn_main(tuple(argv), prog_name="uvicorn")
 
 
+def _stop_starting_pooler(pooler: ManagedPgBouncerRuntime, timeout: int) -> None:
+    pooler.stop(time.monotonic() + timeout)
+
+
 def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+    gateway_mode: Final = os.environ.get("LITELLM_RUST_GATEWAY")
+    if gateway_mode not in (None, "true", "false"):
+        sys.exit("LiteLLM gateway: LITELLM_RUST_GATEWAY must be exactly 'true' or 'false'")
+    if gateway_mode == "true":
+        from dataclasses import replace
+
+        from gateway.supervisor import ConfigurationFailure, build_configuration, startup_scope, supervise
+
+        with ExitStack() as startup_cleanup, startup_scope():
+            rust_settings: Final = DatabaseURLSettings.from_env()
+            rust_settings.apply_to_env()
+            preflight_configuration: Final = build_configuration(argv, os.environ, sys.executable)
+            if isinstance(preflight_configuration, ConfigurationFailure):
+                sys.exit(f"LiteLLM gateway supervisor: {preflight_configuration.reason}")
+            pooler: Final = managed_pool_database_url(rust_settings, PgBouncerSettings(), os.environ)
+            if isinstance(pooler, PgBouncerError):
+                sys.exit(f"LiteLLM gateway: in-container pgbouncer could not start: {pooler.reason}")
+            if pooler is not None:
+                startup_cleanup.callback(
+                    _stop_starting_pooler, pooler, preflight_configuration.termination_grace_timeout
+                )
+                export_pooled_database_url(pooler.pooled_url)
+            python_environment, rust_environment = _pooled_child_environments(
+                preflight_configuration.python_environment,
+                preflight_configuration.rust_environment,
+                pooler,
+            )
+            final_configuration: Final = replace(
+                preflight_configuration,
+                python_environment=python_environment,
+                rust_environment=rust_environment,
+                managed_pooler=pooler,
+            )
+            failure: Final = supervise(final_configuration)
+            startup_cleanup.pop_all()
+            if failure is not None:
+                sys.exit(f"LiteLLM gateway supervisor: {failure.reason}")
+            return
+
     pgbouncer: Final = PgBouncerSettings()
     with pgbouncer_startup_signals(pgbouncer.enabled):
         settings: Final = DatabaseURLSettings.from_env()

@@ -1,6 +1,7 @@
 mod auth;
 mod dispatch;
 mod error;
+mod proxy_headers;
 mod secrets;
 mod upgrades;
 pub use dispatch::{Fallback, Forward, InvalidUpstream};
