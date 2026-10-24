@@ -37401,6 +37401,7 @@
     },
     "gpt-5.6-cyber": {
         "cache_creation_input_token_cost": 1.5625e-05,
+        "cache_creation_input_token_cost_above_12hr": 3.125e-05,
         "cache_creation_input_token_cost_above_272k_tokens": 3.125e-05,
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_above_272k_tokens": 2.5e-06,
