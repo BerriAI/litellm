@@ -74960,7 +74960,7 @@ export interface operations {
                  */
                 "application/json": {
                     /** Add Special Tokens */
-                    add_special_tokens?: boolean | null;
+                    add_special_tokens?: boolean;
                     /**
                      * Include
                      * @default []
@@ -82018,7 +82018,7 @@ export interface operations {
                  */
                 "application/json": {
                     /** Add Special Tokens */
-                    add_special_tokens?: boolean | null;
+                    add_special_tokens?: boolean;
                     /**
                      * Include
                      * @default []

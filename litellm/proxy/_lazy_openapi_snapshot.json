@@ -40517,15 +40517,8 @@
                   "additionalProperties": false,
                   "properties": {
                     "add_special_tokens": {
-                      "anyOf": [
-                        {
-                          "type": "boolean"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ],
-                      "title": "Add Special Tokens"
+                      "title": "Add Special Tokens",
+                      "type": "boolean"
                     },
                     "include": {
                       "default": [],
@@ -40537,7 +40530,8 @@
                         "type": "string"
                       },
                       "title": "Include",
-                      "type": "array"
+                      "type": "array",
+                      "uniqueItems": true
                     },
                     "model": {
                       "minLength": 1,
