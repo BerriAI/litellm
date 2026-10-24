@@ -490,7 +490,7 @@ def _fold_choices_into_one(
     choices: Sequence["Choices"],
     tool_calls: Sequence[Mapping[str, object]],
     trailing_reasoning_content: str | None,
-    trailing_reasoning_item: _BuiltReasoningItem | None,
+    trailing_reasoning_items: Sequence[_BuiltReasoningItem],
     tool_search_items: Sequence[Mapping[str, object]],
     structured_output: bool = False,
 ) -> "Choices":
@@ -509,7 +509,7 @@ def _fold_choices_into_one(
     reasoning_contents: Final = (*(_message_reasoning_content(m) for m in messages), trailing_reasoning_content)
     reasoning_items: Final = (
         *chain.from_iterable(_message_reasoning_items(m) for m in messages),
-        *(() if trailing_reasoning_item is None else (trailing_reasoning_item,)),
+        *trailing_reasoning_items,
     )
     return Choices(
         message=Message(
@@ -1196,7 +1196,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         choices: Final[list[Choices]] = []
         index = 0
         reasoning_content: str | None = None
-        pending_reasoning_item: _BuiltReasoningItem | None = None
+        pending_reasoning_items: tuple[_BuiltReasoningItem, ...] = ()
 
         # Collect all tool calls to put them in a single choice
         # (Chat Completions API expects all tool calls in one message)
@@ -1205,12 +1205,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
-                pending_reasoning_item = _build_reasoning_item(
+                built_reasoning_item = _build_reasoning_item(
                     item_id=item.id,
                     encrypted_content=getattr(item, "encrypted_content", None),
                     summary_raw=item.summary,
                 )
-                reasoning_content = " ".join(s["text"] for s in pending_reasoning_item["summary"] if s.get("text"))
+                # The Responses API can emit several reasoning items before the next
+                # message / tool call, and each flush below consumes every item seen
+                # since the previous flush.
+                pending_reasoning_items = (*pending_reasoning_items, built_reasoning_item)
+                # ``reasoning_content`` deliberately keeps its pre-existing meaning -
+                # the summary text of the most recent reasoning item - even though
+                # ``reasoning_items`` now carries all of them. Widening it to join
+                # every item's summary would change what every existing consumer of
+                # ``reasoning_content`` sees, which is a different fix from "stop
+                # dropping reasoning items" and belongs in its own change.
+                reasoning_content = " ".join(s["text"] for s in built_reasoning_item["summary"] if s.get("text"))
 
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
@@ -1225,10 +1235,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         content=response_text if response_text else "",
                         reasoning_content=reasoning_content,
                         annotations=annotations,
-                        reasoning_items=cast(
-                            list[ChatCompletionReasoningItem] | None,
-                            ([pending_reasoning_item] if pending_reasoning_item is not None else None),
-                        ),
+                        reasoning_items=_as_chat_reasoning_items(pending_reasoning_items),
                     )
 
                     choices.append(
@@ -1240,7 +1247,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
 
                     reasoning_content = None  # flush
-                    pending_reasoning_item = None  # flush
+                    pending_reasoning_items = ()  # flush
                     index += 1
 
             elif isinstance(item, ResponseFunctionToolCall):
@@ -1305,7 +1312,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 choices=choices,
                 tool_calls=accumulated_tool_calls,
                 trailing_reasoning_content=reasoning_content,
-                trailing_reasoning_item=pending_reasoning_item,
+                trailing_reasoning_items=pending_reasoning_items,
                 tool_search_items=tool_search_items,
                 structured_output=structured_output,
             )
@@ -2132,6 +2139,35 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
             else:
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:  # pyright: ignore[reportUnknownMemberType]  # the member post-dates the pinned openai stubs, it exists at runtime
+            # A url_citation / file_citation arrived for the in-flight message.
+            # Emit it on the delta exactly once in Chat Completions format -
+            # this is the only event that carries it, so later
+            # output_item.done / response.completed events must not repeat it
+            # or accumulating clients would see duplicates (issue #43817).
+            raw_annotation: Final = parsed_chunk.get("annotation", None)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the parsed chunk is an untyped event payload
+            annotation: Final = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType, reportUnknownVariableType]  # cross-class reuse of the existing converter; the annotation payload is untyped, and renaming a protected helper is a wider change than this fix
+                [raw_annotation] if raw_annotation is not None else None
+            )
+            if annotation:
+                return ModelResponseStream(  # pyright: ignore[reportUnknownVariableType]  # annotation carries untyped payload values through to the Delta
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(annotations=annotation),
+                            finish_reason=None,
+                        )
+                    ]
+                )
+            return ModelResponseStream(  # pyright: ignore[reportUnknownVariableType]  # same untyped annotation payload
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(),
+                        finish_reason=None,
+                    )
+                ]
+            )
         elif event_type == "response.reasoning_summary_text.delta":
             content_part = parsed_chunk.get("delta", None)
             if content_part:
