@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import traceback
+from collections.abc import Awaitable
 from typing import Callable, Final, Optional
 from urllib.parse import parse_qs
 from unittest.mock import MagicMock, patch
@@ -224,6 +225,7 @@ def test_initialize_with_oidc_token(setup_mocks, monkeypatch):
         is_async=False,
     )
 
+    assert result["azure_ad_token_provider"]() == "mock-oidc-token"
     setup_mocks["oidc_token"].assert_called_once_with(
         azure_ad_token="oidc/test-token",
         azure_client_id=None,
@@ -231,8 +233,6 @@ def test_initialize_with_oidc_token(setup_mocks, monkeypatch):
         scope="https://cognitiveservices.azure.com/.default",
     )
 
-    # Verify expected result
-    assert result["azure_ad_token"] == "mock-oidc-token"
 
 
 def test_initialize_with_oidc_token_and_client_params(setup_mocks):
@@ -252,6 +252,7 @@ def test_initialize_with_oidc_token_and_client_params(setup_mocks):
     )
 
     # Verify that get_azure_ad_token_from_oidc was called with the correct parameters
+    assert result["azure_ad_token_provider"]() == "mock-oidc-token"
     setup_mocks["oidc_token"].assert_called_once_with(
         azure_ad_token="oidc/test-token",
         azure_client_id="test-client-id",
@@ -259,8 +260,6 @@ def test_initialize_with_oidc_token_and_client_params(setup_mocks):
         scope="test-azure-scope",
     )
 
-    # Verify expected result
-    assert result["azure_ad_token"] == "mock-oidc-token"
 
 
 def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
@@ -281,6 +280,7 @@ def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
     )
 
     # Verify that get_azure_ad_token_from_oidc was called with environment variables
+    assert result["azure_ad_token_provider"]() == "mock-oidc-token"
     setup_mocks["oidc_token"].assert_called_once_with(
         azure_ad_token="oidc/test-token",
         azure_client_id="env-client-id",
@@ -288,8 +288,6 @@ def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
         scope="https://cognitiveservices.azure.com/.default",
     )
 
-    # Verify expected result
-    assert result["azure_ad_token"] == "mock-oidc-token"
 
 
 def test_initialize_with_ad_token_provider(setup_mocks, monkeypatch):
@@ -1386,6 +1384,44 @@ def test_get_azure_ad_token_with_oidc_token(setup_mocks, monkeypatch):
     assert token == "mock-oidc-token"
 
 
+@pytest.mark.parametrize(
+    "competing_sign_in",
+    [
+        {"azure_username": "test-username", "azure_password": "test-password"},
+        {"azure_ad_token_provider": lambda: "code-provider-token"},
+    ],
+    ids=["username_password", "code_provider"],
+)
+def test_an_oidc_azure_ad_token_wins_over_another_sign_in_on_both_the_sdk_and_direct_http_routes(
+    monkeypatch: pytest.MonkeyPatch, competing_sign_in: dict[str, object]
+) -> None:
+    class TokenEndpoint(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            assertion: Final = parse_qs(request.read().decode())["client_assertion"][0]
+            return httpx.Response(200, json={"access_token": f"exchanged.{assertion}", "expires_in": 3600})
+
+    monkeypatch.setattr(litellm, "sync_transport", TokenEndpoint(), raising=False)
+    monkeypatch.setenv("FEDERATED_OIDC_TOKEN", "federated-oidc-token")
+    litellm_params: Final = {
+        "azure_ad_token": "oidc/env/FEDERATED_OIDC_TOKEN",
+        "client_id": "oidc-wins-client",
+        "tenant_id": "oidc-tenant",
+        **competing_sign_in,
+    }
+
+    direct_http_token: Final = get_azure_ad_token(GenericLiteLLMParams.model_validate(litellm_params))
+    sdk_client_params: Final = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params=litellm_params,
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="v1",
+        is_async=False,
+    )
+
+    assert direct_http_token == sdk_client_params["azure_ad_token_provider"]() == "exchanged.federated-oidc-token"
+
+
 def test_get_azure_ad_token_with_token_refresh(setup_mocks, monkeypatch):
     """Test get_azure_ad_token with token refresh enabled."""
     # Reset mocks to ensure clean state
@@ -1572,8 +1608,7 @@ def test_get_azure_ad_token_fallback_to_default_azure_credential(
         # If called with azure_credential=DefaultAzureCredential, return a working provider
         if kwargs.get("azure_credential") == AzureCredentialType.DefaultAzureCredential:
             return lambda: "mock-default-azure-credential-token"
-        # Otherwise (service principal call), return None to simulate failure
-        return None
+        raise ValueError("service principal credentials are not configured")
 
     setup_mocks["token_provider"].side_effect = mock_token_provider_side_effect
 
@@ -2221,34 +2256,188 @@ async def test_non_v1_azure_token_refresh_runs_off_the_event_loop_thread() -> No
     assert token_thread != str(threading.get_ident())
 
 
+def _echo_authorization(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": request.headers["authorization"]},
+                }
+            ],
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
+async def test_oidc_token_exchange_runs_off_the_event_loop_and_authorizes_the_request(
+    monkeypatch: pytest.MonkeyPatch, api_version: str
+) -> None:
+    import asyncio
+
+    exchange_started: Final = threading.Event()
+    loop_ran_during_exchange: Final = threading.Event()
+    exchanges: Final[list[bool]] = []
+
+    class TokenEndpoint(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            form: Final = parse_qs(request.read().decode())
+            assert form["client_assertion"] == ["federated-oidc-token"]
+            exchange_started.set()
+            exchanges.append(loop_ran_during_exchange.wait(timeout=5))
+            return httpx.Response(200, json={"access_token": f"exchanged-{api_version}", "expires_in": 3600})
+
+    async def mark_loop_running_once_exchange_starts() -> None:
+        while not exchange_started.is_set():
+            await asyncio.sleep(0.01)
+        loop_ran_during_exchange.set()
+
+    monkeypatch.setattr(litellm, "sync_transport", TokenEndpoint(), raising=False)
+    monkeypatch.setenv("FEDERATED_OIDC_TOKEN", "federated-oidc-token")
+    monkeypatch.setattr(
+        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(_echo_authorization))
+    )
+    loop_watcher: Final = asyncio.ensure_future(mark_loop_running_once_exchange_starts())
+    try:
+        client: Final = BaseAzureLLM().get_azure_openai_client(
+            api_key=None,
+            api_base=f"https://oidc-exchange-{api_version}.openai.azure.com",
+            api_version=api_version,
+            litellm_params={
+                "azure_ad_token": "oidc/env/FEDERATED_OIDC_TOKEN",
+                "client_id": f"oidc-client-{api_version}",
+                "tenant_id": "oidc-tenant",
+            },
+            _is_async=True,
+        )
+        response: Final = await client.chat.completions.create(
+            model="gpt", messages=[{"role": "user", "content": "hi"}]
+        )
+    finally:
+        loop_watcher.cancel()
+
+    assert response.choices[0].message.content == f"Bearer exchanged-{api_version}"
+    assert exchanges == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
+async def test_a_cold_burst_across_deployments_sharing_an_oidc_identity_exchanges_the_token_once(
+    monkeypatch: pytest.MonkeyPatch, api_version: str
+) -> None:
+    import asyncio
+
+    second_exchange_started: Final = threading.Event()
+    exchanges: Final[list[str]] = []
+
+    class TokenEndpoint(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            exchanges.append(request.url.path)
+            if len(exchanges) == 1:
+                second_exchange_started.wait(timeout=0.5)
+            else:
+                second_exchange_started.set()
+            return httpx.Response(200, json={"access_token": f"burst-{api_version}", "expires_in": 3600})
+
+    monkeypatch.setattr(litellm, "sync_transport", TokenEndpoint(), raising=False)
+    monkeypatch.setenv("FEDERATED_OIDC_TOKEN", "federated-oidc-token")
+    monkeypatch.setattr(
+        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(_echo_authorization))
+    )
+    clients: Final = tuple(
+        BaseAzureLLM().get_azure_openai_client(
+            api_key=None,
+            api_base=f"https://oidc-burst-{resource}-{api_version}.openai.azure.com",
+            api_version=api_version,
+            litellm_params={
+                "azure_ad_token": "oidc/env/FEDERATED_OIDC_TOKEN",
+                "client_id": f"burst-client-{api_version}",
+                "tenant_id": "oidc-tenant",
+            },
+            _is_async=True,
+        )
+        for resource in ("east", "west")
+    )
+
+    responses: Final = await asyncio.gather(
+        *(
+            clients[i % 2].chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
+            for i in range(6)
+        )
+    )
+
+    assert [response.choices[0].message.content for response in responses] == [f"Bearer burst-{api_version}"] * 6
+    assert len(exchanges) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
+async def test_a_cold_burst_whose_oidc_exchange_fails_shares_one_failure_and_the_next_request_retries(
+    monkeypatch: pytest.MonkeyPatch, api_version: str
+) -> None:
+    import asyncio
+    import itertools
+
+    second_exchange_started: Final = threading.Event()
+    exchange_numbers: Final = itertools.count()
+
+    class FailingTokenEndpoint(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            exchange_number: Final = next(exchange_numbers)
+            if exchange_number == 0:
+                second_exchange_started.wait(timeout=0.5)
+            else:
+                second_exchange_started.set()
+            return httpx.Response(503, text=f"exchange {exchange_number} unavailable")
+
+    monkeypatch.setattr(litellm, "sync_transport", FailingTokenEndpoint(), raising=False)
+    monkeypatch.setenv("FEDERATED_OIDC_TOKEN", "federated-oidc-token")
+    monkeypatch.setattr(
+        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(_echo_authorization))
+    )
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key=None,
+        api_base=f"https://oidc-failing-burst-{api_version}.openai.azure.com",
+        api_version=api_version,
+        litellm_params={
+            "azure_ad_token": "oidc/env/FEDERATED_OIDC_TOKEN",
+            "client_id": f"failing-burst-client-{api_version}",
+            "tenant_id": "oidc-tenant",
+        },
+        _is_async=True,
+    )
+
+    async def chat() -> str:
+        try:
+            await client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
+        except httpx.HTTPStatusError as error:
+            return f"{error.response.status_code} {error.response.text}"
+        return "answered"
+
+    burst: Final = await asyncio.gather(*(chat() for _ in range(5)))
+    retry: Final = await chat()
+
+    assert burst == ["503 exchange 0 unavailable"] * 5
+    assert retry == "503 exchange 1 unavailable"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
 async def test_async_azure_ad_token_provider_reaches_azure_as_bearer_token(
     monkeypatch: pytest.MonkeyPatch, api_version: str
 ) -> None:
-    def echo_authorization(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "id": "chatcmpl-1",
-                "object": "chat.completion",
-                "created": 0,
-                "model": "gpt",
-                "choices": [
-                    {
-                        "index": 0,
-                        "finish_reason": "stop",
-                        "message": {"role": "assistant", "content": request.headers["authorization"]},
-                    }
-                ],
-            },
-        )
-
     async def async_token_provider() -> str:
         return "async-token"
 
     monkeypatch.setattr(
-        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(echo_authorization))
+        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(_echo_authorization))
     )
     client: Final = BaseAzureLLM().get_azure_openai_client(
         api_key=None,
@@ -2261,6 +2450,44 @@ async def test_async_azure_ad_token_provider_reaches_azure_as_bearer_token(
     response: Final = await client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
 
     assert response.choices[0].message.content == "Bearer async-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
+async def test_a_concurrent_burst_on_an_async_azure_ad_token_provider_gets_a_token_for_every_request_off_the_loop(
+    monkeypatch: pytest.MonkeyPatch, api_version: str
+) -> None:
+    import asyncio
+    import itertools
+
+    event_loop_thread: Final = threading.current_thread()
+    second_call_started: Final = threading.Event()
+    call_numbers: Final = itertools.count()
+
+    def async_token_provider() -> Awaitable[str]:
+        if next(call_numbers) == 0:
+            second_call_started.wait(timeout=0.5)
+        else:
+            second_call_started.set()
+        blocked_the_loop: Final = threading.current_thread() is event_loop_thread
+        return asyncio.sleep(0, result="blocked-the-loop" if blocked_the_loop else "async-token")
+
+    monkeypatch.setattr(
+        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(_echo_authorization))
+    )
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key=None,
+        api_base=f"https://async-token-provider-burst-{api_version}.openai.azure.com",
+        api_version=api_version,
+        litellm_params={"azure_ad_token_provider": async_token_provider},
+        _is_async=True,
+    )
+
+    responses: Final = await asyncio.gather(
+        *(client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}]) for _ in range(3))
+    )
+
+    assert [response.choices[0].message.content for response in responses] == ["Bearer async-token"] * 3
 
 
 def test_oidc_token_exchange_closes_its_own_http_client(monkeypatch: pytest.MonkeyPatch) -> None:

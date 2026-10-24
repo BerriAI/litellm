@@ -54,6 +54,16 @@ def _resolve_responses_api_version(api_base: str | None, litellm_params: Mapping
     return api_version
 
 
+def _v1_responses_url(api_base: str) -> httpx.URL:
+    parsed_url: Final = httpx.URL(api_base)
+    path: Final = parsed_url.path.rstrip("/")
+    root: Final = next(
+        (path.removesuffix(route) for route in ("/openai/v1/responses", "/openai/responses") if path.endswith(route)),
+        path,
+    )
+    return parsed_url.copy_with(path=f"{root}/openai/v1/responses", query=None)
+
+
 def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     return MappingProxyType({**litellm_params, "api_version": _resolve_responses_api_version(api_base, litellm_params)})
 
@@ -247,19 +257,16 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if api_base is None:
             raise ValueError("api_base is required for Azure WebSocket")
 
-        parsed_url: Final = httpx.URL(api_base)
-        path = parsed_url.path.rstrip("/")
-        # Strip existing /openai/responses path if the api_base already contains it
-        for suffix in ("/openai/v1/responses", "/openai/responses"):
-            if path.endswith(suffix):
-                path = path[: -len(suffix)]
-                break
-        scheme: Final = "wss" if parsed_url.scheme == "https" else "ws"
-        return str(parsed_url.copy_with(scheme=scheme, path=f"{path}/openai/v1/responses", query=None))
+        v1_url: Final = _v1_responses_url(api_base)
+        return str(v1_url.copy_with(scheme="wss" if v1_url.scheme == "https" else "ws"))
 
     def model_in_websocket_url(self) -> bool:
         # Azure sends the model in the response.create body, not the URL
         return False
+
+    def compact_url(self, api_base: str) -> str:
+        # Azure serves compaction only on the v1 route; the dated api-version route answers 500 or 404
+        return super().compact_url(str(_v1_responses_url(api_base)))
 
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
