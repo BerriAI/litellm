@@ -1671,7 +1671,7 @@
       "count": 2
     },
     "react-hooks/set-state-in-effect": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/logs/detail/sections/EvalViewer/EvalViewer.tsx": {

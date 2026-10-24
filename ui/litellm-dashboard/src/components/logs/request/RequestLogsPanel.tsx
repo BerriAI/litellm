@@ -154,7 +154,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     staleTime: Infinity,
   };
 
-  const { data: urlLog } = useQuery(urlLogQueryOptions);
+  const { data: urlLog, isLoading: isUrlLogLoading, failureCount: urlLogFailures } = useQuery(urlLogQueryOptions);
 
   const displayLog = useMemo<LogEntry | null>(() => {
     if (urlLogId === null) return null;
@@ -171,6 +171,9 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   }, [urlSessionId, displayLog]);
 
   const isDrawerOpen = displayLog !== null || displaySessionId !== null;
+  const linkedLogId = displayLog === null ? urlLogId : null;
+  // Only the first attempt holds the drawer back; during retry backoff it falls back to the newest call.
+  const isLinkedLogPending = linkedLogId !== null && isUrlLogLoading && urlLogFailures === 0;
 
   const rows: LogEntry[] = filteredLogs.data;
   const rowsThroughThisPage = pagination.pageIndex * pagination.pageSize + rows.length;
@@ -343,6 +346,8 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         open={isDrawerOpen}
         onClose={closeUrlLog}
         logEntry={displayLog}
+        linkedLogId={linkedLogId}
+        isLinkedLogPending={isLinkedLogPending}
         sessionId={displaySessionId}
         accessToken={accessToken}
         allLogs={rows}

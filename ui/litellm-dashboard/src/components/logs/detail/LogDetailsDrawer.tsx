@@ -10,9 +10,10 @@ import { ClassifyTag } from "./ClassifyTag";
 import { type DrawerBackTo, DrawerHeader } from "./DrawerHeader";
 import { SidebarToggle } from "./SidebarToggle";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
+import { useSessionLogs } from "./useSessionLogs";
+import { useSessionScrollAnchor } from "./useSessionScrollAnchor";
 import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
-import { sessionSpendLogsCall } from "../../networking";
-import { useQuery } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { getSpendString } from "@/utils/dataUtils";
 import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
@@ -23,6 +24,10 @@ export interface LogDetailsDrawerProps {
   open: boolean;
   onClose: () => void;
   logEntry: LogEntry | null;
+  /** A linked log (request_id or litellm_call_id) the caller has no row for; selected once a session row matches it. */
+  linkedLogId?: string | null;
+  /** While the caller is still looking up linkedLogId, no other log is selected. */
+  isLinkedLogPending?: boolean;
   sessionId?: string | null;
   accessToken?: string | null;
   allLogs?: LogEntry[];
@@ -33,13 +38,8 @@ export interface LogDetailsDrawerProps {
 
 const SIDEBAR_WIDTH_PX = 224;
 
-// Session logs are fetched page-by-page from the paginated backend and
-// accumulated so the drawer can show the whole session. page_size is the
-// backend maximum (le=100); the page cap bounds the fetch and the
-// (un-virtualized) sidebar list for pathological sessions, keeping the most
-// recent logs since the endpoint returns newest-first.
-const SESSION_PAGE_SIZE = 100;
-const MAX_SESSION_PAGES = 50;
+const SESSION_ROW_ESTIMATED_HEIGHT_PX = 44;
+const SESSION_ROW_OVERSCAN = 12;
 
 /* ------------------------------------------------------------------ */
 /*  TraceEventRow — compact event row used in both session & non-     */
@@ -72,6 +72,7 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
   return (
     <button
       type="button"
+      aria-current={isSelected || undefined}
       className={`w-full text-left pl-8 pr-2 py-1 transition-colors ${isSelected ? "bg-info/10" : "hover:bg-accent"}`}
       onClick={onClick}
     >
@@ -101,6 +102,66 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
   );
 }
 
+interface SessionTraceListProps {
+  logs: LogEntry[];
+  selectedRequestId: string | undefined;
+  onSelect: (log: LogEntry) => void;
+  scroller: HTMLDivElement | null;
+}
+
+function SessionTraceList({ logs, selectedRequestId, onSelect, scroller }: SessionTraceListProps) {
+  const virtualizerOptions = {
+    count: logs.length,
+    getScrollElement: () => scroller,
+    estimateSize: () => SESSION_ROW_ESTIMATED_HEIGHT_PX,
+    overscan: SESSION_ROW_OVERSCAN,
+    getItemKey: (index: number) => logs[index].request_id,
+    // The scroll anchor reports its scrolls from a layout effect, where React rejects
+    // flushSync; a plain update made there is still rendered before the paint.
+    useFlushSync: false,
+  };
+  const virtualizer = useVirtualizer(virtualizerOptions);
+  const [list, setList] = useState<HTMLDivElement | null>(null);
+  const scrollAnchorOptions = { scroller, list, logs, selectedRequestId };
+  useSessionScrollAnchor(virtualizer, scrollAnchorOptions);
+
+  // Rows are placed at the virtualizer's offsets rather than in flow: it rounds measured
+  // heights, so flowed rows would drift from those offsets and the scroll anchor with them.
+  return (
+    <div className="py-1">
+      <div
+        ref={setList}
+        data-slot="trace-sidebar-list"
+        className="relative"
+        style={{ height: virtualizer.getTotalSize() }}
+      >
+        <div className="absolute left-4 top-1 bottom-1 border-l border-border" />
+        {virtualizer.getVirtualItems().map(({ key, index, start }) => {
+          const row = logs[index];
+          return (
+            <div
+              key={key}
+              ref={virtualizer.measureElement}
+              data-index={index}
+              data-slot="trace-sidebar-row"
+              className="absolute left-2 right-0 top-0"
+              style={{ transform: `translateY(${start}px)` }}
+            >
+              <div className="absolute left-4 top-3 w-3 border-t border-border" />
+              {index === logs.length - 1 && <div className="absolute left-4 top-3 bottom-0 w-px bg-muted" />}
+              <TraceEventRow
+                row={row}
+                isSelected={row.request_id === selectedRequestId}
+                onClick={() => onSelect(row)}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Right-side drawer panel for displaying detailed log information.
  * Features:
@@ -115,6 +176,8 @@ export function LogDetailsDrawer({
   open,
   onClose,
   logEntry,
+  linkedLogId,
+  isLinkedLogPending = false,
   sessionId,
   accessToken,
   allLogs = [],
@@ -127,62 +190,21 @@ export function LogDetailsDrawer({
   const [sessionSortMode, setSessionSortMode] = useState<SessionLogSortMode>("duration");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
+  const [sessionScroller, setSessionScroller] = useState<HTMLDivElement | null>(null);
 
-  const { data: sessionData } = useQuery({
-    queryKey: ["sessionLogs", sessionId],
-    queryFn: async () => {
-      if (!sessionId || !accessToken) return { logs: [] as LogEntry[], total: 0 };
-
-      // Fetch the first page, then page through the rest so sessions with more
-      // than one page of logs are shown in full (capped for safety).
-      const firstPage = await sessionSpendLogsCall(accessToken, sessionId, 1, SESSION_PAGE_SIZE);
-      let rows: LogEntry[] = firstPage.data || firstPage || [];
-      const pagesToFetch = Math.min(firstPage.total_pages ?? 1, MAX_SESSION_PAGES);
-
-      if (pagesToFetch > 1) {
-        const BATCH = 5;
-        const remaining: Awaited<ReturnType<typeof sessionSpendLogsCall>>[] = [];
-        for (let start = 2; start <= pagesToFetch; start += BATCH) {
-          const end = Math.min(start + BATCH - 1, pagesToFetch);
-          const batch = await Promise.all(
-            Array.from({ length: end - start + 1 }, (_, i) =>
-              sessionSpendLogsCall(accessToken, sessionId, start + i, SESSION_PAGE_SIZE),
-            ),
-          );
-          remaining.push(...batch);
-        }
-        for (const page of remaining) {
-          rows = rows.concat(page.data || []);
-        }
-      }
-
-      // Fall back to the accumulated row count (not just the first page) when the
-      // backend omits total, so the truncation note reflects what was fetched.
-      const total: number = firstPage.total ?? rows.length;
-
-      const logs = rows.map((row) => ({
-        ...row,
-        request_duration_ms: row.request_duration_ms ?? Date.parse(row.endTime) - Date.parse(row.startTime),
-      }));
-
-      return { logs, total };
-    },
-    enabled: Boolean(open && isSessionMode && sessionId && accessToken),
-  });
-
+  const sessionLogsQuery = { sessionId, accessToken, enabled: open };
+  const session = useSessionLogs(sessionLogsQuery);
   const sessionLogs: LogEntry[] = useMemo(
-    () => sortSessionLogs(sessionData?.logs ?? [], sessionSortMode),
-    [sessionData, sessionSortMode],
+    () => sortSessionLogs(session.logs, sessionSortMode),
+    [session.logs, sessionSortMode],
   );
-  // total reported by the backend; when the page cap truncates the fetch this
-  // exceeds sessionLogs.length, which drives the "showing most recent" note.
-  const sessionTotalCount = sessionData?.total ?? sessionLogs.length;
-  const sessionTruncated = sessionTotalCount > sessionLogs.length;
+  const showSessionLoading = isSessionMode && session.isLoading;
+  const showSessionTruncated = isSessionMode && !session.isLoading && session.total > sessionLogs.length;
 
   // Default selection for a freshly opened session: the most recent log (latest
   // startTime). The list is ordered by the selected sort mode, so the latest
   // log by time is not necessarily sessionLogs[0]; compute it explicitly.
-  // A clicked/remembered log still wins over this default.
+  // A clicked/remembered/linked log still wins over this default.
   const mostRecentLog = useMemo<LogEntry | null>(
     () =>
       sessionLogs.reduce<LogEntry | null>(
@@ -195,28 +217,20 @@ export function LogDetailsDrawer({
 
   const currentLog = useMemo(() => {
     if (!isSessionMode) return logEntry;
-    if (!sessionLogs.length) return null;
-    const fallbackLog = mostRecentLog ?? sessionLogs[0];
-    if (selectedSessionRequestId) {
-      return sessionLogs.find((row) => row.request_id === selectedSessionRequestId) || fallbackLog;
-    }
-    if (logEntry?.request_id) {
-      const clickedLog = sessionLogs.find((row) => row.request_id === logEntry.request_id);
-      return clickedLog || fallbackLog;
-    }
-    return fallbackLog;
-  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
-
-  useEffect(() => {
-    if (!isSessionMode || !sessionLogs.length) return;
-    if (!selectedSessionRequestId || !sessionLogs.some((row) => row.request_id === selectedSessionRequestId)) {
-      const fallbackRequestId =
-        logEntry?.request_id && sessionLogs.some((row) => row.request_id === logEntry.request_id)
-          ? logEntry.request_id
-          : (mostRecentLog ?? sessionLogs[0]).request_id;
-      setSelectedSessionRequestId(fallbackRequestId);
-    }
-  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
+    const findLoaded = (requestId: string | null | undefined) =>
+      requestId ? sessionLogs.find((row) => row.request_id === requestId) : undefined;
+    const findLinked = () =>
+      linkedLogId
+        ? findLoaded(linkedLogId) ?? sessionLogs.find((row) => row.litellm_call_id === linkedLogId)
+        : undefined;
+    return (
+      findLoaded(selectedSessionRequestId) ??
+      findLoaded(logEntry?.request_id) ??
+      logEntry ??
+      findLinked() ??
+      (isLinkedLogPending ? null : mostRecentLog)
+    );
+  }, [isSessionMode, logEntry, linkedLogId, isLinkedLogPending, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
   // Reset transient UI state when the drawer opens or closes.
   useEffect(() => {
@@ -383,9 +397,14 @@ export function LogDetailsDrawer({
                     {cacheHitCount}/{logsForList.length} cached
                   </div>
                 )}
-                {isSessionMode && sessionTruncated && (
+                {showSessionLoading && (
+                  <div role="status" className="mt-1 text-[11px] text-muted-foreground font-mono">
+                    {session.hasFirstPage ? `Loading ${logsForList.length} of ${session.expected}...` : "Loading..."}
+                  </div>
+                )}
+                {showSessionTruncated && (
                   <div className="mt-1 text-[11px] text-warning font-mono">
-                    Showing most recent {logsForList.length} of {sessionTotalCount}
+                    Showing most recent {logsForList.length} of {session.total}
                   </div>
                 )}
                 {isSessionMode && (
@@ -406,36 +425,27 @@ export function LogDetailsDrawer({
                 )}
               </div>
 
-              <div className="flex-1 overflow-y-auto">
+              {/* relative: the session list reads its offset in this scroller from offsetTop */}
+              <div
+                ref={setSessionScroller}
+                data-slot="trace-sidebar"
+                className="relative flex-1 overflow-y-auto [overflow-anchor:none]"
+              >
                 {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
                   <div className="px-3 pt-2">
                     <GuardrailJumpLink guardrailEntries={normalizeGuardrailEntries(metadata?.guardrail_information)} />
                   </div>
                 )}
                 {isSessionMode ? (
-                  <div className="py-1">
-                    {/* Child events — vertical tree line with horizontal connectors */}
-                    <div className="relative pl-2">
-                      <div className="absolute left-4 top-1 bottom-1 border-l border-border" />
-                      {logsForList.map((row, idx) => {
-                        const isLast = idx === logsForList.length - 1;
-                        return (
-                          <div key={row.request_id} className="relative">
-                            <div className="absolute left-4 top-3 w-3 border-t border-border" />
-                            {isLast && <div className="absolute left-4 top-3 bottom-0 w-px bg-muted" />}
-                            <TraceEventRow
-                              row={row}
-                              isSelected={row.request_id === currentLog.request_id}
-                              onClick={() => {
-                                setSelectedSessionRequestId(row.request_id);
-                                onSelectLog?.(row);
-                              }}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  <SessionTraceList
+                    logs={logsForList}
+                    selectedRequestId={currentLog.request_id}
+                    scroller={sessionScroller}
+                    onSelect={(row) => {
+                      setSelectedSessionRequestId(row.request_id);
+                      onSelectLog?.(row);
+                    }}
+                  />
                 ) : (
                   <div className="py-1">
                     {logsForList.map((row) => (

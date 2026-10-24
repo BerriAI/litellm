@@ -246,12 +246,18 @@ if (typeof Range !== "undefined" && !("getClientRects" in Range.prototype)) {
     getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
   });
 }
-// Virtualized InspectorTables render no rows in a zero-height viewport, and jsdom reports 0 for every offsetHeight.
+// Virtualized lists render no rows in a zero-height viewport, and jsdom reports 0 for every offsetHeight.
+// Rows a virtualizer measures need a height too, or every row fits in the viewport.
+const STUB_OFFSET_HEIGHTS: ReadonlyMap<string | undefined, number> = new Map([
+  ["inspector-table", 720],
+  ["trace-sidebar", 720],
+  ["trace-sidebar-row", 44],
+]);
 if (typeof HTMLElement !== "undefined") {
   Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
     configurable: true,
     get(this: HTMLElement) {
-      return this.dataset.slot === "inspector-table" ? 720 : 0;
+      return STUB_OFFSET_HEIGHTS.get(this.dataset.slot) ?? 0;
     },
   });
 }
