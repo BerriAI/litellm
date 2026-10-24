@@ -7,10 +7,10 @@ Keep each static query in `queries/` and call it through a typed SQLx query func
 - Keep write inputs separate from stored rows and keep test-only assertions out of public types
 - `FromRow` supports runtime reads, but production static reads still use `query_file_as!` for compile-time checking
 
-Run database tests against a local database already migrated by Prisma:
+Database integration tests are ignored by default, but still compile in workspace checks. Run them explicitly against a local database already migrated by Prisma. Missing or invalid database configuration must fail the selected tests:
 
 ```sh
-DATABASE_URL=postgresql://... cargo test -p litellm-db
+DATABASE_URL=postgresql://... cargo test -p litellm-db --locked -- --include-ignored
 ```
 
 After changing a query, refresh the checked query metadata from this directory:
