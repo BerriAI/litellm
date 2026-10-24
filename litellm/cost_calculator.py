@@ -3025,7 +3025,8 @@ def _batch_prompt_cost(
     details: Final = parse_prompt_tokens_details(usage)
     cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
     cached_audio_tokens: Final = details["cache_hit_audio_tokens"] if cache_read_rate is not None else 0
-    written_tokens: Final = details["cache_creation_tokens"] if cache_creation_rate is not None else 0
+    bills_cache_writes: Final = cache_creation_rate is not None or bool(cache_creation_rates_by_ttl)
+    written_tokens: Final = details["cache_creation_tokens"] if bills_cache_writes else 0
     audio_tokens, image_tokens, video_tokens = (
         details["audio_tokens"],
         details["image_tokens"],
@@ -3042,11 +3043,15 @@ def _batch_prompt_cost(
         + (cached_tokens - cached_audio_tokens) * (cache_read_rate or 0.0)
         + cached_audio_tokens
         * _batch_rate(model_info, "cache_read_input_audio_token_cost_batches", cache_read_rate or 0.0)
-        + calculate_cache_writing_cost(
-            written_tokens,
-            details["cache_creation_token_details"],
-            cache_creation_rate or 0.0,
-            cache_creation_rates_by_ttl,
+        + (
+            calculate_cache_writing_cost(
+                written_tokens,
+                details["cache_creation_token_details"],
+                input_rate if cache_creation_rate is None else cache_creation_rate,
+                cache_creation_rates_by_ttl,
+            )
+            if bills_cache_writes
+            else 0.0
         )
     )
 
