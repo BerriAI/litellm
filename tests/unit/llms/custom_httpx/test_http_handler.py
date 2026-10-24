@@ -331,6 +331,119 @@ def test_get_ssl_configuration_integration():
     assert ssl_context.verify_mode is not None
 
 
+def _tls12_cipher_names(cipher_string: str) -> set[str]:
+    return {name for name in cipher_string.split(":") if name and not name.startswith("TLS_")}
+
+
+def _context_tls12_cipher_names(context: ssl.SSLContext) -> set[str]:
+    return {cipher["name"] for cipher in context.get_ciphers() if cipher["protocol"] == "TLSv1.2"}
+
+
+def _supported_tls12_cipher_names() -> set[str]:
+    unrestricted = ssl.create_default_context()
+    return _context_tls12_cipher_names(unrestricted)
+
+
+def test_get_ssl_configuration_uses_fips_cipher_list_only_in_fips_mode(monkeypatch: pytest.MonkeyPatch):
+    from litellm.constants import DEFAULT_SSL_CIPHERS, FIPS_SSL_CIPHERS
+    from litellm.llms.custom_httpx import http_handler
+
+    monkeypatch.setattr(http_handler, "_ssl_context_cache", {})
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    monkeypatch.delenv("SSL_SECURITY_LEVEL", raising=False)
+    monkeypatch.delenv("SSL_ECDH_CURVE", raising=False)
+
+    supported = _supported_tls12_cipher_names()
+
+    default_context = get_ssl_configuration()
+    assert isinstance(default_context, ssl.SSLContext)
+    assert _context_tls12_cipher_names(default_context) == (_tls12_cipher_names(DEFAULT_SSL_CIPHERS) & supported)
+    assert get_ssl_configuration() is default_context
+
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+    fips_context = get_ssl_configuration()
+    assert fips_context is not default_context
+    assert isinstance(fips_context, ssl.SSLContext)
+    fips_names = _context_tls12_cipher_names(fips_context)
+    assert fips_names == (_tls12_cipher_names(FIPS_SSL_CIPHERS) & supported)
+    assert all("-GCM-" in name for name in fips_names)
+    assert get_ssl_configuration() is fips_context
+
+
+_CHACHA_OVERRIDE: Final = "ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-SHA256"
+
+
+def _simulate_cipher_override_at_import(monkeypatch: pytest.MonkeyPatch, http_handler) -> None:
+    """Simulate a process that started with LITELLM_SSL_CIPHERS set: litellm.constants
+    re-reads the env at import and http_handler binds those values at import. Reloading
+    http_handler itself would rebind its classes and break isinstance in later tests, so
+    only constants is re-executed and the handler's bindings are swapped explicitly."""
+    from litellm import constants
+
+    importlib.reload(constants)
+    monkeypatch.setattr(http_handler, "DEFAULT_SSL_CIPHERS", constants.DEFAULT_SSL_CIPHERS)
+    monkeypatch.setattr(http_handler, "FIPS_SSL_CIPHERS", constants.FIPS_SSL_CIPHERS)
+
+
+def _restore_cipher_constants(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm import constants
+
+    monkeypatch.delenv("LITELLM_SSL_CIPHERS", raising=False)
+    importlib.reload(constants)
+
+
+def test_get_ssl_configuration_ignores_ssl_ciphers_override_in_fips_mode(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    import logging
+
+    from litellm.llms.custom_httpx import http_handler
+
+    monkeypatch.setattr(http_handler, "_ssl_context_cache", {})
+    monkeypatch.setenv("LITELLM_SSL_CIPHERS", _CHACHA_OVERRIDE)
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+    monkeypatch.delenv("SSL_SECURITY_LEVEL", raising=False)
+    monkeypatch.delenv("SSL_ECDH_CURVE", raising=False)
+
+    _simulate_cipher_override_at_import(monkeypatch, http_handler)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        context = http_handler.get_ssl_configuration()
+    _restore_cipher_constants(monkeypatch)
+
+    assert isinstance(context, ssl.SSLContext)
+    names = _context_tls12_cipher_names(context)
+    supported = _supported_tls12_cipher_names()
+    assert names == (_tls12_cipher_names(http_handler.FIPS_SSL_CIPHERS) & supported)
+    assert not any("CHACHA" in name for name in names)
+    assert "LITELLM_SSL_CIPHERS override ignored" in caplog.text
+
+
+def test_get_ssl_configuration_applies_ssl_ciphers_override_outside_fips_mode(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    import logging
+
+    from litellm.llms.custom_httpx import http_handler
+
+    monkeypatch.setattr(http_handler, "_ssl_context_cache", {})
+    monkeypatch.setenv("LITELLM_SSL_CIPHERS", _CHACHA_OVERRIDE)
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    monkeypatch.delenv("SSL_SECURITY_LEVEL", raising=False)
+    monkeypatch.delenv("SSL_ECDH_CURVE", raising=False)
+
+    _simulate_cipher_override_at_import(monkeypatch, http_handler)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        context = http_handler.get_ssl_configuration()
+    _restore_cipher_constants(monkeypatch)
+
+    assert isinstance(context, ssl.SSLContext)
+    names = _context_tls12_cipher_names(context)
+    supported = _supported_tls12_cipher_names()
+    assert names == (_tls12_cipher_names(_CHACHA_OVERRIDE) & supported)
+    assert any("CHACHA" in name for name in names)
+    assert "LITELLM_SSL_CIPHERS override ignored" not in caplog.text
+
+
 # Session Reuse Tests
 class MockClientSession:
     """Mock ClientSession that is not callable"""
