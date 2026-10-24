@@ -107,18 +107,20 @@ def create_config_class(provider: SimpleProviderConfig):
             # Check if supports_function_calling was mocked (e.g. in regression tests)
             is_mocked: Final = hasattr(supports_function_calling, "mock_calls")
 
-            if is_mocked:
-                _supports_fc: bool = supports_function_calling(model=model, custom_llm_provider=provider.slug)
-            elif provider.provider_info and provider.provider_info.get("supports_function_calling") is False:
-                _supports_fc = False
-            else:
+            def _check_supports_fc() -> bool:
+                if is_mocked:
+                    return bool(supports_function_calling(model=model, custom_llm_provider=provider.slug))
+                if provider.provider_info and provider.provider_info.get("supports_function_calling") is False:
+                    return False
                 try:
                     # If model is mapped in the catalog, respect its capability declaration
                     get_model_info_helper(model=model, custom_llm_provider=provider.slug)
-                    _supports_fc = supports_function_calling(model=model, custom_llm_provider=provider.slug)
+                    return bool(supports_function_calling(model=model, custom_llm_provider=provider.slug))
                 except (ModelNotMappedError, KeyError, ValueError):
                     # Unmapped models on OpenAI-compatible providers default to supporting tools
-                    _supports_fc = True
+                    return True
+
+            _supports_fc: Final = _check_supports_fc()
 
             if not _supports_fc:
                 tool_params: Final = [
