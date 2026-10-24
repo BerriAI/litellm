@@ -6117,13 +6117,52 @@ async def list_team_v2(
             "total_pages": 0,
         }
 
-    # Build order_by conditions
-    valid_sort_columns: Final = ["team_id", "team_alias", "created_at"]
-    order_by = None
-    if sort_by and sort_by in valid_sort_columns:
-        if sort_order.lower() not in ["asc", "desc"]:
-            sort_order = "asc"
-        order_by = {sort_by: sort_order.lower()}
+    from litellm.proxy.management_helpers.team_list_sorting import (
+        COMPUTED_TEAM_SORTS,
+        UnsupportedTeamFilter,
+        sorted_team_ids,
+    )
+
+    valid_sort_columns: Final = (
+        "team_id",
+        "team_alias",
+        "created_at",
+        "spend",
+        "max_budget",
+        "tpm_limit",
+        "rpm_limit",
+        "updated_at",
+    )
+    sort_direction: Final = "desc" if str(sort_order).lower() == "desc" else "asc"
+    nullable_sort: Final = sort_by in ("max_budget", "tpm_limit", "rpm_limit")
+    order_by: Final = (
+        (
+            {sort_by: {"sort": sort_direction, "nulls": "first" if sort_direction == "desc" else "last"}},
+            {"team_id": "asc"},
+        )
+        if nullable_sort
+        else ({sort_by: sort_direction}, {"team_id": "asc"})
+        if sort_by in ("spend", "updated_at")
+        else {sort_by: sort_direction}
+        if sort_by in valid_sort_columns
+        else None
+    )
+    computed_sort: Final = not use_deleted_table and sort_by in COMPUTED_TEAM_SORTS
+    sorted_ids: Final = (
+        await sorted_team_ids(
+            prisma_client,
+            where=where_conditions,
+            sort_by=sort_by or "",
+            descending=sort_direction == "desc",
+            skip=skip,
+            take=page_size,
+        )
+        if computed_sort
+        else ()
+    )
+
+    if isinstance(sorted_ids, UnsupportedTeamFilter):
+        raise HTTPException(status_code=500, detail="Unsupported team sorting filter")
 
     # Get teams with pagination
     if use_deleted_table:
@@ -6138,26 +6177,32 @@ async def list_team_v2(
         total_count = await _deleted_team_db(prisma_client).count(where=where_conditions)
     else:
         teams = await _team_db(prisma_client).find_many(
-            where=where_conditions,
-            skip=skip,
+            # bounded-ok: sorted_ids comes from LIMIT page_size, capped at 100 by the route
+            where={"AND": (where_conditions, {"team_id": {"in": sorted_ids}})} if computed_sort else where_conditions,
+            skip=0 if computed_sort else skip,
             take=page_size,
-            order=order_by if order_by else {"created_at": "desc"},  # Default sort
+            order=order_by if order_by else {"created_at": "desc"},
             include=_INCLUDE_MODEL_TABLE,
         )
         # Get total count for pagination
         total_count = await _team_db(prisma_client).count(where=where_conditions)
+
+    positions: Final = {team_id: index for index, team_id in enumerate(sorted_ids)}
+    sorted_teams: Final = sorted(teams, key=lambda team: positions[team.team_id]) if computed_sort else teams
 
     # Calculate total pages
     total_pages: Final = -(-total_count // page_size)  # Ceiling division
 
     # Aggregate virtual-key counts per team for the current page. The deleted
     # table does not carry keys_count, so it is skipped.
-    keys_count_by_team: dict[str, int] = {}
-    if not use_deleted_table:
-        keys_count_by_team = await _get_keys_count_by_team(prisma_client, teams)
+    keys_count_by_team: Final = (
+        await _get_keys_count_by_team(prisma_client, sorted_teams) if not use_deleted_table else {}
+    )
 
     # Convert Prisma models to response models with members_count and keys_count
-    team_list = _convert_teams_to_response_models(teams, use_deleted_table, keys_count_by_team=keys_count_by_team)
+    team_list: Final = _convert_teams_to_response_models(
+        sorted_teams, use_deleted_table, keys_count_by_team=keys_count_by_team
+    )
 
     # Resolve resources inherited from access groups (single batch query)
     if not use_deleted_table:

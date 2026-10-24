@@ -103,6 +103,7 @@ def _target(request: NativeCall, model: str, provider: str | None) -> Target:
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **detectors.COMMON,
+        Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
         Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
         Feature.RESPONSE_CACHE: detectors.response_cache,
         Feature.MODIFY_PARAMS: detectors.modify_params,

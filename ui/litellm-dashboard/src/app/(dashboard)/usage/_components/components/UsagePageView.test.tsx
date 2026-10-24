@@ -239,8 +239,9 @@ vi.mock("@/components/EntityUsageExport", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 
-vi.mock("./UsageAIChatPanel", () => ({
-  default: () => <div data-testid="usage-ai-chat-panel">Usage AI Chat Panel</div>,
+vi.mock("@/components/liteadmin/LiteAdmin", () => ({
+  AriaUsageTrigger: () => <button aria-label="Open Aria Agent">Aria</button>,
+  AriaUsageComposer: () => <section aria-label="Ask Aria Agent">Shared Aria composer</section>,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
@@ -1388,25 +1389,33 @@ describe("UsagePage", () => {
     });
   });
 
-  describe("Ask AI button", () => {
-    it("should render Ask AI button in global view", async () => {
+  describe("Aria Agent", () => {
+    it("should render the shared Aria prompt and entry point in global view", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByText("Ask AI")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open Aria Agent" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Ask Aria Agent" })).toBeVisible();
+      expect(screen.queryByText("Ask AI")).not.toBeInTheDocument();
     });
 
-    it("should render AI chat panel component", async () => {
+    it("should keep the shared Aria prompt available in entity usage views", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByTestId("usage-ai-chat-panel")).toBeInTheDocument();
+      act(() => {
+        fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "team" } });
+      });
+
+      expect(await screen.findByText("Entity Usage")).toBeInTheDocument();
+      expect(screen.getAllByRole("region", { name: "Ask Aria Agent" })).toHaveLength(1);
+      expect(screen.getByRole("region", { name: "Ask Aria Agent" })).toBeVisible();
     });
   });
 
