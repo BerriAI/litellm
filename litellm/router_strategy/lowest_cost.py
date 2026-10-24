@@ -4,6 +4,9 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
+
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
 from litellm._internal_context import with_service_target
@@ -11,14 +14,14 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
-from litellm.router_utils.deployment_pricing import deployment_pricing_models, str_keyed
+from litellm.router_utils.deployment_pricing import deployment_pricing_models
 
 
 def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float | None]:
     """Input and output per-token prices from the first cost-map row among the deployment's
     pricing models that carries one; (None, None) when no row does, so the caller falls back to
     its unmapped default."""
-    rows: Final = (str_keyed(_cost_map().get(model)) for model in deployment_pricing_models(deployment))
+    rows: Final = (_get_model_cost_info(model) for model in deployment_pricing_models(deployment))
     row: Final = next((row for row in rows if _declares_token_price(row)), None)
     if row is None:
         return None, None
@@ -35,6 +38,44 @@ def _declares_token_price(row: Mapping[str, object]) -> bool:
 
 def _as_rate(value: object) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+class _ModelCostInfo(TypedDict, total=False):
+    input_cost_per_token: ReadOnly[float | None]
+    output_cost_per_token: ReadOnly[float | None]
+    litellm_provider: ReadOnly[str | None]
+
+
+_MODEL_COST_INFO_ADAPTER: Final = TypeAdapter(_ModelCostInfo)
+
+
+def _get_validated_model_cost_info(model_name: str) -> _ModelCostInfo | None:
+    raw_model_cost_info: Final[object] = _cost_map().get(model_name)
+    if raw_model_cost_info is None:
+        return None
+
+    try:
+        return _MODEL_COST_INFO_ADAPTER.validate_python(raw_model_cost_info)
+    except ValidationError:
+        return None
+
+
+def _get_model_cost_info(model_name: str | None) -> _ModelCostInfo:
+    if model_name is None:
+        return {}
+
+    exact_model_cost: Final = _get_validated_model_cost_info(model_name)
+    if exact_model_cost is not None:
+        return exact_model_cost
+
+    provider_name, separator, unprefixed_model_name = model_name.partition("/")
+    if separator == "":
+        return {}
+
+    unprefixed_model_cost: Final = _get_validated_model_cost_info(unprefixed_model_name)
+    if unprefixed_model_cost is None or unprefixed_model_cost.get("litellm_provider") != provider_name:
+        return {}
+    return unprefixed_model_cost
 
 
 class LowestCostLoggingHandler(CustomLogger):
