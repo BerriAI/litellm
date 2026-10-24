@@ -2170,6 +2170,51 @@ def test_bedrock_clear_thinking_keeps_enabled_for_non_adaptive_models():
     assert "output_config" not in request
 
 
+def test_bedrock_invoke_transform_forwards_client_interleaved_thinking_beta(local_beta_headers_config):
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 2000,
+        "stream": False,
+        "thinking": {"type": "enabled", "budget_tokens": 3000},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "interleaved-thinking-2025-05-14"},
+    )
+
+    assert "interleaved-thinking-2025-05-14" in result["anthropic_beta"]
+
+
+def test_bedrock_invoke_transform_adds_interleaved_beta_for_clear_thinking_on_non_adaptive_model(
+    local_beta_headers_config,
+):
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 32000,
+        "stream": False,
+        "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-5-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert "interleaved-thinking-2025-05-14" in result["anthropic_beta"]
+
+
 def test_bedrock_invoke_transform_emits_adaptive_thinking_for_opus_4_8():
     """End-to-end: a Claude Code clear_thinking payload (no ``thinking`` field) on
     Opus 4.8 must produce a Bedrock Invoke body with adaptive thinking and an
