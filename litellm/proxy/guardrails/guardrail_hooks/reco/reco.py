@@ -2,6 +2,9 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from litellm.exceptions import GuardrailRaisedException
+from litellm.integrations.custom_guardrail import (
+    log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # decorator is untyped
+)
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     GenericGuardrailAPI,
 )
@@ -46,6 +49,7 @@ class RecoGuardrail(GenericGuardrailAPI):
             default_on=default_on,
         )
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,

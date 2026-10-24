@@ -2,6 +2,7 @@
 Tests for the Reco guardrail integration.
 """
 
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -73,6 +74,15 @@ class TestRecoGuardrailConfiguration:
     def test_config_model_ui_friendly_name(self) -> None:
         assert RecoConfigModel.ui_friendly_name() == "Reco"
 
+    def test_litellm_params_stay_assignable_for_registry_secret_resolution(self) -> None:
+        litellm_params: Final = LitellmParams(guardrail="reco", mode="pre_call")
+
+        litellm_params.api_base = (
+            "https://edge1.us.reco.ai"
+        )
+
+        assert litellm_params.api_base == "https://edge1.us.reco.ai"
+
 
 class TestRecoGuardrailInitializer:
     def test_initialize_guardrail_wires_optional_params(self) -> None:
@@ -128,7 +138,7 @@ class TestRecoGuardrailInitializer:
         assert guardrail.headers == {"X-Reco-Tenant-Id": "44444444-4444-4444-4444-444444444444"}
 
 
-def _litellm_params(top_level: dict[str, object], nested: dict[str, object]) -> LitellmParams:
+def _litellm_params(top_level: Mapping[str, object], nested: Mapping[str, object]) -> LitellmParams:
     return LitellmParams(
         guardrail="reco",
         mode="pre_call",
@@ -190,7 +200,7 @@ class TestRecoGuardrailFailureModes:
         ],
     )
     async def test_initialize_guardrail_fails_closed_when_configured(
-        self, top_level: dict[str, object], nested: dict[str, object]
+        self, top_level: Mapping[str, object], nested: Mapping[str, object]
     ) -> None:
         guardrail: Final = initialize_guardrail(_litellm_params(top_level, nested), {"guardrail_name": "prod-reco"})
 
@@ -211,7 +221,7 @@ class TestRecoGuardrailFailureModes:
         ],
     )
     async def test_initialize_guardrail_fails_open_when_configured(
-        self, top_level: dict[str, object], nested: dict[str, object]
+        self, top_level: Mapping[str, object], nested: Mapping[str, object]
     ) -> None:
         guardrail: Final = initialize_guardrail(_litellm_params(top_level, nested), {"guardrail_name": "prod-reco"})
 
