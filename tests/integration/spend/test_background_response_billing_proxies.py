@@ -549,7 +549,7 @@ def _cache_polled_create(proxy: Gateway, key: str, model: str, create: Mapping[s
 
 @pytest.mark.timeout(OWNED_PROXY_SECONDS + 120)
 @pytest.mark.parametrize("create", CACHE_POLLED_CREATES.keys())
-def test_a_background_response_the_proxy_polls_through_its_cache_bills_its_creator_once(
+def test_a_background_response_polled_through_the_cache_reports_its_alias_and_bills_its_creator_once(
     gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, create: str
 ) -> None:
     body, provider_sees_background = CACHE_POLLED_CREATES[create]
@@ -564,6 +564,8 @@ def test_a_background_response_the_proxy_polls_through_its_cache_bills_its_creat
                 seconds=SPEND_RETRY_SECONDS,
             )
             assert finished.text == "pong"
+            polled: Final = object_value(proxy.request("GET", f"/v1/responses/{polling_id}", key=key).json())
+            assert polled["model"] == handle.scenario_id
             assert_charged_exactly(lambda: key_spend(key), PRICE)
             assert [read_response(proxy, key, polling_id).text for _ in range(READS)] == ["pong"] * READS
             assert_charged_exactly(lambda: key_spend(key), PRICE)

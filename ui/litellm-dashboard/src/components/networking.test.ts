@@ -975,6 +975,30 @@ describe("modelCostMap", () => {
   });
 });
 
+describe("ragIngestCall", () => {
+  let currentFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    currentFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = currentFetch;
+  });
+
+  it("rejects with the proxy's error text when the detail is an object", async () => {
+    const reason = "Error code: 404 - No vector store found with id 'vs_missing'";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ detail: { error: reason } }),
+    } as any) as any;
+
+    await expect(
+      Networking.ragIngestCall("sk-test", new File(["text"], "doc.txt"), "openai", "vs_missing"),
+    ).rejects.toThrow(reason);
+  });
+});
+
 describe("getUiConfig runtime backend discovery", () => {
   const discoveryConfig = () => ({
     server_root_path: "/",

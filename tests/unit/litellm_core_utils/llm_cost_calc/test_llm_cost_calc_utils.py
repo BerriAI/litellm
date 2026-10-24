@@ -99,6 +99,31 @@ def test_generic_cost_per_token_bills_cache_reads_at_input_rate_when_no_cache_re
     assert completion_cost == pytest.approx(380 * 9.7e-7)
 
 
+@pytest.mark.parametrize(
+    ("model_info", "expected_prompt_cost"),
+    [
+        ({"input_cost_per_token": 1e-7, "input_cost_per_character": 2.5e-8, "output_cost_per_token": 0.0}, 35 * 2.5e-8),
+        ({"input_cost_per_token": 1.5e-7, "output_cost_per_token": 0.0}, 11 * 1.5e-7),
+    ],
+    ids=["character_priced_model_bills_characters_instead_of_tokens", "token_priced_model_ignores_the_character_count"],
+)
+def test_generic_cost_per_token_bills_a_character_counted_prompt_under_one_unit(
+    model_info: ModelInfo, expected_prompt_cost: float
+) -> None:
+    usage = Usage(
+        prompt_tokens=11,
+        completion_tokens=0,
+        total_tokens=11,
+        prompt_tokens_details=PromptTokensDetailsWrapper(character_count=35),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="embedding-fixture", usage=usage, custom_llm_provider="vertex_ai", model_info=model_info
+    )
+
+    assert (prompt_cost, completion_cost) == (pytest.approx(expected_prompt_cost), 0.0)
+
+
 def test_apply_provider_cache_read_default_only_derives_a_rate_for_fireworks() -> None:
     openai_info: ModelInfo = {"input_cost_per_token": 2e-6}
     fireworks_info: ModelInfo = {"input_cost_per_token": 2e-6}
@@ -448,6 +473,66 @@ def test_video_tokens_fallback_to_base_cost():
 
     assert round(prompt_cost, 12) == round(14 * 1e-6, 12)
     assert round(completion_cost, 12) == round((600 + 1120) * 2e-6, 12)
+
+
+def test_prompt_audio_and_video_tokens_without_modality_rates_bill_at_tiered_input_rate():
+    """Prompt audio/video tokens with no modality rate are prompt tokens, so a >200k prompt bills them above-200k."""
+    from unittest.mock import patch
+
+    mock_model_info = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_token_above_200k_tokens": 4e-6,
+        "output_cost_per_token": 1.2e-5,
+        "output_cost_per_token_above_200k_tokens": 1.8e-5,
+    }
+
+    usage = Usage(
+        prompt_tokens=816032,
+        completion_tokens=4559,
+        total_tokens=820591,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=9033, audio_tokens=14999, video_tokens=792000),
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=4559),
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model="test-model", usage=usage, custom_llm_provider="vertex_ai"
+        )
+
+    assert round(prompt_cost, 9) == round(816032 * 4e-6, 9)
+    assert round(completion_cost, 9) == round(4559 * 1.8e-5, 9)
+
+
+def test_prompt_modality_rates_still_win_over_tiered_input_rate():
+    """An explicit input_cost_per_audio_token / input_cost_per_video_token beats the fallback, even above 200k."""
+    from unittest.mock import patch
+
+    mock_model_info = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_token_above_200k_tokens": 4e-6,
+        "input_cost_per_audio_token": 3e-6,
+        "input_cost_per_video_token": 1e-6,
+        "output_cost_per_token": 1.2e-5,
+    }
+
+    usage = Usage(
+        prompt_tokens=300000,
+        completion_tokens=10,
+        total_tokens=300010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=100000, audio_tokens=100000, video_tokens=100000),
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=10),
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        prompt_cost, _ = generic_cost_per_token(model="test-model", usage=usage, custom_llm_provider="vertex_ai")
+
+    assert round(prompt_cost, 9) == round(100000 * 4e-6 + 100000 * 3e-6 + 100000 * 1e-6, 9)
 
 
 def test_generic_cost_per_token_above_200k_tokens(_local_model_cost_map):
@@ -2463,6 +2548,63 @@ def test_get_cost_per_unit_falls_back_from_service_tier_key_to_base():
     assert get_cost_per_unit(model_info_direct, "input_cost_per_token_priority") == 5e-6
 
 
+@pytest.mark.parametrize(
+    "field", ("output_cost_per_token", "cache_read_input_token_cost", "cache_creation_input_token_cost")
+)
+def test_flat_input_price_keeps_other_token_thresholds(field: str) -> None:
+    from typing import Final, cast
+    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
+
+    info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "cache_read_input_token_cost": 0.003,
+            "cache_creation_input_token_cost": 0.004,
+            f"{field}_above_300k_tokens": 0.005,
+        },
+    )
+    rates: Final = _get_token_base_cost(
+        model_info=info,
+        usage=Usage(prompt_tokens=300_001, completion_tokens=3, total_tokens=300_004),
+    )
+    assert rates[0] == 0.001
+    assert rates[1] == (0.005 if field == "output_cost_per_token" else 0.002)
+    assert rates[2] == (0.005 if field == "cache_creation_input_token_cost" else 0.004)
+    assert rates[4] == (0.005 if field == "cache_read_input_token_cost" else 0.003)
+
+
+@pytest.mark.parametrize("prompt_tokens", (200_000, 200_001, 512_000, 512_001))
+@pytest.mark.parametrize("higher_rate", (0.0, 0.009))
+def test_mixed_token_thresholds_preserve_each_crossed_rate(prompt_tokens: int, higher_rate: float) -> None:
+    from typing import Final, cast
+    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
+
+    info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "cache_read_input_token_cost": 0.003,
+            "cache_creation_input_token_cost": 0.004,
+            "input_cost_per_token_above_200k_tokens": 0.005,
+            "output_cost_per_token_above_200k_tokens": 0.006,
+            "cache_creation_input_token_cost_above_200k_tokens": 0.007,
+            "cache_read_input_token_cost_above_512k_tokens": higher_rate,
+            "output_cost_per_token_above_512k_tokens": higher_rate,
+        },
+    )
+    rates: Final = _get_token_base_cost(
+        model_info=info,
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=3, total_tokens=prompt_tokens + 3),
+    )
+    assert rates[0] == (0.005 if prompt_tokens > 200_000 else 0.001)
+    assert rates[1] == (higher_rate if prompt_tokens > 512_000 else 0.006 if prompt_tokens > 200_000 else 0.002)
+    assert rates[2] == (0.007 if prompt_tokens > 200_000 else 0.004)
+    assert rates[4] == (higher_rate if prompt_tokens > 512_000 else 0.003)
+
+
 def test_threshold_keys_exclude_service_tier_variants():
     from typing import cast
 
@@ -4053,3 +4195,28 @@ def test_vertex_gemini_4_argon_matches_gemini_api_global_pricing(_local_model_co
         key: gemini_row[key] for key in GEMINI_4_ARGON_TOKEN_PRICE_KEYS
     }
     assert vertex_row["litellm_provider"].startswith("vertex_ai")
+
+
+@pytest.mark.parametrize("rate", (0.0, 0.001))
+def test_token_breakdown_uses_supplied_pricing_without_catalog_lookup(rate: float) -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+        "cache_read_input_token_cost": rate,
+        "cache_creation_input_token_cost": rate,
+    }
+    usage: Final = Usage(
+        prompt_tokens=20, completion_tokens=3, total_tokens=23,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=5), cache_creation_input_tokens=5,
+    )
+    prompt_cost, output_cost = generic_cost_per_token(
+        model="supplied-pricing-test", usage=usage, custom_llm_provider="bedrock", model_info=model_info,
+    )
+    breakdown: Final = get_token_type_cost_breakdown(
+        model="supplied-pricing-test", usage=usage, custom_llm_provider="bedrock", model_info=model_info,
+    )
+    assert breakdown.cache_read_cost == pytest.approx(5 * rate)
+    assert breakdown.cache_creation_cost == pytest.approx(5 * rate)
+    assert breakdown.rates is not None
+    assert prompt_cost == pytest.approx(10 * breakdown.rates.input_cost_per_token + breakdown.cache_read_cost + breakdown.cache_creation_cost)
+    assert output_cost == pytest.approx(3 * breakdown.rates.output_cost_per_token)

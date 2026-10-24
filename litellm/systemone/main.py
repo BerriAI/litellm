@@ -1,4 +1,6 @@
+import asyncio
 from collections.abc import Mapping
+from functools import partial
 from typing import Final
 
 import httpx
@@ -12,6 +14,7 @@ from litellm.decisions.call import (
     SystemOneQuestions,
     SystemOneRequestFields,
     asend,
+    log_caller_request,
     prepare_call,
     reject_other_format,
     send,
@@ -37,12 +40,14 @@ def _prepare_systemone_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    fields: Final = SystemOneRequestFields(
+        state=state, questions=questions, images=images, assets=assets, audio=audio, videos=videos
+    )
+    log_caller_request(kwargs, fields)
     reject_other_format(model=model, kwargs=kwargs, field_name="input", other_function="decisions")
     return prepare_call(
         model=model,
-        fields=SystemOneRequestFields(
-            state=state, questions=questions, images=images, assets=assets, audio=audio, videos=videos
-        ),
+        fields=fields,
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
@@ -75,21 +80,24 @@ async def asystemone(
     assets: DecisionsAssetEntries | None = None,
     **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
 ) -> DecisionsResponse:
-    call: Final = _prepare_systemone_call(
-        model=model,
-        state=state,
-        questions=questions,
-        images=images,
-        assets=assets,
-        safety_identifier=safety_identifier,
-        audio=audio,
-        videos=videos,
-        api_key=api_key,
-        api_base=api_base,
-        timeout=timeout,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        kwargs=kwargs,
+    call: Final = await asyncio.to_thread(
+        partial(
+            _prepare_systemone_call,
+            model=model,
+            state=state,
+            questions=questions,
+            images=images,
+            assets=assets,
+            safety_identifier=safety_identifier,
+            audio=audio,
+            videos=videos,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            kwargs=kwargs,
+        )
     )
     return _systemone_response(await asend(call))
 

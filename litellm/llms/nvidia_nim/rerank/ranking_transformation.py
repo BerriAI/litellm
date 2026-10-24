@@ -11,6 +11,7 @@ from typing import Final
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
 from litellm.types.rerank import RerankResponse
 
@@ -76,7 +77,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
 
         api_base = api_base.removesuffix("/v1")
 
-        return f"{api_base}/v1/ranking"
+        return join_api_base(api_base, "v1/ranking")
 
     def map_cohere_rerank_params(
         self,
