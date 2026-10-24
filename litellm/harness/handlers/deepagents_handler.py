@@ -161,7 +161,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
 
     async def history(
         self, ctx: SessionContext
-    ) -> list[dict[str, Any]]:  # mutable-ok: BaseHarnessHandler.history API returns OpenAI message dicts
+    ) -> list[dict[str, object]]:  # mutable-ok: BaseHarnessHandler.history API returns OpenAI message dicts
         agent, deps = self._require_agent()
         snapshot = await agent.aget_state(self._run_config(ctx, None))
         messages = (snapshot.values or MappingProxyType({})).get("messages") or ()
@@ -183,7 +183,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
                 break
             resume: dict[str, object] = {}  # mutable-ok: Command(resume=) payload, filled per answered approval
             for interrupt in state.interrupts:
-                decisions: list[dict[str, Any]] = []  # mutable-ok: HITL decisions collected across awaited approvals
+                decisions: list[dict[str, str]] = []  # mutable-ok: HITL decisions collected across awaited approvals
                 for request in approval_requests(getattr(interrupt, "value", None)):
                     approval = Approval(
                         tool=normalized_tool_name(str(request.get("name") or "")),
