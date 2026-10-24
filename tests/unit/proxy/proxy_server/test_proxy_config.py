@@ -3747,6 +3747,46 @@ async def test_ProxyConfig__update_llm_router_no_models_smoke(monkeypatch):
     assert snapshot == {"raised": False, "called": True, "models": "empty"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache_value, expected", [(object(), True), (None, False)])
+async def test_ProxyConfig__update_llm_router_preserves_cache_state(
+    monkeypatch: pytest.MonkeyPatch, cache_value: object, expected: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    captured: dict[str, object] = {}
+    router = MagicMock()
+    router.get_model_list.return_value = []
+
+    def fake_router(**kwargs: object) -> MagicMock:
+        captured.update(kwargs)
+        return router
+
+    monkeypatch.setattr(litellm, "Router", fake_router)
+    monkeypatch.setattr(litellm, "cache", cache_value, raising=False)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    pc = ProxyConfig()
+    monkeypatch.setattr(proxy_server, "proxy_config", pc)
+    monkeypatch.setattr(pc, "get_config", AsyncMock(return_value={}))
+
+    def fake_decrypt_model_list(new_models: list[object]) -> list[dict[str, object]]:
+        return [{"model_name": "db-model", "litellm_params": {"model": "openai/test"}}]
+
+    monkeypatch.setattr(
+        pc,
+        "decrypt_model_list_from_db",
+        fake_decrypt_model_list,
+    )
+    monkeypatch.setattr(pc, "_add_router_settings_from_db_config", AsyncMock())
+
+    await pc._update_llm_router(new_models=[SimpleNamespace()], proxy_logging_obj=MagicMock())
+
+    assert captured["cache_responses"] is expected
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._add_callback_from_db_to_in_memory_litellm_callbacks
 # ---------------------------------------------------------------------------
