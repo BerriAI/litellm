@@ -58,7 +58,7 @@ def response_cache_phase(operation: Literal["get", "set"]) -> Generator[None]:
         yield
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: object) -> None:
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
@@ -353,7 +353,7 @@ class Cache:
     )
     _SEMANTIC_CACHE_END_USER_SCOPE_FIELD: Final = "user_api_key_end_user_id"
 
-    def _is_semantic_cache(self) -> bool:
+    def is_semantic_cache(self) -> bool:
         return self.type in (
             LiteLLMCacheType.REDIS_SEMANTIC,
             LiteLLMCacheType.QDRANT_SEMANTIC,
@@ -395,7 +395,7 @@ class Cache:
             return preset_cache_key
 
         combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
-        is_semantic_cache: Final = self._is_semantic_cache()
+        is_semantic_cache: Final = self.is_semantic_cache()
         scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
         for param in kwargs:
             if param in scope_excluded_params:
@@ -963,7 +963,7 @@ class Cache:
         except Exception as e:
             self._log_add_cache_failure(e)
 
-    def should_use_cache(self, **kwargs):
+    def should_use_cache(self, **kwargs: object) -> bool:
         """
         Returns true if we should use the cache for LLM API calls
 

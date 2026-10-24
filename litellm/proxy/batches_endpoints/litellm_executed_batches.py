@@ -18,7 +18,9 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module
+from litellm.caching.caching import Cache
 from litellm.constants import LITELLM_EXECUTED_BATCH_CONCURRENCY
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.storage_backend import BaseFileStorageBackend
@@ -27,6 +29,7 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import is_request_body_safe
+from litellm.proxy.common_utils.semantic_cache_gate import gated_cache_controls
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.openai_files_endpoints.common_utils import LITELLM_EXECUTED_BATCH_ID_PREFIX
 from litellm.proxy.openai_files_endpoints.storage_backend_service import StorageBackendFileService
@@ -423,6 +426,8 @@ class LiteLLMExecutedBatchRunner:
         batches: ManagedBatchRepository,
         proxy_logging_obj: ProxyLogging,
         general_settings: Mapping[str, object],
+        semantic_cache_gates: Sequence[CustomLogger],
+        semantic_cache: Cache | None,
         concurrency: int = LITELLM_EXECUTED_BATCH_CONCURRENCY,
         heartbeat_seconds: float = _HEARTBEAT_SECONDS,
         completion_window_seconds: float = _COMPLETION_WINDOW_SECONDS,
@@ -435,6 +440,8 @@ class LiteLLMExecutedBatchRunner:
         self.batches = batches
         self.proxy_logging_obj = proxy_logging_obj
         self.general_settings = general_settings
+        self.semantic_cache_gates = semantic_cache_gates
+        self.semantic_cache = semantic_cache
         self.concurrency = concurrency
         self.heartbeat_seconds = heartbeat_seconds
         self.completion_window_seconds = completion_window_seconds
@@ -644,9 +651,17 @@ class LiteLLMExecutedBatchRunner:
         return RowOutcome(custom_id=line.custom_id, status_code=200, body=body, succeeded=True)
 
     async def _dispatch(self, run: _BatchRun, line: BatchInputLine) -> Mapping[str, object]:
-        params: Final = MappingProxyType(
+        request: Final = MappingProxyType(
             {**line.body, "model": run.model, "metadata": self._row_metadata(run), "disable_fallbacks": True}
         )
+        cache_controls: Final = await gated_cache_controls(
+            data=request,
+            user_api_key_dict=run.user_api_key_dict,
+            call_type=_ROUTER_METHODS[run.endpoint],
+            gates=self.semantic_cache_gates,
+            cache=self.semantic_cache,
+        )
+        params: Final = MappingProxyType({**request, **({} if cache_controls is None else {"cache": cache_controls})})
         return _dump(await self._router_call(run.endpoint)(**params))
 
     def _router_call(self, endpoint: BatchEndpoint) -> _RouterCall:

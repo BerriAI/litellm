@@ -7,12 +7,19 @@ through the proxy router / guardrails, and the end-to-end
 `handle_sampling_create_message` success and error-propagation behaviour.
 """
 
+from collections.abc import Mapping
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from mcp.types import CreateMessageResult, ErrorData
+
+import litellm
+from litellm.caching.caching import Cache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.caching import LiteLLMCacheType
 
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     _build_completion_kwargs,
@@ -118,6 +125,35 @@ class TestRunGuardrailsAndCallLlm:
 
         assert result == "router-response"
         router.acompletion.assert_awaited_once()
+
+    async def test_should_skip_the_semantic_cache_for_a_key_the_semantic_cache_check_rejects(self):
+        class _RejectEveryTeam(CustomLogger):
+            async def async_should_semantic_cache(
+                self, user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str
+            ) -> bool:
+                return False
+
+        async def _cache_controls_the_router_received(**kwargs):
+            return kwargs.get("cache")
+
+        semantic_cache = Cache(
+            type=LiteLLMCacheType.VALKEY_SEMANTIC, host="localhost", port="6379", similarity_threshold=0.8
+        )
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+            patch(
+                "litellm.proxy.proxy_server.llm_router",
+                SimpleNamespace(acompletion=_cache_controls_the_router_received),
+            ),
+            patch.object(litellm, "callbacks", [_RejectEveryTeam()]),
+            patch.object(litellm, "cache", semantic_cache),
+        ):
+            received = await _run_guardrails_and_call_llm(
+                completion_kwargs={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", team_id="team-other"),
+            )
+
+        assert received == {"no-cache": True, "no-store": True}
 
     async def test_should_propagate_guardrail_rejection(self):
         plo = MagicMock()

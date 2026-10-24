@@ -1530,6 +1530,7 @@ class _CallbackCapabilities:
     # every string entry in ``litellm.callbacks``.
     resolved_callbacks: tuple[object, ...] = field(default_factory=tuple)
     listed_models_filters: tuple[CustomLogger, ...] = field(default_factory=tuple)
+    semantic_cache_gates: tuple[CustomLogger, ...] = field(default_factory=tuple)
 
 
 def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
@@ -3308,6 +3309,9 @@ class ProxyLogging:
             resolved_callbacks=tuple(resolved_callbacks),
             listed_models_filters=tuple(
                 callback for callback in resolved_callbacks if _overrides_hook(callback, "async_filter_listed_models")
+            ),
+            semantic_cache_gates=tuple(
+                callback for callback in resolved_callbacks if _overrides_hook(callback, "async_should_semantic_cache")
             ),
         )
         # Limit cache to handle test churn without leaking; production
