@@ -157,6 +157,19 @@ def test_post_call_rule_rejects_mock_response(monkeypatch: pytest.MonkeyPatch) -
         )
 
 
+def test_completion_empty_string_mock_response_does_not_make_request() -> None:
+    response = litellm.completion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="",
+        api_base="http://127.0.0.1:9",
+        api_key="sk-test",
+        num_retries=0,
+    )
+
+    assert response.choices[0].message.content == ""
+
+
 def test_post_call_rule_rejects_streaming_mock_response(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "pre_call_rules", [])
     monkeypatch.setattr(litellm, "post_call_rules", [_reject_short_post_call_response])
