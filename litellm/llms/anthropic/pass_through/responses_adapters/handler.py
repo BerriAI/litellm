@@ -10,9 +10,13 @@ from typing import Final, TypeAlias
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.asyncify import (
+    run_async_function,  # pyright: ignore[reportUnknownVariableType]  # untyped helper
 )
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
@@ -24,6 +28,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicOutputConfig,
     AnthropicOutputSchema,
+    ContextManagementResponse,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -31,7 +36,10 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.utils import ProviderConfigManager
 
-from ..adapters.handler import request_safeguards_evaluator
+from ..adapters.handler import context_management_explicitly_dropped, request_safeguards_evaluator
+from ..context_management import AnthropicContextManagementError, PolyfillResult, apply_context_management
+from ..context_management.constants import COMPACT_EDIT_TYPE
+from ..context_management.dispatcher import normalize_spec
 from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
@@ -41,8 +49,71 @@ from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 AnthropicRequestMessages: TypeAlias = list[AllAnthropicMessageValues] | list[dict[str, object]]
 BlockRewrite: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
+# (native spec for the Responses API, edits for the gateway polyfill)
+_SplitEdits: TypeAlias = tuple[dict[str, object] | None, Sequence[Mapping[str, object]]]
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
+
+
+def _split_context_management(
+    spec: dict[str, object] | None,  # mutable-ok: the request's spec, handed to normalize_spec
+    kwargs: Mapping[str, object],
+) -> _SplitEdits:
+    """Return (the edits the Responses API runs natively, the edits the gateway polyfill runs).
+
+    The Responses API compacts natively (``compact_20260112`` becomes its ``compaction``); any other
+    edit, such as ``clear_tool_uses_20250919``, has no Responses API form and runs in the polyfill, as
+    it does on the chat completions path.
+    """
+    if not spec or context_management_explicitly_dropped(kwargs.get("additional_drop_params")):
+        return spec, ()
+    edits: Final = normalize_spec(spec) or []
+    native: Final = [edit for edit in edits if edit.get("type") == COMPACT_EDIT_TYPE]
+    return ({"edits": native} if native else None), tuple(
+        edit for edit in edits if edit.get("type") != COMPACT_EDIT_TYPE
+    )
+
+
+async def _polyfilled(
+    *,
+    model: str,
+    messages: AnthropicRequestMessages,
+    tools: Sequence[AllAnthropicToolsValues | Mapping[str, object]] | None,
+    system: str | None,
+    edits: Sequence[Mapping[str, object]],
+    kwargs: Mapping[str, object],
+) -> PolyfillResult | None:
+    """Run the edits the Responses API can't run natively; raise like the chat completions path does."""
+    if not edits:
+        return None
+    drop_invalid_edits: Final = drops_unsupported_params(kwargs.get("drop_params"))
+    try:
+        return await apply_context_management(
+            model=model,
+            messages=_BLOCK_LIST.validate_python(messages),
+            tools=_BLOCK_LIST.validate_python(tools) if tools else None,
+            system=system,
+            context_management_spec={"edits": [dict(edit) for edit in edits]},
+            drop_invalid_edits=drop_invalid_edits,
+        )
+    except AnthropicContextManagementError:
+        if drop_invalid_edits:
+            return None
+        raise
+    except Exception as e:
+        verbose_logger.exception("context_management polyfill failed on the Responses API path: %s", e)
+        raise AnthropicContextManagementError(
+            status_code=500, message=f"context_management polyfill failed: {e}"
+        ) from e
+
+
+def _with_applied_edits(
+    response: AnthropicMessagesResponse, polyfill_result: PolyfillResult | None
+) -> AnthropicMessagesResponse:
+    applied_edits: Final = polyfill_result.applied_edits_for_response() if polyfill_result else None
+    if not applied_edits:
+        return response
+    return {**response, "context_management": ContextManagementResponse(applied_edits=list(applied_edits))}
 
 
 def _record_bridged_response(responses_kwargs: Mapping[str, object], result: ResponsesAPIResponse) -> None:
@@ -278,11 +349,16 @@ class LiteLLMMessagesToResponsesAPIHandler:
         output_format: AnthropicOutputSchema | None = None,
         **kwargs: object,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes]:
+        native_context_management, polyfilled_edits = _split_context_management(context_management, kwargs)
+        polyfill_result: Final = await _polyfilled(
+            model=model, messages=messages, tools=tools, system=system, edits=polyfilled_edits, kwargs=kwargs
+        )
         responses_kwargs: Final = _build_responses_kwargs(
             max_tokens=max_tokens,
-            messages=messages,
+            # clear_tool_uses edits only rewrite messages; system stays as sent
+            messages=polyfill_result.messages if polyfill_result is not None else messages,
             model=model,
-            context_management=context_management,
+            context_management=native_context_management,
             metadata=metadata,
             output_config=output_config,
             stop_sequences=stop_sequences,
@@ -307,13 +383,16 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
                 safeguards_evaluator=safeguards_evaluator,
+                applied_edits=polyfill_result.applied_edits_for_response() if polyfill_result else None,
             )
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
-        served: Final = await with_safeguard_results(_ADAPTER.translate_response(result), safeguards_evaluator)
+        served: Final = await with_safeguard_results(
+            _with_applied_edits(_ADAPTER.translate_response(result), polyfill_result), safeguards_evaluator
+        )
         _record_bridged_response(responses_kwargs, result)
         return served
 
@@ -364,11 +443,28 @@ class LiteLLMMessagesToResponsesAPIHandler:
             )
 
         # Sync path
+        native_context_management, polyfilled_edits = _split_context_management(context_management, kwargs)
+        ran: Final[object] = (  # pyright: ignore[reportUnknownVariableType]  # run_async_function is untyped
+            run_async_function(
+                _polyfilled,
+                model=model,
+                messages=messages,
+                tools=tools,
+                system=system,
+                edits=polyfilled_edits,
+                kwargs=kwargs,
+            )
+            if polyfilled_edits
+            else None
+        )
+        # run_async_function is untyped: check what it returned rather than assume it
+        polyfill_result: Final = ran if isinstance(ran, PolyfillResult) else None
         responses_kwargs: Final = _build_responses_kwargs(
             max_tokens=max_tokens,
-            messages=messages,
+            # clear_tool_uses edits only rewrite messages; system stays as sent
+            messages=polyfill_result.messages if polyfill_result is not None else messages,
             model=model,
-            context_management=context_management,
+            context_management=native_context_management,
             metadata=metadata,
             output_config=output_config,
             stop_sequences=stop_sequences,
@@ -391,10 +487,11 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
+                applied_edits=polyfill_result.applied_edits_for_response() if polyfill_result else None,
             )
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
-        return _ADAPTER.translate_response(result)
+        return _with_applied_edits(_ADAPTER.translate_response(result), polyfill_result)
