@@ -6,7 +6,16 @@ from types import MappingProxyType
 from typing import Final, get_type_hints
 
 import orjson
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import ORJSONResponse
 
 import litellm
@@ -37,8 +46,12 @@ from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router: Final = APIRouter()
 
-IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
-IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
+IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(
+    get_type_hints(ImageEditRequestParams)
+)
+IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType(
+    {"prompt": None, "image": None}
+)
 
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
@@ -102,7 +115,9 @@ async def image_generation(
         version,
     )
 
-    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+    litellm_call_id: Final = resolve_litellm_call_id(
+        request.headers.get("x-litellm-call-id")
+    )
     data = {"litellm_call_id": litellm_call_id}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
@@ -123,7 +138,11 @@ async def image_generation(
             reject_url_valued_destination("model", model)
 
         data["model"] = resolve_inference_model(
-            data.get("model"), general_settings, user_model, model, kind="image_generation"
+            data.get("model"),
+            general_settings,
+            user_model,
+            model,
+            kind="image_generation",
         )
 
         ### MODEL ALIAS MAPPING ###
@@ -150,6 +169,31 @@ async def image_generation(
             data["prompt"] = get_str_from_messages(messages)
         data.pop("messages", None)
 
+        ## APPLY KEY/TEAM ROUTER SETTINGS ##
+        # Read key/team router_settings and apply them to route_request
+        # This matches the behavior in base_process_llm_request
+        if proxy_config is not None:
+            try:
+                from litellm.proxy.common_request_processing import (
+                    ProxyBaseLLMRequestProcessing,
+                )
+
+                # Create a temporary processor to get router_settings_override
+                temp_processor = ProxyBaseLLMRequestProcessing(data=data)
+                router_settings_override = (
+                    temp_processor.common_processing_pre_call_logic(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        route_type="aimage_generation",
+                        proxy_config=proxy_config,
+                    )
+                )
+                if router_settings_override:
+                    data["router_settings_override"] = router_settings_override
+            except Exception:
+                # If reading router_settings fails, continue without override
+                pass
+
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call: Final = await route_request(
             data=data,
@@ -160,7 +204,11 @@ async def image_generation(
         response = await llm_call
 
         ### ALERTING ###
-        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=litellm_call_id, status="success"
+            )
+        )
 
         ### CALL HOOKS ### - modify outgoing data (guardrails, otel, etc.)
         response = await proxy_logging_obj.post_call_success_hook(
@@ -191,11 +239,13 @@ async def image_generation(
         )
 
         # Call response headers hook (matches base_process_llm_request behavior)
-        callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            response=response,
-            request_headers=dict(request.headers),
+        callback_headers: Final = (
+            await proxy_logging_obj.post_call_response_headers_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
         )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
@@ -209,7 +259,9 @@ async def image_generation(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
-                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                type=openai_error_type(
+                    e, error_status_code(e, status.HTTP_400_BAD_REQUEST)
+                ),
                 param=openai_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
                 code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
@@ -266,9 +318,13 @@ async def image_edit_api(
     ```
     """
     if image is not None and image_array is not None:
-        raise HTTPException(status_code=422, detail="Cannot specify both 'image' and 'image[]'")
+        raise HTTPException(
+            status_code=422, detail="Cannot specify both 'image' and 'image[]'"
+        )
     if mask is not None and mask_array is not None:
-        raise HTTPException(status_code=422, detail="Cannot specify both 'mask' and 'mask[]'")
+        raise HTTPException(
+            status_code=422, detail="Cannot specify both 'mask' and 'mask[]'"
+        )
     if image is None and image_array is not None:
         image = image_array
     if mask is None and mask_array is not None:
@@ -303,7 +359,9 @@ async def image_edit_api(
     )
     data: Final = {
         key: value
-        for key, value in chain(IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS.items(), form_fields.items())
+        for key, value in chain(
+            IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS.items(), form_fields.items()
+        )
         if key not in BRACKETED_FILE_FIELDS
     }
     image_files: Final = await batch_to_bytesio(image)
