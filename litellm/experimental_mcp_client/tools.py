@@ -1,9 +1,11 @@
 import json
+import time
+from collections.abc import Sequence
 from typing import Final, Literal
 
 import anyio
 from mcp import ClientSession, MCPError
-from mcp.types import INTERNAL_ERROR, PaginatedRequestParams
+from mcp.types import INTERNAL_ERROR, ListToolsResult, PaginatedRequestParams
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import Tool as MCPTool
@@ -17,6 +19,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_MAX_PAGES,
     MCP_TOOL_LISTING_TIMEOUT,
 )
+from litellm.proxy._experimental.mcp_server.result_conversion import age_freshness, aggregate_freshness
 from litellm.types.llms.anthropic import AnthropicMessagesTool
 from litellm.types.utils import ChatCompletionMessageToolCall
 
@@ -98,9 +101,21 @@ def transform_mcp_tool_to_anthropic_tool(mcp_tool: MCPTool) -> AnthropicMessages
     )
 
 
+def _complete_listing(tools: Sequence[MCPTool], pages: Sequence[tuple[ListToolsResult, float]]) -> ListToolsResult:
+    now: Final = time.monotonic()
+    freshness: Final = aggregate_freshness(tuple(age_freshness(page, now - received) for page, received in pages))
+    return ListToolsResult(tools=list(tools), ttl_ms=freshness.ttl_ms, cache_scope=freshness.cache_scope)
+
+
 async def list_tools_with_pagination(
     session: ClientSession, listing_deadline: float | None = None, *, require_complete: bool = False
 ) -> list[MCPTool]:  # mutable-ok: list return contract
+    return (await list_tools_result_with_pagination(session, listing_deadline, require_complete=require_complete)).tools
+
+
+async def list_tools_result_with_pagination(
+    session: ClientSession, listing_deadline: float | None = None, *, require_complete: bool = False
+) -> ListToolsResult:
     """Collect tools from every tools/list page by following nextCursor.
 
     Stops and returns the tools collected so far when the upstream repeats a
@@ -108,8 +123,10 @@ async def list_tools_with_pagination(
     buggy or slow upstream yields a partial catalog instead of an error.
     listing_deadline overrides the default whole-walk deadline; callers with a
     per-server timeout above the global default pass it through here.
+    Only a complete walk carries the upstream ttlMs, so a partial catalog is never cached.
     """
     tools: Final[list[MCPTool]] = []  # mutable-ok: accumulates each page's tools
+    pages: Final[list[tuple[ListToolsResult, float]]] = []  # mutable-ok: bounded pagination evidence
     seen_cursors: Final[set[str]] = set()  # mutable-ok: guards against cursor loops
     cursor: str | None = None  # rebind-ok: advances to each page's nextCursor
     # The per-request session read timeout restarts on every page, so a multi-page
@@ -128,10 +145,11 @@ async def list_tools_with_pagination(
                 else await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
             )
             tools.extend(result.tools)
+            pages.append((result, time.monotonic()))
 
             next_cursor = result.next_cursor
             if not isinstance(next_cursor, str) or not next_cursor:
-                return tools
+                return _complete_listing(tools, pages)
             if next_cursor in seen_cursors:
                 verbose_logger.warning(
                     "MCP server repeated a tools/list cursor while listing tools; returning %s tools collected so far",
@@ -141,7 +159,7 @@ async def list_tools_with_pagination(
                     raise MCPError(
                         code=INTERNAL_ERROR, message="Upstream tool discovery is incomplete: repeated cursor"
                     )
-                return tools
+                return ListToolsResult(tools=tools)
             seen_cursors.add(next_cursor)
             cursor = next_cursor
 
@@ -152,7 +170,7 @@ async def list_tools_with_pagination(
         )
         if require_complete:
             raise MCPError(code=INTERNAL_ERROR, message="Upstream tool discovery is incomplete: pagination limit")
-        return tools
+        return ListToolsResult(tools=tools)
 
     verbose_logger.warning(
         "MCP server tools/list pagination exceeded the %s second listing deadline; returning %s tools collected so far",
@@ -161,7 +179,7 @@ async def list_tools_with_pagination(
     )
     if require_complete:
         raise MCPError(code=INTERNAL_ERROR, message="Upstream tool discovery is incomplete: listing deadline")
-    return tools
+    return ListToolsResult(tools=tools)
 
 
 async def load_mcp_tools(

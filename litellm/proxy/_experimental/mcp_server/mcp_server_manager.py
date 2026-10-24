@@ -26,7 +26,7 @@ from collections.abc import (
 )
 from contextlib import AbstractAsyncContextManager, ExitStack, asynccontextmanager, nullcontext
 from dataclasses import dataclass, replace
-from functools import lru_cache
+from functools import lru_cache, partial
 from itertools import chain, groupby
 from types import EllipsisType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
@@ -2030,6 +2030,9 @@ class MCPServerManager:
         )
         self._template_discovery_cache = _DiscoveryCache[ListResourceTemplatesResult](
             discovery_ttl, discovery_clock, TypeAdapter(ListResourceTemplatesResult)
+        )
+        self._tool_discovery_cache = _DiscoveryCache[ListToolsResult](
+            discovery_ttl, discovery_clock, TypeAdapter(ListToolsResult)
         )
         from litellm.proxy._experimental.mcp_server.catalog import CatalogSnapshots
 
@@ -4576,14 +4579,27 @@ class MCPServerManager:
                     tools=[t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
                 )
             else:
-                page: Final = (
-                    await retry_upstream_rate_limit(
-                        lambda: self._fetch_tools_page_with_timeout(client, server, params),
+                key: Final = self._discovery_key(
+                    server,
+                    user_api_key_auth,
+                    mcp_auth_header,
+                    extra_headers,
+                    stdio_env,
+                    subject_token,
+                    await client.discovery_auth_fingerprint(),
+                    raw_headers=raw_headers,
+                    page_cursor=None if params is None else (params.cursor,),
+                )
+                page: Final = await self._tool_discovery_cache.get(
+                    key,
+                    partial(self._fetch_tools_with_timeout, client, server.name)
+                    if params is None
+                    else partial(
+                        retry_upstream_rate_limit,
+                        partial(self._fetch_tools_page_with_timeout, client, server, params),
                         server.name,
                         deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
-                    )
-                    if params is not None
-                    else ListToolsResult(tools=await self._fetch_tools_with_timeout(client, server.name))
+                    ),
                 )
                 tools = page.tools
                 self._remember_upstream_initialize_instructions(server, client)
@@ -4654,6 +4670,7 @@ class MCPServerManager:
         self._prompt_discovery_cache.invalidate(server_id)
         self._resource_discovery_cache.invalidate(server_id)
         self._template_discovery_cache.invalidate(server_id)
+        self._tool_discovery_cache.invalidate(server_id)
 
     def invalidate_server_definition_caches(self, server_id: str) -> None:
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (  # noqa: PLC0415  # lazy: discoverable_endpoints lazily imports this module's manager singleton
@@ -4755,6 +4772,7 @@ class MCPServerManager:
         subject_token: str | None,
         credential_fingerprint: str | None = None,
         raw_headers: Mapping[str, str] | None = None,
+        page_cursor: tuple[str | None] | None = None,
     ) -> _DiscoveryKey:
         identity: Final = (
             user_api_key_auth.model_dump(
@@ -4781,6 +4799,7 @@ class MCPServerManager:
                 stdio_env,
                 subject_token,
                 credential_fingerprint,
+                page_cursor,
             ),
             sort_keys=True,
             separators=(",", ":"),
@@ -5622,7 +5641,7 @@ class MCPServerManager:
         self,
         client: MCPClient,
         server_name: str,
-    ) -> list[MCPTool]:
+    ) -> ListToolsResult:
         """
         Fetch tools from MCP client with timeout and error handling.
 
@@ -5646,17 +5665,17 @@ class MCPServerManager:
             server_name: Name of the server for logging
 
         Returns:
-            List of tools from the server
+            The tools from the server with the upstream freshness of the complete walk
         """
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools: Final = await retry_upstream_rate_limit(
-                    lambda: client.list_tools(raise_on_error=True),
+                listing: Final = await retry_upstream_rate_limit(
+                    lambda: client.list_tools_result(raise_on_error=True),
                     server_name,
                     deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
                 )
-                verbose_logger.debug("Tools from %s: %s", server_name, tools)
-                return tools
+                verbose_logger.debug("Tools from %s: %s", server_name, listing.tools)
+                return listing
         except TimeoutError as e:
             verbose_logger.warning("Timeout while listing tools from %s", server_name)
             raise MCPServerListError(ServerListFault(tag="timeout"), server_name) from e
