@@ -1901,13 +1901,17 @@ async def check_end_user_budget(
     if end_user_budget is None:
         return
 
-    from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.proxy_server import get_current_spend, user_api_key_cache
 
+    loaded_spend: Final = user_api_key_cache.get_cache(
+        key=_end_user_loaded_spend_key(end_user_obj.user_id), local_only=True
+    )
     end_user_spend: Final = await get_current_spend(
         counter_key=f"spend:end_user:{end_user_obj.user_id}",
         fallback_spend=end_user_obj.spend or 0.0,
         max_budget=end_user_budget,
         fallback_authoritative=True,
+        fallback_loaded_spend=float(loaded_spend) if isinstance(loaded_spend, (int, float)) else None,
     )
     if end_user_spend > end_user_budget:
         raise litellm.BudgetExceededError(
@@ -2119,6 +2123,23 @@ async def _end_user_is_known_unrestricted(
     return registry is not None and end_user_id not in registry
 
 
+def _end_user_loaded_spend_key(end_user_id: str) -> str:
+    return f"end_user_loaded_spend:{end_user_id}"
+
+
+def _remember_end_user_loaded_spend(
+    user_api_key_cache: UserApiKeyCache, end_user_id: str, spend: float, *, keep_existing: bool
+) -> None:
+    """Record, on this worker only, the DB spend its cached end-user object was loaded with. Spend this worker
+    charges later is added to the cached object, never to this value."""
+    key: Final = _end_user_loaded_spend_key(end_user_id)
+    if keep_existing and user_api_key_cache.get_cache(key=key, local_only=True) is not None:
+        return
+    user_api_key_cache.set_cache(
+        key=key, value=spend, local_only=True, ttl=get_management_object_ttl(user_api_key_cache)
+    )
+
+
 @log_db_metrics
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def get_end_user_object(
@@ -2166,6 +2187,7 @@ async def get_end_user_object(
         model_type=LiteLLM_EndUserTable,
     )
     if cached_user_obj is not None:
+        _remember_end_user_loaded_spend(user_api_key_cache, end_user_id, cached_user_obj.spend, keep_existing=True)
         return await _apply_default_budget_to_end_user(
             end_user_obj=cached_user_obj,
             prisma_client=prisma_client,
@@ -2206,6 +2228,7 @@ async def get_end_user_object(
             model_type=LiteLLM_EndUserTable,
             ttl=get_management_object_ttl(user_api_key_cache),
         )
+        _remember_end_user_loaded_spend(user_api_key_cache, end_user_id, end_user_row.spend, keep_existing=False)
 
         if key_end_user_budget_id is None:
             return end_user_row

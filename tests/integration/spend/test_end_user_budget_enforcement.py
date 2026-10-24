@@ -791,3 +791,29 @@ def test_a_cold_end_user_counter_seeds_from_a_row_reset_behind_the_cached_custom
         )
         assert float(str(charged[0]["spend"])) == pytest.approx(_CHAT_COST)
         assert _counter(cache, end_user) == pytest.approx(_CHAT_COST)
+
+
+def test_a_cold_end_user_counter_keeps_spend_the_row_has_not_caught_up_to(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.25)
+        key: Final = scenario.key(models=[model])
+        end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
+        call_cost: Final = 20 * 0.001 + 20 * 0.25
+        _new_customer(gateway, end_user, max_budget=_COLD_BUDGET, spend=_COLD_SEED_SPEND)
+        scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
+        served: Final = _chat(gateway, model, key, end_user)
+        assert served.status_code == 200, served.text
+        eventually(
+            lambda: _end_user_row(end_user),
+            lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) == pytest.approx(_COLD_SEED_SPEND + call_cost),
+            seconds=70,
+        )
+        _set_end_user_row_spend(end_user, _COLD_SEED_SPEND)
+        cache.delete(f"spend:end_user:{end_user}")
+
+        denied: Final = _chat(gateway, model, key, end_user)
+
+        assert _refused_spend(denied, end_user) == pytest.approx(_COLD_SEED_SPEND + call_cost)

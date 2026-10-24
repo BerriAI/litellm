@@ -538,6 +538,42 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
     assert exc_info.value.max_budget == customer_budget
 
 
+@pytest.mark.parametrize("row_spend, refused", [(6.0, True), (0.0, False)])
+@pytest.mark.asyncio
+async def test_check_end_user_budget_keeps_unflushed_charges_after_the_counter_is_wiped(
+    monkeypatch: pytest.MonkeyPatch, row_spend: float, refused: bool
+) -> None:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.auth.auth_checks import check_end_user_budget
+
+    end_user_id: Final = "customer-42"
+    prisma: Final = MagicMock()
+    prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=MagicMock(spend=row_spend))
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=f"end_user_id:{end_user_id}",
+        value=LiteLLM_EndUserTable(
+            user_id=end_user_id, spend=6.0, litellm_budget_table=LiteLLM_BudgetTable(max_budget=10.0), blocked=False
+        ),
+        model_type=LiteLLM_EndUserTable,
+    )
+    loaded: Final = await get_end_user_object(end_user_id=end_user_id, prisma_client=prisma, user_api_key_cache=cache)
+    assert loaded is not None and loaded.spend == 6.0
+    ps._add_spend_to_locally_cached_object(cache, f"end_user_id:{end_user_id}", LiteLLM_EndUserTable, 5.0)
+    charged: Final = await get_end_user_object(end_user_id=end_user_id, prisma_client=prisma, user_api_key_cache=cache)
+    assert charged is not None and charged.spend == 11.0
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    monkeypatch.setattr(ps, "spend_counter_cache", DualCache())
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+    if not refused:
+        await check_end_user_budget(end_user_obj=charged, route="/v1/chat/completions")
+        return
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await check_end_user_budget(end_user_obj=charged, route="/v1/chat/completions")
+    assert exc_info.value.current_cost == 11.0
+
+
 @pytest.mark.parametrize(
     "model, expect_to_work",
     [

@@ -3166,6 +3166,7 @@ async def get_current_spend(
     window_duration: str | None = None,
     window_start: datetime | None = None,
     fallback_authoritative: bool = False,
+    fallback_loaded_spend: float | None = None,
 ) -> float:
     """
     Read current spend from the cross-pod spend counter.
@@ -3195,6 +3196,11 @@ async def get_current_spend(
     skipped for healthy primary counters (counter at or above recorded spend)
     and cached in-process for a few seconds, so a persistently stale counter
     drives at most one read per counter per window rather than one per request.
+
+    ``fallback_loaded_spend`` is the DB spend ``fallback_spend`` was loaded
+    from before this worker added its own charges to it. While the row is still
+    at or above that value, ``fallback_spend`` floors the read, so charges the
+    batch writer has not flushed yet are not lost with a wiped counter.
     """
     current, verified = await _read_spend_counter_estimate(counter_key=counter_key, fallback_spend=fallback_spend)
     if fallback_authoritative:
@@ -3222,6 +3228,9 @@ async def get_current_spend(
             verified = True
             if authoritative > current:
                 await _repair_stale_spend_counter(counter_key=counter_key, db_spend=authoritative)
+            if fallback_loaded_spend is not None and fallback_loaded_spend <= authoritative:
+                return max(current, authoritative, fallback_spend)
+            if authoritative > current:
                 return authoritative
         elif fallback_spend > current:
             # nothing to read (tag counters, an end user without a row or a DB client, a
