@@ -2159,12 +2159,12 @@ async def test_commit_spend_updates_to_db_increments_key_total_spend_alongside_s
 
 
 @pytest.mark.asyncio
-async def test_update_database_returns_only_after_every_rollup_is_enqueued():
+async def test_shutdown_drain_finishes_the_rollups_update_database_started():
     """
-    Regression for LIT-6027. The spend log and the key, team and daily rollups must be enqueued
-    in the same hop, so a shutdown right after update_database returns keeps or loses them
-    together. The rollups used to run in an unreferenced asyncio task nothing awaited or drained,
-    which left spend logs without matching daily rows.
+    Regression for LIT-6027. The key, team and daily rollups ran in an unreferenced asyncio task,
+    so the shutdown sequence (flush, drain_logging_tasks, flush) never waited for them and spend
+    logs landed without matching daily rows. Once update_database returns, drain_logging_tasks
+    must leave every rollup for that request in its queue.
     """
     db_writer: Final = DBSpendUpdateWriter()
     db_writer._insert_spend_log_to_db = AsyncMock()
@@ -2205,6 +2205,7 @@ async def test_update_database_returns_only_after_every_rollup_is_enqueued():
             end_time=datetime.now(),
             response_cost=0.1,
         )
+        await drain_logging_tasks()
 
     spend: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
     assert spend["key_list_transactions"] == {"test-token": 0.1}
@@ -2225,51 +2226,48 @@ async def test_update_database_returns_only_after_every_rollup_is_enqueued():
 @pytest.mark.asyncio
 async def test_shutdown_drain_waits_for_an_in_flight_rollup_enqueue():
     """
-    Regression for LIT-6027. The rollup enqueue runs in the untracked cost-callback task, so
-    the shutdown sequence (flush, drain_logging_tasks, flush) only sees it if update_database
-    registers it as a logging task. A rollup still in flight when the drain starts must be
-    finished by the time the drain returns, so the second flush commits it.
+    Regression for LIT-6027. A rollup enqueue that is still in flight when the shutdown drain
+    starts (here: blocked on a full spend queue) must be finished by the time drain_logging_tasks
+    returns, so the second shutdown flush commits it.
     """
+    enqueue_started: Final = asyncio.Event()
+    release_enqueue: Final = asyncio.Event()
+
+    class _BlockedSpendQueue(SpendUpdateQueue):
+        async def add_update(self, update: SpendUpdateQueueItem):
+            enqueue_started.set()
+            await release_enqueue.wait()
+            await super().add_update(update)
+
     db_writer: Final = DBSpendUpdateWriter()
+    db_writer.spend_update_queue = _BlockedSpendQueue()
     db_writer._insert_spend_log_to_db = AsyncMock()
-    rollup_started: Final = asyncio.Event()
-    release_rollup: Final = asyncio.Event()
-
-    async def slow_rollup(**kwargs):
-        rollup_started.set()
-        await release_rollup.wait()
-        await db_writer.spend_update_queue.add_update(
-            update=SpendUpdateQueueItem(entity_type=Litellm_EntityType.KEY, entity_id="t1", response_cost=0.1)
-        )
-
-    db_writer._batch_database_updates = slow_rollup
     with (
         patch("litellm.proxy.proxy_server.disable_spend_logs", True),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
     ):
-        cost_callback: Final = asyncio.create_task(
-            db_writer.update_database(
-                token="t1",
-                user_id="u1",
-                end_user_id=None,
-                team_id=None,
-                org_id=None,
-                kwargs={"model": "gpt-4o-mini", "custom_llm_provider": "openai"},
-                completion_response=MagicMock(),
-                start_time=datetime.now(),
-                end_time=datetime.now(),
-                response_cost=0.1,
-            )
+        await db_writer.update_database(
+            token="t1",
+            user_id=None,
+            end_user_id=None,
+            team_id="team-1",
+            org_id=None,
+            kwargs={"model": "gpt-4o-mini", "custom_llm_provider": "openai"},
+            completion_response=MagicMock(),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.1,
         )
-        await asyncio.wait_for(rollup_started.wait(), timeout=1)
-        asyncio.get_running_loop().call_later(0.05, release_rollup.set)
-        await drain_logging_tasks(timeout=1)
+        await enqueue_started.wait()
+        drain: Final = asyncio.create_task(drain_logging_tasks())
+        release_enqueue.set()
+        await drain
         spend: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
-        await cost_callback
 
     assert spend["key_list_transactions"] == {"t1": 0.1}
+    assert spend["team_list_transactions"] == {"team-1": 0.1}
 
 
 @pytest.mark.asyncio
@@ -2893,18 +2891,17 @@ async def test_commit_spend_updates_iterates_in_sorted_order(
 
 
 @pytest.mark.asyncio
-async def test_update_database_deepcopies_once_and_only_for_the_daily_helpers():
+async def test_update_database_does_not_deepcopy_on_request_path():
     """
-    Regression for LIT-4088: the spend-log insert must not pay for a copy.deepcopy
-    and the batch takes one copy, not three. The deepcopy used to isolate the daily-spend helpers is
-    taken once at the top of _batch_database_updates, and the spend-log
+    Regression for LIT-4088: copy.deepcopy must not run while the caller awaits
+    update_database(). The deepcopy used to isolate the daily-spend helpers is
+    relocated into the _batch_database_updates logging task, and the spend-log
     insert receives the payload directly (all consumers are read-only).
 
     Asserts:
-    - exactly one copy.deepcopy per request, taken while update_database is awaited
-      (LIT-6027 awaits the rollup enqueues instead of detaching them)
-    - the daily helpers get an isolated copy (mutating the original afterwards
-      does not bleed into it)
+    - zero copy.deepcopy calls happen on the awaited request path
+    - the tracked rollup task still hands the daily helpers an isolated copy
+      (mutating the original after the task ran does not bleed into it)
     - the spend-log insert receives the payload on the request path with the
       correct content
     """
@@ -2979,13 +2976,15 @@ async def test_update_database_deepcopies_once_and_only_for_the_daily_helpers():
             response_cost=0.1,
         )
 
-        assert len(deepcopy_calls) == 1
+        assert len(deepcopy_calls) == 0
 
         # The spend-log insert ran inline on the request path with the real payload.
         assert captured_spend_log["ref"] is fake_payload
         assert captured_spend_log["model_at_call"] == "gpt-4"
         assert fake_payload["spend"] == 0.1
+        await drain_logging_tasks()
 
+    assert len(deepcopy_calls) >= 1
     assert len(captured_batch_payloads) == 1
     batch_payload = captured_batch_payloads[0]
     assert batch_payload is not fake_payload

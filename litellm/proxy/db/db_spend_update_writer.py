@@ -679,7 +679,7 @@ class DBSpendUpdateWriter:
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
 
-            await spawn_logging_task(
+            spawn_logging_task(
                 asyncio.get_running_loop(),
                 self._batch_database_updates(
                     response_cost=response_cost,
