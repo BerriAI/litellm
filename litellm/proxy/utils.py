@@ -1476,6 +1476,13 @@ def _call_type_for_route(route: str | None) -> str | None:
     return call_types[0].value if len(operations) == 1 else None
 
 
+REJECTED_BEFORE_REQUEST_SETUP_KEY: Final = "litellm_rejected_before_request_setup"
+REJECTED_BEFORE_REQUEST_SETUP: Final = object()
+"""Stored under ``REJECTED_BEFORE_REQUEST_SETUP_KEY`` on ``request_data`` when the failure handler finds no logging
+object, meaning the request died (auth, body parsing, model resolution) before the pipeline set one up. A sentinel
+object rather than ``True`` because ``request_data`` is the client body: JSON cannot forge this identity, so a
+client can neither hide a guardrail block nor force a row by sending the key or a ``litellm_call_id`` itself."""
+
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
@@ -3888,6 +3895,7 @@ class ProxyLogging:
                 **request_data,
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
+            request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
             if "metadata" not in request_data:
                 request_data["metadata"] = {}
             request_data["metadata"].update(user_api_key_logged_metadata)

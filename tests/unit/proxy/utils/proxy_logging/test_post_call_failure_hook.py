@@ -18,7 +18,7 @@ from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP, REJECTED_BEFORE_REQUEST_SETUP_KEY, ProxyLogging
 from litellm.types.utils import CachingDetails
 
 
@@ -194,7 +194,9 @@ async def test_post_call_failure_hook_attributes_single_router_deployment(
 
 
 @pytest.mark.asyncio
-async def test_pre_routing_reject_spend_log_keeps_public_model_group(proxy_logging, make_user_api_key_auth, monkeypatch):
+async def test_pre_routing_reject_spend_log_keeps_public_model_group(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
     from litellm.proxy import proxy_server
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
@@ -1001,7 +1003,9 @@ async def test_post_call_failure_hook_guardrail_block_fires_failure_callback(
             self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
         ) -> None:
             standard_logging_object = kwargs.get("standard_logging_object")
-            recorded.append(standard_logging_object.get("status") if isinstance(standard_logging_object, dict) else None)
+            recorded.append(
+                standard_logging_object.get("status") if isinstance(standard_logging_object, dict) else None
+            )
 
     monkeypatch.setattr(litellm, "_async_failure_callback", [_StatusRecorder()])
     logging_obj = LiteLLMLoggingObj(
@@ -1029,3 +1033,52 @@ async def test_post_call_failure_hook_guardrail_block_fires_failure_callback(
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert recorded == ["failure"]
+
+
+@pytest.mark.asyncio
+async def test_handle_logging_proxy_only_path_flags_requests_that_died_before_request_setup(
+    proxy_logging, make_user_api_key_auth
+):
+    """A reject before the pipeline set up logging (bad key, bad body) reaches the failure hook with no logging
+    object. The handler mints a ``litellm_call_id`` so error logs can carry it, and marks the request with a
+    server-owned sentinel so spend tracking can tell it apart from a guardrail block, which arrives with the
+    pipeline's logging object. ``request_data`` is the client body, so a client-sent call id or marker value must
+    not change either outcome."""
+    rejected_before_setup: dict[str, object] = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "x"}],
+        "metadata": {},
+        "litellm_call_id": "client-supplied",
+    }
+    await proxy_logging._handle_logging_proxy_only_error(
+        request_data=rejected_before_setup,
+        user_api_key_dict=make_user_api_key_auth(),
+        route="/chat/completions",
+        original_exception=HTTPException(status_code=401, detail="bad key"),
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.call_type = "acompletion"
+    logging_obj.model_call_details = {}
+    logging_obj.async_failure_handler = AsyncMock()
+    blocked_by_guardrail: dict[str, object] = {
+        "litellm_logging_obj": logging_obj,
+        "litellm_call_id": "call-1",
+        "model": "m",
+        "messages": [{"role": "user", "content": "x"}],
+        "metadata": {},
+        REJECTED_BEFORE_REQUEST_SETUP_KEY: True,
+    }
+    await proxy_logging._handle_logging_proxy_only_error(
+        request_data=blocked_by_guardrail,
+        user_api_key_dict=make_user_api_key_auth(),
+        route="/chat/completions",
+        original_exception=HTTPException(status_code=400, detail="blocked"),
+    )
+
+    assert (
+        rejected_before_setup.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is REJECTED_BEFORE_REQUEST_SETUP,
+        rejected_before_setup["litellm_call_id"],
+        blocked_by_guardrail.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is REJECTED_BEFORE_REQUEST_SETUP,
+        blocked_by_guardrail["litellm_call_id"],
+    ) == (True, "client-supplied", False, "call-1")
