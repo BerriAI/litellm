@@ -11,6 +11,7 @@ site, so the runtime can never start there. Workers forked from it are unaffecte
 
 from __future__ import annotations
 
+import os
 from typing import Final
 
 from litellm.rust_bridge.loader import get_native_bridge
@@ -31,11 +32,20 @@ ForkedAfterNativeRuntimeStarted: Final[type[RuntimeError]] = getattr(
 ProcessReservedForForking: Final[type[RuntimeError]] = getattr(_native, "ProcessReservedForForking", _NeverRaised)
 
 
+class _ForkReservation:
+    pid: int | None = None
+
+
+def is_process_reserved_for_forking() -> bool:
+    return _ForkReservation.pid == os.getpid()
+
+
 def reserve_process_for_forking(where: str) -> None:
     """Forbid native routes in this process. Raises if one already ran here."""
     native: Final = get_native_bridge()
     reserve: Final = getattr(native, "reserve_process_for_forking", None)
     if not callable(reserve):
+        _ForkReservation.pid = os.getpid()
         return
     try:
         reserve()
@@ -45,3 +55,4 @@ def reserve_process_for_forking(where: str) -> None:
             "threads do not survive fork(). Move the native call (warm-up, health check, "
             "import-time initialization) into the worker, after the fork."
         ) from error
+    _ForkReservation.pid = os.getpid()

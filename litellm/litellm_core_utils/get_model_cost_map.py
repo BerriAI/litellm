@@ -417,6 +417,7 @@ class ModelCostMapSourceInfo:
     loaded_at: "datetime | None" = None
     source_revision: str | None = None
     etag: str | None = None
+    checked_at: datetime | None = None
 
 
 # Module-level singleton tracking the source of the current cost map
@@ -434,6 +435,7 @@ class CostMapSourceInfo(CostMapProvenance):
     is_env_forced: ReadOnly[bool]
     fallback_reason: ReadOnly[str | None]
     loaded_at: ReadOnly[str | None]
+    checked_at: NotRequired[ReadOnly[str | None]]
 
 
 def _native_served_rows(registry: ModelRegistry) -> tuple[_NativeServedRow, ...]:
@@ -573,6 +575,9 @@ def get_model_cost_map_source_info() -> CostMapSourceInfo:
         "loaded_at": loaded_at.isoformat() if loaded_at is not None else None,
         "source_revision": _cost_map_source_info.source_revision,
         "etag": _cost_map_source_info.etag,
+        "checked_at": (
+            _cost_map_source_info.checked_at.isoformat() if _cost_map_source_info.checked_at is not None else None
+        ),
     }
 
 
@@ -972,20 +977,25 @@ def load_model_cost_map_at_import(
     sleep: Callable[[float], None] = time.sleep,
     rng: random.Random | None = None,
     client: "_SyncGetClient | None" = None,
-) -> dict:
-    """
-    Public entry point — returns the model cost map dict.
+) -> ModelCostDict:
+    """Serve bundled prices immediately and schedule one background revalidation."""
+    from litellm.litellm_core_utils.model_cost_revalidate import REVALIDATOR
 
-    1. If ``LITELLM_LOCAL_MODEL_COST_MAP`` is set or this is a ``lite`` /
-       ``litellm-proxy`` CLI process, uses the local backup only.
-    2. Otherwise fetches from ``url``, retrying transient HTTP errors
-       (429/5xx/transport) with Retry-After-aware backoff in a background
-       thread, validates integrity, and falls back to the local backup on any
-       failure.
-
-    """
-    fetch_seed: Final = rng.getrandbits(64) if rng is not None else None
-    return _get_native_model_cost_map(url, timeout, max_attempts, sleep, client, fetch_seed)
+    catalog: Final = LoadedCatalog(ModelRegistry.bundled(), git_blob_id(ModelRegistry.bundled_bytes()), None)
+    rows: Final = install_loaded_catalog(
+        catalog,
+        provenance=_source_info(
+            catalog,
+            "local",
+            url,
+            os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true",
+            "remote revalidation pending",
+        ),
+    )
+    if isinstance(rows, ModelCostMapUnavailable):
+        return ModelCostDict()
+    REVALIDATOR.start(url)
+    return rows
 
 
 def _mutable_model_cost_value(value: object) -> object:

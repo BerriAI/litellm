@@ -42,24 +42,51 @@ from litellm.rust_bridge._native import ModelRegistry, model_row_errors
 
 
 @dataclass(frozen=True, slots=True)
+class _LocalResponse:
+    status: int
+    body: bytes
+    headers: tuple[tuple[str, str], ...] = ()
+    started: threading.Event | None = None
+    release: threading.Event | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class _LocalResponses:
     url: str
     requests: queue.Queue[None]
+    request_headers: queue.Queue[dict[str, str]]
 
 
 @contextmanager
-def _local_responses(responses: tuple[tuple[int, bytes], ...]) -> Generator[_LocalResponses, None, None]:
+def _local_responses(
+    responses: tuple[tuple[int, bytes] | _LocalResponse, ...],
+) -> Generator[_LocalResponses, None, None]:
     response_indexes: Final = count()
     request_count: Final[queue.Queue[None]] = queue.Queue()
+    request_headers: Final[queue.Queue[dict[str, str]]] = queue.Queue()
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             request_count.put(None)
+            request_headers.put(dict(self.headers.items()))
             index: Final = min(next(response_indexes), len(responses) - 1)
-            status, body = responses[index]
+            response: Final = responses[index]
+            if isinstance(response, _LocalResponse):
+                status, body = response.status, response.body
+                headers = response.headers
+                if response.started is not None:
+                    response.started.set()
+                if response.release is not None and not response.release.wait(timeout=30):
+                    self.send_error(504)
+                    return
+            else:
+                status, body = response
+                headers = ()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            for name, value in headers:
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(body)
 
@@ -70,7 +97,7 @@ def _local_responses(responses: tuple[tuple[int, bytes], ...]) -> Generator[_Loc
     thread: Final = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
-        yield _LocalResponses(f"http://127.0.0.1:{server.server_port}/prices.json", request_count)
+        yield _LocalResponses(f"http://127.0.0.1:{server.server_port}/prices.json", request_count, request_headers)
     finally:
         server.shutdown()
         thread.join()
@@ -97,6 +124,7 @@ def _isolated_model_cost_state() -> Generator[None, None, None]:
         source_info.is_env_forced,
         source_info.fallback_reason,
         source_info.loaded_at,
+        source_info.checked_at,
         source_info.source_revision,
         source_info.etag,
     )
@@ -118,9 +146,13 @@ def _isolated_model_cost_state() -> Generator[None, None, None]:
         model_cost_api._owners = original_owners  # pyright: ignore[reportPrivateUsage]  # test state restore
         model_cost_api._current_source = original_source  # pyright: ignore[reportPrivateUsage]  # test state restore
         source_info.source, source_info.url, source_info.is_env_forced = source_values[:3]
-        source_info.fallback_reason, source_info.loaded_at, source_info.source_revision, source_info.etag = (
-            source_values[3:]
-        )
+        (
+            source_info.fallback_reason,
+            source_info.loaded_at,
+            source_info.checked_at,
+            source_info.source_revision,
+            source_info.etag,
+        ) = source_values[3:]
         set_fallback_generalizations(original_fallback)
         litellm.model_cost = original_map
         for name, values in original_provider_sets.items():
