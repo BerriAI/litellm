@@ -2,7 +2,7 @@ import moment from "moment";
 import { parseAsNativeArrayOf, parseAsString, parseAsStringEnum, type inferParserType } from "nuqs";
 
 import type { EntityType } from "@/components/EntityUsageExport/types";
-import { relativeTimeOptions } from "@/components/shared/advanced_date_picker";
+import { relativeTimeOptions } from "@/components/shared/date_range_presets";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { uiHref } from "@/utils/uiHref";
 import { USAGE_OPTIONS, type UsageOption } from "./components/UsageViewSelect/UsageViewSelect";
@@ -130,6 +130,15 @@ export const dateRangeFromParams = (params: DateParams): DateRangePickerValue | 
   }
   if (params.from === null || params.to === null) return undefined;
   return customRangeFromParams(params.from, params.to);
+};
+
+export const defaultUsageDateRange = (setting: unknown): { value: DateRangePickerValue; preset: string | null } => {
+  const option = relativeTimeOptions.find((candidate) => candidate.settingValue === setting);
+  if (!option || option.settingValue === "last_7_days") {
+    const now = new Date();
+    return { value: { from: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000), to: now }, preset: "7d" };
+  }
+  return { value: option.getValue(), preset: option.shortLabel };
 };
 
 export const dateRangePatch = (value: DateRangePickerValue, presetShortLabel: string | null): UsageUrlPatch => {

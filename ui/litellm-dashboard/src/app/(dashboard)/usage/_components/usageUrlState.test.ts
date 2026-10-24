@@ -1,6 +1,6 @@
 import moment from "moment";
 import { createLoader, createSerializer } from "nuqs";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UsageClient } from "./components/overview/agentCatalog";
 import type { UsageOption } from "./components/UsageViewSelect/UsageViewSelect";
@@ -11,6 +11,7 @@ import {
   clientDateRangePatch,
   clientPanelPatch,
   dateRangeFromParams,
+  defaultUsageDateRange,
   dateRangePatch,
   entitySelectionPatch,
   selectedEntitiesFromParams,
@@ -369,5 +370,65 @@ describe("client team scope", () => {
       clientPanelPatch(null),
     );
     expect(query).toBe("?view=team&team=engineering");
+  });
+});
+
+describe("configured Usage default", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each([undefined, null, "unknown", "last_7_days"])("preserves the rolling seven-day fallback for %s", (setting) => {
+    vi.useFakeTimers();
+    const now = new Date(2026, 9, 24, 12, 34, 56, 789);
+    vi.setSystemTime(now);
+    expect(defaultUsageDateRange(setting)).toEqual({
+      value: { from: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000), to: now },
+      preset: "7d",
+    });
+  });
+
+  it.each(["UTC", "America/Los_Angeles", "Europe/London", "Asia/Tokyo"])(
+    "uses local calendar boundaries in %s",
+    (timezone) => {
+      withTimezone(timezone, () => {
+        vi.useFakeTimers();
+        for (const [year, month, day] of [
+          [2024, 1, 29],
+          [2026, 2, 8],
+          [2026, 10, 1],
+          [2026, 11, 31],
+          [2027, 0, 1],
+        ]) {
+          vi.setSystemTime(new Date(year, month, day, 12));
+          const end = new Date(year, month, day, 23, 59, 59, 999);
+          expect(defaultUsageDateRange("month_to_date")).toEqual({
+            value: { from: new Date(year, month, 1), to: end },
+            preset: "MTD",
+          });
+          expect(defaultUsageDateRange("year_to_date")).toEqual({
+            value: { from: new Date(year, 0, 1), to: end },
+            preset: "YTD",
+          });
+          expect(defaultUsageDateRange("today")).toEqual({
+            value: { from: new Date(year, month, day), to: end },
+            preset: "today",
+          });
+          expect(defaultUsageDateRange("last_30_days")).toEqual({
+            value: { from: new Date(year, month, day - 30), to: end },
+            preset: "30d",
+          });
+        }
+      });
+    },
+  );
+
+  it("recalculates month to date across midnight instead of storing absolute dates", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 11, 31, 23, 59));
+    expect(defaultUsageDateRange("month_to_date").value.from).toEqual(new Date(2026, 11, 1));
+    vi.setSystemTime(new Date(2027, 0, 1));
+    expect(defaultUsageDateRange("month_to_date")).toEqual({
+      value: { from: new Date(2027, 0, 1), to: new Date(2027, 0, 1, 23, 59, 59, 999) },
+      preset: "MTD",
+    });
   });
 });
