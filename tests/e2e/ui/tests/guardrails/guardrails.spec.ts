@@ -195,6 +195,7 @@ test.describe("Guardrails", () => {
 
     const modal = page.getByRole("dialog");
     await expect(modal).toBeVisible({ timeout: 5_000 });
+    await modal.getByPlaceholder(guardrailName).fill(guardrailName);
     await modal.getByRole("button", { name: "Delete", exact: true }).click();
 
     await expect(page.getByRole("row").filter({ hasText: guardrailName })).toHaveCount(0, { timeout: 15_000 });
@@ -281,6 +282,7 @@ test.describe("Guardrails", () => {
 
     const deleteModal = page.getByRole("dialog", { name: "Delete Guardrail" });
     await expect(deleteModal).toBeVisible({ timeout: 5_000 });
+    await deleteModal.getByPlaceholder(guardrailName).fill(guardrailName);
     await deleteModal.getByRole("button", { name: "Delete", exact: true }).click();
 
     await expect(page.getByText(`Guardrail "${guardrailName}" deleted successfully`)).toBeVisible({

@@ -36,8 +36,8 @@ def mock_response(request: NativeCall) -> bool:
 
 
 def caller_client(request: NativeCall) -> bool:
-    """Python sends through the caller's HTTP client or shared session."""
-    return present(request, "client") or present(request, "shared_session")
+    """Python sends through the caller's HTTP client. The proxy's shared session is only a pool native replaces."""
+    return present(request, "client")
 
 
 def extra_body(request: NativeCall) -> bool:
