@@ -1023,6 +1023,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "api.x.ai/v1",
     "ollama.com",
     "api.galadriel.ai/v1",
+    "https://api.zerogpu.ai/v1",
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
@@ -1092,6 +1093,7 @@ openai_compatible_providers: Final[list[str]] = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "zerogpu",
     "github_copilot",  # GitHub Copilot Chat API
     "chatgpt",  # ChatGPT subscription API
     "novita",
