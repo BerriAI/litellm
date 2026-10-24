@@ -16,14 +16,90 @@ The mechanism works without any cache and supports two encoding strategies:
 """
 
 import time
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.models.credentials import CredentialItem
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
+
+
+@pytest.mark.asyncio
+async def test_retry_leaves_failed_encrypted_content_affinity_deployment(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model_group: Final = "gpt-5.6"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_base": f"https://region-{region}.example.invalid/v1",
+                    "api_key": "sk-one-org",
+                },
+                "model_info": {"id": f"region-{region}"},
+            }
+            for region in range(1, 4)
+        ],
+        disable_cooldowns=True,
+        num_retries=1,
+        retry_after=0,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+    )
+    failed_route: Final = respx_mock.post("https://region-1.example.invalid/v1/responses").mock(
+        return_value=httpx.Response(
+            500,
+            json={"error": {"message": "upstream failed", "type": "server_error", "code": "server_error"}},
+        )
+    )
+    completed_response: Final[dict[str, object]] = {
+        "id": "resp_retry_peer",
+        "object": "response",
+        "created_at": 0,
+        "status": "completed",
+        "model": "gpt-5.6",
+        "output": [
+            {
+                "id": "msg_retry_peer",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    second_route: Final = respx_mock.post("https://region-2.example.invalid/v1/responses").mock(
+        return_value=httpx.Response(200, json=completed_response)
+    )
+    third_route: Final = respx_mock.post("https://region-3.example.invalid/v1/responses").mock(
+        return_value=httpx.Response(200, json=completed_response)
+    )
+    followup: Final[list[dict[str, object]]] = [
+        {
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                "gAAAA-opaque", "region-1"
+            ),
+        },
+        {"role": "user", "content": "follow-up"},
+    ]
+
+    try:
+        await router.aresponses(model=model_group, input=followup, litellm_metadata={})
+
+        assert failed_route.call_count == 1
+        assert second_route.call_count + third_route.call_count == 1
+    finally:
+        router.discard()
 
 
 @pytest.fixture(autouse=True)
