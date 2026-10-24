@@ -11,7 +11,9 @@ use litellm_host::{
     lifecycle::{CallEvent, ExecutionEvent},
     observation::observation_channel,
 };
-use litellm_token_counter::raw_text::{LocalTokenizerConfig, RawTextArtifact, RawTextEngine};
+use litellm_token_counter::raw_text::{
+    LocalTokenizerConfig, RawTextArtifact, RawTextEngine, SpecialTextPolicy,
+};
 use rstest::rstest;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -35,6 +37,43 @@ fn local_config(engine: RawTextEngine, artifact: RawTextArtifact) -> LocalTokeni
         special_text: None,
         add_special_tokens: None,
     }
+}
+
+fn small_hf_artifact() -> String {
+    json!({
+        "version": "1.0",
+        "truncation": null,
+        "padding": null,
+        "added_tokens": [{
+            "id": 0,
+            "special": true,
+            "content": "[CLS]",
+            "single_word": false,
+            "lstrip": false,
+            "rstrip": false,
+            "normalized": false
+        }],
+        "normalizer": null,
+        "pre_tokenizer": {"type": "Whitespace"},
+        "post_processor": {
+            "type": "TemplateProcessing",
+            "single": [
+                {"SpecialToken": {"id": "[CLS]", "type_id": 0}},
+                {"Sequence": {"id": "A", "type_id": 0}}
+            ],
+            "pair": [],
+            "special_tokens": {
+                "[CLS]": {"id": "[CLS]", "ids": [0], "tokens": ["[CLS]"]}
+            }
+        },
+        "decoder": null,
+        "model": {
+            "type": "WordLevel",
+            "vocab": {"[CLS]": 0, "hello": 1, "world": 2, "[UNK]": 3},
+            "unk_token": "[UNK]"
+        }
+    })
+    .to_string()
 }
 
 fn deployment(model: &str, api_base: Option<String>) -> Deployment {
@@ -76,13 +115,18 @@ fn config_value(config: &LocalTokenizerConfig) -> Value {
             json!({"type":"file","path":path,"sha256":sha256})
         }
     };
+    let special_text = match config.special_text {
+        Some(SpecialTextPolicy::Literal) => json!("literal"),
+        Some(SpecialTextPolicy::Recognize) => json!("recognize"),
+        None => Value::Null,
+    };
     json!({
         "id": config.id,
         "revision": config.revision,
         "engine": engine,
         "artifact": artifact,
-        "special_text": null,
-        "add_special_tokens": null
+        "special_text": special_text,
+        "add_special_tokens": config.add_special_tokens
     })
 }
 
@@ -228,6 +272,7 @@ async fn requested_representations_are_enforced(#[case] include: Value) {
     assert_eq!(response.status(), 200);
 }
 
+#[rstest]
 #[tokio::test]
 async fn configured_provider_headers_and_special_token_override_reach_vllm_without_defaults() {
     let upstream = MockServer::start().await;
@@ -277,6 +322,7 @@ async fn configured_provider_headers_and_special_token_override_reach_vllm_witho
     assert_eq!(body["tokens"], json!([]));
 }
 
+#[rstest]
 #[tokio::test]
 async fn watsonx_unsupported_representation_is_rejected_before_io() {
     let upstream = MockServer::start().await;
@@ -287,6 +333,26 @@ async fn watsonx_unsupported_representation_is_rejected_before_io() {
             "model":"public/model",
             "prompt":"hello",
             "include":["token_ids"]
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), 501);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[case::enabled(true)]
+#[case::disabled(false)]
+#[tokio::test]
+async fn watsonx_rejects_explicit_special_token_policy_before_io(#[case] add_special_tokens: bool) {
+    let upstream = MockServer::start().await;
+    let response = support::post(
+        support::app("watsonx/model", &upstream.uri()),
+        "/tokenize",
+        json!({
+            "model":"public/model",
+            "prompt":"hello",
+            "add_special_tokens":add_special_tokens
         }),
     )
     .await;
@@ -350,6 +416,7 @@ async fn upstream_errors_forward_safe_headers_once(#[case] status: u16) {
     assert!(!response.headers().contains_key("set-cookie"));
 }
 
+#[rstest]
 #[tokio::test]
 async fn authorization_and_unknown_aliases_precede_provider_io() {
     let upstream = MockServer::start().await;
@@ -375,21 +442,68 @@ async fn authorization_and_unknown_aliases_precede_provider_io() {
 }
 
 #[rstest]
-#[case::inline(local_config(
-    RawTextEngine::HuggingFace,
-    RawTextArtifact::Inline { content: HF_ARTIFACT.into() },
-))]
+#[case::alias_grant("public/model", 200, 1)]
+#[case::provider_model_grant("hosted_vllm/org/model", 403, 0)]
+#[tokio::test]
+async fn restricted_model_grants_match_public_alias_before_provider_io(
+    #[case] granted_name: &str,
+    #[case] expected_status: u16,
+    #[case] expected_requests: usize,
+    #[values("/tokenize", "/v1/tokenize")] endpoint: &str,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/tokenize"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "count":1,"tokens":[7],"token_strs":["hello"]
+        })))
+        .mount(&upstream)
+        .await;
+    let permissions = litellm_gateway_auth::Permissions::Only(Arc::from([
+        litellm_gateway_auth::AccessRequest::Model {
+            name: granted_name.into(),
+            deployment: "hosted_vllm/org/model".into(),
+        },
+    ]));
+    let response = support::post(
+        support::app_with_permissions("hosted_vllm/org/model", &upstream.uri(), permissions),
+        endpoint,
+        json!({"model":"public/model","prompt":"hello"}),
+    )
+    .await;
+
+    assert_eq!(response.status().as_u16(), expected_status);
+    assert_eq!(
+        upstream.received_requests().await.unwrap().len(),
+        expected_requests
+    );
+}
+
+#[rstest]
+#[case::count_omitted(json!({}), "hello world", 3, Value::Null, Value::Null)]
+#[case::count_empty_include(json!({"include": []}), "hello world", 3, Value::Null, Value::Null)]
+#[case::ids(json!({"include": ["token_ids"]}), "hello world", 3, json!([0, 1, 2]), Value::Null)]
+#[case::tokens(json!({"include": ["tokens"]}), "hello world", 3, Value::Null, json!(["[CLS]", "hello", "world"]))]
+#[case::both(json!({"include": ["token_ids", "tokens"]}), "hello world", 3, json!([0, 1, 2]), json!(["[CLS]", "hello", "world"]))]
+#[case::empty_prompt_both(json!({"include": ["token_ids", "tokens"]}), "", 1, json!([0]), json!(["[CLS]"]))]
 #[tokio::test]
 async fn configured_local_backends_preserve_prompt_and_response_contract(
-    #[case] config: LocalTokenizerConfig,
-    #[values(json!({}), json!({"include":["token_ids"]}), json!({"include":["tokens"]}), json!({"include":["token_ids","tokens"]}))]
-    options: Value,
+    #[case] options: Value,
+    #[case] prompt: &str,
+    #[case] count: u64,
+    #[case] token_ids: Value,
+    #[case] tokens: Value,
 ) {
     let response = support::post(
-        support::app_with_deployment(local_deployment(config)),
+        support::app_with_deployment(local_deployment(local_config(
+            RawTextEngine::HuggingFace,
+            RawTextArtifact::Inline {
+                content: small_hf_artifact(),
+            },
+        ))),
         "/v1/tokenize",
         {
-            let mut body = json!({"model":"public/model","prompt":"  café 世界  "});
+            let mut body = json!({"model":"public/model","prompt":prompt});
             body.as_object_mut()
                 .unwrap()
                 .extend(options.as_object().unwrap().clone());
@@ -400,11 +514,81 @@ async fn configured_local_backends_preserve_prompt_and_response_contract(
     assert_eq!(response.status(), 200);
     let body = response_json(response).await;
     assert_eq!(body["model"], "gateway-local");
-    assert!(body["count"].as_u64().unwrap() > 0);
-    assert!(body.get("token_ids").is_some());
-    assert!(body.get("tokens").is_some());
+    assert_eq!(body["count"], count);
+    assert_eq!(body["token_ids"], token_ids);
+    assert_eq!(body["tokens"], tokens);
+    assert_eq!(body.as_object().unwrap().len(), 4);
 }
 
+#[rstest]
+#[tokio::test]
+async fn explicit_special_token_override_preserves_configured_policy() {
+    let config = LocalTokenizerConfig {
+        add_special_tokens: Some(true),
+        ..local_config(
+            RawTextEngine::HuggingFace,
+            RawTextArtifact::Inline {
+                content: small_hf_artifact(),
+            },
+        )
+    };
+    let app = support::app_with_deployment(local_deployment(config));
+    let initial = response_json(
+        support::post(
+            app.clone(),
+            "/tokenize",
+            json!({
+                "model":"public/model",
+                "prompt":"hello world",
+                "include":["token_ids","tokens"]
+            }),
+        )
+        .await,
+    )
+    .await;
+    let explicit_false = response_json(
+        support::post(
+            app.clone(),
+            "/tokenize",
+            json!({
+                "model":"public/model",
+                "prompt":"hello world",
+                "include":["token_ids","tokens"],
+                "add_special_tokens":false
+            }),
+        )
+        .await,
+    )
+    .await;
+    let omitted_again = response_json(
+        support::post(
+            app,
+            "/tokenize",
+            json!({
+                "model":"public/model",
+                "prompt":"hello world",
+                "include":["token_ids","tokens"]
+            }),
+        )
+        .await,
+    )
+    .await;
+
+    assert_eq!(initial["model"], "gateway-local");
+    assert_eq!(explicit_false["model"], "gateway-local");
+    assert_eq!(omitted_again["model"], "gateway-local");
+    assert_eq!(initial["count"], 3);
+    assert_eq!(initial["token_ids"], json!([0, 1, 2]));
+    assert_eq!(initial["tokens"], json!(["[CLS]", "hello", "world"]));
+    assert_eq!(explicit_false["count"], 2);
+    assert_eq!(explicit_false["token_ids"], json!([1, 2]));
+    assert_eq!(explicit_false["tokens"], json!(["hello", "world"]));
+    assert_eq!(omitted_again["count"], 3);
+    assert_eq!(omitted_again["token_ids"], json!([0, 1, 2]));
+    assert_eq!(omitted_again["tokens"], json!(["[CLS]", "hello", "world"]));
+}
+
+#[rstest]
 #[tokio::test]
 async fn configured_tiktoken_supports_ids_but_rejects_pieces() {
     let response = support::post(
@@ -445,6 +629,7 @@ fn byte_ranks() -> String {
         .join("\n")
 }
 
+#[rstest]
 #[tokio::test]
 async fn local_tiktoken_file_artifact_is_hash_pinned_and_pieces_are_explicitly_unsupported() {
     let content = byte_ranks();
@@ -482,6 +667,7 @@ async fn local_tiktoken_file_artifact_is_hash_pinned_and_pieces_are_explicitly_u
     std::fs::remove_file(path).unwrap();
 }
 
+#[rstest]
 #[tokio::test]
 async fn local_backend_rejects_provider_fields_without_network_fallback() {
     let response = support::post(
@@ -541,6 +727,7 @@ impl Interceptors<litellm_inference::Error> for Hooks {
     }
 }
 
+#[rstest]
 #[tokio::test]
 async fn hooks_rewrite_wire_and_result_failure_does_not_replay() {
     let upstream = MockServer::start().await;
@@ -607,6 +794,7 @@ async fn hooks_rewrite_wire_and_result_failure_does_not_replay() {
     );
 }
 
+#[rstest]
 #[tokio::test]
 async fn local_facts_are_provider_zero_cost_and_observers_see_terminals() {
     let (sender, mut events) = observation_channel(std::num::NonZeroUsize::new(16).unwrap());
@@ -649,6 +837,7 @@ async fn local_facts_are_provider_zero_cost_and_observers_see_terminals() {
     ));
 }
 
+#[rstest]
 #[test]
 fn current_thread_executor_remains_responsive_during_cold_local_load_and_encoding() {
     tokio::runtime::Builder::new_current_thread()
@@ -691,5 +880,87 @@ fn current_thread_executor_remains_responsive_during_cold_local_load_and_encodin
             heartbeat.abort();
             assert_eq!(response.status(), 200);
             assert!(ticks.load(std::sync::atomic::Ordering::Relaxed) > 0);
+        });
+}
+
+#[rstest]
+#[case::count_only(None, 250_000)]
+#[case::both_representations(Some(json!(["token_ids","tokens"])), 80_000)]
+#[test]
+fn current_thread_executor_remains_responsive_during_warm_local_work(
+    #[case] include: Option<Value>,
+    #[case] repetitions: usize,
+) {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let app = support::app_with_deployment(local_deployment(local_config(
+                RawTextEngine::HuggingFace,
+                RawTextArtifact::Inline {
+                    content: HF_ARTIFACT.into(),
+                },
+            )));
+            let warm = support::post(
+                app.clone(),
+                "/tokenize",
+                json!({"model":"public/model","prompt":"hello"}),
+            )
+            .await;
+            assert_eq!(warm.status(), 200);
+
+            let maximum_gap = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let observed_gap = Arc::clone(&maximum_gap);
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let heartbeat = tokio::spawn(async move {
+                let mut timer = tokio::time::interval(std::time::Duration::from_millis(2));
+                timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                timer.tick().await;
+                let mut previous = tokio::time::Instant::now();
+                let _ = started.send(());
+                loop {
+                    timer.tick().await;
+                    let gap = previous.elapsed().as_micros() as u64;
+                    observed_gap.fetch_max(gap, std::sync::atomic::Ordering::Relaxed);
+                    previous = tokio::time::Instant::now();
+                }
+            });
+            ready.await.unwrap();
+
+            let prompt = "hello ".repeat(repetitions);
+            let body = match include {
+                Some(include) => json!({
+                    "model":"public/model",
+                    "prompt":prompt,
+                    "include":include
+                }),
+                None => json!({"model":"public/model","prompt":prompt}),
+            };
+            let request = tokio::spawn(async move {
+                app.oneshot(
+                    Request::post("/tokenize")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+            });
+            let response = tokio::time::timeout(std::time::Duration::from_secs(15), request)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            heartbeat.abort();
+
+            let maximum_gap = std::time::Duration::from_micros(
+                maximum_gap.load(std::sync::atomic::Ordering::Relaxed),
+            );
+            assert!(
+                maximum_gap < std::time::Duration::from_millis(150),
+                "heartbeat paused for {maximum_gap:?}"
+            );
         });
 }
