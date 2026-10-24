@@ -13,8 +13,11 @@ from typing import Final, TypeAlias
 import requests
 from google.protobuf.json_format import MessageToDict
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+from opentelemetry.exporter.otlp.proto.http._common import RequestPayloadTooLargeError
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export import SpanExportResult
+from opentelemetry.semconv.attributes.http_attributes import HTTP_RESPONSE_STATUS_CODE
 
 JSON_CONTENT_TYPE: Final = "application/json"
 _HEX_ID_KEYS: Final = frozenset({"traceId", "spanId", "parentSpanId"})
@@ -70,8 +73,30 @@ class OTLPJsonSpanExporter(OTLPSpanExporter):
         certificate_file: str | None = None,
         session: "requests.Session | None" = None,
     ) -> None:
-        super().__init__(endpoint=endpoint, headers=headers, certificate_file=certificate_file, session=session)
-        self._session.headers["Content-Type"] = JSON_CONTENT_TYPE
+        super().__init__(
+            endpoint=endpoint,
+            headers={**headers, "Content-Type": JSON_CONTENT_TYPE},
+            certificate_file=certificate_file,
+            session=session,
+        )
 
-    def _serialize_spans(self, spans: Sequence[ReadableSpan]) -> bytes:
-        return encode_spans_json(spans)
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        if self._shutdown:
+            return SpanExportResult.FAILURE
+        with self._metrics.export_operation(len(spans)) as result:
+            serialized_data: Final = encode_spans_json(spans)
+            if 0 < self._max_request_size < len(serialized_data):
+                result.error = RequestPayloadTooLargeError(
+                    f"Serialized span request size {len(serialized_data)} exceeds {self._max_request_size} bytes"
+                )
+                return SpanExportResult.FAILURE
+            export_result: Final = self._client.export(serialized_data)
+            if not export_result.success:
+                result.error = export_result.error
+                result.error_attrs = (
+                    {HTTP_RESPONSE_STATUS_CODE: export_result.status_code}
+                    if export_result.status_code is not None
+                    else None
+                )
+                return SpanExportResult.FAILURE
+        return SpanExportResult.SUCCESS

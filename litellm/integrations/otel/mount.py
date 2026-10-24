@@ -124,7 +124,7 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
     ``x-litellm-call-id`` header. ``tracer_provider`` defaults to the global provider.
     """
     try:
-        if not is_otel_v2_enabled():
+        if not is_otel_v2_enabled() or app.middleware_stack is not None:
             return
 
         # Lazy: only the V2-enabled path needs the optional

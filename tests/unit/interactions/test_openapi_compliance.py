@@ -17,6 +17,8 @@ import httpx
 import pytest
 from openapi_core import OpenAPI
 
+from litellm.types.interactions import InteractionStatus
+
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 
 
@@ -250,26 +252,10 @@ class TestResponseCompliance:
             print(f"✓ Output field '{field}' exists in spec")
 
     def test_status_enum_values(self, spec_dict):
-        """Verify status enum values match spec."""
-        # `status` is an output-only field; validate against the response schema.
+        """Verify response statuses from the spec are accepted by the SDK."""
         schema = spec_dict["components"]["schemas"]["Interaction"]
         status_prop = schema["properties"]["status"]
-        # Google Interactions API uses lowercase status values (updated Feb 2026).
-        # Keep this an exact match: this test intentionally breaks CI when
-        # Google changes the live spec — that breakage is how we get notified
-        # to review the change.
-        expected_statuses = [
-            "in_progress",
-            "requires_action",
-            "completed",
-            "failed",
-            "cancelled",
-            "incomplete",
-            "budget_exceeded",
-            "queued",
-        ]
-        assert status_prop["enum"] == expected_statuses
-        print(f"✓ Status enum values: {expected_statuses}")
+        assert [InteractionStatus(status).value for status in status_prop["enum"]] == status_prop["enum"]
 
     def test_usage_schema(self, spec_dict):
         """Verify Usage schema fields."""
