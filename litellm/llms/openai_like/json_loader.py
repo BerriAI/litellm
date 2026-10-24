@@ -3,6 +3,7 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 """
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
@@ -26,7 +27,7 @@ class SimpleProviderConfig:
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
-        self.supported_endpoints = data.get("supported_endpoints", [])
+        self.supported_endpoints: Sequence[str] = data.get("supported_endpoints", [])
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
@@ -85,6 +86,14 @@ class JSONProviderRegistry:
         if provider is None:
             return False
         return "/v1/responses" in provider.supported_endpoints
+
+    @classmethod
+    def supports_embeddings(cls, slug: str) -> bool:
+        """Check if a JSON provider supports the Embeddings API"""
+        provider: Final = cls._providers.get(slug)
+        if provider is None:
+            return False
+        return "/v1/embeddings" in provider.supported_endpoints
 
     @classmethod
     def list_providers(cls) -> list:
