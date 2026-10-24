@@ -78,6 +78,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_member_spend: float | None = None
     team_member_tpm_limit: int | None = None
     team_member_rpm_limit: int | None = None
+    team_member_budget: float | None = None
 
     # End User Params
     end_user_id: str | None = None
