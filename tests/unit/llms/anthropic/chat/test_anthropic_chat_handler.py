@@ -3609,17 +3609,17 @@ def test_streamed_end_turn_carries_no_stop_details():
     assert "stop_reason" not in provider_fields
 
 
-def test_streaming_text_block_start_without_text_field():
-    """Compatible gateways may omit `text` on a text block start, where upstream always sends an empty string. Regression for #40689."""
+def test_streaming_text_block_start_without_text_field() -> None:
+    """Preserve text deltas when a gateway omits block-start text."""
     model_response_iterator: Final = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+        streaming_response=iter(()), sync_stream=True, json_mode=False
     )
-    chunks = [
+    chunks: Final = (
         {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}},
         {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello"}},
-    ]
+    )
 
-    parsed_chunks = [model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks]
-    text = "".join(chunk.choices[0].delta.content or "" for chunk in parsed_chunks)
+    parsed_chunks: Final = tuple(model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks)
+    text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in parsed_chunks)
 
     assert text == "hello"

@@ -13,7 +13,6 @@ from collections.abc import Sequence
 from typing import Final
 
 import httpx
-import requests
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from pydantic import Field
@@ -77,6 +76,7 @@ def agentops_preset(
 
 def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
     """Factory for the ``agentops`` exporter kind: a lazy-auth OTLP/HTTP exporter."""
+    import requests
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
         OTLPSpanExporter,
     )
@@ -90,8 +90,8 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
         """
 
         def __init__(self, *, endpoint: str | None, api_key: str | None) -> None:
-            self._session = requests.Session()
-            super().__init__(endpoint=endpoint, session=self._session)
+            self._agentops_session = requests.Session()
+            super().__init__(endpoint=endpoint, session=self._agentops_session)
             self._agentops_api_key = api_key
             self._auth_resolved = False
 
@@ -104,7 +104,7 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
             try:
                 token: Final = _fetch_agentops_jwt(self._agentops_api_key).get("token")
                 if token:
-                    self._session.headers["Authorization"] = f"Bearer {token}"
+                    self._agentops_session.headers["Authorization"] = f"Bearer {token}"
             except Exception as e:
                 verbose_logger.debug("AgentOps JWT fetch failed: %s", e)
 
