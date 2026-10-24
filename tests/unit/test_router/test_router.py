@@ -30034,7 +30034,9 @@ def _candidate_ids(
     messages: list[dict[str, object]] | None = None,
     request_kwargs: dict[str, object] | None = None,
 ) -> list[str]:
-    _, candidates = router._common_checks_available_deployment(model="mixed", messages=messages, request_kwargs=request_kwargs)
+    candidates = router._without_declared_text_only_deployments(
+        router.get_model_list(model_name="mixed"), "mixed", messages, request_kwargs
+    )
     return [d["model_info"]["id"] for d in candidates]
 
 
@@ -30045,16 +30047,34 @@ def test_router_picks_the_vision_leg_for_image_requests_without_enable_pre_call_
         assert router.get_available_deployment(model="mixed", messages=_IMAGE_CHAT)["model_info"]["id"] == "vision"
 
 
+@pytest.mark.asyncio
+async def test_async_router_picks_the_vision_leg_for_responses_images_without_enable_pre_call_checks():
+    router = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    for _ in range(5):
+        deployment = await router.async_get_available_deployment(
+            model="mixed", request_kwargs={"input": _IMAGE_RESPONSES_INPUT}
+        )
+        assert deployment["model_info"]["id"] == "vision"
+
+
+def test_router_sends_an_image_to_the_text_only_leg_when_the_vision_leg_is_cooling_down():
+    router = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="vision", original_exception=Exception("bad key"), exception_status=401, cooldown_time=60
+    )
+    assert router.get_available_deployment(model="mixed", messages=_IMAGE_CHAT)["model_info"]["id"] == "declared-text"
+
+
 def test_without_declared_text_only_deployments_passes_a_chosen_deployment_through():
     assert litellm.Router._without_declared_text_only_deployments(_DECLARED_TEXT_LEG, "mixed", _IMAGE_CHAT, None) is _DECLARED_TEXT_LEG
 
 
-def test_common_checks_drop_declared_text_only_legs_for_image_requests():
+def test_image_routing_drop_declared_text_only_legs_for_image_requests():
     router = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
     assert _candidate_ids(router, messages=_IMAGE_CHAT) == ["vision"]
 
 
-def test_common_checks_keep_declared_text_only_legs_for_text_requests():
+def test_image_routing_keep_declared_text_only_legs_for_text_requests():
     router = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
     assert _candidate_ids(router, messages=[{"role": "user", "content": "Say hi"}]) == [
         "vision",
@@ -30062,12 +30082,12 @@ def test_common_checks_keep_declared_text_only_legs_for_text_requests():
     ]
 
 
-def test_common_checks_drop_declared_text_only_legs_for_responses_input_image():
+def test_image_routing_drop_declared_text_only_legs_for_responses_input_image():
     router = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
     assert _candidate_ids(router, request_kwargs={"input": _IMAGE_RESPONSES_INPUT}) == ["vision"]
 
 
-def test_common_checks_send_image_to_the_group_when_every_leg_is_declared_text_only():
+def test_image_routing_send_image_to_the_group_when_every_leg_is_declared_text_only():
     other_text_leg = {**_DECLARED_TEXT_LEG, "model_info": {"id": "declared-text-2", "supports_vision": False}}
     router = _mixed_router(_DECLARED_TEXT_LEG, other_text_leg)
     assert _candidate_ids(router, messages=_IMAGE_CHAT) == [
@@ -30076,7 +30096,7 @@ def test_common_checks_send_image_to_the_group_when_every_leg_is_declared_text_o
     ]
 
 
-def test_common_checks_keep_undeclared_custom_legs_for_image_requests():
+def test_image_routing_keep_undeclared_custom_legs_for_image_requests():
     custom_leg = {
         "litellm_params": {"model": "hosted_vllm/Qwen2.5-VL-7B-Instruct", "api_base": "http://localhost:8000"},
         "model_info": {"id": "custom"},
@@ -30085,7 +30105,7 @@ def test_common_checks_keep_undeclared_custom_legs_for_image_requests():
     assert _candidate_ids(router, messages=_IMAGE_CHAT) == ["vision", "custom"]
 
 
-def test_common_checks_resolve_vision_through_the_cost_map_and_base_model():
+def test_image_routing_resolve_vision_through_the_cost_map_and_base_model():
     catalog_text_leg = {"litellm_params": {"model": "bedrock/deepseek.v3.2"}, "model_info": {"id": "catalog-text"}}
     azure_text_leg = {
         "litellm_params": {"model": "azure/my-audio-deployment", "api_base": "https://x.openai.azure.com"},

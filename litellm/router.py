@@ -14784,9 +14784,7 @@ class Router:
                 model
             ]  # update the model to the actual value if an alias has been passed in
 
-        return model, self._without_declared_text_only_deployments(
-            self._drop_strategy_markers(model, healthy_deployments), model, messages, request_kwargs
-        )
+        return model, self._drop_strategy_markers(model, healthy_deployments)
 
     def _drop_strategy_markers(
         self, model: str, deployments: Sequence[DeploymentTypedDict]
@@ -14980,12 +14978,17 @@ class Router:
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
-        healthy_deployments = await self.async_callback_filter_deployments(
-            model=model,
-            healthy_deployments=healthy_deployments,
-            messages=(cast(list[AllMessageValues], messages) if messages is not None else None),
-            request_kwargs=request_kwargs,
-            parent_otel_span=parent_otel_span,
+        healthy_deployments = self._without_declared_text_only_deployments(
+            await self.async_callback_filter_deployments(
+                model=model,
+                healthy_deployments=healthy_deployments,
+                messages=(cast(list[AllMessageValues], messages) if messages is not None else None),
+                request_kwargs=request_kwargs,
+                parent_otel_span=parent_otel_span,
+            ),
+            model,
+            messages,
+            cast(Mapping[str, object], request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
 
         if self.enable_pre_call_checks and (messages is not None or input is not None):
@@ -16246,8 +16249,11 @@ class Router:
             )
             healthy_deployments = _pre_cooldown_deployments
 
-        healthy_deployments = continuation_deployments(
-            self._filter_blocked_deployments(healthy_deployments), routing_kwargs
+        healthy_deployments = self._without_declared_text_only_deployments(
+            continuation_deployments(self._filter_blocked_deployments(healthy_deployments), routing_kwargs),
+            model,
+            messages,
+            cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
 
         # filter pre-call checks
