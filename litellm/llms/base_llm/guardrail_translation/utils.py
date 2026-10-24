@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any, Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
+from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
@@ -319,7 +319,7 @@ def anthropic_tool_name(tool: object) -> str | None:
     return names[0] if names else None
 
 
-def extract_tool_from_addition_block(block: Mapping[str, Any] | Any) -> dict[str, Any] | None:
+def extract_tool_from_addition_block(block: object) -> dict[str, object] | None:
     """Extract raw tool dict from an Anthropic tool_addition block."""
     if not isinstance(block, Mapping):
         return None
