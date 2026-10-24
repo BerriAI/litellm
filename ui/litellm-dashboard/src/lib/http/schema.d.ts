@@ -1167,6 +1167,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/audio/speech/stream-input": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: elevenlabs_tts_stream_input_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_elevenlabs_tts_stream_input_endpoint_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/audio/transcriptions": {
         parameters: {
             query?: never;
@@ -19548,6 +19568,26 @@ export interface paths {
          *     https://platform.openai.com/docs/api-reference/audio/createSpeech
          */
         post: operations["audio_speech_v1_audio_speech_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/audio/speech/stream-input": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: elevenlabs_tts_stream_input_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_elevenlabs_tts_stream_input_endpoint_get_2"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -52523,6 +52563,24 @@ export interface operations {
             };
         };
     };
+    websocket_elevenlabs_tts_stream_input_endpoint_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     audio_transcriptions_audio_transcriptions_post: {
         parameters: {
             query?: never;
@@ -77197,6 +77255,24 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+        };
+    };
+    websocket_elevenlabs_tts_stream_input_endpoint_get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
