@@ -372,6 +372,10 @@ def end_user_cache_key(end_user_id: str) -> str:
     return f"end_user_id:{end_user_id}"
 
 
+def end_user_block_cache_key(end_user_id: str) -> str:
+    return f"litellm:end_user_id:{end_user_id}"
+
+
 def end_user_restricted_registry_cache_key() -> str:
     """Cache key for the set of end-user ids whose row carries a restriction auth enforces."""
     return "end_user_restricted_registry"
