@@ -1,6 +1,8 @@
 package litellm
 
 import (
+	"fmt"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
@@ -241,6 +243,41 @@ func resourceLiteLLMModel() *schema.Resource {
 				DiffSuppressFunc: suppressEquivalentDropParams,
 				Description:      "Additional parameters to pass to litellm_params beyond the standard ones",
 			},
+			"additional_model_info": {
+				Type:     schema.TypeMap,
+				Optional: true,
+				Elem: &schema.Schema{
+					Type: schema.TypeString,
+				},
+				ValidateFunc: validateAdditionalModelInfoKeys,
+				Description:  "Additional entries merged into model_info. Values are converted like additional_litellm_params, so jsonencode() produces a nested object. Removing a key does not remove it from the proxy.",
+			},
 		},
 	}
+}
+
+var modelInfoKeyOwners = map[string]string{
+	"id":           "",
+	"db_model":     "",
+	"base_model":   "base_model or pricing_base_model",
+	"tier":         "tier",
+	"mode":         "mode",
+	"team_id":      "team_id",
+	"display_name": "display_name",
+}
+
+func validateAdditionalModelInfoKeys(value interface{}, attribute string) ([]string, []error) {
+	entries, _ := value.(map[string]interface{})
+	var errs []error
+	for key := range entries {
+		owner, reserved := modelInfoKeyOwners[key]
+		switch {
+		case !reserved:
+		case owner == "":
+			errs = append(errs, fmt.Errorf("%s: key %q is set by the provider and cannot be overridden", attribute, key))
+		default:
+			errs = append(errs, fmt.Errorf("%s: key %q is managed by the %s argument, set it there instead", attribute, key, owner))
+		}
+	}
+	return nil, errs
 }
