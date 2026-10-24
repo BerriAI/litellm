@@ -3698,6 +3698,7 @@ dependencies = [
  "rstest",
  "serde",
  "sqlx",
+ "strum",
  "thiserror 2.0.19",
  "tokio",
 ]

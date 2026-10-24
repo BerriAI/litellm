@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 serde.workspace = true
 sqlx.workspace = true
+strum.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
