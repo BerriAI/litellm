@@ -1521,3 +1521,80 @@ def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_through_it(mo
     ]
     assert f"team-partial-route/{_ROUTE_OPENAI_ID}" in v1_models
     assert unrouted_ids == []
+
+
+_SERVER_MODEL_IDS: Final = ("Qwen/Qwen3-8B", "meta-llama/Llama-3.1-8B-Instruct")
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_key", "expected_authorization"),
+    (
+        ("custom_openai", "sk-custom", "Bearer sk-custom"),
+        ("hosted_vllm", "sk-vllm", "Bearer sk-vllm"),
+        ("hosted_vllm", None, None),
+    ),
+)
+def test_openai_compatible_server_wildcard_lists_the_models_that_server_serves(
+    monkeypatch: pytest.MonkeyPatch, provider: str, api_key: str | None, expected_authorization: str | None
+) -> None:
+    """Regression test for #20064: `/v1/models` asks the same server, with the same key, that chat calls use."""
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    api_base: Final = f"https://{provider}-{api_key}.test/tenant/v1"
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.get(f"{api_base}/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": model_id} for model_id in _SERVER_MODEL_IDS]})
+        )
+        result: Final = get_known_models_from_wildcard(
+            wildcard_model="my-server/*",
+            litellm_params=LiteLLM_Params(model=f"{provider}/*", api_base=api_base, api_key=api_key),
+        )
+
+    assert route.calls.last.request.headers.get("authorization") == expected_authorization
+    assert result == [f"my-server/{model_id}" for model_id in _SERVER_MODEL_IDS]
+
+
+@respx.mock(assert_all_called=True)
+def test_custom_openai_wildcard_lists_models_beside_the_chat_route_when_the_base_has_no_v1(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    """Chat calls go to `{api_base}/chat/completions`, so the model list must come from `{api_base}/models`."""
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    api_base: Final = "https://custom-openai-no-v1.test/serving"
+    respx_mock.get(f"{api_base}/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": model_id} for model_id in _SERVER_MODEL_IDS]})
+    )
+
+    result: Final = get_known_models_from_wildcard(
+        wildcard_model="my-server/*",
+        litellm_params=LiteLLM_Params(model="custom_openai/*", api_base=api_base, api_key="sk-custom"),
+    )
+
+    assert result == [f"my-server/{model_id}" for model_id in _SERVER_MODEL_IDS]
+
+
+def test_openai_compatible_server_wildcard_lists_nothing_when_the_server_rejects_the_listing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    api_base: Final = "https://custom-openai-rejects.test/v1"
+    with respx.mock(assert_all_called=True) as respx_mock:
+        respx_mock.get(f"{api_base}/models").mock(return_value=httpx.Response(401, json={"error": "bad key"}))
+        result: Final = get_known_models_from_wildcard(
+            wildcard_model="my-server/*",
+            litellm_params=LiteLLM_Params(model="custom_openai/*", api_base=api_base, api_key="sk-wrong"),
+        )
+
+    assert result == []
