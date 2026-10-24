@@ -6,6 +6,7 @@ from typing import List, Optional, Tuple
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -13,7 +14,11 @@ from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.completion.guardrail_translation.handler import (
     OpenAITextCompletionHandler,
 )
-from litellm.types.utils import CallTypes, TextChoices, TextCompletionResponse
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+from litellm.types.utils import CallTypes, TextChoices, TextCompletionResponse, Usage
 
 
 class MockGuardrail(CustomGuardrail):
@@ -341,3 +346,143 @@ class TestPIIMaskingScenario:
         assert "[EMAIL_REDACTED]" in result["prompt"][1]
         assert "alice@example.com" not in result["prompt"][0]
         assert "bob@test.org" not in result["prompt"][1]
+
+
+class _RecordingKeywordFilter(ContentFilterGuardrail):
+    def __init__(self):
+        super().__init__(
+            guardrail_name="keyword-filter",
+            blocked_words=[
+                BlockedWord(keyword="persimmon", action=ContentFilterAction.MASK),
+                BlockedWord(keyword="kumquat", action=ContentFilterAction.BLOCK),
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+            default_on=True,
+        )
+        self.streaming_sampling_rate = 1
+        self.scanned_texts: tuple[tuple[str, ...], ...] = ()
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        self.scanned_texts = (*self.scanned_texts, tuple(inputs.get("texts") or ()))
+        return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+
+def _text_chunk(index: int, text: str | None, finish_reason: str | None = None) -> TextCompletionResponse:
+    return TextCompletionResponse(
+        id="cmpl-stream",
+        created=1589478378,
+        model="gpt-3.5-turbo-instruct",
+        object="text_completion",
+        choices=[TextChoices(index=index, text=text, finish_reason=finish_reason)],
+    )
+
+
+def _usage_chunk() -> TextCompletionResponse:
+    return TextCompletionResponse(
+        id="cmpl-stream",
+        created=1589478378,
+        model="gpt-3.5-turbo-instruct",
+        object="text_completion",
+        choices=[],
+        usage=Usage(prompt_tokens=3, completion_tokens=5, total_tokens=8),
+    )
+
+
+def _delivered(chunks: list[TextCompletionResponse]) -> list[tuple[int, str | None, str | None]]:
+    return [(choice.index, choice.text, choice.finish_reason) for chunk in chunks for choice in chunk.choices]
+
+
+async def _drive_flat_stream(guardrail: CustomGuardrail, chunks: list[TextCompletionResponse]) -> list[object]:
+    async def upstream():
+        for chunk in chunks:
+            yield chunk
+
+    return [
+        item
+        async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/completions"),
+            response=upstream(),
+            request_data={"guardrail_to_apply": guardrail, "model": "gpt-3.5-turbo-instruct"},
+        )
+    ]
+
+
+class TestStreamingOutputProcessing:
+    @pytest.mark.asyncio
+    async def test_ended_stream_delivers_each_choice_masked_text(self):
+        guardrail = _RecordingKeywordFilter()
+        chunks = [
+            _text_chunk(0, "A pers"),
+            _text_chunk(1, "kiwi "),
+            _text_chunk(0, "im"),
+            _text_chunk(1, "pie", "stop"),
+            _text_chunk(0, "mon tart"),
+            _text_chunk(0, None, "length"),
+            _usage_chunk(),
+        ]
+
+        await OpenAITextCompletionHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            request_data={},
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert guardrail.scanned_texts == (("A persimmon tart", "kiwi pie"),)
+        assert _delivered(chunks) == [
+            (0, "A [KEYWORD_REDACTED] tart", None),
+            (1, "kiwi ", None),
+            (0, "", None),
+            (1, "pie", "stop"),
+            (0, "", None),
+            (0, None, "length"),
+        ]
+        assert chunks[-1].usage.total_tokens == 8
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_scanned_without_delivery_keeps_chunks_and_stores_the_assembled_response(self):
+        chunks = [_text_chunk(0, "A pers"), _text_chunk(0, "immon tart"), _text_chunk(0, "", "stop"), _usage_chunk()]
+        request_data: dict[str, object] = {}
+
+        await OpenAITextCompletionHandler().process_output_streaming_response(
+            responses_so_far=chunks, guardrail_to_apply=_RecordingKeywordFilter(), request_data=request_data
+        )
+
+        assert _delivered(chunks) == [(0, "A pers", None), (0, "immon tart", None), (0, "", "stop")]
+        assembled = request_data["response"]
+        assert isinstance(assembled, TextCompletionResponse)
+        assert [(c.text, c.finish_reason) for c in assembled.choices] == [("A [KEYWORD_REDACTED] tart", "stop")]
+        assert assembled.usage.total_tokens == 8
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_block_raises_the_guardrail_error(self):
+        chunks = [_text_chunk(0, "A kum"), _text_chunk(0, "quat tart"), _text_chunk(0, "", "stop")]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await OpenAITextCompletionHandler().process_output_streaming_response(
+                responses_so_far=chunks, guardrail_to_apply=_RecordingKeywordFilter(), deliver_ended_stream_rewrites=True
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "kumquat" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_flat_stream_is_scanned_once_after_it_ends(self):
+        guardrail = _RecordingKeywordFilter()
+        chunks = [_text_chunk(0, "A pers"), _text_chunk(0, "immon tart"), _text_chunk(0, "", "stop"), _usage_chunk()]
+
+        delivered = await _drive_flat_stream(guardrail, chunks)
+
+        assert guardrail.scanned_texts == (("A persimmon tart",),)
+        assert len(delivered) == len(chunks)
+
+    @pytest.mark.asyncio
+    async def test_flat_stream_block_ends_with_an_in_band_error_frame(self):
+        chunks = [_text_chunk(0, "A kum"), _text_chunk(0, "quat tart"), _text_chunk(0, "", "stop"), _usage_chunk()]
+
+        delivered = await _drive_flat_stream(_RecordingKeywordFilter(), chunks)
+
+        error_frame = delivered[-1]
+        assert isinstance(error_frame, bytes)
+        assert error_frame.startswith(b'data: {"error": ')
+        assert b"kumquat" in error_frame
