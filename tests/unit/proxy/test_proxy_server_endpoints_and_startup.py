@@ -7251,6 +7251,39 @@ async def test_async_data_generator_closes_the_guardrail_chain_before_returning_
 
 
 @pytest.mark.asyncio
+async def test_async_data_generator_midstream_failure_frame_is_openai_shaped_with_a_json_null_param():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+
+    async def chain_failing_after_first_chunk(**_kwargs):
+        yield {"choices": [{"delta": {"content": "Hello"}}]}
+        raise ValueError("audit hook could not reach its sink")
+
+    proxy_logging = _guarded_chain_logging(chain_failing_after_first_chunk)
+    proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging):
+        frames = [
+            frame
+            async for frame in async_data_generator(
+                MagicMock(), MagicMock(spec=UserAPIKeyAuth), {"model": "gpt-4o-mini"}
+            )
+        ]
+
+    error_bodies = [json.loads(frame.removeprefix("data: ")) for frame in frames if '"error"' in frame]
+    assert error_bodies == [
+        {
+            "error": {
+                "message": "audit hook could not reach its sink",
+                "type": "internal_server_error",
+                "param": None,
+                "code": "500",
+            }
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_async_data_generator_closes_the_guardrail_chain_while_a_keepalive_read_is_pending():
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import async_data_generator
@@ -14215,6 +14248,51 @@ async def test_moderations_reraises_proxy_exception_unwrapped():
     assert exc_info.value.code == "400"
     assert exc_info.value.param == "metadata"
     mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected_type", "expected_code"),
+    [
+        pytest.param(HTTPException(status_code=400, detail="bad input"), "invalid_request_error", "400", id="http_400"),
+        pytest.param(HTTPException(status_code=429, detail="slow down"), "rate_limit_error", "429", id="http_429"),
+        pytest.param(Exception("provider down"), "internal_server_error", "500", id="bare_exception"),
+    ],
+)
+async def test_moderations_failure_body_is_openai_shaped(failure, expected_type, expected_code):
+    from litellm.proxy._types import ProxyException
+
+    async def passthrough_add_litellm_data(data, **kwargs):
+        return data
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"input": "hi"}')
+    fake_logging = MagicMock()
+    fake_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    fake_logging.post_call_failure_hook = AsyncMock()
+
+    with (
+        patch.object(
+            proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data
+        ),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(
+            proxy_server_module, "route_request", new=AsyncMock(side_effect=failure)
+        ),  # test-quality-ok: fakes the provider failure so the real route's error shaping is observable
+        patch.object(
+            proxy_server_module, "proxy_logging_obj", new=fake_logging
+        ),  # test-quality-ok: module global, no injection point
+        pytest.raises(ProxyException) as raised,
+    ):
+        await proxy_server_module.moderations(
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    body = json.loads(json.dumps({"error": raised.value.to_dict()}))
+    assert body["error"]["type"] == expected_type
+    assert body["error"]["param"] is None
+    assert body["error"]["code"] == expected_code
 
 
 @pytest.mark.asyncio

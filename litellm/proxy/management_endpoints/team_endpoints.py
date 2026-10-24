@@ -129,6 +129,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 )
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     team_membership_auth_cache_key,
@@ -5395,7 +5396,7 @@ async def team_info(
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         elif isinstance(e, ProxyException):
@@ -5403,7 +5404,7 @@ async def team_info(
         raise ProxyException(
             message="Authentication Error, " + str(e),
             type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_400_BAD_REQUEST,
         )
 

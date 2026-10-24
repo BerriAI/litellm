@@ -4368,6 +4368,7 @@ async def test_removed_signing_key_stops_being_trusted_once_the_stale_window_exp
 
     assert exc_info.value.code == "503"
     assert exc_info.value.type == ProxyErrorTypes.auth_provider_unavailable
+    assert exc_info.value.param is None
 
 
 @pytest.mark.asyncio

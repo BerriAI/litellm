@@ -519,8 +519,11 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    error_status_code,
     headers_with_litellm_call_id,
     litellm_call_id_headers,
+    openai_error_param,
+    openai_error_type,
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
@@ -9787,9 +9790,9 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
 
         proxy_exception: Final = ProxyException(
             message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
+            code=error_status_code(e, 500),
         )
         error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         yield f"data: {error_returned}\n\n"
@@ -10624,9 +10627,9 @@ async def async_data_generator(
                 if isinstance(client_error, HTTPException)
                 else ProxyException(
                     message=getattr(client_error, "message", str(client_error)),
-                    type=getattr(client_error, "type", "None"),
-                    param=getattr(client_error, "param", "None"),
-                    code=getattr(client_error, "status_code", 500),
+                    type=openai_error_type(client_error, error_status_code(client_error, 500)),
+                    param=openai_error_param(client_error),
+                    code=error_status_code(client_error, 500),
                 ).to_dict()
             },
             default=str,
@@ -12966,11 +12969,11 @@ async def completion(
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
             headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
-            code=getattr(e, "status_code", 500),
+            code=error_status_code(e, 500),
         )
 
 
@@ -13193,19 +13196,19 @@ async def moderations(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
-                code=getattr(e, "status_code", 500),
+                code=error_status_code(e, 500),
             )
 
 
@@ -13346,11 +13349,11 @@ async def audio_speech(
             )
         raise ProxyException(
             message=getattr(e, "message", f"{e}"),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
             headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
-            code=getattr(e, "status_code", 500),
+            code=error_status_code(e, 500),
         )
 
 
@@ -13492,20 +13495,20 @@ async def audio_transcriptions(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
                 openai_code=getattr(e, "code", None),
-                code=getattr(e, "status_code", 500),
+                code=error_status_code(e, 500),
             )
 
 
@@ -16955,7 +16958,7 @@ async def model_streaming_metrics(
         raise ProxyException(
             message=CommonProxyErrors.db_not_connected_error.value,
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -17089,7 +17092,7 @@ async def model_metrics(
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     startTime = startTime or datetime.now() - timedelta(days=DAYS_IN_A_MONTH)
@@ -17204,7 +17207,7 @@ async def model_metrics_slow_responses(
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     if api_key is None or api_key == "undefined":
@@ -17293,7 +17296,7 @@ async def model_metrics_exceptions(
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -18323,7 +18326,7 @@ async def async_queue_request(
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         elif isinstance(e, ProxyException):
@@ -18335,7 +18338,7 @@ async def async_queue_request(
         raise ProxyException(
             message="Authentication Error, " + str(e),
             type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -18510,7 +18513,7 @@ async def login_v2(request: Request):
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
                 type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         else:
@@ -18518,7 +18521,7 @@ async def login_v2(request: Request):
             raise ProxyException(
                 message=error_msg,
                 type=ProxyErrorTypes.auth_error,
-                param="None",
+                param=None,
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -18586,7 +18589,7 @@ async def login_v3(request: Request):
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
                 type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         else:
@@ -18594,7 +18597,7 @@ async def login_v3(request: Request):
             raise ProxyException(
                 message=error_msg,
                 type=ProxyErrorTypes.auth_error,
-                param="None",
+                param=None,
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -18659,7 +18662,7 @@ async def login_v3_exchange(request: Request):
         raise ProxyException(
             message=str(e),
             type=ProxyErrorTypes.auth_error,
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -19620,7 +19623,7 @@ async def update_config(
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         elif isinstance(e, ProxyException):
@@ -19628,7 +19631,7 @@ async def update_config(
         raise ProxyException(
             message="Authentication Error, " + str(e),
             type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -20815,7 +20818,7 @@ async def get_config(
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         elif isinstance(e, ProxyException):
@@ -20823,7 +20826,7 @@ async def get_config(
         raise ProxyException(
             message="Authentication Error, " + str(e),
             type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_400_BAD_REQUEST,
         )
 
