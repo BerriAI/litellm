@@ -57,6 +57,27 @@ def test_get_requester_metadata_returns_none_for_empty():
     assert get_requester_metadata(metadata) is None
 
 
+def test_get_requester_metadata_does_not_fall_back_to_sensitive_auth_metadata():
+    metadata = {
+        "requester_metadata": {
+            "hidden_params": "secret",
+            "non_string": 123,
+        },
+        "user_api_key": "sk-proxy-secret",
+        "user_api_key_hash": "opaque-custom-auth-token",
+        "user_api_key_auth": {"api_key": "sk-proxy-secret"},
+        "session_id": "should-not-leak",
+    }
+
+    assert get_requester_metadata(metadata) is None
+
+
+def test_get_requester_metadata_uses_outer_metadata_without_requester_snapshot():
+    assert get_requester_metadata({"session_id": "abc-123", "non_string": 123}) == {
+        "session_id": "abc-123"
+    }
+
+
 @patch("litellm.main.openai_chat_completions.completion")
 def test_requester_metadata_forwarded_to_openai(mock_completion):
     mock_completion.return_value = MagicMock()
@@ -85,6 +106,27 @@ def test_requester_metadata_forwarded_to_openai(mock_completion):
 
     sent_metadata = mock_completion.call_args.kwargs["optional_params"]["metadata"]
     assert sent_metadata == {"custom_meta_key": "value"}
+
+
+@patch("litellm.main.openai_chat_completions.completion")
+def test_sensitive_auth_metadata_is_not_forwarded_with_empty_requester_snapshot(
+    mock_completion, monkeypatch
+):
+    mock_completion.return_value = MagicMock()
+    monkeypatch.setattr(litellm, "api_key", "sk-test")
+
+    litellm.completion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={
+            "requester_metadata": {"non_string": 123},
+            "user_api_key": "sk-proxy-secret",
+            "user_api_key_hash": "opaque-custom-auth-token",
+            "session_id": "should-not-leak",
+        },
+    )
+
+    assert "metadata" not in mock_completion.call_args.kwargs["optional_params"]
 
 
 def test_get_optional_params_with_allowed_openai_params():
