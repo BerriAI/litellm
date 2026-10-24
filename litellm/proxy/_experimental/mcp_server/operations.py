@@ -421,11 +421,11 @@ async def _dispatch_mcp_tool_search(
     top_k: int,
     user_api_key_auth: UserAPIKeyAuth,
     client_ip: str | None = None,
-    mcp_servers: list[str] | None = None,
+    mcp_servers: list[str] | None = None,  # mutable-ok: mirrors the MCP call request container
     mcp_auth_header: str | None = None,
-    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
-    oauth2_headers: dict[str, str] | None = None,
-    raw_headers: dict[str, str] | None = None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,  # mutable-ok: forwarded request headers
+    oauth2_headers: dict[str, str] | None = None,  # mutable-ok: forwarded request headers
+    raw_headers: dict[str, str] | None = None,  # mutable-ok: forwarded request headers
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.tool_search import (
         MCP_TOOL_SEARCH_TOOL_NAME,
