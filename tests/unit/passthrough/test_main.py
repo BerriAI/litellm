@@ -51,3 +51,30 @@ async def test_allm_passthrough_route_hosted_vllm_sends_normalized_model(respx_m
     outbound: Final = json.loads(route.calls[0].request.content)
     assert outbound["model"] == "my-deployment"
     assert outbound["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+@pytest.mark.asyncio
+async def test_allm_passthrough_route_hosted_vllm_sends_deployment_api_key(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    response: Final = await allm_passthrough_route(
+        method="POST",
+        endpoint="v1/chat/completions",
+        model="hosted_vllm/my-deployment",
+        api_base=_API_BASE,
+        api_key="sk-upstream",
+        json={"model": "anything", "messages": [{"role": "user", "content": "Hello"}]},
+        client=AsyncHTTPHandler(),
+    )
+    assert response.status_code == 200
+    assert route.calls[0].request.headers["authorization"] == "Bearer sk-upstream"
+    assert "x-api-key" not in route.calls[0].request.headers
+
+
+def test_vllm_passthrough_api_key_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VLLM_API_KEY", "sk-from-env")
+    assert VLLMPassthroughConfig.get_api_key(None) == "sk-from-env"
+    assert VLLMPassthroughConfig.get_api_key("sk-explicit") == "sk-explicit"
+    monkeypatch.delenv("VLLM_API_KEY")
+    assert VLLMPassthroughConfig.get_api_key(None) is None
