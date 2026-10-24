@@ -1241,7 +1241,9 @@ def transform_request_body(
         if cached_content is not None:
             data["cachedContent"] = cached_content
 
-        if service_tier := optional_params.pop("service_tier", None):
+        if (
+            service_tier := optional_params.pop("service_tier", None)
+        ) and custom_llm_provider == LlmProviders.GEMINI.value:
             if isinstance(service_tier, str):
                 if service_tier.lower() == "default":
                     data["serviceTier"] = "standard"
