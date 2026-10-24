@@ -28,16 +28,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 class TestMessageSanitization:
     """Test message sanitization for tool calling scenarios"""
 
-    def setup_method(self):
-        """Setup for each test"""
-        # Save original modify_params value
-        self.original_modify_params = litellm.modify_params
-        litellm.modify_params = True
-
-    def teardown_method(self):
-        """Cleanup after each test"""
-        # Restore original modify_params value
-        litellm.modify_params = self.original_modify_params
+    @pytest.fixture(autouse=True)
+    def _modify_params_on(self, monkeypatch):
+        monkeypatch.setattr(litellm, "modify_params", True)
 
     def test_case_a_orphaned_tool_call_single(self):
         """
@@ -259,11 +252,11 @@ class TestMessageSanitization:
         assert sanitized[3]["content"] == "[System: Empty message content sanitised to satisfy protocol]"
         assert sanitized[4]["role"] == "assistant"
 
-    def test_modify_params_false_no_sanitization(self):
+    def test_modify_params_false_no_sanitization(self, monkeypatch):
         """
         Test that sanitization is skipped when modify_params=False
         """
-        litellm.modify_params = False
+        monkeypatch.setattr(litellm, "modify_params", False)
 
         messages = [
             {"role": "user", "content": ""},
@@ -291,7 +284,6 @@ class TestMessageSanitization:
         """
         Test that sanitization is integrated into anthropic_messages_pt
         """
-        litellm.modify_params = True
 
         messages = [
             {"role": "user", "content": "What is the weather in Nashik?"},
@@ -320,7 +312,7 @@ class TestMessageSanitization:
         assert result[0]["role"] == "user"
         assert result[1]["role"] == "assistant"
 
-    def test_empty_string_content_sanitized_without_modify_params(self):
+    def test_empty_string_content_sanitized_without_modify_params(self, monkeypatch):
         """
         Regression: An empty user message ({"role": "user", "content": ""}) must
         be rewritten to a non-empty placeholder *before* it reaches Anthropic,
@@ -328,7 +320,7 @@ class TestMessageSanitization:
             "messages: text content blocks must be non-empty"
         Reproduces a real failure from the pr-review agent (pydantic-ai).
         """
-        litellm.modify_params = False
+        monkeypatch.setattr(litellm, "modify_params", False)
 
         messages = [
             {"role": "user", "content": "First message"},
@@ -348,13 +340,13 @@ class TestMessageSanitization:
             assert block["text"].strip() != ""
         assert text_blocks[2]["text"] == ("[System: Empty message content sanitised to satisfy protocol]")
 
-    def test_empty_text_block_in_list_content_sanitized(self):
+    def test_empty_text_block_in_list_content_sanitized(self, monkeypatch):
         """
         Same regression for the list-of-blocks form:
             {"role": "user", "content": [{"type": "text", "text": ""}]}
         Empty text *blocks* must be rewritten too, regardless of modify_params.
         """
-        litellm.modify_params = False
+        monkeypatch.setattr(litellm, "modify_params", False)
 
         messages = [
             {
@@ -376,12 +368,12 @@ class TestMessageSanitization:
         for block in text_blocks[1:]:
             assert block["text"].strip() != ""
 
-    def test_non_empty_content_unchanged_without_modify_params(self):
+    def test_non_empty_content_unchanged_without_modify_params(self, monkeypatch):
         """
         Sanity check: when nothing is empty, the messages flow through unchanged
         even with modify_params disabled.
         """
-        litellm.modify_params = False
+        monkeypatch.setattr(litellm, "modify_params", False)
 
         messages = [
             {"role": "user", "content": "Hello"},
@@ -403,7 +395,7 @@ class TestMessageSanitization:
         [None, "", "   \n  \t  ", [], [{"type": "text", "text": ""}]],
         ids=["none", "empty_str", "whitespace_str", "empty_list", "empty_text_block"],
     )
-    def test_tool_call_only_assistant_turn_never_gets_placeholder(self, modify_params, empty_content):
+    def test_tool_call_only_assistant_turn_never_gets_placeholder(self, monkeypatch, modify_params, empty_content):
         """
         Regression for the placeholder leaking into tool-call-only assistant turns.
 
@@ -412,7 +404,7 @@ class TestMessageSanitization:
         is just tool_use, so there is nothing to substitute; injecting the placeholder made
         it look like the assistant had said it, and the model echoed it on later turns.
         """
-        litellm.modify_params = modify_params
+        monkeypatch.setattr(litellm, "modify_params", modify_params)
 
         messages = [
             {"role": "user", "content": "list the files"},
@@ -448,7 +440,6 @@ class TestMessageSanitization:
         Anthropic once the empty text block is dropped, so the placeholder must not be
         substituted in its place.
         """
-        litellm.modify_params = True
 
         message = {
             "role": "assistant",
@@ -477,7 +468,6 @@ class TestMessageSanitization:
         redacted_thinking blocks, so the turn still reaches Anthropic without the
         empty text and the placeholder must not be substituted.
         """
-        litellm.modify_params = True
 
         messages = [
             {"role": "user", "content": "hi"},
@@ -491,14 +481,14 @@ class TestMessageSanitization:
         assert [b["type"] for b in result[1]["content"]] == [sibling_block["type"]]
         assert PLACEHOLDER not in json.dumps(result)
 
-    def test_placeholder_kept_when_only_tool_call_is_dropped_tool_search(self):
+    def test_placeholder_kept_when_only_tool_call_is_dropped_tool_search(self, monkeypatch):
         """
         A tool search call whose result is not replayed is dropped by the converter, so
         it does not count as content: the empty text keeps its placeholder instead of
         the assistant turn vanishing from the request. modify_params stays off so no
         dummy tool result answers the call and keeps it.
         """
-        litellm.modify_params = False
+        monkeypatch.setattr(litellm, "modify_params", False)
 
         messages = [
             {"role": "user", "content": "find a tool"},
@@ -539,7 +529,6 @@ class TestMessageSanitization:
         signature-less thinking, unrecognised types) would leave an empty turn that gets
         dropped from the request entirely, so the placeholder has to stay.
         """
-        litellm.modify_params = True
 
         messages = [
             {"role": "user", "content": "hi"},
@@ -557,7 +546,6 @@ class TestMessageSanitization:
         Dropping empty text must not drop real text: an assistant turn that says something
         *and* calls a tool keeps both blocks.
         """
-        litellm.modify_params = True
 
         messages = [
             {"role": "user", "content": "list the files"},
@@ -598,7 +586,6 @@ class TestMessageSanitization:
         The placeholder is still required where dropping the empty text would leave the
         turn with no content at all, which Anthropic also rejects.
         """
-        litellm.modify_params = True
 
         result = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
 
@@ -611,7 +598,6 @@ class TestMessageSanitization:
         The invariant Anthropic actually enforces, over a conversation mixing every shape:
         no empty content list and no empty text block may survive the conversion.
         """
-        litellm.modify_params = True
 
         messages = [
             {"role": "user", "content": ""},
@@ -645,7 +631,6 @@ class TestMessageSanitization:
         Callers reuse their message list across retries and fallbacks, so sanitization has
         to stay copy-on-write.
         """
-        litellm.modify_params = True
 
         messages = [
             {"role": "user", "content": "go"},
