@@ -613,9 +613,7 @@ async def test_cohere_v2_annotations(respx_mock: respx.MockRouter) -> None:
 def test_cohere_v2_parameter_mapping(respx_mock: respx.MockRouter) -> None:
     messages: Final = [{"role": "user", "content": "Generate a creative story."}]
     route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
-        return_value=httpx.Response(
-            200, json=_cohere_v2_response({"content": [{"type": "text", "text": "A story."}]})
-        )
+        return_value=httpx.Response(200, json=_cohere_v2_response({"content": [{"type": "text", "text": "A story."}]}))
     )
 
     litellm.completion(
@@ -665,3 +663,68 @@ def test_cohere_v2_error_handling(respx_mock: respx.MockRouter) -> None:
     assert error.value.status_code == 400
     assert error.value.llm_provider == "cohere"
     assert "invalid request: model 'invalid-model' not found" in error.value.message
+
+
+def test_cohere_v2_stream_tool_calls_are_emitted_with_index() -> None:
+    events: Final = [
+        {
+            "type": "tool-call-start",
+            "index": 0,
+            "delta": {
+                "message": {
+                    "tool_calls": {
+                        "id": "get_weather_a1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""},
+                    }
+                }
+            },
+        },
+        {
+            "type": "tool-call-delta",
+            "index": 0,
+            "delta": {"message": {"tool_calls": {"function": {"arguments": '{"city": '}}}},
+        },
+        {
+            "type": "tool-call-delta",
+            "index": 0,
+            "delta": {"message": {"tool_calls": {"function": {"arguments": '"Paris"}'}}}},
+        },
+        {"type": "tool-call-end", "index": 0},
+        {
+            "type": "tool-call-start",
+            "index": 1,
+            "delta": {
+                "message": {
+                    "tool_calls": {
+                        "id": "get_time_b2",
+                        "type": "function",
+                        "function": {"name": "get_time", "arguments": ""},
+                    }
+                }
+            },
+        },
+        {
+            "type": "tool-call-delta",
+            "index": 1,
+            "delta": {"message": {"tool_calls": {"function": {"arguments": "{}"}}}},
+        },
+    ]
+    iterator: Final = CohereV2ChatConfig().get_model_response_iterator(
+        streaming_response=iter(json.dumps(event) for event in events), sync_stream=True
+    )
+
+    calls: Final[dict[int, dict[str, str]]] = {}
+    for parsed in iterator:
+        tool_use = parsed["tool_use"]
+        if tool_use is None:
+            continue
+        call = calls.setdefault(tool_use["index"], {"id": "", "name": "", "arguments": ""})
+        call["id"] += tool_use["id"] or ""
+        call["name"] += tool_use["function"]["name"] or ""
+        call["arguments"] += tool_use["function"]["arguments"] or ""
+
+    assert calls == {
+        0: {"id": "get_weather_a1", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+        1: {"id": "get_time_b2", "name": "get_time", "arguments": "{}"},
+    }
