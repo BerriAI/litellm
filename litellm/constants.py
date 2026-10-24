@@ -1032,6 +1032,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api-inference.modelscope.cn/v1",
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
+    "https://api.aiand.com/v1",
     "https://api.synthetic.new/openai/v1",
     "https://serverless.tensormesh.ai/v1",
     "https://api.stima.tech/v1",
@@ -1097,6 +1098,7 @@ openai_compatible_providers: Final[list[str]] = [
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
+    "aiand",  # ai& - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
     "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
