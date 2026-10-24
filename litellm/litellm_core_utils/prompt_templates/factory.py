@@ -1487,7 +1487,7 @@ def _contains_part_reference(payload: JsonValue) -> bool:
 def convert_to_gemini_tool_call_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     last_message_with_tool_calls: dict | None,
-    forward_function_call_id: bool = False,
+    forward_function_call_id: bool = True,
 ) -> VertexPartType | list[VertexPartType]:
     """
     OpenAI message with a tool result looks like:
@@ -1652,7 +1652,12 @@ def convert_to_gemini_tool_call_result(
 
     # For multimodal function responses, Gemini expects media parts nested
     # inside functionResponse.parts instead of sibling content parts.
+    # Pre-Gemini 3 models (Gemini 2.5 and older) reject media nested in functionResponse.parts
+    # with 400 "Multimodal function responses are not supported for this model".
+    # Return inline_data as sibling content parts alongside function_response.
     if inline_data_list:
+        if not forward_function_call_id:
+            return [_part, *[{"inline_data": inline_data} for inline_data in inline_data_list]]
         _function_response["parts"] = [{"inline_data": inline_data} for inline_data in inline_data_list]
         return [_part]
 
