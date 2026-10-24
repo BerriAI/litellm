@@ -843,3 +843,117 @@ def test_openrouter_streaming_reasoning_is_preserved() -> None:
     assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
     assert assembled is not None
     assert assembled.choices[0].message.reasoning_content == "Consider the evidence. Apply the rule."
+
+
+def _openrouter_non_streaming_body(provider: str | None) -> dict:
+    body = {
+        "id": "gen-123",
+        "model": "openrouter/some-org/some-model",
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+            "cost": 0.00015,
+        },
+    }
+    if provider is not None:
+        body["provider"] = provider
+    return body
+
+
+def _transform_openrouter_response(body: dict):
+    from unittest.mock import Mock, patch
+
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    config = OpenrouterConfig()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = body
+    mock_response.headers = {}
+    model_response = ModelResponse(
+        id="gen-123",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="Hello!", role="assistant"),
+            )
+        ],
+        created=1234567890,
+        model="openrouter/some-org/some-model",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+    with patch.object(OpenAIGPTConfig, "transform_response", return_value=model_response):
+        return config.transform_response(
+            model="openrouter/some-org/some-model",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=Mock(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+
+def test_openrouter_upstream_provider_non_streaming():
+    """
+    OpenRouter names the provider that served the request in the top-level ``provider``
+    field. It is recorded as the ``upstream_provider`` hidden param, next to the
+    provider-reported cost, so per-call cost variation on one model has an explaining field.
+    """
+    from litellm.litellm_core_utils.hidden_params import get_hidden_params
+
+    result = _transform_openrouter_response(_openrouter_non_streaming_body(provider="SomeProvider"))
+
+    hidden = get_hidden_params(result)
+    assert hidden is not None
+    assert hidden["upstream_provider"] == "SomeProvider"
+    # the cost header is still set alongside it
+    assert hidden["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.00015
+
+
+def test_openrouter_upstream_provider_absent_is_not_recorded():
+    from litellm.litellm_core_utils.hidden_params import get_hidden_params
+
+    result = _transform_openrouter_response(_openrouter_non_streaming_body(provider=None))
+
+    hidden = get_hidden_params(result)
+    assert hidden is not None
+    assert "upstream_provider" not in hidden
+    assert hidden["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.00015
+
+
+def test_openrouter_chunk_parser_records_upstream_provider():
+    """
+    Streaming chunks carry the serving provider at the top level too. The parser keeps it as a
+    hidden param on the chunk so the stream wrapper and chunk builder can surface it.
+    """
+    from litellm.litellm_core_utils.hidden_params import get_hidden_params
+
+    handler = OpenRouterChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    base = {
+        "id": "gen-stream-1",
+        "created": 1234567890,
+        "model": "openrouter/some-org/some-model",
+        "choices": [{"delta": {"content": "Hello", "reasoning": None}, "index": 0}],
+    }
+
+    with_provider = handler.chunk_parser({**base, "provider": "SomeProvider"})
+    hidden = get_hidden_params(with_provider)
+    assert hidden is not None
+    assert hidden["upstream_provider"] == "SomeProvider"
+    assert with_provider.choices[0]["delta"]["content"] == "Hello"
+
+    without_provider = handler.chunk_parser(dict(base))
+    hidden_without = get_hidden_params(without_provider)
+    assert hidden_without is None or "upstream_provider" not in hidden_without

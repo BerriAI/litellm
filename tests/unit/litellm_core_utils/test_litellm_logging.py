@@ -13479,6 +13479,20 @@ def test_masking_function_not_in_metadata_when_not_provided():
     assert result["metadata"]["some_key"] == "some_value"
 
 
+def test_standard_logging_hidden_params_carries_upstream_provider():
+    """``upstream_provider`` on response hidden params reaches StandardLoggingHiddenParams."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    hidden = StandardLoggingPayloadSetup.get_hidden_params(
+        {"model_id": "mid-test", "upstream_provider": "SomeProvider"}
+    )
+    assert hidden["upstream_provider"] == "SomeProvider"
+    assert hidden["model_id"] == "mid-test"
+
+    empty = StandardLoggingPayloadSetup.get_hidden_params(None)
+    assert empty["upstream_provider"] is None
+
+
 def test_copy_for_new_call_logs_a_turn_under_its_own_call_id_against_the_connections_reservation() -> None:
     reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": []}
     connection: Final = LitellmLogging(
