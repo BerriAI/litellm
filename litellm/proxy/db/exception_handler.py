@@ -1,4 +1,6 @@
+import os
 import re
+import sys
 from collections.abc import Awaitable, Callable, Iterator
 from http import HTTPStatus
 from typing import Final, Protocol, TypeVar
@@ -23,6 +25,7 @@ _TRANSIENT_DB_UNAVAILABLE_MESSAGE: Final = (
 )
 
 _DATABASE_ERROR_META: Final = TypeAdapter(dict[str, object])
+_GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _BATCH_POSTGRES_ERROR_CODE: Final = re.compile(r'PostgresError \{ code: "([0-9A-Z]{5})"')
 _CONNECTION_CAPACITY_PHRASES: Final = (
     "too many clients already",
@@ -89,6 +92,39 @@ class PrismaDBExceptionHandler:
         if str_to_bool(_allow_requests_on_db_unavailable) is True:
             return True
         return False
+
+    @staticmethod
+    def is_database_configured() -> bool:
+        """True when a database was configured for this proxy.
+
+        A database is configured when ``DATABASE_URL`` (or ``DIRECT_URL``)
+        is present in the environment, or a ``database_url`` is present in
+        ``general_settings``. The CLI / entrypoints assemble ``DATABASE_URL``
+        into ``os.environ`` from discrete ``DATABASE_*`` settings before the
+        proxy starts, so the environment is the canonical signal by request
+        time. When neither is present there is no database to be
+        ``unavailable``: that state never resolves by itself and must not be
+        treated as a transient outage by
+        ``allow_requests_on_db_unavailable``.
+        """
+        if os.getenv("DATABASE_URL") or os.getenv("DIRECT_URL"):
+            return True
+        # Read ``general_settings`` through ``sys.modules``: importing
+        # ``proxy_server`` here could fail or recurse while it is still
+        # being imported, and a proxy server that has not been imported
+        # yet has not configured a database through it either. The raw
+        # value is ``object`` until validated into a typed dict, because
+        # ``general_settings`` is declared as a bare ``dict`` and reading
+        # it directly surfaces as partially unknown to basedpyright.
+        proxy_server_module: Final = sys.modules.get("litellm.proxy.proxy_server")
+        raw_settings: Final[object] = getattr(proxy_server_module, "general_settings", None)
+        if not isinstance(raw_settings, dict):
+            return False
+        try:
+            settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(raw_settings)
+        except ValidationError:
+            return False
+        return bool(settings.get("database_url"))
 
     @staticmethod
     def is_database_connection_error(e: Exception) -> bool:
