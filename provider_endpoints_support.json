@@ -3273,6 +3273,22 @@
         "a2a": false
       }
     }
+    ,"crowllm": {
+      "display_name": "CrowLLM (`crowllm`)",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": true,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": true,
+        "a2a": false
+      }
+    }
   },
   "endpoints": {
     "a2a": {
