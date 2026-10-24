@@ -6,11 +6,15 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeConnection
+from redis.asyncio import BlockingConnectionPool
 
 import litellm
 from litellm.caching.affinity_cache import claim_affinity_pin
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
@@ -26,6 +30,13 @@ def _repinning_router(enabled: bool | None = True) -> litellm.Router:
                 "model_info": {"id": deployment_id},
             }
             for deployment_id in ("original", "replacement", "other")
+        ]
+        + [
+            {
+                "model_name": "unrelated-group",
+                "litellm_params": {"model": "openai/test-model", "api_key": "fake-api-key"},
+                "model_info": {"id": "unrelated"},
+            }
         ],
         optional_pre_call_checks=["session_affinity", "deployment_affinity"],
         **({"session_affinity_repin_on_failover": enabled} if enabled is not None else {}),
@@ -131,6 +142,103 @@ async def test_healthy_legacy_string_pin_is_preserved_with_repinning_enabled() -
         await router.cache.async_set_cache(_repin_key(), "original")
         await _record_replacement_success(router)
         assert await router.cache.async_get_cache(_repin_key()) == "original"
+    finally:
+        router.discard()
+
+
+@pytest.mark.parametrize("route_bucket", ["metadata", "litellm_metadata"])
+async def test_repin_session_after_success_reads_split_metadata(route_bucket: str) -> None:
+    router: Final = _repinning_router()
+    try:
+        await router.cache.async_set_cache(_repin_key(), {"model_id": "original"})
+        _cool_down_original(router)
+        session_bucket: Final = "litellm_metadata" if route_bucket == "metadata" else "metadata"
+        await router._repin_session_after_success(
+            {
+                "model_info": {"id": "replacement"},
+                route_bucket: {"deployment_model_name": "repin-group"},
+                session_bucket: {"session_id": "repin-session", "user_api_key_hash": "caller-1"},
+            },
+            {"status": "completed"},
+        )
+        assert await router.cache.async_get_cache(_repin_key()) == {"model_id": "replacement"}
+    finally:
+        router.discard()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_session_selection_observes_another_workers_repin_only_when_enabled(enabled: bool) -> None:
+    server: Final = FakeServer()
+    sync_client: Final = FakeRedis(server=server)
+    pool: Final = BlockingConnectionPool(connection_class=FakeConnection, server=server)
+    router: Final = _repinning_router(enabled)
+    try:
+        with (
+            patch("redis.Redis.from_url", return_value=sync_client),
+            patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
+        ):
+            redis: Final = RedisCache(url=f"redis://repin-cache.example:6379/{int(enabled)}")
+            router.cache.attach_redis_cache(redis)
+            other_worker: Final = DualCache(redis_cache=redis)
+            router.cache.in_memory_cache.set_cache(_repin_key(), {"model_id": "original"}, ttl=3600)
+            await other_worker.async_set_cache(_repin_key(), {"model_id": "replacement"}, ttl=3600)
+            callback: Final = next(
+                cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck)
+            )
+            selected: Final = await callback.async_filter_deployments(
+                model="repin-group",
+                healthy_deployments=router.get_model_list(model_name="repin-group") or [],
+                messages=None,
+                request_kwargs=_repin_params("replacement"),
+            )
+            assert [deployment["model_info"]["id"] for deployment in selected] == [
+                "replacement" if enabled else "original"
+            ]
+    finally:
+        router.discard()
+        await pool.aclose()
+        sync_client.close()
+
+
+class _ReadCountingCache(InMemoryCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.read_keys: tuple[str, ...] = ()
+
+    def get_cache(self, key: str, **kwargs: object) -> object:
+        self.read_keys += (key,)
+        return super().get_cache(key, **kwargs)
+
+
+@pytest.mark.parametrize("case", ["disabled", "no-session", "generated-session", "group-disabled", "active"])
+async def test_repin_cooldown_reads_are_limited_to_active_session_route(case: str) -> None:
+    router: Final = _repinning_router(case != "disabled")
+    reads: Final = _ReadCountingCache()
+    try:
+        router.cooldown_cache.cooldown_store.in_memory_cache = reads
+        callback: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
+        if case == "group-disabled":
+            callback.model_group_affinity_config = {"repin-group": []}
+        await router._repin_session_after_success(
+            {
+                "model_info": {"id": "replacement"},
+                "metadata": {
+                    "deployment_model_name": "repin-group",
+                    **({"session_id": "repin-session"} if case != "no-session" else {}),
+                    SESSION_ID_GENERATED_METADATA_KEY: case == "generated-session",
+                },
+            },
+            {"status": "completed"},
+        )
+        expected: Final = (
+            {
+                router.cooldown_cache.get_cooldown_cache_key(model_id)
+                for model_id in ("original", "replacement", "other")
+            }
+            if case == "active"
+            else set()
+        )
+        assert set(reads.read_keys) == expected
     finally:
         router.discard()
 

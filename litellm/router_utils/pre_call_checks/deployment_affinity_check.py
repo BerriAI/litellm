@@ -101,6 +101,7 @@ class DeploymentAffinityCheck(CustomLogger):
         enable_session_id_affinity: bool = False,
         model_group_affinity_config: dict[str, list[str]] | None = None,
         is_priority_group: Callable[[str], bool] | None = None,
+        session_affinity_repin_on_failover: bool = False,
     ):
         super().__init__()
         self.cache = cache
@@ -110,6 +111,7 @@ class DeploymentAffinityCheck(CustomLogger):
         self.enable_session_id_affinity = enable_session_id_affinity
         self.model_group_affinity_config: dict[str, list[str]] = model_group_affinity_config or {}
         self.is_priority_group = is_priority_group
+        self.session_affinity_repin_on_failover = session_affinity_repin_on_failover
 
     def _get_effective_flags(self, model_group: str) -> tuple[bool, bool, bool]:
         """
@@ -433,7 +435,11 @@ class DeploymentAffinityCheck(CustomLogger):
                 session_cache_key: Final = self.get_session_affinity_cache_key(
                     model_group=stable_model_map_key, session_id=session_id, user_key=user_key
                 )
-                session_cache_result: Final = await self.cache.async_get_cache(key=session_cache_key)
+                session_cache_result: Final = (
+                    await redis_cache.async_get_cache(key=session_cache_key, parent_otel_span=parent_otel_span)
+                    if self.session_affinity_repin_on_failover and (redis_cache := self.cache.redis_cache) is not None
+                    else await self.cache.async_get_cache(key=session_cache_key)
+                )
 
                 session_model_id: str | None = None
                 if isinstance(session_cache_result, dict):
@@ -496,6 +502,24 @@ class DeploymentAffinityCheck(CustomLogger):
             self._shorten_for_logs(self._hash_user_key(user_key)),
         )
         return [deployment]
+
+    def get_repin_model_group(self, request_kwargs: Mapping[str, object]) -> str | None:
+        model_group: Final = next(
+            (
+                value
+                for metadata in self._iter_metadata_dicts(request_kwargs)
+                if isinstance(value := metadata.get("deployment_model_name"), str) and value
+            ),
+            None,
+        )
+        if model_group is None or self._get_session_id_from_request_kwargs(request_kwargs) is None:
+            return None
+        if (
+            not self._get_effective_flags(model_group)[2]
+            and self._get_marker_session_affinity_ttl(request_kwargs) is None
+        ):
+            return None
+        return model_group
 
     async def async_repin_session_after_success(
         self,

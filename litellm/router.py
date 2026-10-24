@@ -2857,6 +2857,7 @@ class Router:
             enable_session_id_affinity=False,
             model_group_affinity_config=self.model_group_affinity_config,
             is_priority_group=self._is_priority_routing_group,
+            session_affinity_repin_on_failover=self.session_affinity_repin_on_failover,
         )
         self.optional_callbacks.append(affinity_callback)
         litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
@@ -2903,6 +2904,7 @@ class Router:
                     enable_session_id_affinity=enable_session_id_affinity,
                     model_group_affinity_config=self.model_group_affinity_config,
                     is_priority_group=self._is_priority_routing_group,
+                    session_affinity_repin_on_failover=self.session_affinity_repin_on_failover,
                 )
                 self.optional_callbacks.append(affinity_callback)
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
@@ -9323,23 +9325,25 @@ class Router:
 
             if not completed_affinity_response(response):
                 return
-            metadata: Final = TypeAdapter(Mapping[str, object]).validate_python(
-                litellm_params.get("litellm_metadata") or litellm_params.get("metadata") or {}
+            callback: Final = next(
+                (logger for logger in self._optional_loggers() if isinstance(logger, DeploymentAffinityCheck)),
+                None,
             )
-            model_group: Final = metadata.get("deployment_model_name")
-            team_id: Final = metadata.get("user_api_key_team_id")
-            if not isinstance(model_group, str) or self._is_priority_routing_group(model_group):
+            if callback is None:
+                return
+            model_group: Final = callback.get_repin_model_group(litellm_params)
+            if model_group is None or self._is_priority_routing_group(model_group):
                 return
             registered_ids: Final = self.get_candidate_model_ids_for_route(
-                model=model_group, team_id=team_id if isinstance(team_id, str) else None
+                model=model_group, team_id=get_request_team_id(litellm_params)
             )
             cooldown_ids: Final = frozenset(
-                await async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=None)
+                model_id
+                for model_id, _ in await self.cooldown_cache.async_get_active_cooldowns(
+                    model_ids=list(registered_ids), parent_otel_span=None
+                )
             )
-            eligible_ids: Final = registered_ids - cooldown_ids
-            for callback in self._optional_loggers():
-                if isinstance(callback, DeploymentAffinityCheck):
-                    await callback.async_repin_session_after_success(litellm_params, model_group, eligible_ids)
+            await callback.async_repin_session_after_success(litellm_params, model_group, registered_ids - cooldown_ids)
         except Exception as error:  # noqa: BLE001  # Optional pin updates must not interrupt success accounting
             verbose_router_logger.debug("Session re-pinning failed: %s", error)
 
