@@ -831,7 +831,7 @@ def _mid_stream_retry_trigger(error: "MidStreamFallbackError") -> Exception:
 
 
 _RestT: Final = TypeVar("_RestT", Iterator[object], AsyncIterator[object])
-_RouteDeploymentT: Final = TypeVar("_RouteDeploymentT", bound=Mapping[str, object])
+_RouteDeploymentsT: Final = TypeVar("_RouteDeploymentsT", bound=Sequence[Mapping[str, object]] | Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -14233,7 +14233,7 @@ class Router:
         group: str,
         resolver: Callable[[str, LlmProviders], object | None],
     ) -> bool:
-        if not deployment.get("litellm_params"):
+        if "litellm_params" not in deployment:
             return True
 
         try:
@@ -14253,9 +14253,8 @@ class Router:
 
     @staticmethod
     def _without_deployments_that_cannot_serve_route(
-        healthy_deployments: list[_RouteDeploymentT] | _RouteDeploymentT,  # mutable-ok: selector needs list/dict
-        group: str,
-    ) -> list[_RouteDeploymentT] | _RouteDeploymentT:  # mutable-ok: selector needs list/dict
+        healthy_deployments: _RouteDeploymentsT, group: str
+    ) -> _RouteDeploymentsT:
         handler_name: Final = _routed_call_type.get()
         resolver: Final = _ROUTE_CAPABILITY_RESOLVERS.get(handler_name) if handler_name is not None else None
         if resolver is None or isinstance(healthy_deployments, Mapping):
@@ -14270,7 +14269,9 @@ class Router:
                 resolver,
             )
         ]
-        return filtered_deployments if filtered_deployments else healthy_deployments
+        if not filtered_deployments:
+            return healthy_deployments
+        return cast(_RouteDeploymentsT, filtered_deployments)  # cast-ok: same list shape as the input candidates
 
     @staticmethod
     def _request_carries_image(
@@ -14916,10 +14917,7 @@ class Router:
         )
 
         if isinstance(healthy_deployments, dict):
-            if (
-                healthy_deployments.get("model_info")  # pyright: ignore[reportUnknownMemberType]  # legacy dict
-                or {}
-            ).get("blocked") is True:  # pyright: ignore[reportUnknownMemberType]  # legacy selector dict
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
                 raise litellm.ServiceUnavailableError(
                     message=f"Model '{model}' is currently paused and cannot accept requests.",
                     model=model,
@@ -16190,10 +16188,8 @@ class Router:
         )
         healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
             self._without_deployments_that_cannot_serve_route(
-                healthy_deployments=(  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
-                    healthy_deployments
-                ),
-                group=model,
+                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                model,
             )
         )
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)

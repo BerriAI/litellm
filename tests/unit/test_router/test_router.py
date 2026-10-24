@@ -121,31 +121,33 @@ _ROUTER_DECISIONS_RESPONSE: Final[Mapping[str, object]] = {
 }
 
 
-def _mixed_decisions_group_router() -> Router:
-    return Router(
-        model_list=[
-            {
-                "model_name": "decision-group",
-                "litellm_params": {
-                    "model": "openai/gpt-6-luna",
-                    "api_base": "https://api.openai.com/v1",
-                    "api_key": "k",
-                },
-                "model_info": {"id": "openai-leg"},
-            },
-            {
-                "model_name": "decision-group",
-                "litellm_params": {
-                    "model": "bedrock/us.openai.gpt-5.6-terra",
-                    "aws_access_key_id": "fake",
-                    "aws_secret_access_key": "fake",
-                    "aws_region_name": "us-east-1",
-                },
-                "model_info": {"id": "bedrock-leg"},
-            },
-        ],
-        routing_strategy="simple-shuffle",
-    )
+_OPENAI_DECISIONS_PARAMS: Final[Mapping[str, object]] = {
+    "model": "openai/gpt-6-luna",
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "k",
+}
+_BEDROCK_DECISIONS_PARAMS: Final[Mapping[str, object]] = {
+    "model": "bedrock/us.openai.gpt-5.6-terra",
+    "aws_access_key_id": "fake",
+    "aws_secret_access_key": "fake",
+    "aws_region_name": "us-east-1",
+}
+
+
+def _decisions_leg(leg_id: str, params: Mapping[str, object], weight: int | None = None) -> dict[str, object]:
+    return {
+        "model_name": "decision-group",
+        "litellm_params": params if weight is None else {**params, "weight": weight},
+        "model_info": {"id": leg_id},
+    }
+
+
+_OPENAI_DECISIONS_LEG: Final = _decisions_leg("openai-leg", _OPENAI_DECISIONS_PARAMS)
+_BEDROCK_DECISIONS_LEG: Final = _decisions_leg("bedrock-leg", _BEDROCK_DECISIONS_PARAMS)
+
+
+def _mixed_decisions_group_router(*legs: dict[str, object]) -> Router:
+    return Router(model_list=list(legs), routing_strategy="simple-shuffle")
 
 
 @pytest.fixture
@@ -161,7 +163,7 @@ async def test_decisions_on_a_mixed_group_never_routes_to_a_leg_without_decision
     respx_mock: respx.MockRouter,
     _router_httpx_transport: None,
 ) -> None:
-    router: Final = _mixed_decisions_group_router()
+    router: Final = _mixed_decisions_group_router(_OPENAI_DECISIONS_LEG, _BEDROCK_DECISIONS_LEG)
     route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
 
     for _ in range(20):
@@ -179,7 +181,7 @@ async def test_decisions_on_a_mixed_group_never_routes_to_a_leg_without_decision
 def test_decisions_on_a_mixed_group_never_routes_to_a_leg_without_decisions_support_sync(
     respx_mock: respx.MockRouter,
 ) -> None:
-    router: Final = _mixed_decisions_group_router()
+    router: Final = _mixed_decisions_group_router(_OPENAI_DECISIONS_LEG, _BEDROCK_DECISIONS_LEG)
     route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
 
     for _ in range(20):
@@ -222,19 +224,19 @@ async def test_decisions_on_a_group_with_no_capable_leg_still_returns_the_provid
 
 
 @pytest.mark.asyncio
-async def test_chat_on_a_mixed_group_still_uses_every_leg() -> None:
-    router: Final = _mixed_decisions_group_router()
+async def test_chat_on_a_mixed_group_still_reaches_the_leg_without_decisions_support() -> None:
+    router: Final = _mixed_decisions_group_router(
+        _decisions_leg("openai-leg", _OPENAI_DECISIONS_PARAMS, weight=0),
+        _decisions_leg("bedrock-leg", _BEDROCK_DECISIONS_PARAMS, weight=1),
+    )
 
-    responses: Final = [
-        await router.acompletion(
-            model="decision-group",
-            messages=[{"role": "user", "content": "Say hi"}],
-            mock_response="hi",
-        )
-        for _ in range(20)
-    ]
+    response: Final = await router.acompletion(
+        model="decision-group",
+        messages=[{"role": "user", "content": "Say hi"}],
+        mock_response="hi",
+    )
 
-    assert {response._hidden_params["model_id"] for response in responses} == {"openai-leg", "bedrock-leg"}
+    assert response._hidden_params["model_id"] == "bedrock-leg"
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
