@@ -29959,8 +29959,10 @@ def test_pre_call_checks_resolve_vision_through_the_cost_map_and_base_model():
         ({"litellm_params": {"model": "bedrock/deepseek.v3.2"}, "model_info": {}}, True),
         ({"litellm_params": {"model": "azure/my-deploy"}, "model_info": {"base_model": "azure/gpt-audio"}}, True),
         ({"litellm_params": {"model": "hosted_vllm/Qwen2.5-VL-7B-Instruct"}, "model_info": {}}, False),
+        ({"litellm_params": {"model": "no-such-model-anywhere"}, "model_info": {}}, False),
+        ({"litellm_params": {}, "model_info": {}}, False),
     ],
-    ids=["override-false", "override-true", "cost-map-false", "base-model-false", "undeclared"],
+    ids=["override-false", "override-true", "cost-map-false", "base-model-false", "undeclared", "unresolvable", "no-params"],
 )
 def test_deployment_declares_no_vision_reads_the_override_then_the_cost_map(deployment: dict[str, object], expected: bool):
     assert litellm.Router._deployment_declares_no_vision(deployment, "mixed") is expected
