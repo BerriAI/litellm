@@ -382,7 +382,23 @@ describe("configured Usage default", () => {
     vi.setSystemTime(now);
     expect(defaultUsageDateRange(setting)).toEqual({
       value: { from: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000), to: now },
-      preset: "7d",
+      preset: null,
+    });
+  });
+
+  it.each([
+    ["America/Los_Angeles", 2, 9],
+    ["Europe/London", 2, 30],
+  ])("preserves untouched fallback dates after spring DST in %s", (timezone, month, day) => {
+    withTimezone(timezone, () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, month, day, 0, 30));
+      for (const setting of [undefined, "last_7_days"]) {
+        const fallback = defaultUsageDateRange(setting);
+        const restored = dateRangeFromParams(load(applyPatch("", dateRangePatch(fallback.value, fallback.preset))));
+        expect(moment(restored?.from).format("YYYY-MM-DD")).toBe(moment(fallback.value.from).format("YYYY-MM-DD"));
+        expect(moment(restored?.to).format("YYYY-MM-DD")).toBe(moment(fallback.value.to).format("YYYY-MM-DD"));
+      }
     });
   });
 
