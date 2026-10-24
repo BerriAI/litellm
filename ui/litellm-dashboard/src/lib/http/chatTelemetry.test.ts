@@ -7,7 +7,7 @@ afterEach(() => {
 });
 
 describe("Chat telemetry transport", () => {
-  it("should send only pseudonymous user and request IDs without gateway credentials or referrer", async () => {
+  it("should send a minimal PostHog request event without gateway credentials or referrer", async () => {
     const send = vi.fn().mockResolvedValue(new Response("{}"));
     const timeout = vi.spyOn(AbortSignal, "timeout");
     vi.stubGlobal("fetch", send);
@@ -15,7 +15,7 @@ describe("Chat telemetry transport", () => {
 
     expect(send).toHaveBeenCalledOnce();
     const [url, request] = send.mock.calls[0];
-    expect(url).toBe("https://chat-telemetry.litellm.ai/v1/chat/events");
+    expect(url).toBe("https://us.i.posthog.com/i/v0/e/");
     const expectedRequest = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -27,10 +27,18 @@ describe("Chat telemetry transport", () => {
     };
     expect(request).toEqual(expectedRequest);
     expect(timeout).toHaveBeenCalledExactlyOnceWith(5000);
-    expect(JSON.parse(request.body)).toEqual({
-      user_id: "opaque-user",
-      request_id: "unique-request",
-    });
+    const expectedPayload = {
+      api_key: expect.stringMatching(/^phc_/),
+      event: "litellm_chat_request",
+      distinct_id: "opaque-user",
+      uuid: "unique-request",
+      properties: {
+        product: "LiteLLM Chat UI",
+        $process_person_profile: false,
+        $geoip_disable: true,
+      },
+    };
+    expect(JSON.parse(request.body)).toEqual(expectedPayload);
   });
 
   it("should reject an unsuccessful ingestion response for the caller to handle", async () => {

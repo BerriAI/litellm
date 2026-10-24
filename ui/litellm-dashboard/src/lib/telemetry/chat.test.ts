@@ -64,7 +64,7 @@ describe("Chat request metrics", () => {
     expect(new Set(ids).size).toBe(3);
   });
 
-  it("should preserve user identity across days while leaving event timestamps to the collector", async () => {
+  it("should preserve user identity across days while leaving event timestamps to PostHog", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-23T23:59:00Z"));
     await chat.recordChatQuery("alice");
