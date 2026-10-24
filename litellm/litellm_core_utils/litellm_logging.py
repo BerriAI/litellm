@@ -198,6 +198,7 @@ from litellm.utils import get_base_model_from_metadata, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
+from ..integrations.asqav import AsqavLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
@@ -5864,6 +5865,13 @@ def build_custom_logger_compatible_class(
         newrelic_logger: Final = NewRelicLogger()
         _in_memory_loggers.append(newrelic_logger)
         return newrelic_logger
+    elif logging_integration == "asqav":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, AsqavLogger):
+                return callback
+        asqav_logger: Final = AsqavLogger()
+        _in_memory_loggers.append(asqav_logger)
+        return asqav_logger
     return None
 
 
@@ -6275,6 +6283,10 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, OpenTelemetryV2) and callback.callback_name == "newrelic":
                     return callback
                 if isinstance(callback, NewRelicLogger):
+                    return callback
+        elif logging_integration == "asqav":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AsqavLogger):
                     return callback
         return None
 
