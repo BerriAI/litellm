@@ -328,8 +328,8 @@ def isolate_model_catalog() -> Iterator[None]:
     models_by_provider_entries: Final = dict(models_by_provider)
     provider_model_sets: Final = tuple((models, frozenset(models)) for models in _provider_model_sets())
     yield
-    model_cost.clear()
-    model_cost.update(model_cost_entries)
+    dict.clear(model_cost)
+    dict.update(model_cost, model_cost_entries)
     models_by_provider.clear()
     models_by_provider.update(models_by_provider_entries)
     for models, entries in provider_model_sets:

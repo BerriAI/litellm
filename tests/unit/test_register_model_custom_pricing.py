@@ -19,9 +19,13 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases, adopt_model_cost_map
-from litellm.litellm_core_utils.model_cost_dict import ModelCostDict
 from litellm.main import _build_custom_pricing_entry
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.utils import (
+    _compose_initial_registration_entry,
+    _invalidate_model_cost_lowercase_map,
+    _RegistrationWrite,
+    get_model_cost_mutation_generation,
+)
 
 
 def _snapshot_model_cost_entries(keys):
@@ -995,28 +999,33 @@ def test_register_model_keeps_the_prices_a_reload_adopts_while_it_registers(monk
     builtin_cost_map: Final = litellm.get_model_cost_map(url="")
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", {**builtin_cost_map, catalog_key: dict(catalog_row)})
+    live_map: Final = litellm.model_cost
     _invalidate_model_cost_lowercase_map()
     reloaded_cost_map: Final = {
         **builtin_cost_map,
         catalog_key: {**catalog_row, "input_cost_per_token": reloaded_input_cost},
     }
     real_lookup: Final = litellm.utils.get_model_info
+    reload_attempts: Final = itertools.count()
+    reload_generations: Final[list[tuple[int, int]]] = []
 
     def lookup_racing_a_price_data_reload(model: str, custom_llm_provider: str | None = None) -> object:
         info: Final = real_lookup(model=model, custom_llm_provider=custom_llm_provider)
-        if litellm.model_cost is not reloaded_cost_map:
+        if next(reload_attempts) == 0:
+            generation_before: Final = get_model_cost_mutation_generation()
             adopt_model_cost_map(reloaded_cost_map)
+            reload_generations.append((generation_before, get_model_cost_mutation_generation()))
         return info
 
     with pytest.MonkeyPatch.context() as lookup_patch:
         lookup_patch.setattr(litellm.utils, "get_model_info", lookup_racing_a_price_data_reload)
         litellm.register_model({deployment_key: {"litellm_provider": "bedrock"}}, persist_across_reloads=False)
 
-    try:
-        assert litellm.model_cost[catalog_key]["input_cost_per_token"] == reloaded_input_cost
-        assert litellm.get_model_info(deployment_key)["input_cost_per_token"] == reloaded_input_cost
-    finally:
-        _invalidate_model_cost_lowercase_map()
+    assert litellm.model_cost is live_map
+    assert reload_generations
+    assert reload_generations[0][1] > reload_generations[0][0]
+    assert litellm.model_cost[catalog_key]["input_cost_per_token"] == reloaded_input_cost
+    assert litellm.get_model_info(deployment_key)["input_cost_per_token"] == reloaded_input_cost
 
 
 def test_register_model_keeps_its_price_when_a_reload_adopts_a_map_as_it_writes(
@@ -1037,38 +1046,47 @@ def test_register_model_keeps_its_price_when_a_reload_adopts_a_map_as_it_writes(
         **builtin_cost_map,
         catalog_key: {**catalog_row, "input_cost_per_token": reloaded_input_cost},
     }
-
-    class CostMapAReloadReplacesAsItIsWritten(dict[str, dict[str, object]]):
-        published_map: ModelCostDict | None = None
-
-        def update(self, other: Mapping[str, dict[str, object]], /) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # registration writes pass one mapping
-            if litellm.model_cost is self:
-                adopt_model_cost_map(reloaded_cost_map)
-                assert isinstance(litellm.model_cost, ModelCostDict)
-                self.published_map = litellm.model_cost
-            super().update(other)
-
-    race_map: Final = CostMapAReloadReplacesAsItIsWritten({**builtin_cost_map, catalog_key: dict(catalog_row)})
+    race_map: Final = {**builtin_cost_map, catalog_key: dict(catalog_row)}
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(
-        litellm,
-        "model_cost",
-        race_map,
-    )
+    monkeypatch.setattr(litellm, "model_cost", race_map)
     _invalidate_model_cost_lowercase_map()
+    real_compose: Final = _compose_initial_registration_entry
+    reload_attempts: Final = itertools.count()
+    reload_generations: Final[list[tuple[int, int]]] = []
+
+    def compose_racing_a_price_data_reload(
+        cost_map: Mapping[str, Mapping[str, object]],
+        write: _RegistrationWrite,
+        value: Mapping[str, object],
+        *,
+        original_key: str,
+        custom_llm_provider: str | None,
+    ) -> Mapping[str, object]:
+        entry: Final = real_compose(
+            cost_map,
+            write,
+            value,
+            original_key=original_key,
+            custom_llm_provider=custom_llm_provider,
+        )
+        if next(reload_attempts) == 0:
+            generation_before: Final = get_model_cost_mutation_generation()
+            adopt_model_cost_map(reloaded_cost_map)
+            reload_generations.append((generation_before, get_model_cost_mutation_generation()))
+        return entry
+
+    monkeypatch.setattr(litellm.utils, "_compose_initial_registration_entry", compose_racing_a_price_data_reload)
 
     litellm.register_model(
         {deployment_key: {"litellm_provider": "bedrock", "output_cost_per_token": registered_output_cost}},
         persist_across_reloads=False,
     )
 
-    try:
-        assert litellm.model_cost is race_map.published_map
-        assert isinstance(litellm.model_cost, ModelCostDict)
-        assert litellm.get_model_info(deployment_key)["input_cost_per_token"] == reloaded_input_cost
-        assert litellm.get_model_info(deployment_key)["output_cost_per_token"] == registered_output_cost
-    finally:
-        _invalidate_model_cost_lowercase_map()
+    assert litellm.model_cost is race_map
+    assert reload_generations
+    assert reload_generations[0][1] > reload_generations[0][0]
+    assert litellm.get_model_info(deployment_key)["input_cost_per_token"] == reloaded_input_cost
+    assert litellm.get_model_info(deployment_key)["output_cost_per_token"] == registered_output_cost
 
 
 def test_register_model_leaves_the_entry_a_lookup_is_walking_intact(monkeypatch: pytest.MonkeyPatch) -> None:

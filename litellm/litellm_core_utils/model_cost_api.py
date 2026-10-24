@@ -534,7 +534,9 @@ def _default_source() -> ModelCostSource:
     return Remote(litellm.model_cost_map_url)
 
 
-def _install_fetched(fetched: FetchedModelCostMap, *, is_env_forced: bool) -> ModelCostReloaded:
+def _install_fetched(
+    fetched: FetchedModelCostMap, *, is_env_forced: bool
+) -> ModelCostReloaded | ModelCostMapUnavailable:
     global _current_source  # noqa: PLW0603  # provenance changes only after a successful catalog install
     registry: Final = (
         fetched._catalog  # pyright: ignore[reportPrivateUsage]  # fetch retains native registry metadata for reload
@@ -542,7 +544,11 @@ def _install_fetched(fetched: FetchedModelCostMap, *, is_env_forced: bool) -> Mo
         else ModelRegistry.parse(json.dumps(_normalize(fetched.entries), sort_keys=True).encode())
     )
     accepted_registry, _ = registry.without_rejected()
-    catalog: Final = LoadedCatalog(accepted_registry, fetched.revision, fetched.etag)
+    catalog: Final = LoadedCatalog(
+        registry if isinstance(fetched.source, Remote) else accepted_registry,
+        fetched.revision,
+        fetched.etag,
+    )
     source_kind: Final = _source_kind(fetched.source)
     provenance: Final = _source_info(
         catalog,
@@ -553,6 +559,8 @@ def _install_fetched(fetched: FetchedModelCostMap, *, is_env_forced: bool) -> Mo
     )
     with _MODEL_COST_REGISTRATION_LOCK:
         composed: Final = install_loaded_catalog(catalog, provenance=provenance)
+        if isinstance(composed, NativeUnavailable):
+            return ModelCostMapUnavailable(composed.reason)
         _adopt_installed_model_cost_map(composed)
         _current_source = fetched.source  # rebind-ok: record the source adopted by the process
     return ModelCostReloaded(len(fetched.entries), fetched.revision, fetched.source)

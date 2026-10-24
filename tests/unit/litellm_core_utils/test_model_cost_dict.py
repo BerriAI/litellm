@@ -1,8 +1,10 @@
 import copy
+import inspect
 import json
 import operator
 import pickle
-from collections.abc import Mapping, MutableMapping
+import warnings
+from collections.abc import Iterable, Mapping, MutableMapping
 from pathlib import Path
 from typing import Final, cast
 
@@ -20,7 +22,7 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     get_model_cost_map_source_info,
     install_loaded_catalog,
 )
-from litellm.litellm_core_utils.model_cost_dict import ServedRow
+from litellm.litellm_core_utils.model_cost_dict import ModelCostDirectWriteWarning, ServedRow, WriteSink
 from litellm.rust_bridge._native import ModelCostLayers, ModelRegistry
 
 
@@ -34,6 +36,109 @@ def test_model_cost_dict_preserves_served_rows_and_alias_identity() -> None:
     assert model_cost["model"] is model_cost["alias"]
     assert model_cost["model"].names == ("model", "alias")
     assert model_cost["model"].registered_fields == frozenset({"input_cost_per_token"})
+
+
+class RecordingSink:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str]] = []
+
+    def wrote(self, key: str, row: Mapping[str, object]) -> None:
+        self.events.append(("wrote", key))
+
+    def removed(self, key: str) -> None:
+        self.events.append(("removed", key))
+
+    def cleared(self, keys: Iterable[str]) -> None:
+        self.events.extend(("removed", key) for key in keys)
+
+
+def test_model_cost_dict_mutators_record_after_mutating() -> None:
+    sink: Final = RecordingSink()
+    model_cost = ModelCostDict({"existing": {"input_cost_per_token": 1}}, sink=cast(WriteSink, sink))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ModelCostDirectWriteWarning)
+        model_cost["set"] = cast(ServedRow, {"input_cost_per_token": 1})
+        model_cost.update(cast(Mapping[str, ServedRow], {"updated": {"input_cost_per_token": 1}}))
+        model_cost.setdefault("default", cast(ServedRow, {"input_cost_per_token": 1}))
+        model_cost |= cast(Mapping[str, ServedRow], {"ior": {"input_cost_per_token": 1}})
+        del model_cost["set"]
+        model_cost.pop("updated")
+        model_cost.popitem()
+        model_cost.clear()
+    assert sink.events == [
+        ("wrote", "set"),
+        ("wrote", "updated"),
+        ("wrote", "default"),
+        ("wrote", "ior"),
+        ("removed", "set"),
+        ("removed", "updated"),
+        ("removed", "ior"),
+        ("removed", "existing"),
+        ("removed", "default"),
+    ]
+
+
+def test_model_cost_dict_update_accepts_pair_iterables_and_keyword_rows() -> None:
+    sink: Final = RecordingSink()
+    model_cost = ModelCostDict(sink=cast(WriteSink, sink))
+    row: Final = cast(ServedRow, {"input_cost_per_token": 1})
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ModelCostDirectWriteWarning)
+        model_cost.update([("pair", row)], keyword=row)
+
+    assert model_cost == {"pair": row, "keyword": row}
+    assert sink.events == [("wrote", "pair"), ("wrote", "keyword")]
+
+
+def test_model_cost_dict_warning_is_once_per_callsite_and_writes_before_error() -> None:
+    sink: Final = RecordingSink()
+    existing: Final = ServedRow({"input_cost_per_token": 1})
+    model_cost = ModelCostDict({"existing": existing}, sink=cast(WriteSink, sink))
+    with warnings.catch_warnings():
+        warnings.simplefilter("default", ModelCostDirectWriteWarning)
+        model_cost.update()
+        assert model_cost.setdefault("existing", cast(ServedRow, {"input_cost_per_token": 2})) is existing
+        assert model_cost.pop("missing", None) is None
+    assert sink.events == []
+
+    model_cost = ModelCostDict(sink=cast(WriteSink, sink))
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("default", ModelCostDirectWriteWarning)
+        for _ in range(300):
+            model_cost["loop"] = cast(ServedRow, {"input_cost_per_token": 1})
+    assert len(recorded) == 1
+    expected_line: Final = inspect.currentframe().f_lineno + 3
+    with warnings.catch_warnings(record=True) as located:
+        warnings.simplefilter("always", ModelCostDirectWriteWarning)
+        model_cost["location"] = cast(ServedRow, {"input_cost_per_token": 1})
+    assert len(located) == 1
+    assert located[0].filename == __file__
+    assert located[0].lineno == expected_line
+    assert "set_model_cost_overrides" in str(located[0].message)
+    expected_update_line: Final = inspect.currentframe().f_lineno + 3
+    with warnings.catch_warnings(record=True) as update_located:
+        warnings.simplefilter("always", ModelCostDirectWriteWarning)
+        model_cost.update({"update-location": cast(ServedRow, {"input_cost_per_token": 1})})
+    assert len(update_located) == 1
+    assert update_located[0].filename == __file__
+    assert update_located[0].lineno == expected_update_line
+    expected_ior_line: Final = inspect.currentframe().f_lineno + 3
+    with warnings.catch_warnings(record=True) as ior_located:
+        warnings.simplefilter("always", ModelCostDirectWriteWarning)
+        model_cost |= cast(Mapping[str, ServedRow], {"ior-location": {"input_cost_per_token": 1}})
+    assert len(ior_located) == 1
+    assert ior_located[0].filename == __file__
+    assert ior_located[0].lineno == expected_ior_line
+
+    error_sink: Final = RecordingSink()
+    model_cost = ModelCostDict(sink=cast(WriteSink, error_sink))
+    with pytest.raises(ModelCostDirectWriteWarning):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ModelCostDirectWriteWarning)
+            model_cost["written"] = cast(ServedRow, {"input_cost_per_token": 1})
+    assert "written" in model_cost
+    assert error_sink.events == [("wrote", "written")]
 
 
 def test_runtime_registered_model_cost_is_live_read_only_sparse_view() -> None:
@@ -108,20 +213,27 @@ def test_runtime_registered_model_cost_is_live_read_only_sparse_view() -> None:
         litellm.model_cost = original_model_cost
 
 
-def test_model_cost_dict_copies_are_plain_dicts_with_plain_rows() -> None:
-    row = ServedRow({"input_cost_per_token": 0.1}, ("model", "alias"))
-    model_cost = ModelCostDict({"model": row, "alias": row})
+def test_model_cost_dict_copies_are_plain_dicts_with_no_hooks() -> None:
+    row: Final = ServedRow({"input_cost_per_token": 0.1}, ("model", "alias"))
+    sink: Final = RecordingSink()
+    model_cost = ModelCostDict({"model": row, "alias": row}, sink=cast(WriteSink, sink))
 
-    copies = (
-        copy.copy(model_cost),
-        model_cost.copy(),
-        copy.deepcopy(model_cost),
-        pickle.loads(pickle.dumps(model_cost)),
-    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ModelCostDirectWriteWarning)
+        copies: Final = (
+            copy.copy(model_cost),
+            model_cost.copy(),
+            copy.deepcopy(model_cost),
+            pickle.loads(pickle.dumps(model_cost)),
+        )
+        dict_copy: Final = dict(model_cost)
 
     assert all(type(value) is dict for value in copies)
     assert all(type(value["model"]) is dict for value in copies)
     assert all(value["model"] is value["alias"] for value in copies)
+    assert type(dict_copy) is dict
+    assert dict_copy["model"] is row
+    assert sink.events == []
 
 
 def test_model_cost_dict_json_preserves_order_and_values() -> None:

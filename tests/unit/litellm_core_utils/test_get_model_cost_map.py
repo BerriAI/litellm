@@ -11,7 +11,8 @@ import logging
 import os
 import sys
 import threading
-from collections.abc import Callable
+import warnings
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Final
 
@@ -27,7 +28,9 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
 from litellm.litellm_core_utils.get_model_cost_map import (
+    _MODEL_COST_LAYERS,
     FALLBACK_GENERALIZATIONS_KEY,
+    CostMapSourceInfo,
     GetModelCostMap,
     LoadedCatalog,
     ModelCostMapUnavailable,
@@ -35,13 +38,76 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     _classify_fetch_content,
     _finalize_model_cost_map,
     _load,
+    adopt_model_cost_map,
     get_model_cost_map_provenance,
     get_model_cost_map_source_info,
     git_blob_id,
+    install_loaded_catalog,
 )
-from litellm.rust_bridge._native import ModelCostLayers, ModelRegistry
+from litellm.rust_bridge._native import ModelCostLayers, ModelRegistry, model_row_errors
 
 _ROOT_COST_MAP_PATH: Final = os.path.join(os.path.dirname(__file__), "../../../model_prices_and_context_window.json")
+
+
+def test_native_registry_rejects_nested_nonfinite_owner_rows() -> None:
+    key: Final = "nested-nonfinite-owner"
+    row: Final = {
+        "litellm_provider": "openai",
+        "metadata": {"prices": [float("nan")]},
+    }
+    errors: Final = model_row_errors(key, row)
+    layers: Final = ModelCostLayers()
+    with pytest.raises(ValueError):
+        layers.set_owner("nonfinite-owner", "override", {key: row})
+    assert tuple(layers.compose_keys(ModelRegistry.bundled(), (key,))) == ((key, None, frozenset()),)
+    assert tuple((error.key, error.field, error.kind, error.rejects) for error in errors) == (
+        (key, "metadata/prices/0", "invalid", True),
+    )
+
+
+@pytest.fixture
+def restore_installed_catalog_state() -> Iterator[None]:
+    previous_registry: Final = GetModelCostMap.loaded_registry()
+    previous_catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    source_info: Final = get_model_cost_map_module._cost_map_source_info
+    previous_source: Final = (
+        source_info.source,
+        source_info.url,
+        source_info.is_env_forced,
+        source_info.fallback_reason,
+        source_info.loaded_at,
+        source_info.source_revision,
+        source_info.etag,
+    )
+    previous_fallbacks: Final = list(get_fallback_generalization_rules())
+    previous_layers: Final = _MODEL_COST_LAYERS.snapshot()
+    api_module: Final = sys.modules.get("litellm.litellm_core_utils.model_cost_api")
+    api_state: Final = (
+        None
+        if api_module is None
+        else (getattr(api_module, "_owners", None), getattr(api_module, "_current_source", None))
+    )
+
+    def restore() -> None:
+        GetModelCostMap._base_registry = previous_registry
+        GetModelCostMap._snapshot_loaded_catalog(previous_catalog)
+        set_fallback_generalizations(previous_fallbacks)
+        (
+            source_info.source,
+            source_info.url,
+            source_info.is_env_forced,
+            source_info.fallback_reason,
+            source_info.loaded_at,
+            source_info.source_revision,
+            source_info.etag,
+        ) = previous_source
+        _MODEL_COST_LAYERS.restore(previous_layers)
+        if api_module is not None and api_state is not None:
+            setattr(api_module, "_owners", api_state[0])
+            setattr(api_module, "_current_source", api_state[1])
+
+    yield
+    restore()
 
 
 def _load_root_cost_map() -> dict:
@@ -143,6 +209,154 @@ def test_load_returns_catalog_without_mutating_process_state() -> None:
     assert GetModelCostMap.loaded_model_cost_map() is loaded_snapshot
     assert get_model_cost_map_source_info() == provenance
     assert tuple(get_fallback_generalization_rules()) == fallback_rules
+
+
+def test_remote_install_filters_before_integrity_and_keeps_state_unchanged(
+    restore_installed_catalog_state: None,
+) -> None:
+    previous_registry: Final = GetModelCostMap.loaded_registry()
+    previous_catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    previous_source_info: Final = get_model_cost_map_source_info()
+    previous_fallbacks: Final = tuple(get_fallback_generalization_rules())
+    previous_model_cost: Final = litellm.model_cost
+    previous_entries: Final = dict(previous_model_cost)
+    body: Final = json.dumps(
+        {
+            "accepted": {"litellm_provider": "openai", "mode": "chat"},
+            "rejected": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": "invalid"},
+        }
+    ).encode()
+    catalog: Final = LoadedCatalog(ModelRegistry.parse(body), git_blob_id(body), '"etag"')
+    provenance: Final[CostMapSourceInfo] = {
+        **previous_source_info,
+        "source": "remote",
+        "url": "https://example.invalid/model_cost.json",
+        "is_env_forced": False,
+        "fallback_reason": None,
+        "source_revision": catalog.revision,
+        "etag": catalog.etag,
+    }
+
+    result: Final = install_loaded_catalog(catalog, provenance=provenance)
+
+    assert isinstance(result, ModelCostMapUnavailable)
+    assert result.reason == "model cost map failed integrity validation"
+    assert litellm.model_cost is previous_model_cost
+    assert dict(litellm.model_cost) == previous_entries
+    assert GetModelCostMap.loaded_registry() is previous_registry
+    assert GetModelCostMap.loaded_model_cost_map() is previous_catalog
+    assert get_model_cost_map_source_info() == previous_source_info
+    assert tuple(get_fallback_generalization_rules()) == previous_fallbacks
+
+
+def test_live_direct_write_survives_reload_and_refreshes_caches_and_providers(
+    restore_installed_catalog_state: None,
+) -> None:
+    live_map: Final = litellm.model_cost
+    catalog_rows: Final = dict(live_map)
+    key: Final = "litellm-plan04-direct-write-cache-model"
+    openai_row: Final = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 0.000001,
+    }
+    anthropic_row: Final = {
+        "litellm_provider": "anthropic",
+        "mode": "chat",
+        "input_cost_per_token": 0.000002,
+    }
+    assert key not in catalog_rows
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", litellm.ModelCostDirectWriteWarning)
+        litellm.model_cost[key] = openai_row
+    assert key in litellm.open_ai_chat_completion_models
+    assert litellm.get_model_info(key)["input_cost_per_token"] == openai_row["input_cost_per_token"]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", litellm.ModelCostDirectWriteWarning)
+        litellm.model_cost[key] = anthropic_row
+    assert key not in litellm.open_ai_chat_completion_models
+    assert key in litellm.anthropic_models
+    assert litellm.get_model_info(key)["litellm_provider"] == "anthropic"
+    assert litellm.get_model_info(key)["input_cost_per_token"] == anthropic_row["input_cost_per_token"]
+
+    assert adopt_model_cost_map(catalog_rows) > 0
+    assert litellm.model_cost is live_map
+    assert litellm.model_cost[key] == anthropic_row
+    assert litellm.get_model_info(key)["input_cost_per_token"] == anthropic_row["input_cost_per_token"]
+
+
+def test_direct_writes_and_registrations_replay_in_chronological_order(
+    restore_installed_catalog_state: None,
+) -> None:
+    catalog_rows: Final = dict(litellm.model_cost)
+    direct_before_registration: Final = "litellm-plan04-direct-before-registration"
+    registration_before_direct: Final = "litellm-plan04-registration-before-direct"
+    direct_first_row: Final = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 0.000011,
+    }
+    direct_last_row: Final = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 0.000044,
+    }
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", litellm.ModelCostDirectWriteWarning)
+        litellm.model_cost[direct_before_registration] = direct_first_row
+    litellm.register_model(
+        {
+            direct_before_registration: {
+                "litellm_provider": "openai",
+                "output_cost_per_token": 0.000022,
+            }
+        },
+        persist_across_reloads=True,
+    )
+    litellm.register_model(
+        {
+            registration_before_direct: {
+                "litellm_provider": "openai",
+                "output_cost_per_token": 0.000033,
+            }
+        },
+        persist_across_reloads=True,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", litellm.ModelCostDirectWriteWarning)
+        litellm.model_cost[registration_before_direct] = direct_last_row
+
+    assert adopt_model_cost_map(catalog_rows) > 0
+    assert litellm.model_cost[direct_before_registration]["input_cost_per_token"] == 0.000011
+    assert litellm.model_cost[direct_before_registration]["output_cost_per_token"] == 0.000022
+    assert litellm.model_cost[registration_before_direct] == direct_last_row
+
+
+class ForeignModelCostMap(dict[str, dict[str, object]]):
+    def __getitem__(self, key: str) -> dict[str, object]:
+        return super().__getitem__(key) if key in self else {"foreign_default": True}
+
+
+@pytest.mark.parametrize("foreign_subclass", [False, True])
+def test_catalog_adoption_preserves_plain_and_foreign_map_identity(
+    foreign_subclass: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    restore_installed_catalog_state: None,
+) -> None:
+    cost_map: Final = dict(litellm.model_cost)
+    target: Final = ForeignModelCostMap(cost_map) if foreign_subclass else cost_map
+    monkeypatch.setattr(litellm, "model_cost", target)
+
+    adopt_model_cost_map(cost_map)
+
+    assert litellm.model_cost is target
+    assert type(litellm.model_cost) is type(target)
+    assert dict(litellm.model_cost) == cost_map
+    if foreign_subclass:
+        assert litellm.model_cost["missing-foreign-key"] == {"foreign_default": True}
 
 
 def test_explicit_file_source_ignores_local_map_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1286,7 +1500,7 @@ def test_every_key_reads_the_same_as_the_json_parsed_map(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_a_fetched_map_serves_a_bad_entry_as_written_and_logs_it_by_model_and_key():
+async def test_a_fetched_map_drops_a_bad_entry_and_logs_it_by_model_and_key():
     edited = json.loads(_real_map_bytes())
     edited["gpt-5.4-mini"]["mode"] = "telepathy"
     client, _ = _mock_client([httpx.Response(200, content=json.dumps(edited).encode())])
@@ -1301,5 +1515,5 @@ async def test_a_fetched_map_serves_a_bad_entry_as_written_and_logs_it_by_model_
         logger.removeHandler(handler)
 
     assert isinstance(result, ModelCostMapReloaded)
-    assert result.model_cost_map["gpt-5.4-mini"]["mode"] == "telepathy"
-    assert [record for record in records if "gpt-5.4-mini.mode" in record.getMessage()]
+    assert "gpt-5.4-mini" not in result.model_cost_map
+    assert any("gpt-5.4-mini.mode" in record.getMessage() for record in records)

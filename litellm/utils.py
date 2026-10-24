@@ -3528,7 +3528,7 @@ def _replace_cost_map_entry(
         name for name, value in registration.items() if value is not None
     )
     sharing_names: Final = tuple(name for name in names if cost_map.get(name) is current)
-    cost_map.update(dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, names, registered_fields)))
+    dict.update(cost_map, dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, names, registered_fields)))
 
 
 def _without_synthesized_costs(
@@ -3954,6 +3954,7 @@ def _registration_attempt(
     warning_display_name: str | None,
     final_attempt: bool,
 ) -> _RegistrationWrite | None:
+    generation: Final = get_model_cost_mutation_generation()
     source: Final = _builtin_cost_map()
     write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
     target: Final = _builtin_cost_map() if final_attempt else source
@@ -3964,8 +3965,10 @@ def _registration_attempt(
         original_key=key,
         custom_llm_provider=custom_llm_provider,
     )
+    if not final_attempt and get_model_cost_mutation_generation() != generation:
+        return None
     _replace_cost_map_entry(target, write.key, entry, value)
-    return write if final_attempt or litellm.model_cost is source else None
+    return write if final_attempt or get_model_cost_mutation_generation() == generation else None
 
 
 def _registration_sparse_fields(value: Mapping[str, object]) -> Mapping[str, object]:
@@ -4036,10 +4039,7 @@ def _compose_initial_registration_entry(
 def _register_on_current_map(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
 ) -> _RegistrationWrite:
-    """A price data reload that swaps the map while the entry is being built or written would otherwise get the old
-    map's prices written over its own, or drop the entry with the old map, so each attempt writes into the map it was
-    built from and the entry is rebuilt when a reload replaced that map before the write finished. The last attempt
-    writes into the current map, so the entry is never lost."""
+    """Rebuild against the current catalog if a reload changes its generation during registration."""
     attempts: Final = (
         _registration_attempt(
             key, value, custom_llm_provider, warning_display_name, final_attempt=attempt == _REGISTRATION_ATTEMPTS - 1

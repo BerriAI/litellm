@@ -41,6 +41,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
 from litellm.litellm_core_utils.model_cost_dict import (
+    LayersSink,
     ModelCostDict,
     ModelCostLayers,
     RegistrationIdentity,
@@ -364,6 +365,8 @@ async def refetch_model_cost_map(
         None,
     )
     model_cost: Final = install_loaded_catalog(loaded, provenance=provenance)
+    if isinstance(model_cost, ModelCostMapUnavailable):
+        return ModelCostMapReloadUnavailable(model_cost.reason)
     return ModelCostMapReloaded(model_cost, loaded.revision, loaded.etag)
 
 
@@ -487,8 +490,24 @@ def install_loaded_catalog(
     catalog: LoadedCatalog,
     *,
     provenance: CostMapSourceInfo,
-) -> ModelCostDict:
-    registry: Final = _report_errors(catalog.registry, provenance["source"])
+) -> ModelCostDict | ModelCostMapUnavailable:
+    accepted_registry, rejected = catalog.registry.without_rejected()
+    if provenance["source"] == "remote":
+        for error in rejected:
+            verbose_logger.warning(
+                "LiteLLM: rejected remote model cost row %s.%s: %s",
+                error.key,
+                error.field or "",
+                error.message,
+            )
+        if not accepted_registry.check_size():
+            return ModelCostMapUnavailable("model cost map failed integrity validation", None)
+    install_catalog: Final = (
+        LoadedCatalog(accepted_registry, catalog.revision, catalog.etag)
+        if provenance["source"] == "remote"
+        else catalog
+    )
+    registry: Final = _report_errors(install_catalog.registry, provenance["source"])
     base_rows: Final = _model_cost_dict_from_native_rows(_native_served_rows(registry))
     with _MODEL_COST_REGISTRATION_LOCK:
         set_fallback_generalizations(registry.fallback_rules())
@@ -500,6 +519,7 @@ def install_loaded_catalog(
             from litellm.litellm_core_utils.model_cost_api import (
                 _prepare_owner_layers,  # pyright: ignore[reportPrivateUsage]  # optional loaded API install hook
             )
+
             _prepare_owner_layers(registry)
         composed: Final = _model_cost_dict_from_native_rows(_MODEL_COST_LAYERS.compose(registry))
         _cost_map_source_info.source = provenance["source"]
@@ -515,6 +535,7 @@ def install_loaded_catalog(
             from litellm.litellm_core_utils.model_cost_api import (
                 _installed_catalog_changed,  # pyright: ignore[reportPrivateUsage]  # optional loaded API provenance hook
             )
+
             _installed_catalog_changed(provenance)
         if _MODEL_COST_LAYERS.identities:
             from litellm import utils
@@ -591,7 +612,10 @@ def _model_cost_dict_from_native_rows(rows: Sequence[_NativeServedRow]) -> Model
         )
         for identity, identity_rows in rows_by_identity.items()
     }
-    return ModelCostDict({key: served_rows[id(fields)] for key, fields, _ in rows})
+    return ModelCostDict(
+        {key: served_rows[id(fields)] for key, fields, _ in rows},
+        sink=LayersSink(_MODEL_COST_LAYERS),
+    )
 
 
 def _source_info(
@@ -796,6 +820,9 @@ def adopt_model_cost_map(
         _cost_map_source_info.fallback_reason,
     )
     composed_model_cost: Final = install_loaded_catalog(catalog, provenance=provenance)
+    if isinstance(composed_model_cost, ModelCostMapUnavailable):
+        verbose_logger.warning("LiteLLM: model cost map adoption rejected: %s", composed_model_cost.reason)
+        return 0
     _adopt_installed_model_cost_map(composed_model_cost)
     fetched_model_count: Final = len(composed_model_cost)
     return fetched_model_count
@@ -809,8 +836,10 @@ def _adopt_installed_model_cost_map(model_cost: ModelCostDict) -> None:
         latest: Final = _model_cost_dict_from_native_rows(_MODEL_COST_LAYERS.compose(GetModelCostMap.loaded_registry()))
         utils.restore_model_cost_registration_metadata(latest)
         published: Final = model_cost if latest == model_cost else latest
-        litellm.model_cost = published
-        utils.restore_model_cost_registration_metadata(published)
+        target: Final = litellm.model_cost
+        dict.clear(target)
+        dict.update(target, published)
+        utils.restore_model_cost_registration_metadata(target)
         utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
         litellm.add_known_models(model_cost_map=published)
         if utils._LiveDeploymentReplay.callback is not None:  # pyright: ignore[reportPrivateUsage]  # installation replays live router metadata
@@ -849,6 +878,9 @@ def _retry_native_fetch_in_background(
             result,
             provenance=_source_info(result, "remote", url, False, None),
         )
+        if isinstance(model_cost, ModelCostMapUnavailable):
+            verbose_logger.warning("LiteLLM: Background model cost map retry rejected: %s", model_cost.reason)
+            return
         _adopt_installed_model_cost_map(model_cost)
     except Exception as e:  # noqa: BLE001  # a failed background retry must not kill the task; the backup stays
         verbose_logger.warning("LiteLLM: Background model cost map retry failed: %s", e)
@@ -870,7 +902,10 @@ def _get_native_model_cost_map(
         if isinstance(local_catalog, ModelCostMapUnavailable):
             verbose_logger.warning("LiteLLM: Failed to load the bundled model cost map: %s", local_catalog.reason)
             return ModelCostDict()
-        return install_loaded_catalog(local_catalog, provenance=_source_info(local_catalog, "local", None, True, None))
+        installed: Final = install_loaded_catalog(
+            local_catalog, provenance=_source_info(local_catalog, "local", None, True, None)
+        )
+        return installed if isinstance(installed, ModelCostDict) else ModelCostDict()
 
     loaded: Final = (
         _load(NativeSource("remote", url, float(timeout)))
@@ -891,17 +926,24 @@ def _get_native_model_cost_map(
             )
         )
     )
-    if isinstance(loaded, LoadedCatalog):
-        return install_loaded_catalog(loaded, provenance=_source_info(loaded, "remote", url, False, None))
+    remote_install: Final = (
+        install_loaded_catalog(loaded, provenance=_source_info(loaded, "remote", url, False, None))
+        if isinstance(loaded, LoadedCatalog)
+        else loaded
+    )
+    if isinstance(remote_install, ModelCostDict):
+        return remote_install
+    if isinstance(remote_install, ModelCostMapUnavailable) and isinstance(loaded, LoadedCatalog):
+        verbose_logger.warning("LiteLLM: Remote model cost map rejected: %s", remote_install.reason)
     verbose_logger.warning(
         "LiteLLM: Failed to fetch remote model cost map from %s: %s. Falling back to local backup.",
         url,
-        loaded.reason,
+        remote_install.reason,
     )
     if (
         max_attempts > 1
         and not url.startswith("s3://")
-        and (loaded.retry_after is not None or loaded.reason == "model cost map transport failed")
+        and (remote_install.retry_after is not None or remote_install.reason == "model cost map transport failed")
     ):
         threading.Thread(
             target=_retry_native_fetch_in_background,
@@ -913,10 +955,14 @@ def _get_native_model_cost_map(
     if isinstance(bundled, ModelCostMapUnavailable):
         verbose_logger.warning("LiteLLM: Failed to load the bundled model cost map: %s", bundled.reason)
         return ModelCostDict()
-    return install_loaded_catalog(
+    fallback_map: Final = install_loaded_catalog(
         bundled,
-        provenance=_source_info(bundled, "local", None, False, f"Remote fetch failed: {loaded.reason}"),
+        provenance=_source_info(bundled, "local", None, False, f"Remote fetch failed: {remote_install.reason}"),
     )
+    if isinstance(fallback_map, ModelCostMapUnavailable):
+        verbose_logger.warning("LiteLLM: Failed to install the bundled model cost map: %s", fallback_map.reason)
+        return ModelCostDict()
+    return fallback_map
 
 
 def get_model_cost_map(

@@ -10,7 +10,7 @@ use litellm_model_catalog::{
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedBytes;
-use pyo3::types::{PyAny, PyBytes, PyDict, PyFrozenSet, PyList, PyTuple};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyFloat, PyFrozenSet, PyList, PyTuple};
 use serde::Serialize;
 use strum::{IntoStaticStr, VariantArray};
 
@@ -278,6 +278,25 @@ pub(crate) fn model_row_errors(key: &str, row: &Bound<'_, PyAny>) -> PyResult<Ve
             Error::NotAnObject,
         ))]);
     }
+    let mut errors = Vec::new();
+    if nonfinite_errors(
+        row,
+        &format!("/{}", escape_pointer_segment(key)),
+        &mut errors,
+        0,
+    )
+    .is_err()
+    {
+        errors.push(row_error(&Located::new(
+            format!("/{}", escape_pointer_segment(key)),
+            Error::Invalid(<serde_json::Error as serde::de::Error>::custom(
+                "row must contain JSON-compatible values",
+            )),
+        )));
+    }
+    if !errors.is_empty() {
+        return Ok(errors);
+    }
     let fields: Fields = match from_py(row) {
         Ok(fields) => fields,
         Err(_) => {
@@ -294,6 +313,42 @@ pub(crate) fn model_row_errors(key: &str, row: &Bound<'_, PyAny>) -> PyResult<Ve
         .iter()
         .map(row_error)
         .collect())
+}
+
+fn nonfinite_errors(
+    value: &Bound<'_, PyAny>,
+    path: &str,
+    errors: &mut Vec<RowError>,
+    depth: usize,
+) -> PyResult<()> {
+    if depth >= 128 {
+        return Err(PyValueError::new_err("model cost row nesting is too deep"));
+    }
+    if let Ok(number) = value.cast::<PyFloat>() {
+        if !number.value().is_finite() {
+            errors.push(row_error(&Located::new(
+                path.to_owned(),
+                Error::Invalid(<serde_json::Error as serde::de::Error>::custom(
+                    "JSON numbers must be finite",
+                )),
+            )));
+        }
+    } else if let Ok(fields) = value.cast::<PyDict>() {
+        for (key, item) in fields.iter() {
+            let key: String = key.extract()?;
+            nonfinite_errors(
+                &item,
+                &format!("{path}/{}", escape_pointer_segment(&key)),
+                errors,
+                depth + 1,
+            )?;
+        }
+    } else if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
+        for (index, item) in value.try_iter()?.enumerate() {
+            nonfinite_errors(&item?, &format!("{path}/{index}"), errors, depth + 1)?;
+        }
+    }
+    Ok(())
 }
 
 fn required_registration_option<'py>(
@@ -399,6 +454,15 @@ impl ModelCostLayers {
     }
 
     fn set_owner(&self, name: &str, precedence: &str, rows: &Bound<'_, PyDict>) -> PyResult<()> {
+        let mut errors = Vec::new();
+        nonfinite_errors(rows.as_any(), "", &mut errors, 0)?;
+        if let Some(error) = errors.first() {
+            return Err(PyValueError::new_err(format!(
+                "{}: {}",
+                error.field.as_deref().unwrap_or(&error.key),
+                error.message
+            )));
+        }
         let rows = from_py(rows)?;
         let precedence = match precedence {
             "fallback" => Precedence::Fallback,

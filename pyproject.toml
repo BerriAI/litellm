@@ -414,6 +414,8 @@ markers = [
     "requires_rust_extension: public Python contract requiring an enabled, compiled Rust extension",
 ]
 filterwarnings = [
+    # TODO: move direct model-cost writes to set_model_cost_overrides, tracked by PR #47769
+    "ignore::litellm.ModelCostDirectWriteWarning",
     # Suppress Pydantic serializer warnings from mock server responses (non-critical for memory tests)
     # These occur because the mock server returns a simplified response format
     "ignore:Pydantic serializer warnings:UserWarning",

@@ -58,6 +58,7 @@ UTILS_NAMES: Final = (
     "ModelCostSource",
     "FetchedModelCostMap",
     "ModelCostMapUnavailable",
+    "ModelCostDirectWriteWarning",
     "RowIssue",
     "ModelCostReloaded",
     "ModelCostOverrideResult",
@@ -531,6 +532,10 @@ _UTILS_IMPORT_MAP: Final = {
     "ModelCostSource": ("litellm.litellm_core_utils.model_cost_api", "ModelCostSource"),
     "FetchedModelCostMap": ("litellm.litellm_core_utils.model_cost_api", "FetchedModelCostMap"),
     "ModelCostMapUnavailable": ("litellm.litellm_core_utils.model_cost_api", "ModelCostMapUnavailable"),
+    "ModelCostDirectWriteWarning": (
+        "litellm.litellm_core_utils.model_cost_dict",
+        "ModelCostDirectWriteWarning",
+    ),
     "RowIssue": ("litellm.litellm_core_utils.model_cost_api", "RowIssue"),
     "ModelCostReloaded": ("litellm.litellm_core_utils.model_cost_api", "ModelCostReloaded"),
     "ModelCostOverrideResult": ("litellm.litellm_core_utils.model_cost_api", "ModelCostOverrideResult"),
