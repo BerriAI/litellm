@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from itertools import count, islice
 from types import MappingProxyType
@@ -104,6 +104,10 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
         *((list(scope.api_keys),) if scope.api_keys else ()),
     )
     return " AND ".join(conditions), params
+
+
+# Same rule as common_daily_activity._is_user_agent_tag
+_NOT_USER_AGENT_TAG: Final = "NOT (LOWER(BTRIM(tag)) LIKE 'user-agent:%' OR LOWER(BTRIM(tag)) LIKE 'user agent:%')"
 
 
 def _ptu_flat_cost_select(table: DailyActivityTable, *, aggregate: bool = True) -> str:
@@ -299,6 +303,42 @@ def build_key_page_sql(scope: DailyActivityScope, *, offset: int, limit: int) ->
         ) AS page ON TRUE
     """
     return SqlQuery(sql=sql, params=(*where_params, PTU_SENTINEL_API_KEY, limit, offset))
+
+
+def build_tag_page_sql(scope: DailyActivityScope, *, team_id: str, offset: int, limit: int) -> SqlQuery:
+    if not 1 <= limit <= constants.USAGE_TAG_PAGE_MAX:
+        raise ValueError(f"limit must be between 1 and {constants.USAGE_TAG_PAGE_MAX}")
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+    tag_scope: Final = replace(
+        scope,
+        table=DailyActivityTable.TAG,
+        entity_id_field="tag",
+        entity_ids=None,
+        exclude_entity_ids=(),
+    )
+    where_clause, where_params = build_where_clause(tag_scope)
+    team_param: Final = len(where_params) + 1
+    sentinel_param: Final = team_param + 1
+    limit_param: Final = sentinel_param + 1
+    offset_param: Final = limit_param + 1
+    sql: Final = f"""
+        WITH ranked AS (
+            SELECT tag,{_key_spend_select()}, SUM(spend::numeric) AS rank_spend
+            FROM "{PRISMA_TO_PG_TABLE[DailyActivityTable.TAG]}"
+            WHERE {where_clause} AND team_id = ${team_param} AND api_key <> ${sentinel_param}
+                AND tag IS NOT NULL AND {_NOT_USER_AGENT_TAG}
+            GROUP BY tag
+        )
+        SELECT (SELECT COUNT(*) FROM ranked)::bigint AS total_tags, page.*
+        FROM (SELECT 1) AS one
+        LEFT JOIN LATERAL (
+            SELECT * FROM ranked
+            ORDER BY rank_spend DESC, tag ASC
+            LIMIT ${limit_param} OFFSET ${offset_param}
+        ) AS page ON TRUE
+    """
+    return SqlQuery(sql=sql, params=(*where_params, team_id, PTU_SENTINEL_API_KEY, limit, offset))
 
 
 def _user_spend_select() -> str:

@@ -272,6 +272,10 @@ def _team_query(
     )
 
 
+def named_team_ids(query: EntityQuery) -> tuple[str, ...]:
+    return tuple(team_id for team_id in query.entity_ids or () if team_id)
+
+
 def _tag_query(
     start_date: str | None = None,
     end_date: str | None = None,
@@ -390,6 +394,7 @@ TEAM_RESOLVER = EntityScopeResolver(
             "aggregated": "get_team_daily_activity_aggregated",
             "search": "get_team_daily_activity_aggregated_search",
             "key_page": "get_team_daily_activity_aggregated_keys",
+            "tag_page": "get_team_daily_activity_aggregated_tags",
             "model_top_keys": "get_team_daily_activity_model_top_keys",
             "export": "get_team_daily_activity_export",
         }

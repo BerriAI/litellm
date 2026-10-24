@@ -66,6 +66,26 @@ class KeyPage:
 
 
 @dataclass(frozen=True, slots=True)
+class TagSpendRow:
+    tag: str
+    spend: float
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class TagPage:
+    rows: tuple[TagSpendRow, ...]
+    total_tags: int
+
+
+@dataclass(frozen=True, slots=True)
 class UserSpendRow:
     user_id: str | None
     spend: float
