@@ -16,5 +16,6 @@ pub mod openrouter;
 pub mod reducto;
 pub mod tencent;
 pub mod vertex_ai;
+pub mod watsonx;
 
 pub use error::{Error, ErrorDetail, ErrorSource};

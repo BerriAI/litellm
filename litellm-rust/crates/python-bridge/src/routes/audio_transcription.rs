@@ -13,7 +13,7 @@ use crate::{
 };
 
 async fn execute(
-    http: Result<litellm_http::Client, litellm_http::Error>,
+    clients: Result<(litellm_http::Client, litellm_http::CredentialClient), litellm_http::Error>,
     secrets: std::sync::Arc<dyn litellm_secrets::source::SecretSource>,
     audio: Value,
     optional_params: Map<String, Value>,
@@ -27,18 +27,24 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    AudioTranscriptionRoute::new(http?, crate::http::resources().auth.clone(), secrets)
-        .execute(AudioTranscriptionRequest {
-            model: &model,
-            audio,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-        })
-        .await
+    let (provider, credential) = clients?;
+    AudioTranscriptionRoute::new(
+        provider,
+        credential,
+        crate::http::resources().auth.clone(),
+        secrets,
+    )
+    .execute(AudioTranscriptionRequest {
+        model: &model,
+        audio,
+        api_key: api_key.as_deref(),
+        api_base: api_base.as_deref(),
+        custom_llm_provider: custom_llm_provider.as_deref(),
+        extra_headers,
+        optional_params,
+        timeout,
+    })
+    .await
 }
 
 #[pyfunction]
@@ -48,7 +54,7 @@ pub(crate) fn transcription(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py
         litellm_host_python::from_py_argument(&required_field(&arguments, "audio")?)?;
     let options = value_route_options(&arguments)?;
     let optional_params = optional_object_field(&arguments, "optional_params")?.unwrap_or_default();
-    let http = crate::http::provider_client(py, &call.kwargs, false)?;
+    let http = crate::http::provider_clients(py, &call.kwargs, false)?;
     let secrets = crate::secrets::source(py)?;
     run_sync(
         py,
@@ -67,7 +73,7 @@ pub(crate) fn atranscription<'py>(
         litellm_host_python::from_py_argument(&required_field(&arguments, "audio")?)?;
     let options = value_route_options(&arguments)?;
     let optional_params = optional_object_field(&arguments, "optional_params")?.unwrap_or_default();
-    let http = crate::http::provider_client(py, &call.kwargs, true)?;
+    let http = crate::http::provider_clients(py, &call.kwargs, true)?;
     let secrets = crate::secrets::source(py)?;
     run_async(
         py,

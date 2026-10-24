@@ -3361,6 +3361,7 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-auth-gcp",
  "litellm-auth-types",
+ "litellm-auth-watsonx",
 ]
 
 [[package]]
@@ -3432,6 +3433,23 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "veil",
+]
+
+[[package]]
+name = "litellm-auth-watsonx"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth-types",
+ "litellm-http",
+ "moka",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]

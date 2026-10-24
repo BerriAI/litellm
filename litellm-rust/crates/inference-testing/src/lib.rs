@@ -30,6 +30,13 @@ pub fn provider_http(resources: &CoreResources, config: &HttpClientConfig) -> li
         .unwrap()
 }
 
+pub fn credential_http(
+    resources: &CoreResources,
+    config: &HttpClientConfig,
+) -> litellm_http::CredentialClient {
+    resources.pool.credential_client(config).unwrap()
+}
+
 pub fn http_config() -> HttpClientConfig {
     Resolution::from(&HttpSettings::default()).config
 }

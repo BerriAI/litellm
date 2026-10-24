@@ -23,6 +23,7 @@ pub use types::{
 #[derive(Clone)]
 pub struct MessagesRoute {
     http: litellm_http::Client,
+    credential: litellm_http::CredentialClient,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
     cache: Option<litellm_cache_response::ScopedCache>,
@@ -31,11 +32,13 @@ pub struct MessagesRoute {
 impl MessagesRoute {
     pub fn new(
         http: litellm_http::Client,
+        credential: litellm_http::CredentialClient,
         auth: Arc<AuthServices>,
         secrets: Arc<dyn SecretSource>,
     ) -> Self {
         Self {
             http,
+            credential,
             auth,
             secrets,
             cache: None,

@@ -89,6 +89,7 @@ async fn chat_errors_come_from_core(
     let fields = fields.as_object().unwrap();
     let error = ChatCompletionsRoute::new(
         provider,
+        resources.pool.credential_client(&http).unwrap(),
         resources.auth.clone(),
         Arc::new(support::NoSecrets),
     )

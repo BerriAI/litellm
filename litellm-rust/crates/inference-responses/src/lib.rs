@@ -35,6 +35,7 @@ fn responses_provider(provider: LlmProviders) -> Option<&'static dyn BaseRespons
 #[derive(Clone)]
 pub struct ResponsesRoute {
     http: litellm_http::Client,
+    credential: litellm_http::CredentialClient,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
     cache: Option<litellm_cache_response::ScopedCache>,
@@ -43,11 +44,13 @@ pub struct ResponsesRoute {
 impl ResponsesRoute {
     pub fn new(
         http: litellm_http::Client,
+        credential: litellm_http::CredentialClient,
         auth: Arc<AuthServices>,
         secrets: Arc<dyn SecretSource>,
     ) -> Self {
         Self {
             http,
+            credential,
             auth,
             secrets,
             cache: None,

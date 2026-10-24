@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use litellm_inference_testing::{http_config, provider_http, resources};
+use litellm_inference_testing::{credential_http, http_config, provider_http, resources};
 use litellm_secrets::source::SecretSource;
 use serde_json::Value;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
@@ -17,8 +17,10 @@ pub fn responses_route(
     secrets: Arc<dyn SecretSource>,
 ) -> litellm_inference_responses::ResponsesRoute {
     let resources = resources();
+    let config = http_config();
     litellm_inference_responses::ResponsesRoute::new(
-        provider_http(&resources, &http_config()),
+        provider_http(&resources, &config),
+        credential_http(&resources, &config),
         resources.auth,
         secrets,
     )

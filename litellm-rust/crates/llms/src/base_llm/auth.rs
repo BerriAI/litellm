@@ -5,10 +5,12 @@
 //! that split: `validate_environment` shapes the forwarded headers and names the credential
 //! as an [`AuthScheme`], and [`resolve_auth`] turns the scheme into headers and a signer.
 
-use litellm_auth::{AuthServices, CredentialPlacement, SecretValue, TokenProviderHandle};
+use litellm_auth::{
+    AuthServices, CredentialPlacement, SecretValue, TokenProviderHandle, watsonx::WatsonxIamConfig,
+};
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer};
 use litellm_auth_gcp::VertexConfig;
-use litellm_http::request::with_header;
+use litellm_http::{CredentialClient, request::with_header};
 
 pub type Headers = Vec<(String, String)>;
 
@@ -24,10 +26,17 @@ pub enum AuthScheme {
     },
     /// A bearer acquired when the request is sent, from a token source such as a cloud SDK
     /// or a caller-supplied callable.
-    Token { provider: TokenProviderHandle },
+    Token {
+        provider: TokenProviderHandle,
+    },
     /// A Google access token for the Vertex AI project the config names, acquired when the
     /// request is sent through the shared GCP token cache.
-    GcpAccessToken { config: Box<VertexConfig> },
+    GcpAccessToken {
+        config: Box<VertexConfig>,
+    },
+    WatsonxIam {
+        config: Box<WatsonxIamConfig>,
+    },
     /// AWS SigV4 over the bytes that go on the wire, so the handler signs after the body is
     /// serialized.
     AwsSigV4 {
@@ -49,10 +58,12 @@ pub struct ValidatedEnvironment {
 pub struct Authenticated {
     pub headers: Headers,
     pub signer: Option<SigV4Signer>,
+    pub watsonx_iam: Option<litellm_auth::watsonx::WatsonxToken>,
 }
 
 pub async fn resolve_auth(
     services: &AuthServices,
+    credential: &CredentialClient,
     validated: ValidatedEnvironment,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Authenticated, litellm_auth::Error> {
@@ -61,10 +72,12 @@ pub async fn resolve_auth(
         AuthScheme::Forwarded => Ok(Authenticated {
             headers,
             signer: None,
+            watsonx_iam: None,
         }),
         AuthScheme::Credential { placement, secret } => Ok(Authenticated {
             headers: with_credential(headers, placement, secret.expose()),
             signer: None,
+            watsonx_iam: None,
         }),
         AuthScheme::Token { provider } => {
             let token = provider.acquire().await?;
@@ -75,6 +88,7 @@ pub async fn resolve_auth(
                     token.secret().expose(),
                 ),
                 signer: None,
+                watsonx_iam: None,
             })
         }
         AuthScheme::GcpAccessToken { config } => {
@@ -82,6 +96,19 @@ pub async fn resolve_auth(
             Ok(Authenticated {
                 headers: with_credential(headers, CredentialPlacement::Bearer, &token),
                 signer: None,
+                watsonx_iam: None,
+            })
+        }
+        AuthScheme::WatsonxIam { config } => {
+            let token = services.watsonx.access_token(&config, credential).await?;
+            Ok(Authenticated {
+                headers: with_credential(
+                    headers,
+                    CredentialPlacement::Bearer,
+                    token.secret().expose(),
+                ),
+                signer: None,
+                watsonx_iam: Some(token),
             })
         }
         AuthScheme::AwsSigV4 {
@@ -94,6 +121,7 @@ pub async fn resolve_auth(
                 SigV4Signer::resolve(&services.aws, region, service, *credentials, env_lookup)
                     .await?,
             ),
+            watsonx_iam: None,
         }),
     }
 }
@@ -129,8 +157,10 @@ mod tests {
     }
 
     async fn resolve(headers: Headers, auth: AuthScheme) -> Authenticated {
+        let credential = CredentialClient::no_redirect_for_test();
         resolve_auth(
             &AuthServices::default(),
+            &credential,
             ValidatedEnvironment { headers, auth },
             &no_env,
         )

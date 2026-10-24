@@ -13,9 +13,12 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
         py,
         arguments,
         move |py, arguments, request| {
+            let (provider, credential) =
+                crate::http::provider_clients(py, arguments, asynchronous)?
+                    .map_err(crate::http::client_error)?;
             let route = litellm_inference_messages::MessagesRoute::new(
-                crate::http::provider_client(py, arguments, asynchronous)?
-                    .map_err(crate::http::client_error)?,
+                provider,
+                credential,
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );

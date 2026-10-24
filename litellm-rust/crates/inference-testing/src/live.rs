@@ -8,6 +8,7 @@ pub const DEADLINE: Duration = Duration::from_secs(120);
 
 pub struct LiveResources {
     pub http: litellm_http::Client,
+    pub credential: litellm_http::CredentialClient,
     pub auth: Arc<litellm_auth::AuthServices>,
     pub secrets: Arc<dyn SecretSource>,
 }
@@ -24,12 +25,17 @@ impl Default for LiveResources {
             .pool
             .client(&resolution.config, ClientVariant::Provider)
             .expect("live provider HTTP settings must be valid");
+        let credential = resources
+            .pool
+            .credential_client(&resolution.config)
+            .expect("live credential HTTP settings must be valid");
         let secrets_http = resources
             .pool
             .client(&resolution.config, ClientVariant::NoRedirect)
             .expect("live secret HTTP settings must be valid");
         Self {
             http,
+            credential,
             auth: resources.auth,
             secrets: Arc::new(EnvironmentSecrets::python_compatible(secrets_http)),
         }

@@ -16,6 +16,7 @@ use types::{ChatCompletionsCall, ChatCompletionsRequest};
 #[derive(Clone)]
 pub struct ChatCompletionsRoute {
     http: litellm_http::Client,
+    credential: litellm_http::CredentialClient,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
     cache: Option<litellm_cache_response::ScopedCache>,
@@ -24,11 +25,13 @@ pub struct ChatCompletionsRoute {
 impl ChatCompletionsRoute {
     pub fn new(
         http: litellm_http::Client,
+        credential: litellm_http::CredentialClient,
         auth: Arc<AuthServices>,
         secrets: Arc<dyn SecretSource>,
     ) -> Self {
         Self {
             http,
+            credential,
             auth,
             secrets,
             cache: None,
@@ -98,6 +101,7 @@ impl ChatCompletionsRoute {
                 Result<ChatCompletionsResponse, Error>,
             > = Box::pin(handler::execute(
                 &self.http,
+                &self.credential,
                 &self.auth,
                 config,
                 provider,

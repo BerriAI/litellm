@@ -51,10 +51,11 @@ impl InferenceRoute for ChatCompletionsRoute {
 
     fn new(
         http: litellm_http::Client,
+        credential: litellm_http::CredentialClient,
         auth: Arc<AuthServices>,
         secrets: Arc<dyn SecretSource>,
     ) -> Self {
-        Self::new(http, auth, secrets)
+        Self::new(http, credential, auth, secrets)
     }
 
     fn with_cache(self, cache: ScopedCache) -> Self {
