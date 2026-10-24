@@ -262,24 +262,9 @@ class PostHogLogger(CustomBatchLogger):
         litellm_internal_fields: Final = {
             "endpoint",
             "caching_groups",
-            "user_api_key_hash",
-            "user_api_key_alias",
-            "user_api_key_team_id",
-            "user_api_key_user_id",
-            "user_api_key_org_id",
-            "user_api_key_team_alias",
-            "user_api_key_end_user_id",
-            "user_api_key_user_email",
-            "user_api_key",
             "user_api_end_user_max_budget",
             "litellm_api_version",
             "global_max_parallel_requests",
-            "user_api_key_team_max_budget",
-            "user_api_key_team_spend",
-            "user_api_key_spend",
-            "user_api_key_max_budget",
-            "user_api_key_model_max_budget",
-            "user_api_key_metadata",
             "headers",
             "litellm_parent_otel_span",
             "requester_ip_address",
@@ -295,8 +280,13 @@ class PostHogLogger(CustomBatchLogger):
         }
 
         for key, value in metadata.items():
-            if key not in litellm_internal_fields:
-                properties[key] = value
+            # The proxy writes the calling key's record under user_api_key* names
+            # (the hash, budgets, spend, the whole UserAPIKeyAuth object), and the
+            # set of names grows with the proxy, so the rule is the prefix, as in
+            # redact_user_api_key_info, not a list.
+            if key.startswith("user_api_key") or key in litellm_internal_fields:
+                continue
+            properties[key] = value
 
     def _get_distinct_id(self, standard_logging_object: StandardLoggingPayload, kwargs: PostHogLogKwargs) -> str:
         metadata: Final = self._extract_metadata(kwargs)
