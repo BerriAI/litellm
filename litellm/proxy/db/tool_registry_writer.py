@@ -14,9 +14,16 @@ from typing import TYPE_CHECKING, Final, Protocol
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import TOOL_DISCOVERY_COMMIT_JOB_NAME
 from litellm.proxy._types import ToolDiscoveryQueueItem
 from litellm.proxy.db.db_span import db_span
-from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import aggregate_tool_discoveries
+from litellm.proxy.db.db_spend_update_writer import spend_commit_failure_is_requeue_safe
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
+from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
+    ToolDiscoveryQueue,
+    aggregate_tool_discoveries,
+)
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.db.tool_table_bulk_upsert import build_tool_bulk_upsert
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -119,6 +126,64 @@ async def batch_upsert_tools(
     async with db_span("commit_tool_discoveries", "LiteLLM_ToolTable"):
         await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
     verbose_proxy_logger.debug("tool_registry_writer: upserted %d tool(s)", len(rows))
+
+
+async def flush_tool_discovery_queue(prisma_client: "PrismaClient", tool_discovery_queue: ToolDiscoveryQueue) -> None:
+    """One worker's own rows straight to LiteLLM_ToolTable, the path without the Redis buffer."""
+    items: Final = tool_discovery_queue.flush()
+    if not items:
+        return
+    try:
+        await batch_upsert_tools(prisma_client=prisma_client, items=items)
+    except Exception as e:  # noqa: BLE001  # a lost tool row only delays its discovery, the scheduler job must not fail
+        verbose_proxy_logger.debug("flush_tool_discovery_queue error (non-blocking): %s", e)
+
+
+async def commit_tool_discoveries(
+    prisma_client: "PrismaClient",
+    tool_discovery_queue: ToolDiscoveryQueue,
+    redis_update_buffer: RedisUpdateBuffer,
+    pod_lock_manager: PodLockManager,
+    use_redis_buffer: bool,
+) -> None:
+    """Scheduled alongside update_spend on its own lock, so tool table writes never ride the spend commit.
+
+    With the Redis buffer every worker hands its rows to Redis and the holder of the tool lock writes them all in
+    one statement. Without it each worker writes its own rows."""
+    if not use_redis_buffer:
+        await flush_tool_discovery_queue(prisma_client=prisma_client, tool_discovery_queue=tool_discovery_queue)
+        return
+    await redis_update_buffer.store_tool_discoveries_in_redis(tool_discovery_queue=tool_discovery_queue)
+    if not await pod_lock_manager.acquire_lock(cronjob_id=TOOL_DISCOVERY_COMMIT_JOB_NAME):
+        return
+    try:
+        await _commit_tool_discoveries_from_redis(prisma_client=prisma_client, redis_update_buffer=redis_update_buffer)
+    finally:
+        await pod_lock_manager.release_lock(cronjob_id=TOOL_DISCOVERY_COMMIT_JOB_NAME)
+
+
+async def _commit_tool_discoveries_from_redis(
+    prisma_client: "PrismaClient", redis_update_buffer: RedisUpdateBuffer
+) -> None:
+    """Tool lock holder only: drain every worker's tool rows from Redis and write them in one statement."""
+    items: Final = await redis_update_buffer.get_all_tool_discoveries_from_redis_buffer()
+    if not items:
+        return
+    try:
+        await batch_upsert_tools(prisma_client=prisma_client, items=items)
+    except Exception as e:  # noqa: BLE001  # the rows go back to redis or are dropped, the scheduler job must not fail
+        if spend_commit_failure_is_requeue_safe(e):
+            await redis_update_buffer.restore_tool_discoveries_to_redis(items)
+            verbose_proxy_logger.error(
+                "Tool discovery - %d tool rows went back to Redis for the next tick. Error: %s", len(items), str(e)
+            )
+            return
+        verbose_proxy_logger.error(
+            "Tool discovery - dropped %d tool rows: the failed statement may have applied or the database "
+            "refused the data, so re-sending it is not safe. Error: %s",
+            len(items),
+            str(e),
+        )
 
 
 _NO_OWNERS: Final[Mapping[str, ToolDiscoveryUser]] = MappingProxyType({})

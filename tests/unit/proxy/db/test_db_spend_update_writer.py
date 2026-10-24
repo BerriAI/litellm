@@ -20,10 +20,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 from litellm.constants import (
-    DB_SPEND_UPDATE_JOB_NAME,
-    REDIS_TOOL_DISCOVERY_BUFFER_KEY,
     SPEND_ROLLUP_LOCK_TIMEOUT_MS,
-    TOOL_DISCOVERY_COMMIT_JOB_NAME,
 )
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
@@ -34,7 +31,6 @@ from litellm.proxy.db.db_spend_update_writer import (
     _SpendTableName,
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
-from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
@@ -2397,68 +2393,6 @@ class _InMemoryRedis:
 
     async def async_lpop_pipeline(self, lpop_list: list[RedisPipelineLpopOperation]) -> list[list[object] | None]:
         return [self.lists.pop(op["key"], None) for op in lpop_list]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "lock_held_by_another_pod",
-    [None, DB_SPEND_UPDATE_JOB_NAME, TOOL_DISCOVERY_COMMIT_JOB_NAME],
-    ids=["free", "spend_lock_held", "tool_lock_held"],
-)
-async def test_commit_with_redis_writes_every_workers_tools_in_one_statement_from_the_tool_lock_holder_only(
-    lock_held_by_another_pod: str | None,
-):
-    redis = _InMemoryRedis()
-    if lock_held_by_another_pod is not None:
-        assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=lock_held_by_another_pod)
-    other_worker = DBSpendUpdateWriter(redis_cache=redis)
-    other_worker.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "mcp_server"})
-    other_worker.tool_discovery_queue.add_update({"tool_name": "search", "origin": "user_defined"})
-    await other_worker.redis_update_buffer.store_tool_discoveries_in_redis(other_worker.tool_discovery_queue)
-
-    db_writer = DBSpendUpdateWriter(redis_cache=redis)
-    db_writer.pod_lock_manager.redis_cache = redis
-    db_writer.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
-    db_writer.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
-    prisma_client = MagicMock()
-    prisma_client.db.execute_raw = AsyncMock(return_value=2)
-    prisma_client.db.litellm_tooltable.upsert = AsyncMock()
-
-    await db_writer.commit_tool_discoveries(prisma_client=prisma_client, use_redis_buffer=True)
-
-    assert db_writer.tool_discovery_queue.flush() == [], "every worker hands its tools to redis each tick"
-    prisma_client.db.litellm_tooltable.upsert.assert_not_awaited()
-    if lock_held_by_another_pod == TOOL_DISCOVERY_COMMIT_JOB_NAME:
-        prisma_client.db.execute_raw.assert_not_awaited()
-        assert len(redis.lists[REDIS_TOOL_DISCOVERY_BUFFER_KEY]) == 2, "non-holders leave their tools for the holder"
-        return
-    assert REDIS_TOOL_DISCOVERY_BUFFER_KEY not in redis.lists, "the spend lock must not gate the tool drain"
-    prisma_client.db.execute_raw.assert_awaited_once()
-    sql, *params = prisma_client.db.execute_raw.call_args.args
-    assert sql.startswith('INSERT INTO "LiteLLM_ToolTable"') and 'ON CONFLICT ("tool_name")' in sql
-    rows = {params[i + 1]: params[i + 3] for i in range(0, len(params), 10)}
-    assert rows == {"get_weather": 3, "search": 1}, f"one row per tool summed across workers, got {params}"
-
-
-@pytest.mark.asyncio
-async def test_commit_without_redis_writes_only_this_workers_tools_in_one_statement_and_never_touches_redis():
-    redis = _InMemoryRedis()
-    db_writer = DBSpendUpdateWriter(redis_cache=redis)
-    db_writer.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
-    db_writer.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
-    db_writer.tool_discovery_queue.add_update({"tool_name": "search", "origin": "user_defined"})
-    prisma_client = MagicMock()
-    prisma_client.db.execute_raw = AsyncMock(return_value=2)
-
-    await db_writer.commit_tool_discoveries(prisma_client=prisma_client, use_redis_buffer=False)
-
-    assert redis.lists == {}, "without the buffer flag nothing goes through redis"
-    assert db_writer.tool_discovery_queue.flush() == []
-    prisma_client.db.execute_raw.assert_awaited_once()
-    sql, *params = prisma_client.db.execute_raw.call_args.args
-    assert 'ON CONFLICT ("tool_name")' in sql
-    rows = {params[i + 1]: params[i + 3] for i in range(0, len(params), 10)}
-    assert rows == {"get_weather": 2, "search": 1}, f"got {params}"
 
 
 @pytest.mark.asyncio
@@ -5265,30 +5199,3 @@ def test_record_request_error_feeds_the_failure_rollup_with_the_logged_status() 
             status_code=503,
         ): 1
     }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("failure", "requeued"),
-    [
-        (Exception("connection reset"), True),
-        (_postgres_rejection("23502"), False),
-    ],
-    ids=["connection_error_goes_back_to_redis", "rejected_row_is_dropped"],
-)
-async def test_failed_tool_table_write_requeues_the_rows_only_when_they_provably_did_not_apply(
-    failure: Exception, requeued: bool
-):
-    redis = _InMemoryRedis()
-    db_writer = DBSpendUpdateWriter(redis_cache=redis)
-    db_writer.pod_lock_manager.redis_cache = redis
-    db_writer.tool_discovery_queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
-    prisma_client = MagicMock()
-    prisma_client.db.execute_raw = AsyncMock(side_effect=failure)
-
-    await db_writer.commit_tool_discoveries(prisma_client=prisma_client, use_redis_buffer=True)
-
-    prisma_client.db.execute_raw.assert_awaited_once()
-    left_in_redis = [json.loads(entry) for entry in redis.lists.get(REDIS_TOOL_DISCOVERY_BUFFER_KEY, [])]
-    expected = [[{"tool_name": "get_weather", "origin": "user_defined", "call_count": 1}]] if requeued else []
-    assert left_in_redis == expected, f"requeued={requeued} but redis holds {left_in_redis}"

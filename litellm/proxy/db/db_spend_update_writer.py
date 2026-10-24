@@ -33,7 +33,6 @@ from litellm.constants import (
     DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
     DB_SPEND_UPDATE_JOB_NAME,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
-    TOOL_DISCOVERY_COMMIT_JOB_NAME,
 )
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -253,7 +252,7 @@ class _DailySpendCommit(Protocol[_DailySpendTransactionT]):
 _DATA_REJECTED_SQLSTATE_CLASSES: Final = frozenset({"22", "23"})
 
 
-def _spend_commit_failure_is_requeue_safe(e: Exception) -> bool:
+def spend_commit_failure_is_requeue_safe(e: Exception) -> bool:
     if isinstance(e, DB_CONNECTION_ERROR_TYPES):
         return isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
     sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
@@ -297,7 +296,7 @@ def _spend_tables_left_to_send(
         _SPEND_TABLE_COMMIT_ORDER[len(committed)] if len(committed) < len(_SPEND_TABLE_COMMIT_ORDER) else None
     )
     dropped: Final[frozenset[_SpendTableName]] = (
-        frozenset() if in_flight is None or _spend_commit_failure_is_requeue_safe(failure) else frozenset({in_flight})
+        frozenset() if in_flight is None or spend_commit_failure_is_requeue_safe(failure) else frozenset({in_flight})
     )
     if dropped and in_flight is not None:
         spend_log_error(
@@ -1771,7 +1770,7 @@ class DBSpendUpdateWriter:
                             window_spend_transactions=window_spend_update_transactions,
                         )
                     except Exception as e:
-                        if not _spend_commit_failure_is_requeue_safe(e):
+                        if not spend_commit_failure_is_requeue_safe(e):
                             uncommitted.pop("window_spend_update_transactions", None)
                             spend_log_error(
                                 "Spend tracking - dropped %d budget window increments: the failed statement may have "
@@ -1937,7 +1936,7 @@ class DBSpendUpdateWriter:
                 window_spend_transactions=window_spend_update_transactions,
             )
         except Exception as e:  # noqa: BLE001  # the increments go back on the queue; the rest of the flush must run
-            if _spend_commit_failure_is_requeue_safe(e):
+            if spend_commit_failure_is_requeue_safe(e):
                 spend_log_error(
                     "Spend tracking - failed to commit budget window spend updates. "
                     "Re-queued %d window increments for retry on next tick. Error: %s",
@@ -2085,59 +2084,6 @@ class DBSpendUpdateWriter:
                 daily_tag_spend_update_transactions=daily_tag_spend_update_transactions,
             )
             raise
-
-    async def _flush_tool_discovery_queue(
-        self,
-        prisma_client: PrismaClient,
-    ) -> None:
-        """Flush ToolDiscoveryQueue and write it to LiteLLM_ToolTable in one statement."""
-        from litellm.proxy.db.tool_registry_writer import batch_upsert_tools
-
-        try:
-            items: Final = self.tool_discovery_queue.flush()
-            if items:
-                await batch_upsert_tools(prisma_client=prisma_client, items=items)
-        except Exception as e:
-            verbose_proxy_logger.debug("_flush_tool_discovery_queue error (non-blocking): %s", e)
-
-    async def commit_tool_discoveries(self, prisma_client: PrismaClient, use_redis_buffer: bool) -> None:
-        """Scheduled alongside update_spend on its own lock, so tool table writes never ride the spend commit.
-
-        With the Redis buffer every worker hands its rows to Redis and the holder of the tool lock writes them all in
-        one statement. Without it each worker writes its own rows."""
-        if not use_redis_buffer:
-            await self._flush_tool_discovery_queue(prisma_client=prisma_client)
-            return
-        await self.redis_update_buffer.store_tool_discoveries_in_redis(tool_discovery_queue=self.tool_discovery_queue)
-        if not await self.pod_lock_manager.acquire_lock(cronjob_id=TOOL_DISCOVERY_COMMIT_JOB_NAME):
-            return
-        try:
-            await self._commit_tool_discoveries_from_redis(prisma_client=prisma_client)
-        finally:
-            await self.pod_lock_manager.release_lock(cronjob_id=TOOL_DISCOVERY_COMMIT_JOB_NAME)
-
-    async def _commit_tool_discoveries_from_redis(self, prisma_client: PrismaClient) -> None:
-        """Tool lock holder only: drain every worker's tool rows from Redis and write them in one statement."""
-        from litellm.proxy.db.tool_registry_writer import batch_upsert_tools
-
-        items: Final = await self.redis_update_buffer.get_all_tool_discoveries_from_redis_buffer()
-        if not items:
-            return
-        try:
-            await batch_upsert_tools(prisma_client=prisma_client, items=items)
-        except Exception as e:  # noqa: BLE001  # the rows go back to redis or are dropped, the spend commit must not fail
-            if _spend_commit_failure_is_requeue_safe(e):
-                await self.redis_update_buffer.restore_tool_discoveries_to_redis(items)
-                verbose_proxy_logger.error(
-                    "Tool discovery - %d tool rows went back to Redis for the next tick. Error: %s", len(items), str(e)
-                )
-                return
-            verbose_proxy_logger.error(
-                "Tool discovery - dropped %d tool rows: the failed statement may have applied or the database "
-                "refused the data, so re-sending it is not safe. Error: %s",
-                len(items),
-                str(e),
-            )
 
     @staticmethod
     async def handle_spend_update_failure(
@@ -2659,7 +2605,7 @@ class DBSpendUpdateWriter:
                                 _mark_daily_spend_commit_started()
                             _mark_daily_spend_commit_finished()
                         except Exception as batch_error:
-                            if _spend_commit_failure_is_requeue_safe(batch_error):
+                            if spend_commit_failure_is_requeue_safe(batch_error):
                                 spend_log_error(
                                     "Daily %s spend batch upsert failed. Table: %s, Rows: %d, Error: %s",
                                     entity_type,
