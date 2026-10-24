@@ -87,6 +87,13 @@ pub(crate) async fn execute(
         )
         .await?;
     authenticated.headers = wire.headers;
+    let bearer = authenticated
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .and_then(|(_, value)| value.strip_prefix("Bearer "))
+        .map(litellm_auth::SecretValue::new);
+    let receipt = authenticated.watsonx_iam.clone();
     let outbound = litellm_inference::outbound::outbound_request(
         authenticated,
         wire.url,
@@ -97,6 +104,12 @@ pub(crate) async fn execute(
         .await
         .map_err(TransportError::from_reqwest_before_dispatch)?;
     let status = response.status();
+    if status.as_u16() == 401
+        && let (Some(receipt), Some(bearer)) = (receipt.as_ref(), bearer.as_ref())
+        && receipt.secret() == bearer
+    {
+        route.auth.watsonx.invalidate(receipt).await;
+    }
     let text = response.text().await.map_err(TransportError::from)?;
     if !status.is_success() {
         return Err(TransportError::Http {
