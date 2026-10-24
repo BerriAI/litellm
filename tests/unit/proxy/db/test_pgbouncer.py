@@ -23,6 +23,7 @@ import pytest
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.pgbouncer import (
     PGBOUNCER_POOLED_ENV_VAR,
+    ManagedPgBouncerRuntime,
     PgBouncerError,
     PgBouncerPlan,
     PgBouncerProcess,
@@ -32,6 +33,7 @@ from litellm.proxy.db.pgbouncer import (
     database_url_is_pooled,
     export_pooled_database_url,
     install_pgbouncer_token,
+    pgbouncer_startup_signals,
     pgbouncer_version,
     plan_pgbouncer,
     start_in_container_pgbouncer,
@@ -601,6 +603,51 @@ def _token_source(*tokens: str | Exception) -> PgBouncerTokenSource:
         return outcome
 
     return PgBouncerTokenSource(auth=AzureEntraTokenAuth(token_provider=provide), endpoint=ENDPOINT)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows does not deliver POSIX process signals")
+@pytest.mark.parametrize("signum", (signal.SIGTERM, signal.SIGINT))
+@pytest.mark.parametrize("enabled", (False, True))
+def test_startup_signals_preserve_the_application_handler_after_interruption(signum: int, enabled: bool) -> None:
+    previous: Final = signal.signal(signum, signal.default_int_handler)
+    expected_exception: Final = SystemExit if enabled else KeyboardInterrupt
+    try:
+        with pytest.raises((SystemExit, KeyboardInterrupt)) as interrupted:
+            with pgbouncer_startup_signals(enabled):
+                signal.raise_signal(signum)
+        assert type(interrupted.value) is expected_exception
+        assert interrupted.value.args == ((128 + signum,) if enabled else ())
+        with pytest.raises(KeyboardInterrupt):
+            signal.raise_signal(signum)
+    finally:
+        signal.signal(signum, previous)
+
+
+def test_managed_shutdown_cancels_pending_token_install_and_restart(tmp_path: Path) -> None:
+    runtime_dir: Final = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    auth_file: Final = runtime_dir / "userlist.txt"
+
+    def install(token: str) -> None:
+        auth_file.write_text(token)
+
+    refresher: Final = PgBouncerTokenRefresher(_token_source("before", "after"), install, fallback_seconds=600)
+    pooler: Final = PgBouncerProcess(argv=(), port=6543, socket_path=runtime_dir / "socket")
+    runtime: Final = ManagedPgBouncerRuntime(
+        pooled_url="postgresql://app:password@127.0.0.1:6543/litellm",
+        pooler=pooler,
+        refresher=refresher,
+        runtime_dir=runtime_dir,
+    )
+    assert refresher.refresh() == 600
+    assert auth_file.read_text() == "before"
+    with runtime.owned_pid_guard() as pid:
+        assert pid is None
+    runtime.stop(deadline=0.0)
+    assert not runtime_dir.exists()
+    assert refresher.refresh() == 600
+    assert not runtime_dir.exists()
+    assert pooler.start() == PgBouncerError("pgbouncer was stopped before it started")
 
 
 class TestPgBouncerTokenRefresher:
