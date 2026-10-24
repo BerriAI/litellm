@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.router_strategy.complexity_router.context_compaction import CompactionState
 from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
+from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityRetryState
 from litellm.types import litellm_params
 from litellm.types import utils as types_utils
 from litellm.types.caching import DynamicCacheControl
@@ -254,6 +255,7 @@ INTERNAL_STATE_NAMES: Final = (
     "_context_compaction_state",
     *AGENTIC_LOOP_STATE_NAMES,
     "_router_weights",
+    "_deployment_affinity_retry_state",
     "_encrypted_content_affinity_pinned",
     "fallback_depth",
     "max_fallbacks",
@@ -527,6 +529,7 @@ TYPE_HINT_NAMESPACE: Final[Mapping[str, object]] = {
     "CompactionState": CompactionState,
     "RouterWeights": RouterWeights,
     "AttemptedFallbackTargets": AttemptedFallbackTargets,
+    "DeploymentAffinityRetryState": DeploymentAffinityRetryState,
 }
 
 LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {

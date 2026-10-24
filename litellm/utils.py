@@ -1726,10 +1726,8 @@ async def async_post_call_failure_deployment_hook(
     Callbacks receive a same-class snapshot of ``exception``, not the live
     object that's about to be re-raised, so a callback setting an attribute
     on it (e.g. ``status_code``) cannot change what the real caller sees.
-    ``request_data`` omits ``attempted_targets``: unlike the rest of this
-    attempt's own kwargs, it's the *same* object shared by reference across
-    every hop of the live fallback walk, so a callback calling ``.record()``
-    on it would make the router skip a deployment it hasn't actually tried.
+    ``request_data`` omits live routing state shared across retries and fallbacks.
+    Callbacks must not be able to mark an untried deployment as failed.
     """
     try:
         typed_call_type = CallTypes(call_type)
@@ -1738,7 +1736,9 @@ async def async_post_call_failure_deployment_hook(
 
     _raw_fallback_depth: Final = request_data.get("fallback_depth")
     fallback_depth: Final = _raw_fallback_depth if isinstance(_raw_fallback_depth, int) else None
-    safe_request_data: Final = MappingProxyType({k: v for k, v in request_data.items() if k != "attempted_targets"})
+    safe_request_data: Final = MappingProxyType(
+        {k: v for k, v in request_data.items() if k not in ("attempted_targets", "_deployment_affinity_retry_state")}
+    )
     safe_exception: Final = _snapshot_exception_for_hook(exception)
 
     custom_logger_class: Final = _get_cached_custom_logger()

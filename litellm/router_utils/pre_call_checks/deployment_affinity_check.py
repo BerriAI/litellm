@@ -14,10 +14,12 @@ where routing to a consistent deployment is still beneficial.
 
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final, cast
 
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.affinity_cache import (
@@ -64,6 +66,18 @@ def warn_on_unknown_model_group_affinity_flags(model_group_affinity_config: Mapp
                 group,
                 VALID_MODEL_GROUP_AFFINITY_FLAGS,
             )
+
+
+@dataclass(slots=True)
+class DeploymentAffinityRetryState:
+    failed_deployment_ids: frozenset[str] = frozenset()
+
+    def record_failure(self, exception: Exception) -> None:
+        deployment_id: Final[object] = getattr(exception, "retry_skip_deployment_id", None) or getattr(
+            exception, "failed_deployment_id", None
+        )
+        if isinstance(deployment_id, str) and deployment_id:
+            self.failed_deployment_ids = self.failed_deployment_ids | frozenset((deployment_id,))
 
 
 class DeploymentAffinityCheck(CustomLogger):
@@ -341,26 +355,12 @@ class DeploymentAffinityCheck(CustomLogger):
         return self._pinned_model_id(winner)
 
     @staticmethod
-    def _failed_deployment_ids(metadata: Mapping[object, object]) -> frozenset[str]:
-        failed_ids: Final = metadata.get("retry_failed_deployment_ids")
-        if not isinstance(failed_ids, tuple):
-            return frozenset()
-        values: Final = cast(tuple[object, ...], failed_ids)  # cast-ok: checked tuple, opaque elements
-        return frozenset(deployment_id for deployment_id in values if isinstance(deployment_id, str))
-
-    @staticmethod
-    def _deployment_model_id(deployment: Mapping[str, object]) -> object:
-        model_info: Final = deployment.get("model_info")
-        if not isinstance(model_info, dict):
-            return None
-        return cast(Mapping[object, object], model_info).get("id")  # cast-ok: dict checked; values stay opaque
-
-    @classmethod
-    def _find_deployment_by_model_id(
-        cls, healthy_deployments: Sequence[dict[str, object]], model_id: str
-    ) -> dict[str, object] | None:
+    def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
         for deployment in healthy_deployments:
-            deployment_model_id = cls._deployment_model_id(deployment)
+            model_info = deployment.get("model_info")
+            if not isinstance(model_info, dict):
+                continue
+            deployment_model_id = model_info.get("id")
             if deployment_model_id is not None and str(deployment_model_id) == str(model_id):
                 return deployment
         return None
@@ -380,7 +380,7 @@ class DeploymentAffinityCheck(CustomLogger):
         2. cached API-key deployment affinity
         """
         request_kwargs = request_kwargs or {}
-        typed_healthy_deployments: Final = cast(list[dict[str, object]], healthy_deployments)
+        typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
         if request_kwargs.get("_target_order") is not None:
             return typed_healthy_deployments
 
@@ -424,22 +424,25 @@ class DeploymentAffinityCheck(CustomLogger):
             if (session_affinity_active or enable_user_key)
             else None
         )
-        session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs=request_kwargs)
+
+        session_id: Final = (
+            self._get_session_id_from_request_kwargs(request_kwargs=request_kwargs) if session_affinity_active else None
+        )
+        retry_state: Final[object] = request_kwargs.get("_deployment_affinity_retry_state")
         failed_deployment_ids: Final = (
-            frozenset[str]().union(
-                *(self._failed_deployment_ids(metadata) for metadata in self._iter_metadata_dicts(request_kwargs))
-            )
-            if (session_affinity_active and session_id is not None) or (enable_user_key and user_key is not None)
+            retry_state.failed_deployment_ids
+            if isinstance(retry_state, DeploymentAffinityRetryState)
+            and (session_id is not None or (enable_user_key and user_key is not None))
             else frozenset[str]()
         )
-        affinity_deployments: Final = [
-            deployment
-            for deployment in typed_healthy_deployments
-            if self._deployment_model_id(deployment) not in failed_deployment_ids
-        ] or typed_healthy_deployments
+        affinity_deployments: Final = cast(  # cast-ok: filtering preserves the router deployment dictionaries
+            list[dict[str, object]],
+            litellm.utils.get_excluded_filtered_deployments(typed_healthy_deployments, failed_deployment_ids)
+            or typed_healthy_deployments,
+        )
 
         # 2) Session-id -> deployment affinity
-        if session_affinity_active and session_id is not None:
+        if session_id is not None:
             session_cache_key: Final = self.get_session_affinity_cache_key(
                 model_group=stable_model_map_key, session_id=session_id, user_key=user_key
             )

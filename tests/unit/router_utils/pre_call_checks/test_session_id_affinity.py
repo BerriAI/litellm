@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -15,6 +15,7 @@ from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESS
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
+    DeploymentAffinityRetryState,
 )
 
 
@@ -29,7 +30,14 @@ class MockResponse:
         return self._json_data
 
 
-def _session_retry_router(deployment_ids: tuple[str, ...], allowed_fails: int) -> litellm.Router:
+def _session_retry_router(
+    deployment_ids: tuple[str, ...],
+    allowed_fails: int,
+    checks: tuple[Literal["session_affinity", "deployment_affinity", "responses_api_deployment_check"], ...] | None = (
+        "session_affinity",
+    ),
+    group_checks: tuple[str, ...] | None = None,
+) -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
@@ -38,12 +46,14 @@ def _session_retry_router(deployment_ids: tuple[str, ...], allowed_fails: int) -
                     "model": "openai/affinity-test-model",
                     "api_key": "test-key",
                     "api_base": f"https://{deployment_id}.test/v1",
+                    "weight": 1 if deployment_id == "b1" else 0,
                 },
                 "model_info": {"id": deployment_id},
             }
             for deployment_id in deployment_ids
         ],
-        optional_pre_call_checks=["session_affinity"],
+        optional_pre_call_checks=list(checks) if checks is not None else None,
+        model_group_affinity_config={"session-retry-model": list(group_checks)} if group_checks is not None else None,
         num_retries=2,
         allowed_fails=allowed_fails,
         retry_after=0,
@@ -140,6 +150,10 @@ async def test_session_affinity_retry_exclusion_does_not_leak_to_next_request(
     statuses: Final = iter((500, 200, 200))
     upstream: Final = Mock(side_effect=lambda request: _session_retry_response(request, next(statuses)))
     metadata: Final = {"session_id": "retry-session"}
+    request_kwargs: Final = {
+        "metadata": metadata,
+        **({"litellm_metadata": {"session_id": "retry-session"}} if both_metadata_buckets else {}),
+    }
     async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
         monkeypatch.setattr(litellm, "aclient_session", client)
         router: Final = _session_retry_router(("b1", "b2"), allowed_fails=100)
@@ -148,13 +162,12 @@ async def test_session_affinity_retry_exclusion_does_not_leak_to_next_request(
         recovered: Final = await router.acompletion(
             model="session-retry-model",
             messages=[{"role": "user", "content": "Hello"}],
-            metadata=metadata,
+            **request_kwargs,
         )
         next_request: Final = await router.acompletion(
             model="session-retry-model",
             messages=[{"role": "user", "content": "Hello again"}],
-            metadata={**metadata, "retry_failed_deployment_ids": ("b1",)} if both_metadata_buckets else metadata,
-            **({"litellm_metadata": {"session_id": "retry-session"}} if both_metadata_buckets else {}),
+            **request_kwargs,
         )
 
     assert recovered.choices[0].message.content == "b2.test"
@@ -189,41 +202,49 @@ async def test_session_affinity_remembers_failed_backends_beyond_retry_log_limit
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("enable_session", "group_checks", "metadata", "expected_ids"),
+    ("checks", "group_checks", "metadata"),
     [
-        (True, None, {"session_id": "retry-session"}, ("b2",)),
-        (False, ("session_affinity",), {"session_id": "retry-session"}, ("b2",)),
-        (
-            False,
-            None,
-            {"session_id": "retry-session", SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: 600},
-            ("b2",),
-        ),
-        (True, None, {}, ("b1", "b2")),
-        (False, None, {"session_id": "retry-session"}, ("b1", "b2")),
-        (
-            True,
-            None,
-            {"session_id": "retry-session", SESSION_ID_GENERATED_METADATA_KEY: True},
-            ("b1", "b2"),
-        ),
+        (None, ("session_affinity",), {"session_id": "retry-session"}),
+        (("deployment_affinity",), None, {"user_api_key_hash": "test-user-key"}),
     ],
-    ids=["global", "per-group", "auto-router-marker", "absent-session", "disabled-affinity", "generated-session"],
+    ids=["per-group-session", "api-key"],
 )
-async def test_retry_filter_requires_active_session_affinity(
-    enable_session: bool,
+async def test_configured_affinity_retries_another_backend(
+    checks: tuple[Literal["session_affinity", "deployment_affinity", "responses_api_deployment_check"], ...] | None,
     group_checks: tuple[str, ...] | None,
     metadata: Mapping[str, object],
-    expected_ids: tuple[str, ...],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    upstream: Final = Mock(
+        side_effect=lambda request: _session_retry_response(request, 500 if request.url.host == "b1.test" else 200)
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        monkeypatch.setattr(litellm, "aclient_session", client)
+        router: Final = _session_retry_router(("b1", "b2"), allowed_fails=100, checks=checks, group_checks=group_checks)
+        await _pin_session_retry_router(router)
+        await router.cache.async_set_cache(
+            key=DeploymentAffinityCheck.get_affinity_cache_key("session-retry-model", "test-user-key"),
+            value={"model_id": "b1"},
+        )
+
+        response: Final = await router.acompletion(
+            model="session-retry-model",
+            messages=[{"role": "user", "content": "Hello"}],
+            metadata=dict(metadata),
+        )
+
+    assert response.choices[0].message.content == "b2.test"
+    assert tuple(call.args[0].url.host for call in upstream.call_args_list) == ("b1.test", "b2.test")
+
+
+@pytest.mark.asyncio
+async def test_auto_router_marker_skips_a_failed_pinned_backend() -> None:
     cache: Final = DualCache()
     callback: Final = DeploymentAffinityCheck(
         cache=cache,
         ttl_seconds=600,
         enable_user_key_affinity=False,
         enable_responses_api_affinity=False,
-        enable_session_id_affinity=enable_session,
-        model_group_affinity_config={"session-retry-model": list(group_checks)} if group_checks is not None else None,
     )
     deployments: Final = [
         {"model_name": "session-retry-model", "model_info": {"id": deployment_id}} for deployment_id in ("b1", "b2")
@@ -237,10 +258,47 @@ async def test_retry_filter_requires_active_session_affinity(
         model="session-retry-model",
         healthy_deployments=deployments,
         messages=[],
-        request_kwargs={"litellm_metadata": {**metadata, "retry_failed_deployment_ids": ("b1",)}},
+        request_kwargs={
+            "_deployment_affinity_retry_state": DeploymentAffinityRetryState(frozenset({"b1"})),
+            "litellm_metadata": {
+                "session_id": "retry-session",
+                SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: 600,
+            },
+        },
     )
 
-    assert tuple(deployment["model_info"]["id"] for deployment in available) == expected_ids
+    assert available == [deployments[1]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("checks", "metadata"),
+    [
+        (None, {"session_id": "retry-session"}),
+        (("session_affinity",), {}),
+        (("session_affinity",), {"session_id": "retry-session", SESSION_ID_GENERATED_METADATA_KEY: True}),
+    ],
+    ids=["default-disabled", "absent-session", "generated-session"],
+)
+async def test_inactive_affinity_preserves_configured_backend_weights_on_retry(
+    checks: tuple[Literal["session_affinity", "deployment_affinity", "responses_api_deployment_check"], ...] | None,
+    metadata: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = Mock(side_effect=lambda request: _session_retry_response(request, 500))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        monkeypatch.setattr(litellm, "aclient_session", client)
+        router: Final = _session_retry_router(("b1", "b2"), allowed_fails=100, checks=checks)
+        await _pin_session_retry_router(router)
+
+        with pytest.raises(litellm.InternalServerError, match="Unavailable backend"):
+            await router.acompletion(
+                model="session-retry-model",
+                messages=[{"role": "user", "content": "Hello"}],
+                metadata=dict(metadata),
+            )
+
+    assert tuple(call.args[0].url.host for call in upstream.call_args_list) == ("b1.test", "b1.test", "b1.test")
 
 
 @pytest.mark.asyncio
@@ -265,7 +323,8 @@ async def test_response_continuity_keeps_its_backend_after_a_session_affinity_fa
         messages=[],
         request_kwargs={
             "previous_response_id": previous_response_id,
-            "litellm_metadata": {"session_id": "retry-session", "retry_failed_deployment_ids": ("b1",)},
+            "_deployment_affinity_retry_state": DeploymentAffinityRetryState(frozenset({"b1"})),
+            "litellm_metadata": {"session_id": "retry-session"},
         },
     )
 

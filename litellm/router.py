@@ -312,6 +312,7 @@ from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
 )
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
+    DeploymentAffinityRetryState,
     warn_on_unknown_model_group_affinity_flags,
 )
 from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
@@ -8893,11 +8894,10 @@ class Router:
         verbose_router_logger.debug(
             "async function w/ retries: original_function - %s, num_retries - %s", original_function, num_retries
         )
+        affinity_retry_state: Final = DeploymentAffinityRetryState()
+        kwargs["_deployment_affinity_retry_state"] = affinity_retry_state  # rebind-ok: kwargs is local to this loop
+
         ## ADD RETRY TRACKING TO METADATA - used for spend logs retry tracking
-        retry_metadata_values: Final[tuple[object, object]] = (kwargs.get("metadata"), kwargs.get("litellm_metadata"))
-        for metadata_value in retry_metadata_values:
-            if isinstance(metadata_value, dict):
-                metadata_value.pop("retry_failed_deployment_ids", None)
         _metadata["attempted_retries"] = 0
         _metadata["max_retries"] = num_retries  # Updated after overrides in exception handler
         try:
@@ -8911,6 +8911,7 @@ class Router:
                 raise
             current_attempt = None
             original_exception = e
+            affinity_retry_state.record_failure(e)
             deployment_num_retries: Final = getattr(e, "num_retries", None)
 
             if (
@@ -9012,6 +9013,7 @@ class Router:
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
                     original_exception = e
+                    affinity_retry_state.record_failure(e)
 
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
@@ -9633,12 +9635,10 @@ class Router:
         from litellm.types.router import RetryAttemptRecord
 
         _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-        request_metadata: Final = cast(  # cast-ok: router-owned metadata dict
-            "dict[str, object]", kwargs[_metadata_var]
-        )
+        request_metadata: Final = cast("Mapping[str, object]", kwargs[_metadata_var])  # cast-ok: untyped kwargs
         model_group: Final = kwargs.get("model")
         model_info: Final = request_metadata.get("model_info")
-        deployment_id: Final[object] = model_info.get("id") if isinstance(model_info, Mapping) else None
+        deployment_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
         base_model: Final = get_base_model_from_litellm_call_metadata(
             metadata=request_metadata
         ) or self._deployment_params_base_model(deployment_id if isinstance(deployment_id, str) else None)
@@ -9660,16 +9660,6 @@ class Router:
             else ()
         )
         breadcrumbs: Final = (*kept_breadcrumbs, attempt_record)
-        failed_deployment_id: Final = (
-            getattr(e, "retry_skip_deployment_id", None) or getattr(e, "failed_deployment_id", None) or deployment_id
-        )
-        if isinstance(failed_deployment_id, str):
-            earlier_failed_ids: Final = _as_retry_skipped_deployment_ids(
-                request_metadata.get("retry_failed_deployment_ids")
-            )
-            request_metadata["retry_failed_deployment_ids"] = tuple(
-                sorted(frozenset((*earlier_failed_ids, failed_deployment_id)))
-            )
         earlier: Final = request_metadata.get("request_retry_count")
         request_retry_count: Final = (earlier if type(earlier) is int and 0 <= earlier else 0) + 1
         decision: Final = request_metadata.get("routing_decision")
@@ -9685,8 +9675,8 @@ class Router:
                     **({"litellm.deployment.id": deployment_id} if isinstance(deployment_id, str) else {}),
                 },
             )
-        request_metadata["previous_models"] = breadcrumbs
-        request_metadata["request_retry_count"] = request_retry_count
+        kwargs[_metadata_var]["previous_models"] = breadcrumbs  # rebind-ok: the logging object already holds this dict
+        kwargs[_metadata_var]["request_retry_count"] = request_retry_count  # rebind-ok: same dict, read by the cap
         return kwargs
 
     def _deployment_params_base_model(self, deployment_id: str | None) -> str | None:
