@@ -106,7 +106,9 @@ ENV HOME=/home/nonroot \
     PRISMA_CLI_QUERY_ENGINE_TYPE=binary \
     PRISMA_OFFLINE_MODE=true
 
-COPY --from=builder --chown=nonroot:nonroot /app /app
+COPY --from=builder --chown=nonroot:nonroot /app/.venv /app/.venv
+COPY --from=builder --chown=nonroot:nonroot /app/litellm /app/litellm
+COPY --from=builder --chown=nonroot:nonroot /app/run.py /app/run.py
 COPY --from=builder /opt/prisma /opt/prisma
 
 RUN chmod -R a+rX /opt/prisma && \
