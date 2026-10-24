@@ -45,6 +45,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let settings: Settings = settings::from_iter(std::env::vars_os())?;
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
+    if settings.litellm_rust_gateway {
+        let forward = settings.forwarder()?;
+        let listener =
+            tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
+        tracing::info!(address = %listener.local_addr()?, log_level = %level, "forward-only gateway listening");
+        litellm_gateway::serve(
+            listener,
+            litellm_gateway::forward_only(forward),
+            shutdown_signal(),
+        )
+        .await?;
+        return Ok(());
+    }
     let config = Config::load(settings.litellm_config)?;
     let inference = litellm_gateway::build_inference(&config)?;
     let fallback = match settings.litellm_python_upstream.as_deref() {
