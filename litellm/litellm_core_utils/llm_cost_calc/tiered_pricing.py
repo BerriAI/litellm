@@ -5,24 +5,25 @@ Shared by provider cost calculators (e.g. Dashscope) and the proxy budget
 reservation logic so neither has to depend on the other.
 """
 
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, SupportsFloat
 
 
-def _coerce_cost_per_token(value: float | str | None) -> float:
+def _coerce_cost_per_token(value: object) -> float:
     """
     Coerce a per-token cost into a float.
 
     Model cost values loaded from YAML config may arrive as strings (e.g.
     scientific notation like "4e-07"), which would break arithmetic.
     """
-    if value is None:
-        return 0.0
     if isinstance(value, str):
         try:
             return float(value)
         except ValueError:
             return 0.0
-    return float(value)
+    if isinstance(value, SupportsFloat):
+        return float(value)
+    return 0.0
 
 
 def select_tier_for_input(
@@ -56,7 +57,7 @@ def select_tier_for_input(
 
 
 def tier_rate(
-    tier: dict,
+    tier: Mapping[str, object],
     cost_key: str,
     fallback_cost_key: str | None = None,
 ) -> float:
@@ -68,4 +69,6 @@ def tier_rate(
     primary: Final = tier.get(cost_key)
     if primary is not None:
         return _coerce_cost_per_token(primary)
+    if fallback_cost_key is None:
+        return 0.0
     return _coerce_cost_per_token(tier.get(fallback_cost_key, 0))

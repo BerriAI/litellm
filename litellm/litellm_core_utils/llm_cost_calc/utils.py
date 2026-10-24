@@ -3,7 +3,7 @@
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
 from typing import Final, Literal, TypedDict, cast
@@ -379,14 +379,14 @@ class TokenRates:
     cache_read_rate: float
     cache_creation_rate: float
     reasoning_rate: float | None
-    cache_creation_rates_by_ttl: Mapping[str, float] = MappingProxyType({})
+    cache_creation_rates_by_ttl: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
 
     @property
     def billed_reasoning_rate(self) -> float:
         return self.output_rate if self.reasoning_rate is None else self.reasoning_rate
 
 
-def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> dict[str, object] | None:
+def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> Mapping[str, object] | None:
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if not isinstance(tiered_pricing, list) or not tiered_pricing:
         return None
@@ -406,7 +406,7 @@ def _get_tiered_reasoning_rate(model_info: ModelInfo, usage: Usage) -> float | N
     return tier_rate(tier, "output_cost_per_reasoning_token", "output_cost_per_token")
 
 
-def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[TokenRates, dict[str, object]] | None:
+def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[TokenRates, Mapping[str, object]] | None:
     """
     Resolve the base rates from a model's ``tiered_pricing`` table, if it has one.
 
@@ -678,7 +678,7 @@ def _apply_off_peak_to_base_costs(
     model_info: ModelInfo,
     current_time: datetime | None,
     base_rates: TokenRates,
-    tier: dict[str, object],
+    tier: Mapping[str, object],
 ) -> TokenRates:
     """Apply off-peak rates to the base costs resolved from a pricing tier. off_peak_pricing has no
     field for the long-TTL cache-creation rates, so a tier that declares one keeps it, and a tier
