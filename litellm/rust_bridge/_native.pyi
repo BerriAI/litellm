@@ -41,6 +41,8 @@ class NativeDiagnosticProcessor:
     ) -> tuple[str, str | None, str | None, list[str], bool]: ...
     def scrub_access_arguments(self, arguments: Sequence[str]) -> list[str]: ...
 
+def tokenize(call: NativeCall) -> Execution: ...
+def atokenize(call: NativeCall) -> Execution: ...
 def ocr(
     call: NativeCall,
 ) -> Execution: ...
@@ -219,6 +221,7 @@ __all__ = [
     "amessages",
     "aocr",
     "aresponses",
+    "atokenize",
     "atranscription",
     "completion",
     "embedding",
@@ -230,6 +233,7 @@ __all__ = [
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
+    "tokenize",
     "trace_encode_error",
     "transcription",
 ]
