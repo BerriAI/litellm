@@ -29949,3 +29949,25 @@ def test_pre_call_checks_resolve_vision_through_the_cost_map_and_base_model():
     }
     router = _pre_call_router(_VISION_LEG, catalog_text_leg, azure_text_leg)
     assert _pre_call_ids(router, (_VISION_LEG, catalog_text_leg, azure_text_leg), messages=_IMAGE_CHAT) == ["vision"]
+
+
+@pytest.mark.parametrize(
+    ("deployment", "expected"),
+    [
+        (_DECLARED_TEXT_LEG, True),
+        ({"litellm_params": {"model": "bedrock/openai.gpt-oss-120b-1:0"}, "model_info": {"supports_vision": True}}, False),
+        ({"litellm_params": {"model": "bedrock/deepseek.v3.2"}, "model_info": {}}, True),
+        ({"litellm_params": {"model": "azure/my-deploy"}, "model_info": {"base_model": "azure/gpt-audio"}}, True),
+        ({"litellm_params": {"model": "hosted_vllm/Qwen2.5-VL-7B-Instruct"}, "model_info": {}}, False),
+    ],
+    ids=["override-false", "override-true", "cost-map-false", "base-model-false", "undeclared"],
+)
+def test_deployment_declares_no_vision_reads_the_override_then_the_cost_map(deployment, expected):
+    assert litellm.Router._deployment_declares_no_vision(deployment, "mixed") is expected
+
+
+def test_request_carries_image_sees_chat_parts_and_responses_input_items():
+    assert litellm.Router._request_carries_image(_IMAGE_CHAT, {}) is True
+    assert litellm.Router._request_carries_image(None, {"input": _IMAGE_RESPONSES_INPUT}) is True
+    assert litellm.Router._request_carries_image([{"role": "user", "content": "Say hi"}], {}) is False
+    assert litellm.Router._request_carries_image(None, {"input": "Say hi"}) is False
