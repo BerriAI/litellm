@@ -781,7 +781,7 @@ def test_request_routing_strategy_override_helper_validates_directly():
     router = _build_router(routing_strategy="least-busy")
     assert router._get_request_routing_strategy_override({"routing_strategy": "simple-shuffle"}) == "simple-shuffle"
     assert router._get_request_routing_strategy_override({"routing_strategy": RoutingStrategy.LEAST_BUSY}) == "least-busy"
-    assert router._get_request_routing_strategy_override({"routing_strategy": "lar1"}) is None
+    assert router._get_request_routing_strategy_override({"routing_strategy": "unknown-strategy"}) is None
     assert router._get_request_routing_strategy_override({"routing_strategy": {"bad": "type"}}) is None
     assert router._get_request_routing_strategy_override({}) is None
     assert router._get_request_routing_strategy_override(None) is None
