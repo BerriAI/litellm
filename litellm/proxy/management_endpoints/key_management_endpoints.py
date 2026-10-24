@@ -7397,20 +7397,26 @@ async def key_aliases(
         )
 
 
-def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str] | None:
-    order_by: Final[dict[str, str]] = {}
-
+def _validate_sort_params(
+    sort_by: str | None, sort_order: str
+) -> Mapping[str, object] | Sequence[Mapping[str, object]] | None:
     if sort_by is None:
         return None
     # Validate sort_by is a valid column
-    valid_columns: Final = [
+    valid_columns: Final = (
         "spend",
         "max_budget",
         "created_at",
         "updated_at",
         "token",
         "key_alias",
-    ]
+        "expires",
+        "last_active",
+        "budget_reset_at",
+        "total_spend",
+        "tpm_limit",
+        "rpm_limit",
+    )
     if sort_by not in valid_columns:
         raise HTTPException(
             status_code=400,
@@ -7424,9 +7430,14 @@ def _validate_sort_params(sort_by: str | None, sort_order: str) -> dict[str, str
             detail={"error": "Invalid sort order. Must be 'asc' or 'desc'"},
         )
 
-    order_by[sort_by] = sort_order.lower()
-
-    return order_by
+    direction: Final = sort_order.lower()
+    nullable_sort_columns: Final = ("expires", "last_active", "budget_reset_at", "tpm_limit", "rpm_limit")
+    if sort_by not in (*nullable_sort_columns, "total_spend"):
+        return {sort_by: direction}
+    return [
+        {sort_by: {"sort": direction, "nulls": "last"}} if sort_by in nullable_sort_columns else {sort_by: direction},
+        {"token": "asc"},
+    ]
 
 
 def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str, object]:
@@ -7668,7 +7679,7 @@ async def list_key_helper(
 
     verbose_proxy_logger.debug("Pagination: skip=%s, take=%s", skip, size)
 
-    order_by: Final[dict[str, str] | None] = (
+    order_by: Final = (
         _validate_sort_params(sort_by, sort_order) if sort_by is not None and isinstance(sort_by, str) else None
     )
 
