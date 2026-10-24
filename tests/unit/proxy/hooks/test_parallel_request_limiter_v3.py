@@ -7437,6 +7437,21 @@ async def test_request_capacity_enforces_shared_rpm_scopes(
 
 
 @pytest.mark.asyncio
+async def test_has_request_capacity_limit_matches_effective_request_descriptors():
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    no_limits_auth = UserAPIKeyAuth(api_key=hash_token("sk-count-no-request-limit"))
+    key_rpm_auth = UserAPIKeyAuth(api_key=hash_token("sk-count-key-request-limit"), rpm_limit=1)
+    model_rpm_auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-count-model-request-limit"),
+        metadata={"model_rpm_limit": {"mcp-tool-call": 1}},
+    )
+
+    assert await handler.has_request_capacity_limit(no_limits_auth, "mcp-tool-call") is False
+    assert await handler.has_request_capacity_limit(key_rpm_auth, "mcp-tool-call") is True
+    assert await handler.has_request_capacity_limit(model_rpm_auth, "mcp-tool-call") is True
+
+
+@pytest.mark.asyncio
 async def test_request_capacity_keeps_dynamic_rpm_policy(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server
 
