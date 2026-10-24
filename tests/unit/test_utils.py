@@ -7827,6 +7827,52 @@ def test_completion_finishes_response_metadata_before_handing_the_response_to_th
     assert snapshot["api_base"]
 
 
+def test_rerank_plain_success_callback_runs_on_background_thread_after_return(monkeypatch):
+    """Regression for #47799: plain success callbacks are dispatched to the
+    background logging executor, so a callback that records per-call cost can
+    run after the caller has already moved on. Callbacks must not be relied on
+    for post-call cost accounting. The returned response already carries the
+    final cost in _hidden_params["response_cost"], and the callback observes
+    the same populated cost in kwargs when it runs."""
+    observations: Final = queue.Queue()
+    callback_ran: Final = threading.Event()
+
+    def on_success(kwargs, response_obj, start_time, end_time):
+        observations.put((threading.current_thread().name, kwargs.get("response_cost")))
+        callback_ran.set()
+
+    monkeypatch.setattr(litellm, "success_callback", [on_success])
+    monkeypatch.setattr(litellm, "cohere_key", "test_api_key")
+
+    mock_response: Final = MagicMock()
+    mock_response.json = lambda: {
+        "id": "rerank-1",
+        "results": [{"index": 0, "relevance_score": 0.95, "document": {"text": "hello"}}],
+        "meta": {"api_version": {"version": "2"}, "billed_units": {"search_units": 1}},
+    }
+    mock_response.headers = {}
+    mock_response.status_code = 200
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+        return_value=mock_response,
+    ):
+        response = litellm.rerank(
+            model="cohere/rerank-english-v3.0",
+            query="hello",
+            documents=["hello", "world"],
+        )
+
+    inline_cost: Final = response._hidden_params.get("response_cost")
+    assert inline_cost is not None, "response must carry the final cost before the call returns"
+    assert callback_ran.wait(timeout=10), "plain success callback never ran"
+    callback_thread_name, callback_cost = observations.get_nowait()
+    assert callback_thread_name != threading.current_thread().name, (
+        "plain success callback must not run inline on the caller's thread"
+    )
+    assert callback_cost == inline_cost, "callback must observe the same final cost the response carried"
+
+
 def test_get_model_info_gemini(monkeypatch):
     """
     Tests if ALL gemini models have 'tpm' and 'rpm' in the model info

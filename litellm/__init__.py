@@ -93,6 +93,11 @@ if set_verbose:
 ### Callbacks /Logging / Success / Failure Handlers #####
 CALLBACK_TYPES = Union[str, Callable[..., object], "CustomLogger"]  # CustomLogger is lazy-loaded
 input_callback: List[CALLBACK_TYPES] = []
+# Plain functions in success_callback run on a background logging thread after
+# the SDK call returns, so they are not ordered with the caller's next
+# statement and must not be relied on for post-call cost accounting. The
+# response handed back to the caller already carries the final cost in
+# response._hidden_params["response_cost"]
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
