@@ -8,11 +8,13 @@ export interface BudgetWindowEntry {
   max_budget: number | null;
 }
 
+const RESET_TIMEZONE_NOTE = "in the proxy timezone (litellm_settings.timezone, defaults to UTC)";
+
 export const BUDGET_WINDOW_OPTIONS = [
   { value: "1h", label: "Hourly", resetHint: "Resets every hour" },
-  { value: "24h", label: "Daily", resetHint: "Resets daily at midnight UTC" },
-  { value: "7d", label: "Weekly", resetHint: "Resets every Sunday at midnight UTC" },
-  { value: "30d", label: "Monthly", resetHint: "Resets on the 1st of every month at midnight UTC" },
+  { value: "24h", label: "Daily", resetHint: `Resets daily at midnight ${RESET_TIMEZONE_NOTE}` },
+  { value: "7d", label: "Weekly", resetHint: `Resets every Monday at midnight ${RESET_TIMEZONE_NOTE}` },
+  { value: "30d", label: "Monthly", resetHint: `Resets on the 1st of each month at midnight ${RESET_TIMEZONE_NOTE}` },
 ];
 
 interface BudgetWindowsEditorProps {
