@@ -9,6 +9,22 @@ from typing import Any, Final
 from litellm._logging import verbose_proxy_logger
 
 
+def _normalize_wildcard_segments(expr: str) -> tuple[str, ...]:
+    """Normalize ``key[*]`` into ``key`` + ``[*]`` segments.
+
+    Idempotent: the recursion in :meth:`JsonPathExtractor.evaluate` passes
+    already-normalized paths (e.g. ``content.[*].text``) back through here.
+    Re-running ``expr.replace("[*]", ".[*]")`` on those injects empty
+    segments (``content..[*].text``); dropping empty segments afterwards
+    keeps the normalization stable for raw (``a[*].b``), adjacent
+    (``a[*][*].b``) and already-normalized inputs alike, so no
+    nested-wildcard expression is silently dropped and skips the
+    guardrail (#46302).
+    """
+    segments: Final = tuple(segment for segment in expr.replace("[*]", ".[*]").split(".") if segment)
+    return segments
+
+
 class JsonPathExtractor:
     """Extracts field values from data using JSONPath-like expressions."""
 
@@ -55,7 +71,7 @@ class JsonPathExtractor:
         if not expr or not data:
             return None
 
-        parts: Final = expr.replace("[*]", ".[*]").split(".")
+        parts: Final = _normalize_wildcard_segments(expr)
         current: Any = data
 
         for i, part in enumerate(parts):
