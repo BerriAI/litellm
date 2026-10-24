@@ -249,5 +249,10 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "runcrate": {
+    "base_url": "https://api.runcrate.ai/v1",
+    "api_key_env": "RUNCRATE_API_KEY",
+    "api_base_env": "RUNCRATE_API_BASE"
   }
 }
