@@ -5546,6 +5546,7 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("environment_base", [None, "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"])
 @pytest.mark.parametrize(
     ("api_base", "explicit_header", "expected_session"),
     [
@@ -5555,8 +5556,17 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
     ],
 )
 async def test_messages_opencode_session_header(
-    stream: bool, api_base: str, explicit_header: str | None, expected_session: str | None
+    stream: bool,
+    environment_base: str | None,
+    api_base: str,
+    explicit_header: str | None,
+    expected_session: str | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    if environment_base:
+        monkeypatch.setenv(environment_base, "https://opencode.ai/inference/go/anthropic")
     received: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
     payload: Final = {
         "id": "msg_test",
@@ -5588,7 +5598,7 @@ async def test_messages_opencode_session_header(
             model="anthropic/claude-haiku-5-5",
             messages=[{"role": "user", "content": "hello"}],
             max_tokens=128000,
-            api_base=api_base,
+            api_base=None if environment_base and api_base == "https://opencode.ai/inference/go/anthropic" else api_base,
             api_key="test-key",
             stream=stream,
             litellm_session_id="conversation-123",
