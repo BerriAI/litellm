@@ -95,8 +95,6 @@ fn read_timeout(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Duration>> 
         .transpose()
 }
 
-/// The read limit a Python `timeout` argument carries: a bare number, or the `read` field of an
-/// `httpx.Timeout`.
 pub(super) fn read_timeout_seconds(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<f64>> {
     let Some(value) = value.filter(|value| !value.is_none()) else {
         return Ok(None);
