@@ -39,6 +39,7 @@ from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..litellm_core_utils.realtime_streaming import client_websocket_scope
 from ..llms.azure.common_utils import get_azure_ad_token
+from ..llms.azure.live.handler import AzureOpenAILiveSessions
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
@@ -59,6 +60,7 @@ if TYPE_CHECKING:
 azure_realtime: Final = AzureOpenAIRealtime()
 openai_realtime: Final = OpenAIRealtime()
 openai_live_sessions: Final = OpenAILiveSessions()
+azure_live_sessions: Final = AzureOpenAILiveSessions()
 bedrock_realtime: Final = BedrockRealtime()
 xai_realtime: Final = XAIRealtime()
 vertex_llm_base: Final = VertexBase()
@@ -409,7 +411,7 @@ _LiveSessionRejection = _LiveProviderUnsupported | _LiveGuardrailsUnsupported
 def _live_session_rejection(
     custom_llm_provider: str, litellm_metadata: Mapping[str, object]
 ) -> _LiveSessionRejection | None:
-    if custom_llm_provider != "openai":
+    if custom_llm_provider != "openai" and custom_llm_provider not in AZURE_OPENAI_AUDIO_PROVIDERS:
         return _LiveProviderUnsupported(provider=custom_llm_provider)
     if _realtime_guardrail_configured(litellm_metadata):
         return _LiveGuardrailsUnsupported()
@@ -419,9 +421,9 @@ def _live_session_rejection(
 def _raise_live_session_rejection(rejection: _LiveSessionRejection) -> NoReturn:
     match rejection:
         case _LiveProviderUnsupported(provider=provider):
-            raise ValueError(f"OpenAI Live sessions require the openai provider, got {provider}")
+            raise ValueError(f"Live sessions require the openai or azure provider, got {provider}")
         case _LiveGuardrailsUnsupported():
-            raise ValueError("Guardrails are not supported on OpenAI Live sessions")
+            raise ValueError("Guardrails are not supported on Live sessions")
         case _:
             assert_never(rejection)
 
@@ -434,12 +436,30 @@ async def _alive_session(
     session_start: Mapping[str, object],
     api_base: str | None,
     api_key: str | None,
+    azure_ad_token: str | None,
     litellm_metadata: Mapping[str, object],
     litellm_params: Mapping[str, object],
 ) -> None:
     rejection: Final = _live_session_rejection(custom_llm_provider, litellm_metadata)
     if rejection is not None:
         _raise_live_session_rejection(rejection)
+    if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
+        azure_api_base: Final = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+        resolved_api_key: Final = api_key or litellm.api_key or get_secret_str("AZURE_API_KEY")
+        await azure_live_sessions.async_live_session(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            session_start=session_start,
+            api_base=azure_api_base,
+            api_key=resolved_api_key,
+            azure_ad_token=(
+                None
+                if resolved_api_key
+                else get_azure_ad_token(GenericLiteLLMParams(**litellm_params, azure_ad_token=azure_ad_token))
+            ),
+        )
+        return
     resolved_api_base: Final = api_base or litellm.api_base or "https://api.openai.com/"
     await openai_live_sessions.async_live_session(
         model=model,
@@ -518,6 +538,7 @@ async def _arealtime(
             session_start=live_session_start,
             api_base=dynamic_api_base or litellm_params.api_base,
             api_key=dynamic_api_key,
+            azure_ad_token=azure_ad_token,
             litellm_metadata=_build_litellm_metadata(kwargs),
             litellm_params=kwargs,
         )

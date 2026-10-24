@@ -291,6 +291,52 @@ async def test_arealtime_live_session_dispatches_to_openai_live_handler(monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["azure", "azure_ai"])
+async def test_arealtime_live_session_dispatches_to_azure_live_handler(
+    provider: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: Final = _CallCapture()
+
+    def mock_get_llm_provider(
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str | None = None,
+    ) -> tuple[str, str, str | None, str | None]:
+        return "gpt-live-deployment", provider, "azure-key", "https://voice-resource.openai.azure.com"
+
+    class FakeAzureLiveHandler:
+        async def async_live_session(self, **kwargs: object) -> None:
+            captured.values = kwargs
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main, "azure_live_sessions", FakeAzureLiveHandler())
+    start_frame: Final[dict[str, object]] = {
+        "type": "session.start",
+        "session": {"model": "azure-live-alias", "instructions": "Stay brief"},
+    }
+    websocket: Final = MagicMock()
+    logging_obj: Final = FakeLogging()
+
+    await realtime_main._arealtime.__wrapped__(
+        model="azure-live-alias",
+        websocket=websocket,
+        litellm_logging_obj=logging_obj,
+        live_session_start=start_frame,
+    )
+
+    assert captured.values == {
+        "model": "gpt-live-deployment",
+        "websocket": websocket,
+        "logging_obj": logging_obj,
+        "session_start": start_frame,
+        "api_base": "https://voice-resource.openai.azure.com",
+        "api_key": "azure-key",
+        "azure_ad_token": None,
+    }
+
+
+@pytest.mark.asyncio
 async def test_arealtime_live_session_rejects_matching_guardrail_before_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -329,7 +375,7 @@ async def test_arealtime_live_session_rejects_matching_guardrail_before_dispatch
     monkeypatch.setattr(realtime_main, "openai_live_sessions", live_handler)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
-    with pytest.raises(ValueError, match="Guardrails are not supported on OpenAI Live sessions"):
+    with pytest.raises(ValueError, match="Guardrails are not supported on Live sessions"):
         await realtime_main._arealtime.__wrapped__(
             model="live-alias",
             websocket=MagicMock(),
@@ -373,7 +419,7 @@ async def test_arealtime_live_session_rejects_streaming_only_pre_call_guardrail(
     monkeypatch.setattr(realtime_main, "openai_live_sessions", live_handler)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
-    with pytest.raises(ValueError, match="Guardrails are not supported on OpenAI Live sessions"):
+    with pytest.raises(ValueError, match="Guardrails are not supported on Live sessions"):
         await realtime_main._arealtime.__wrapped__(
             model="live-alias",
             websocket=MagicMock(),
