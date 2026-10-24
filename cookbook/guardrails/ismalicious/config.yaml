@@ -1,0 +1,13 @@
+guardrails:
+  - guardrail_name: ismalicious-mcp
+    litellm_params:
+      guardrail: ismalicious
+      mode: [pre_mcp_call, post_mcp_call]
+      default_on: true
+      api_key: os.environ/ISMALICIOUS_ENCODED_API_KEY
+
+litellm_settings:
+  turn_off_message_logging: true
+
+general_settings:
+  store_prompts_in_spend_logs: false
