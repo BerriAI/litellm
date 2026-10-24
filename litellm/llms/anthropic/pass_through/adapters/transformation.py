@@ -1236,73 +1236,78 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         messages: Sequence[Mapping[str, object] | AllAnthropicPassThroughMessageValues],
         initial_tools: Sequence[AllAnthropicToolsValues] | None = None,
-    ) -> tuple[list[AllAnthropicToolsValues] | None, list[AllAnthropicPassThroughMessageValues]]:
+    ) -> tuple[tuple[AllAnthropicToolsValues, ...] | None, tuple[AllAnthropicPassThroughMessageValues, ...]]:
         """
         Extract and apply mid-conversation tool changes (tool_addition, tool_removal)
         such as those sent by Claude Code under mid-conversation-tool-changes beta.
 
         Returns:
             Tuple of (active_tools, cleaned_messages)
-            - active_tools: Updated tools list with additions applied and removals removed,
+            - active_tools: Updated tools tuple with additions applied and removals removed,
                             or None if no tools exist and none were added.
-            - cleaned_messages: Messages list with tool_addition and tool_removal blocks stripped,
+            - cleaned_messages: Messages tuple with tool_addition and tool_removal blocks stripped,
                                 and carrier messages left without content dropped.
         """
-        active_tools: list[AllAnthropicToolsValues] = list(initial_tools) if initial_tools else []
-        had_tool_changes = False
-        cleaned_messages: list[AllAnthropicPassThroughMessageValues] = []
+        active_tools: tuple[AllAnthropicToolsValues, ...] = tuple(initial_tools or ())  # rebind-ok: tool updates
+        had_tool_changes: bool = False  # rebind-ok: state flag
+        cleaned_messages: Final[list[AllAnthropicPassThroughMessageValues]] = []  # mutable-ok: accumulator
 
         for m in messages:
-            if not isinstance(m, dict):
-                cleaned_messages.append(m)  # type: ignore[arg-type]
+            if not isinstance(m, Mapping):
+                cleaned_messages.append(m)  # pyright: ignore[reportArgumentType]  # non-mapping passthrough
                 continue
-            content = m.get("content")
-            if not isinstance(content, list):
-                cleaned_messages.append(cast(AllAnthropicPassThroughMessageValues, m))
+            content: Final = m.get("content")
+            if not isinstance(content, Sequence) or isinstance(content, (str, bytes)):
+                msg_val: Final = cast(AllAnthropicPassThroughMessageValues, m)  # cast-ok: msg
+                cleaned_messages.append(msg_val)
                 continue
 
-            remaining_blocks: list[dict[str, Any]] = []
+            remaining_blocks: Final[list[object]] = []  # mutable-ok: accumulator
             for block in content:
-                if not isinstance(block, dict):
+                if not isinstance(block, Mapping):
                     remaining_blocks.append(block)
                     continue
-                btype = block.get("type")
+                btype: Final = block.get("type")
                 if btype == "tool_addition":
                     had_tool_changes = True
-                    raw_tool = extract_tool_from_addition_block(block)
-                    if isinstance(raw_tool, dict) and raw_tool.get("name"):
-                        tool_name = str(raw_tool["name"])
-                        if not any(isinstance(t, dict) and t.get("name") == tool_name for t in active_tools):
-                            active_tools.append(cast(AllAnthropicToolsValues, raw_tool))
+                    raw_tool: Final = extract_tool_from_addition_block(block)
+                    if isinstance(raw_tool, Mapping) and raw_tool.get("name"):
+                        tool_name: Final = str(raw_tool["name"])
+                        if not any(isinstance(t, Mapping) and t.get("name") == tool_name for t in active_tools):
+                            added_tool: Final = cast(AllAnthropicToolsValues, dict(raw_tool))  # cast-ok: tool
+                            active_tools = (*active_tools, added_tool)
                 elif btype == "tool_removal":
                     had_tool_changes = True
-                    rem_name = (
+                    rem_name: Final = (
                         block.get("tool_name")
                         or block.get("name")
-                        or (block.get("tool", {}).get("name") if isinstance(block.get("tool"), dict) else None)
+                        or (block.get("tool", {}).get("name") if isinstance(block.get("tool"), Mapping) else None)
                         or (block.get("tool") if isinstance(block.get("tool"), str) else None)
                     )
                     if rem_name:
-                        rem_name_str = str(rem_name)
-                        active_tools = [
-                            t for t in active_tools if not (isinstance(t, dict) and t.get("name") == rem_name_str)
-                        ]
+                        rem_name_str: Final = str(rem_name)
+                        active_tools = tuple(
+                            t for t in active_tools if not (isinstance(t, Mapping) and t.get("name") == rem_name_str)
+                        )
                 else:
                     remaining_blocks.append(block)
 
             if remaining_blocks:
-                new_m = dict(m)
+                new_m: Final[dict[str, object]] = dict(m)  # mutable-ok: message clone
                 new_m["content"] = remaining_blocks
-                cleaned_messages.append(cast(AllAnthropicPassThroughMessageValues, new_m))
+                new_msg: Final = cast(AllAnthropicPassThroughMessageValues, new_m)  # cast-ok: msg
+                cleaned_messages.append(new_msg)
             elif not had_tool_changes:
-                cleaned_messages.append(cast(AllAnthropicPassThroughMessageValues, m))
+                clean_msg: Final = cast(AllAnthropicPassThroughMessageValues, m)  # cast-ok: msg
+                cleaned_messages.append(clean_msg)
 
         if not had_tool_changes and initial_tools is None:
-            return None, cleaned_messages
+            return None, tuple(cleaned_messages)
 
-        return active_tools if active_tools else (
-            [] if initial_tools is not None or had_tool_changes else None
-        ), cleaned_messages
+        return (
+            active_tools if active_tools else (() if initial_tools is not None or had_tool_changes else None),
+            tuple(cleaned_messages),
+        )
 
     def translate_anthropic_to_openai(
         self,
@@ -1320,8 +1325,6 @@ class LiteLLMAnthropicMessagesAdapter:
             - tool_name_mapping maps truncated tool names back to original names
               for tools that exceeded OpenAI's 64-char limit
         """
-        # Debug: Processing Anthropic message request
-        new_messages: list[AllMessageValues] = []
         tool_name_mapping: dict[str, str] = {}
 
         ## CONVERT ANTHROPIC MESSAGES TO OPENAI
@@ -1336,17 +1339,17 @@ class LiteLLMAnthropicMessagesAdapter:
             messages=messages_list,
             initial_tools=anthropic_message_request.get("tools"),
         )
-        request_for_translation: Final[AnthropicMessagesRequest] = cast(
+        request_for_translation: Final[AnthropicMessagesRequest] = cast(  # cast-ok: anthropic request type
             AnthropicMessagesRequest, dict(anthropic_message_request)
         )
         if active_tools is not None:
             if active_tools:
-                request_for_translation["tools"] = active_tools
+                request_for_translation["tools"] = list(active_tools)
             else:
                 request_for_translation.pop("tools", None)
 
-        new_messages = self.translate_anthropic_messages_to_openai(
-            messages=cleaned_messages,
+        new_messages: Final = self.translate_anthropic_messages_to_openai(
+            messages=list(cleaned_messages),
             model=request_for_translation.get("model"),
             custom_llm_provider=custom_llm_provider,
             preserve_midturn_system=preserve_midturn_system,

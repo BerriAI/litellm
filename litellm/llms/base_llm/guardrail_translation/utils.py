@@ -319,22 +319,22 @@ def anthropic_tool_name(tool: object) -> str | None:
     return names[0] if names else None
 
 
-def extract_tool_from_addition_block(block: object) -> dict[str, object] | None:
+def extract_tool_from_addition_block(block: object) -> Mapping[str, object] | None:
     """Extract raw tool dict from an Anthropic tool_addition block."""
     if not isinstance(block, Mapping):
         return None
-    tool_data = block.get("tool")
-    if isinstance(tool_data, dict):
+    tool_data: Final = block.get("tool")
+    if isinstance(tool_data, Mapping):
         if (
             tool_data.get("type") == "tool_definition"
             and "definition" in tool_data
-            and isinstance(tool_data["definition"], dict)
+            and isinstance(tool_data["definition"], Mapping)
         ):
             return tool_data["definition"]
         return tool_data
-    if "definition" in block and isinstance(block["definition"], dict):
+    if "definition" in block and isinstance(block["definition"], Mapping):
         return block["definition"]
-    if isinstance(block.get("tool_definition"), dict):
+    if isinstance(block.get("tool_definition"), Mapping):
         return block["tool_definition"]
     return None
 
