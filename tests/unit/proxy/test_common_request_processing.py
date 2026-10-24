@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anthropic
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -5633,6 +5634,129 @@ class TestCancelOnDisconnect:
             await asyncio.Event().wait()
 
         return Request(scope={"type": "http", "headers": []}, receive=receive)
+
+    @pytest.mark.parametrize(
+        "model,group_enabled,global_enabled,expect_cancel",
+        [
+            ("interactive", True, False, True),
+            ("batch", True, False, False),
+            ("interactive", False, False, False),
+            ("batch", False, True, True),
+            ("alias", True, False, True),
+            ("wild/selected", True, False, True),
+        ],
+    )
+    async def test_model_group_disconnect_cancels_only_opted_in_work(
+        self,
+        model: str,
+        group_enabled: bool,
+        global_enabled: bool,
+        expect_cancel: bool,
+        respx_mock: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.proxy_server import ProxyConfig as RuntimeProxyConfig
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        started: Final = asyncio.Event()
+        cancelled: Final = asyncio.Event()
+        messages: Final = [{"role": "user", "content": "disconnect control"}]
+        parameters: Final = {
+            "model": "openai/gpt-6.1-sol",
+            "api_key": "synthetic-key",
+            "api_base": "https://disconnect.example/v1",
+        }
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "interactive",
+                    "litellm_params": parameters,
+                    "model_info": {"id": "interactive-passive", "cancel_on_disconnect": False},
+                },
+                {
+                    "model_name": "interactive",
+                    "litellm_params": parameters,
+                    "model_info": {"cancel_on_disconnect": group_enabled},
+                },
+                {"model_name": "batch", "litellm_params": parameters, "model_info": {"cancel_on_disconnect": False}},
+                {
+                    "model_name": "wild/*",
+                    "litellm_params": parameters,
+                    "model_info": {"cancel_on_disconnect": group_enabled},
+                },
+            ],
+            model_group_alias={"alias": "interactive"},
+            num_retries=0,
+        )
+
+        async def upstream(_: httpx.Request) -> httpx.Response:
+            started.set()
+            try:
+                await asyncio.sleep(0)
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "completion-disconnect",
+                        "object": "chat.completion",
+                        "created": 1,
+                        "model": "gpt-6.1-sol",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "completed"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+                    },
+                )
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        async def receive() -> Mapping[str, object]:
+            await started.wait()
+            return {"type": "http.disconnect"}
+
+        respx_mock.post("https://disconnect.example/v1/chat/completions").mock(side_effect=upstream)
+        logging_obj: Final = Logging(
+            model=model,
+            messages=messages,
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.datetime(2026, 10, 1),
+            litellm_call_id="disconnect-control",
+            function_id="disconnect-control",
+        )
+        processor: Final = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": model,
+                "messages": messages,
+                "litellm_logging_obj": logging_obj,
+                "metadata": {"cancel_on_disconnect": True, "model_info": {"cancel_on_disconnect": True}},
+            }
+        )
+        call: Final = processor.base_process_llm_request(
+            request=Request(scope={"type": "http", "headers": []}, receive=receive),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="synthetic-key"),
+            route_type="acompletion",
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+            general_settings={"cancel_on_disconnect": global_enabled},
+            proxy_config=RuntimeProxyConfig(),
+            llm_router=router,
+            skip_pre_call_logic=True,
+        )
+        if expect_cancel:
+            with pytest.raises(HTTPException) as error:
+                await call
+            assert error.value.status_code == 499
+        else:
+            response: Final = await call
+            assert response.choices[0].message.content == "completed"
+        assert cancelled.is_set() is expect_cancel
+
 
     async def test_monitor_cancels_llm_call_and_sets_event_on_disconnect(self):
         request = self._request(

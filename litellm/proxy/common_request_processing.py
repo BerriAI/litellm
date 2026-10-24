@@ -57,6 +57,7 @@ from litellm.litellm_core_utils.bug_report import (
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
@@ -1859,6 +1860,17 @@ def log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
     )
 
 
+def _model_group_cancels_on_disconnect(llm_router: Router, model: object) -> bool:
+    if not isinstance(model, str):
+        return False
+    group: Final = llm_router.get_model_from_alias(model=model) or model
+    return any(
+        info.get("cancel_on_disconnect") is True
+        for deployment in llm_router.get_model_list_of_routed_group(group)
+        if (info := as_str_mapping(_REQUEST_FIELDS.validate_python(deployment).get("model_info"))) is not None
+    )
+
+
 async def _cancel_llm_call_on_client_disconnect(
     request: Request,
     llm_api_call: "asyncio.Future[_LlmCallT]",
@@ -2939,7 +2951,13 @@ class ProxyBaseLLMRequestProcessing:
         llm_responses: Final = asyncio.gather(*tasks)  # run the moderation check in parallel to the actual llm api call
 
         try:
-            if general_settings.get("cancel_on_disconnect", False):
+            if general_settings.get("cancel_on_disconnect", False) or (
+                llm_router is not None
+                and _model_group_cancels_on_disconnect(
+                    llm_router,
+                    _REQUEST_FIELDS.validate_python(self.data).get("model"),  # pyright: ignore[reportUnknownMemberType]  # legacy request state is validated by the adapter
+                )
+            ):
                 responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
             else:
                 responses = await llm_responses
