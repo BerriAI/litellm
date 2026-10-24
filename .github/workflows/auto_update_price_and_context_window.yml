@@ -2,35 +2,66 @@ name: Updates model_prices_and_context_window.json and Create Pull Request
 
 on:
   schedule:
-    - cron: "0 0 * * 0" # Run every Sundays at midnight
-    #- cron: "0 0 * * *" # Run daily at midnight
+    - cron: "0 0 * * 0"
+  workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: auto_update_price_and_context_window
+  cancel-in-progress: false
+
 jobs:
   auto_update_price_and_context_window:
     if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
+    env:
+      BASE_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
+          ref: ${{ env.BASE_BRANCH }}
           persist-credentials: false
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
-      - name: Update JSON Data
+      - name: Look for an already-open price map update PR
+        id: existing
         run: |
-          uv run --frozen --with 'aiohttp==3.13.3' python ".github/scripts/auto_update_price_and_context_window_file.py"
-      - name: Create Pull Request
-        run: |
-          git add model_prices_and_context_window.json
-          git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')" 
-          gh pr create --title "Update model_prices_and_context_window.json file" \
-            --body "Automated update for model_prices_and_context_window.json" \
-            --head auto-update-price-and-context-window-$(date +'%Y-%m-%d') \
-            --base main
+          open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --search "head:litellm_price_map_auto_update_" --json headRefName --jq '[.[].headRefName | select(startswith("litellm_price_map_auto_update_"))] | first // empty')"
+          if [ -n "$open_pr" ]; then
+            echo "Skipping the sync: the price map update PR on $open_pr is still open"
+          fi
+          echo "open_pr=$open_pr" >> "$GITHUB_OUTPUT"
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+      - name: Update JSON Data
+        if: steps.existing.outputs.open_pr == ''
+        run: |
+          uv run --frozen python .github/scripts/auto_update_price_and_context_window_file.py
+      - name: Create Pull Request
+        if: steps.existing.outputs.open_pr == ''
+        run: |
+          if git diff --quiet; then
+            echo "Price map already in sync with the Vercel AI Gateway and Friendli catalogs; no PR needed."
+            exit 0
+          fi
+          today="$(date +'%Y-%m-%d')"
+          branch="litellm_price_map_auto_update_${today}_${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+          git commit -m "chore(models): sync vercel_ai_gateway and friendliai prices $today"
+          gh auth setup-git
+          git push origin "$branch"
+          gh pr create \
+            --title "chore(models): sync vercel_ai_gateway and friendliai prices $today" \
+            --body "Automated sync of model_prices_and_context_window.json from the Vercel AI Gateway and Friendli model catalogs" \
+            --head "$branch" \
+            --base "$BASE_BRANCH"
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
