@@ -12258,6 +12258,25 @@ async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_a
     return listed_name in await _names_hidden_by_listing_callbacks(user_api_key_dict, (listed_name,))
 
 
+def _model_list_provider(model_id: str, router: Router | None, team_id: str | None) -> str:
+    if router is None:
+        return "openai"
+    model_group: Final = router.routable_model_group(model_id)
+    deployment: Final = router.get_deployment_by_model_group_name(model_group) or next(
+        (Deployment.model_validate(row) for row in router.wildcard_route_deployments(model_group, team_id)), None
+    )
+    if deployment is None:
+        return "openai"
+    try:
+        return litellm.get_llm_provider(
+            model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            api_base=deployment.litellm_params.api_base,
+        )[1]
+    except litellm.BadRequestError:
+        return "openai"
+
+
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"])
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
@@ -12427,7 +12446,7 @@ async def model_list(
         for response_id, lookup_id in admin_entries:
             model_info = create_model_info_response(
                 model_id=lookup_id,
-                provider="openai",
+                provider=_model_list_provider(lookup_id, llm_router, team_id or user_api_key_dict.team_id),
                 include_metadata=include_metadata or False,
                 fallback_type=fallback_type,
                 llm_router=llm_router,
@@ -12498,7 +12517,7 @@ async def model_list(
     for response_id, lookup_id in entries:
         model_info = create_model_info_response(
             model_id=lookup_id,
-            provider="openai",
+            provider=_model_list_provider(lookup_id, llm_router, team_id or user_api_key_dict.team_id),
             include_metadata=include_metadata or False,
             fallback_type=fallback_type,
             llm_router=llm_router,

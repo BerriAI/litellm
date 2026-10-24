@@ -24,6 +24,7 @@ def patched_model_list(monkeypatch):
     from litellm.proxy import utils as proxy_utils
 
     router = MagicMock()
+    router.get_deployment_by_model_group_name.return_value = None
     router.get_fully_blocked_model_names = MagicMock(return_value=set())
     router.async_get_fully_unhealthy_model_names = AsyncMock(
         return_value={"claude-sonnet"}
