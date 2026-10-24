@@ -1,6 +1,31 @@
-from typing import Any, Final
+from typing import Any, Final, Literal
 
+import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
+
+
+def _catalog_rerank_strategy(model: str) -> Literal["pointwise", "multiple_choice"] | None:
+    info: Final = as_str_mapping(litellm.model_cost.get(model))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Narrow the legacy untyped catalog entry at the boundary.
+    strategy: Final = None if info is None else info.get("rerank_strategy")
+    match strategy:
+        case "pointwise":
+            return "pointwise"
+        case "multiple_choice":
+            return "multiple_choice"
+        case _:
+            return None
+
+
+def get_decision_rerank_strategy(
+    model: str, custom_llm_provider: LlmProviders
+) -> Literal["pointwise", "multiple_choice"] | None:
+    """Read the catalog method for an already resolved model and provider."""
+    if ProviderConfigManager.get_provider_decisions_config(model, custom_llm_provider) is None:
+        return None
+    return _catalog_rerank_strategy(f"{custom_llm_provider.value}/{model}") or _catalog_rerank_strategy(model)
 
 
 def get_optional_rerank_params(

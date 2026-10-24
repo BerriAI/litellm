@@ -3,9 +3,9 @@
 import logging
 import math
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from functools import lru_cache
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
@@ -124,9 +124,10 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.llms.xai import RealtimeMeteredUsage
-from litellm.types.rerank import RerankBilledUnits, RerankResponse
+from litellm.types.rerank import DecisionRerankResponse, RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
     CallTypesLiteral,
+    CostBreakdown,
     LiteLLMRealtimeStreamLoggingObject,
     LlmProviders,
     LlmProvidersSet,
@@ -1500,6 +1501,77 @@ def _response_time_ms_for_cost(
     return 0.0
 
 
+def _decision_rerank_breakdown(
+    breakdowns: Sequence[CostBreakdown | None], repeated_fixed: float
+) -> CostBreakdown | None:
+    complete: Final = tuple(item for item in breakdowns if item is not None)
+    if not complete or len(complete) != len(breakdowns):
+        return None
+    monetary_fields: Final = (
+        "input_cost",
+        "cache_read_cost",
+        "cache_creation_cost",
+        "output_cost",
+        "reasoning_cost",
+        "total_cost",
+        "tool_usage_cost",
+        "guardrail_cost",
+        "original_cost",
+        "discount_amount",
+        "margin_total_amount",
+    )
+    totals: Final = {
+        key: sum(value for item in complete if isinstance(value := item.get(key), (int, float)))
+        for key in monetary_fields
+        if any(key in item for item in complete)
+    }
+    additional_keys: Final = frozenset[str]().union(*(item.get("additional_costs", {}) for item in complete))
+    return TypeAdapter(CostBreakdown).validate_python(
+        {
+            **complete[-1],
+            **totals,
+            "additional_costs": {
+                key: sum(item.get("additional_costs", {}).get(key, 0.0) for item in complete) for key in additional_keys
+            },
+            **{key: totals[key] - repeated_fixed for key in ("total_cost", "margin_total_amount") if key in totals},
+        }
+    )
+
+
+def _decision_rerank_cost(
+    responses: Sequence[OpenAIDecisionResponse],
+    price: Callable[[OpenAIDecisionResponse], float],
+    logging_obj: LitellmLoggingObject | None,
+    provider: str | None,
+    custom_pricing: bool,
+) -> float:
+    def price_child(
+        response: OpenAIDecisionResponse,
+    ) -> tuple[float, CostBreakdown | None, float]:
+        if logging_obj is not None:
+            logging_obj.cost_breakdown = None
+        provider_cost: Final = get_response_cost_from_hidden_params(response.hidden_params)
+        cost: Final = price(response) if custom_pricing or provider_cost is None else provider_cost
+        breakdown: Final = logging_obj.cost_breakdown if logging_obj is not None else None
+        fixed: Final = (
+            _apply_cost_margin(
+                0.0,
+                provider or str(response.hidden_params.get("custom_llm_provider", "")),
+            )[2]
+            if custom_pricing or provider_cost is None
+            else 0.0
+        )
+        return cost, breakdown, fixed
+
+    prices: Final = tuple(price_child(response) for response in responses)
+    repeated_fixed: Final = sum(item[2] for item in prices) - max((item[2] for item in prices), default=0.0)
+
+    if logging_obj is not None and responses:
+        combined: Final = _decision_rerank_breakdown(tuple(item[1] for item in prices), repeated_fixed)
+        logging_obj.cost_breakdown = combined  # rebind-ok: log the aggregate rather than the last child
+    return sum(item[0] for item in prices) - repeated_fixed
+
+
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -1544,6 +1616,50 @@ def completion_cost(
     Raises if no candidate model name resolves to pricing. Register the model via `litellm.register_model`
     or add it to model_prices_and_context_window.json.
     """
+    decision_rerank_child: Final = (
+        completion_response.decision_responses[0]
+        if isinstance(completion_response, DecisionRerankResponse) and completion_response.decision_responses
+        else None
+    )
+    decision_rerank_model: Final = (
+        _get_hidden_str_for_cost_calc(decision_rerank_child.hidden_params, "model") or decision_rerank_child.model
+        if decision_rerank_child is not None
+        else None
+    )
+    decision_rerank_provider: Final = (
+        _get_hidden_str_for_cost_calc(decision_rerank_child.hidden_params, "custom_llm_provider")
+        if decision_rerank_child is not None
+        else None
+    )
+    if isinstance(completion_response, DecisionRerankResponse) and (
+        custom_cost_per_second is None
+        or custom_cost_per_token is not None
+        or not completion_response.decision_responses
+    ):
+        return _decision_rerank_cost(
+            completion_response.decision_responses,
+            partial(
+                completion_cost,
+                model=model or (decision_rerank_child.model if decision_rerank_child is not None else ""),
+                call_type="decisions",
+                custom_llm_provider=custom_llm_provider,
+                optional_params=optional_params or {},
+                custom_pricing=custom_pricing,
+                base_model=base_model,
+                litellm_model_name=litellm_model_name,
+                router_model_id=router_model_id,
+                litellm_logging_obj=litellm_logging_obj,
+                pricing_provider=pricing_provider,
+                service_tier=service_tier,
+                data_residency=data_residency,
+                vertex_location=vertex_location,
+                region_name=region_name,
+                custom_cost_per_token=custom_cost_per_token,
+            ),
+            litellm_logging_obj,
+            pricing_provider or custom_llm_provider,
+            bool(custom_pricing or custom_cost_per_token is not None),
+        )
     try:
         call_type = infer_call_type(call_type, completion_response) or "completion"
         if pricing_provider is not None:
@@ -1637,7 +1753,7 @@ def completion_cost(
             litellm_logging_obj,
         )
         selected_model: Final = select_model_name_for_cost_calc(
-            model=model,
+            model=model or decision_rerank_model,
             completion_response=completion_response,
             custom_llm_provider=base_model_provider or custom_llm_provider,
             custom_pricing=custom_pricing,
@@ -1739,7 +1855,7 @@ def completion_cost(
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
                         custom_llm_provider = pricing_provider or hidden_params.get(
-                            "custom_llm_provider", custom_llm_provider or None
+                            "custom_llm_provider", custom_llm_provider or decision_rerank_provider
                         )
                         region_name = hidden_params.get("region_name", region_name)
 

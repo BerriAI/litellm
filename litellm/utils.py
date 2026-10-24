@@ -6967,6 +6967,7 @@ def get_model_info_helper(
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_video_input=_model_info.get("supports_video_input", None),
                 supports_box_questions=_model_info.get("supports_box_questions", None),
+                rerank_strategy=_model_info.get("rerank_strategy", None),
                 supports_audio_output=_model_info.get("supports_audio_output", None),
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),
                 supports_embedding_image_input=_model_info.get("supports_embedding_image_input", None),
