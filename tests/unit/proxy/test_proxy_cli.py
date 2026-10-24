@@ -74,7 +74,16 @@ class TestProxyInitializationHelpers:
     @patch("openai.OpenAI")
     @patch("click.echo")
     @patch("builtins.print")
-    def test_run_test_chat_completion(self, mock_print, mock_echo, mock_openai):
+    @pytest.mark.parametrize(
+        ("test_value", "expected_base_url"),
+        [
+            (True, "http://localhost:8000"),
+            ("http://test-url", "http://test-url"),
+        ],
+    )
+    def test_run_test_chat_completion(
+        self, mock_print, mock_echo, mock_openai, test_value, expected_base_url
+    ):
         # Setup
         mock_client = MagicMock()
         mock_openai.return_value = mock_client
@@ -90,21 +99,27 @@ class TestProxyInitializationHelpers:
         ]
 
         # Execute
-        with pytest.raises(ValueError, match="Invalid test value"):
-            ProxyInitializationHelpers._run_test_chat_completion(
-                "localhost", 8000, "gpt-3.5-turbo", True
-            )
-
-        # Test with valid string test value
         ProxyInitializationHelpers._run_test_chat_completion(
-            "localhost", 8000, "gpt-3.5-turbo", "http://test-url"
+            "localhost", 8000, "gpt-3.5-turbo", test_value
         )
 
         # Assert
         mock_openai.assert_called_once_with(
-            api_key="My API Key", base_url="http://test-url"
+            api_key="My API Key", base_url=expected_base_url
         )
-        mock_client.chat.completions.create.assert_called()
+        assert mock_client.chat.completions.create.call_count == 2
+        mock_client.completions.create.assert_called_once_with(
+            model="gpt-3.5-turbo", prompt="this is a test request, write a short poem"
+        )
+
+    @patch("openai.OpenAI")
+    def test_run_test_chat_completion_rejects_false(self, mock_openai):
+        with pytest.raises(ValueError, match="Invalid test value"):
+            ProxyInitializationHelpers._run_test_chat_completion(
+                "localhost", 8000, "gpt-3.5-turbo", False
+            )
+
+        mock_openai.assert_not_called()
 
     def test_get_default_unvicorn_init_args(self):
         # Test without log_config
