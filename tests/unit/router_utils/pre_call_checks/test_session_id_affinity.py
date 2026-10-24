@@ -280,22 +280,23 @@ async def test_delayed_shared_pin_read_preserves_a_newer_local_write(
         await redis.async_set_cache(_repin_key(), shared_value, ttl=3600)
     observed: Final = asyncio.Event()
     resume: Final = asyncio.Event()
-    original_get: Final = Redis.get
 
-    async def delayed_get(client: Redis, name: str) -> object:
-        value: Final = await original_get(client, name)
-        observed.set()
-        await resume.wait()
-        return value
+    class DelayedReader(Redis):
+        async def get(self, name: str) -> object:
+            value: Final = await super().get(name)
+            observed.set()
+            await resume.wait()
+            return value
 
-    with patch("redis.asyncio.Redis.get", new=delayed_get):
-        pending: Final = asyncio.create_task(_selected_session_ids(router))
-        try:
-            await observed.wait()
-            router.cache.in_memory_cache.set_cache(_repin_key(), {"model_id": "replacement"}, ttl=3600)
-        finally:
-            resume.set()
-            await pending
+    reader: Final = DelayedReader(connection_pool=redis.init_async_client().connection_pool)
+    litellm.in_memory_llm_clients_cache.set_cache(key=redis._get_async_client_cache_key(), value=reader)
+    pending: Final = asyncio.create_task(_selected_session_ids(router))
+    try:
+        await observed.wait()
+        router.cache.in_memory_cache.set_cache(_repin_key(), {"model_id": "replacement"}, ttl=3600)
+    finally:
+        resume.set()
+        await pending
     server.connected = False
     assert await _selected_session_ids(router) == ("replacement",)
 
