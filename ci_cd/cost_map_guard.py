@@ -1,10 +1,14 @@
 """Guard the cost map on pull requests.
 
-Every pull request whose diff against its merge base touches one of the two cost map files gets the file
-checks: the files parse and the backup copy matches the root file. A pull request that leaves both untouched
-skips them, since merging it keeps the base branch's copies and its head tree only carries whatever state the
-branch was cut from. Pull requests from the cost map sync bot (branches named litellm_cost_map_sync_*) always
-get the file checks and additionally may only touch those two files and may only add or update models.
+Every pull request whose diff against its merge base touches one of the two cost map files or the pins file gets the
+file checks: the files parse, the backup copy matches the root file, and every capability pinned in
+ci_cd/cost_map_pins.json (a value verified against a live provider call where the provider's model listing says
+otherwise) still holds in the map, so a pull request that deletes the pins file fails too, while a branch cut before
+the pins file existed skips the pin checks, since merging it keeps the base branch's pins. A pull request that leaves
+all three untouched skips them, since merging it keeps the base branch's copies and its head tree only carries
+whatever state the branch was cut from. Pull requests from the cost map sync bot (branches named
+litellm_cost_map_sync_*) always get the file checks and additionally may only touch the two cost map files and may
+only add or update models, so a sync can never lower a pinned capability or edit the pins.
 """
 
 from __future__ import annotations
@@ -13,25 +17,38 @@ import argparse
 import json
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
 COST_MAP_PATH: Final = "model_prices_and_context_window.json"
 BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
+PINS_PATH: Final = "ci_cd/cost_map_pins.json"
 GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH)
+CHECKED_PATHS: Final = (*GUARDED_PATHS, PINS_PATH)
 BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
 SPECIAL_ROOT_KEYS: Final = frozenset({"sample_spec", "fallback_generalizations"})
 EVALUATION_OUTPUT_PRICE_SOURCES: Final[Mapping[str, str]] = MappingProxyType({})
 
 CostMap = dict[str, object]
+_MISSING: Final = object()
 
 
 @dataclass(frozen=True, slots=True)
 class Snapshot:
     cost_map: str
     backup: str
+    pins: str
+
+
+@dataclass(frozen=True, slots=True)
+class Pin:
+    key: str
+    field: str
+    value: object
+    checked: str
+    source: str
 
 
 def _parse_object(text: str, path: str) -> CostMap | str:
@@ -91,6 +108,48 @@ def _entries(cost_map: CostMap) -> dict[str, dict[str, object]]:
     return {key: entry for key, entry in cost_map.items() if isinstance(entry, dict)}
 
 
+def _pin(key: str, field: str, spec: object) -> Pin | str:
+    malformed: Final = f"{PINS_PATH}: {key}.{field} needs value, checked, and source"
+    if not isinstance(spec, dict) or "value" not in spec:
+        return malformed
+    checked: Final = spec.get("checked")
+    source: Final = spec.get("source")
+    if not isinstance(checked, str) or not isinstance(source, str) or not checked or not source:
+        return malformed
+    return Pin(key, field, spec["value"], checked, source)
+
+
+def _pins(parsed: CostMap) -> Iterator[Pin | str]:
+    for key, fields in parsed.items():
+        if not isinstance(fields, dict):
+            yield f"{PINS_PATH}: {key} must map field names to pins"
+            continue
+        for field, spec in fields.items():
+            yield _pin(key, field, spec)
+
+
+def _pin_violations(parsed: CostMap, entries: Mapping[str, Mapping[str, object]]) -> Iterator[str]:
+    for pin in _pins(parsed):
+        if isinstance(pin, str):
+            yield pin
+        elif pin.key not in entries:
+            yield f"{PINS_PATH} pins {pin.key}.{pin.field} but {COST_MAP_PATH} has no {pin.key} entry"
+        elif entries[pin.key].get(pin.field, _MISSING) != pin.value:
+            yield (
+                f"{COST_MAP_PATH}: {pin.key}.{pin.field} must stay {json.dumps(pin.value)} "
+                f"(verified {pin.checked}: {pin.source}); change {PINS_PATH} with new evidence first"
+            )
+
+
+def pin_failures(pins_text: str, head_map: CostMap) -> tuple[str, ...]:
+    if not pins_text:
+        return (f"{PINS_PATH} is missing; restore it, its pins were verified against live provider calls",)
+    parsed: Final = _parse_object(pins_text, PINS_PATH)
+    if isinstance(parsed, str):
+        return (parsed,)
+    return tuple(_pin_violations(parsed, _entries(head_map)))
+
+
 def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str]) -> tuple[str, ...]:
     base_map: Final = _parse_object(base.cost_map, COST_MAP_PATH)
     if isinstance(base_map, str):
@@ -121,7 +180,7 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
 
 
 def touches_cost_map(changed_files: Sequence[str]) -> bool:
-    return any(path in GUARDED_PATHS for path in changed_files)
+    return any(path in CHECKED_PATHS for path in changed_files)
 
 
 def contract_for(bot: bool, changed_files: Sequence[str]) -> str:
@@ -147,6 +206,7 @@ def guard_failures(
         *_file_failures(
             head, head_map, evaluation_output_price_sources=evaluation_output_price_sources
         ),
+        *(pin_failures(head.pins, head_map) if head.pins or base.pins else ()),
         *(_bot_failures(base, head_map, changed_files) if bot else ()),
     )
 
@@ -157,7 +217,7 @@ def _git(*args: str) -> str | None:
 
 
 def snapshot(revision: str) -> Snapshot:
-    return Snapshot(*(_git("show", f"{revision}:{path}") or "" for path in GUARDED_PATHS))
+    return Snapshot(*(_git("show", f"{revision}:{path}") or "" for path in CHECKED_PATHS))
 
 
 def changed_files(base: str, head: str) -> tuple[str, ...] | None:

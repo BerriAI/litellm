@@ -51,9 +51,12 @@ def _serialize(cost_map: dict[str, object]) -> str:
     return json.dumps(cost_map, indent=4, ensure_ascii=False) + "\n"
 
 
-def _snapshot(cost_map: dict[str, object], backup: str | None = None) -> object:
+NO_PINS: Final = "{}\n"
+
+
+def _snapshot(cost_map: dict[str, object], backup: str | None = None, pins: str = NO_PINS) -> object:
     text = _serialize(cost_map)
-    return guard.Snapshot(cost_map=text, backup=text if backup is None else backup)
+    return guard.Snapshot(cost_map=text, backup=text if backup is None else backup, pins=pins)
 
 
 BASE: Final = _snapshot(BASE_MAP)
@@ -64,9 +67,10 @@ def _failures(
     changed_files: tuple[str, ...] = MAP_FILES,
     bot: bool = True,
     evaluation_output_price_sources: Mapping[str, str] = guard.EVALUATION_OUTPUT_PRICE_SOURCES,
+    base: object = BASE,
 ) -> tuple[str, ...]:
     return guard.guard_failures(
-        BASE,
+        base,
         head,
         changed_files,
         bot,
@@ -129,14 +133,14 @@ def test_bot_may_add_and_reprice_models() -> None:
 
 
 def test_broken_json_is_reported() -> None:
-    head = guard.Snapshot(cost_map="{not json", backup="{not json")
+    head = guard.Snapshot(cost_map="{not json", backup="{not json", pins=NO_PINS)
     assert _failures(head, bot=False) == (
         f"{guard.COST_MAP_PATH} is not valid JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)",
     )
 
 
 def test_non_object_root_is_reported() -> None:
-    head = guard.Snapshot(cost_map="[]", backup="[]")
+    head = guard.Snapshot(cost_map="[]", backup="[]", pins=NO_PINS)
     assert _failures(head, bot=False) == (f"{guard.COST_MAP_PATH} must be a JSON object at the root",)
 
 
@@ -154,15 +158,15 @@ CODE_ONLY: Final = (
 
 
 def test_human_pr_that_leaves_the_cost_map_alone_skips_the_file_checks() -> None:
-    unparseable: Final = guard.Snapshot(cost_map="{not json", backup="")
+    unparseable: Final = guard.Snapshot(cost_map="{not json", backup="", pins=NO_PINS)
     assert _failures(STALE_HEAD, changed_files=CODE_ONLY, bot=False) == ()
     assert _failures(STALE_HEAD, changed_files=(), bot=False) == ()
     assert _failures(unparseable, changed_files=CODE_ONLY, bot=False) == ()
 
 
-@pytest.mark.parametrize("guarded_path", guard.GUARDED_PATHS)
-def test_touching_any_cost_map_file_keeps_the_file_checks(guarded_path: str) -> None:
-    failures: Final = _failures(STALE_HEAD, changed_files=(*CODE_ONLY, guarded_path), bot=False)
+@pytest.mark.parametrize("checked_path", guard.CHECKED_PATHS)
+def test_touching_any_cost_map_file_keeps_the_file_checks(checked_path: str) -> None:
+    failures: Final = _failures(STALE_HEAD, changed_files=(*CODE_ONLY, checked_path), bot=False)
     assert [failure for failure in failures if failure.startswith(guard.BACKUP_PATH)]
 
 
@@ -204,8 +208,100 @@ def test_bot_may_not_change_special_root_keys() -> None:
     assert _failures(head) == ("bot PRs may not change fallback_generalizations",)
 
 
-def _commit(repo: Path, cost_map: dict[str, object], message: str) -> str:
+PINNED_SOURCE: Final = "a 512x512 probe image was read back over the provider's chat endpoint"
+PINS: Final = _serialize(
+    {"openrouter/a": {"supports_vision": {"value": True, "checked": "2026-09-26", "source": PINNED_SOURCE}}}
+)
+
+
+def test_a_pinned_capability_that_holds_passes_for_humans_and_bots() -> None:
+    head = _snapshot(BASE_MAP, pins=PINS)
+    assert _failures(head, bot=False) == ()
+    assert _failures(head, bot=True) == ()
+
+
+@pytest.mark.parametrize("bot", [False, True])
+def test_lowering_a_pinned_capability_fails_with_its_evidence(bot: bool) -> None:
+    head = _snapshot({**BASE_MAP, "openrouter/a": _entry(supports_vision=False)}, pins=PINS)
+    assert _failures(head, bot=bot) == (
+        f"{guard.COST_MAP_PATH}: openrouter/a.supports_vision must stay true (verified 2026-09-26: {PINNED_SOURCE}); "
+        f"change {guard.PINS_PATH} with new evidence first",
+    )
+
+
+def test_dropping_a_pinned_field_or_model_is_reported() -> None:
+    no_field = _snapshot({**BASE_MAP, "openrouter/a": _entry()}, pins=PINS)
+    assert [failure for failure in _failures(no_field, bot=False) if "must stay true" in failure]
+    no_model = _snapshot({key: value for key, value in BASE_MAP.items() if key != "openrouter/a"}, pins=PINS)
+    assert _failures(no_model, bot=False) == (
+        f"{guard.PINS_PATH} pins openrouter/a.supports_vision but {guard.COST_MAP_PATH} has no openrouter/a entry",
+    )
+
+
+@pytest.mark.parametrize(
+    ("pins", "expected"),
+    [
+        (
+            "{not json",
+            f"{guard.PINS_PATH} is not valid JSON: Expecting property name enclosed in double quotes: "
+            "line 1 column 2 (char 1)",
+        ),
+        (
+            _serialize({"openrouter/a": {"supports_vision": {"value": True}}}),
+            f"{guard.PINS_PATH}: openrouter/a.supports_vision needs value, checked, and source",
+        ),
+        (_serialize({"openrouter/a": True}), f"{guard.PINS_PATH}: openrouter/a must map field names to pins"),
+    ],
+)
+def test_malformed_pins_are_reported(pins: str, expected: str) -> None:
+    assert _failures(_snapshot(BASE_MAP, pins=pins), bot=False) == (expected,)
+
+
+MISSING_PINS: Final = f"{guard.PINS_PATH} is missing; restore it, its pins were verified against live provider calls"
+
+
+@pytest.mark.parametrize("bot", [False, True])
+def test_a_pr_that_deletes_the_pins_file_fails(bot: bool) -> None:
+    head: Final = _snapshot(BASE_MAP, pins="")
+    assert _failures(head, bot=bot, base=_snapshot(BASE_MAP, pins=PINS)) == (MISSING_PINS,)
+
+
+@pytest.mark.parametrize("bot", [False, True])
+def test_a_branch_cut_before_the_pins_file_existed_skips_the_pin_checks(bot: bool) -> None:
+    lowered: Final = {**BASE_MAP, "openrouter/a": _entry(supports_vision=False)}
+    assert _failures(_snapshot(lowered, pins=""), bot=False, base=_snapshot(BASE_MAP, pins="")) == ()
+    assert _failures(_snapshot(BASE_MAP, pins=""), bot=bot, base=_snapshot(BASE_MAP, pins="")) == ()
+
+
+def test_a_pr_that_adds_the_pins_file_gets_its_pins_checked() -> None:
+    head: Final = _snapshot({**BASE_MAP, "openrouter/a": _entry(supports_vision=False)}, pins=PINS)
+    changed: Final = (*MAP_FILES, guard.PINS_PATH)
+    failures: Final = _failures(head, changed_files=changed, bot=False, base=_snapshot(BASE_MAP, pins=""))
+    assert [failure for failure in failures if "openrouter/a.supports_vision must stay true" in failure]
+
+
+def test_bot_may_not_touch_the_pins_file() -> None:
+    head = _snapshot(BASE_MAP, pins=PINS)
+    changed = (*guard.GUARDED_PATHS, guard.PINS_PATH)
+    assert _failures(head, changed_files=changed, bot=False) == ()
+    assert _failures(head, changed_files=changed) == (
+        f"bot PRs may only change the cost map files, not {guard.PINS_PATH}",
+    )
+
+
+def test_checked_in_pins_hold_in_the_checked_in_cost_map() -> None:
+    cost_map = json.loads((ROOT / guard.COST_MAP_PATH).read_text())
+    pins = (ROOT / guard.PINS_PATH).read_text()
+    assert json.loads(pins), "the pins file must pin at least one capability"
+    assert guard.pin_failures(pins, cost_map) == ()
+
+
+def _commit(repo: Path, cost_map: dict[str, object], message: str, pins: str | None = None) -> str:
     text = _serialize(cost_map)
+    pins_file = repo / guard.PINS_PATH
+    if pins is not None or not pins_file.exists():
+        pins_file.parent.mkdir(exist_ok=True)
+        pins_file.write_text(NO_PINS if pins is None else pins)
     (repo / guard.COST_MAP_PATH).write_text(text)
     (repo / guard.BACKUP_PATH).parent.mkdir(exist_ok=True)
     (repo / guard.BACKUP_PATH).write_text(text)
@@ -298,3 +394,14 @@ def test_main_rejects_a_bot_pr_that_edits_code(tmp_path: Path) -> None:
     head = _commit(tmp_path, {**BASE_MAP, "openrouter/c": _entry()}, "head")
     assert _run_guard(tmp_path, base, head, BOT_REF).returncode == 1
     assert _run_guard(tmp_path, base, head, "litellm_fix_pricing").returncode == 0
+
+
+@pytest.mark.parametrize("head_ref", [BOT_REF, "litellm_fix_pricing"])
+def test_main_reads_the_pins_from_the_head_revision(tmp_path: Path, head_ref: str) -> None:
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    base: Final = _commit(tmp_path, BASE_MAP, "base", pins=PINS)
+    head: Final = _commit(tmp_path, {**BASE_MAP, "openrouter/a": _entry(supports_vision=False)}, "sync lowers it")
+    result: Final = _run_guard(tmp_path, base, head, head_ref)
+    assert result.returncode == 1, result.stdout + result.stderr
+    pin_line: Final = f"- {guard.COST_MAP_PATH}: openrouter/a.supports_vision must stay true (verified 2026-09-26: "
+    assert [line for line in result.stdout.splitlines() if line.startswith(pin_line)]
