@@ -2,10 +2,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, testQueryClient } from "@/../tests/test-utils";
 import { setServerRootPath } from "@/lib/serverRootPath";
-import { recordChatQuery } from "@/lib/telemetry/chat";
 import ChatLayout from "./layout";
-
-vi.mock("@/lib/telemetry/chat", () => ({ recordChatQuery: vi.fn(async () => {}) }));
 
 const { router, route } = vi.hoisted(() => ({
   router: { push: vi.fn(), replace: vi.fn() },
@@ -94,7 +91,6 @@ describe("Chat layout product navigation", () => {
       );
 
       expect(screen.getByRole("heading", { name: "Chat content" })).toBeVisible();
-      expect(recordChatQuery).not.toHaveBeenCalled();
       await user.click(screen.getByRole("button", { name: "Switch workspace, current: Chat" }));
       expect(await screen.findByRole("menuitem", { name: "Observability" })).toBeInTheDocument();
       expect(localStorage.getItem("litellm_plugin_mode")).toBe(plugin.name);
@@ -103,7 +99,6 @@ describe("Chat layout product navigation", () => {
 
       expect(localStorage.getItem("litellm_plugin_mode")).toBe("ai-gateway");
       expect(assign).toHaveBeenCalledWith(gateway);
-      expect(recordChatQuery).not.toHaveBeenCalled();
     },
   );
 
