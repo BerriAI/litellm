@@ -1,12 +1,7 @@
+import { toResponsesMessages } from "./attachmentHelpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import OpenAI from "openai";
-import {
-  generateChatImages,
-  isChatImageUrl,
-  MAX_CHAT_IMAGE_BYTES,
-  readChatImage,
-  toResponsesMessages,
-} from "./imageHelpers";
+import { generateChatImages, isChatImageUrl, MAX_CHAT_IMAGE_BYTES, readChatImage } from "./imageHelpers";
 
 const { generate } = vi.hoisted(() => ({ generate: vi.fn() }));
 vi.mock("openai", () => ({
