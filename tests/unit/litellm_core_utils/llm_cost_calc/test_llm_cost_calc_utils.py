@@ -2021,7 +2021,7 @@ def test_calculate_cache_writing_cost():
         cache_creation_tokens=cache_creation_tokens,
         cache_creation_token_details=cache_creation_token_details,
         cache_creation_cost=cache_creation_cost,
-        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr},
+        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr, "12hr": cache_creation_cost_above_1hr},
     )
 
     # Expected calculation:
@@ -2042,7 +2042,7 @@ def test_calculate_cache_writing_cost():
         cache_creation_tokens=cache_creation_tokens_no_details,
         cache_creation_token_details=cache_creation_token_details_none,
         cache_creation_cost=cache_creation_cost_fallback,
-        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr},
+        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr, "12hr": cache_creation_cost_above_1hr},
     )
 
     # Expected calculation when no details: 1000 * 5e-06 = 0.005
@@ -2060,7 +2060,7 @@ def test_calculate_cache_writing_cost():
         cache_creation_tokens=500,
         cache_creation_token_details=cache_creation_token_details_partial,
         cache_creation_cost=3e-06,
-        cache_creation_cost_by_ttl={"1hr": 6e-06},
+        cache_creation_cost_by_ttl={"1hr": 6e-06, "12hr": 6e-06},
     )
 
     # Expected calculation: 0 (for None 5m tokens) + (100 * 6e-06) = 0.0006
@@ -2076,7 +2076,7 @@ def test_calculate_cache_writing_cost():
             ephemeral_5m_input_tokens=50, ephemeral_1h_input_tokens=950
         ),
         cache_creation_cost=0.0,
-        cache_creation_cost_by_ttl={"1hr": 0.0},
+        cache_creation_cost_by_ttl={"1hr": 0.0, "12hr": 0.0},
     )
 
     assert result_zero == 0.0
@@ -2088,7 +2088,7 @@ def test_calculate_cache_writing_cost_bills_every_reported_lifetime(field: str) 
         cache_creation_tokens=10,
         cache_creation_token_details=CacheCreationTokenDetails(**{field: 10}),
         cache_creation_cost=2.0,
-        cache_creation_cost_by_ttl={},
+        cache_creation_cost_by_ttl={"1hr": 2.0, "12hr": 2.0},
     )
     assert cost == 20.0
 
@@ -2213,7 +2213,7 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
         prompt_base_cost=0.0,
         cache_read_cost=0.0,
         cache_creation_cost=cache_creation_cost,
-        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr},
+        cache_creation_cost_by_ttl={"1hr": cache_creation_cost_above_1hr, "12hr": cache_creation_cost_above_1hr},
     )
 
     # Expected: (100 * 3.75e-06) + (200 * 6e-06) = 0.000375 + 0.0012 = 0.001575
