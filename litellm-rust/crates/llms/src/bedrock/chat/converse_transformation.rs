@@ -193,6 +193,7 @@ impl BaseConfig for AmazonConverseConfig {
         };
 
         Ok(ChatCompletionsResponse {
+            id: None,
             created: unix_now(),
             // Converse echoes no model id, so Python reports the requested one.
             model: model.to_string(),

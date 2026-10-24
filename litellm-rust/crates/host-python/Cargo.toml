@@ -13,6 +13,7 @@ bytes.workspace = true
 futures-util.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 

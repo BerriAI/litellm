@@ -146,6 +146,7 @@ impl BaseConfig for OpenAILikeChatConfig {
         let details = usage.and_then(|usage| usage.get("prompt_tokens_details"));
 
         Ok(ChatCompletionsResponse {
+            id: None,
             created: body
                 .get("created")
                 .and_then(Value::as_u64)

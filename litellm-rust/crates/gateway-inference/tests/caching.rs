@@ -47,7 +47,7 @@ async fn all_inference_endpoints_share_native_cache(
         .expect(2)
         .mount(&upstream)
         .await;
-    let cache: Arc<dyn ResponseCacheService> = Arc::new(
+    let cache = Arc::new(
         ResponseCache::new(Arc::new(InMemoryCache::new(
             Some(100),
             Some(Duration::from_secs(60)),
@@ -72,7 +72,7 @@ async fn all_inference_endpoints_share_native_cache(
     let cache_key = second.headers().get("x-litellm-cache-key").unwrap().clone();
     assert!(!cache_key.as_bytes().is_empty());
     let stored = cache
-        .lookup(
+        .async_lookup(
             &ResponseCacheRequest::new(CacheKeyInput {
                 preset: Some(cache_key.to_str().unwrap().into()),
                 ..Default::default()

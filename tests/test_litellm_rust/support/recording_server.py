@@ -51,6 +51,12 @@ class RecordingServer:
     def enqueue(self, response: ResponseSpec) -> None:
         self.responses.append(response)
 
+    def serve(self, response: ResponseSpec) -> None:
+        self.default_response = response
+
+    def expect(self, count: int | None) -> None:
+        self.expected_requests = count
+
     async def wait_for_requests(self, count: int) -> None:
         async with asyncio.timeout(2):
             while len(self.requests) < count:

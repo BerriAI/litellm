@@ -311,13 +311,12 @@ impl LegacyLogging {
         self.prepare(py)
     }
 
-    fn resume_after_success(
+    fn resume_provider_result(
         &mut self,
-        py: Python<'_>,
+        _: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<HookStep<Self, Py<PyAny>>> {
-        self.response = Some(result?);
-        self.finalize(py)
+        result.map(HookStep::Ready)
     }
 
     fn resume_deployment_failure(
@@ -423,18 +422,26 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, Py<PyAny>>> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
-        if self.runs_deployment_hooks() {
-            return Ok(HookStep::Await(
-                DeploymentHooks::after_success(
-                    py,
-                    self.call.kwargs(),
-                    &self.response,
-                    self.call_type(),
-                )?,
-                Self::resume_after_success,
-            ));
-        }
         self.finalize(py)
+    }
+
+    pub(crate) fn provider_result(
+        &mut self,
+        py: Python<'_>,
+        response: Py<PyAny>,
+    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
+        if !self.runs_deployment_hooks() {
+            return Ok(HookStep::Ready(response));
+        }
+        Ok(HookStep::Await(
+            DeploymentHooks::after_success(
+                py,
+                self.call.kwargs(),
+                &Some(response),
+                self.call_type(),
+            )?,
+            Self::resume_provider_result,
+        ))
     }
 
     pub(crate) fn result_ready(
@@ -787,8 +794,27 @@ assert hooked == ([opaque] if asynchronous else []), hooked
         });
     }
 
+    #[rstest]
+    #[case::synchronous(false, false)]
+    #[case::asynchronous(true, true)]
+    fn only_an_async_call_reviews_provider_results(
+        #[case] asynchronous: bool,
+        #[case] reviews: bool,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, c"kwargs = {'logger': logger}\nresponse = object()");
+            let (mut logging, _) = begin(py, &locals, asynchronous);
+
+            let step = logging
+                .provider_result(py, local(&locals, "response").unbind())
+                .unwrap();
+            assert_eq!(awaits_deployment_hook(&step), reviews);
+        });
+    }
+
     #[rstest::rstest]
-    fn response_returned_by_the_post_call_hook_is_finalized_and_returned() {
+    fn the_success_hook_reviews_the_provider_result_and_its_answer_is_finalized() {
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(
@@ -809,18 +835,23 @@ logger.hooks = {'pre': lambda kwargs: kwargs}
             )
             .unwrap();
             let step = logging
-                .transform_response(py, local(&locals, "response").unbind(), TIMING)
+                .provider_result(py, local(&locals, "response").unbind())
                 .unwrap();
             assert!(awaits_deployment_hook(&step));
-            let step = resume(
+            let HookStep::Ready(reviewed) = resume(
                 &mut logging,
                 step,
                 py,
                 Ok(local(&locals, "replacement").unbind()),
             )
-            .unwrap();
-            let HookStep::Ready(returned) = step else {
-                panic!("expected the finalized response");
+            .unwrap() else {
+                panic!("expected the hook's answer");
+            };
+            assert!(reviewed.bind(py).is(local(&locals, "replacement")));
+            let HookStep::Ready(returned) =
+                logging.transform_response(py, reviewed, TIMING).unwrap()
+            else {
+                panic!("transforming the public response runs no deployment hook");
             };
             assert!(returned.bind(py).is(local(&locals, "replacement")));
             run(
@@ -829,6 +860,7 @@ logger.hooks = {'pre': lambda kwargs: kwargs}
                 c"
 [finalized] = [value for name, value in logger.calls if name == 'finalize']
 assert finalized is replacement
+assert [name for name in logger.names() if name.endswith('_hook')] == ['pre_hook', 'success_hook']
 ",
             );
         });
@@ -853,7 +885,7 @@ assert finalized is replacement
                 )
                 .unwrap();
                 let step = logging
-                    .transform_response(py, local(&locals, "response").unbind(), TIMING)
+                    .provider_result(py, local(&locals, "response").unbind())
                     .unwrap();
                 resume(&mut logging, step, py, Err(cancellation))
                     .err()

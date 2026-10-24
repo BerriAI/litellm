@@ -6,14 +6,17 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use litellm_host::{
     call::{CallOutput, HostedMachine, hosted_call},
     hooks::CallHooks,
-    interceptors::{RawResponse, RequestContext, WireRequest},
+    interceptors::{
+        Cost, ExecutionFacts, ProviderIdentity, RawResponse, RequestContext, ResultSource,
+        WireRequest,
+    },
     lifecycle::{ExecutionEvent, Timing},
     machine::{CallMachine, MachineFault},
     protocol::{Protocol, Reply},
 };
 use litellm_host_python::{
-    CallOptions, HookStep, InvokeError, PythonBinding, PythonCallEvent, PythonCallHooks,
-    PythonHostCalls, PythonOwned, PythonRuntime, run_call,
+    CallOptions, Hit, HitOutput, HookStep, InvokeError, Lookup, PythonBinding, PythonCallEvent,
+    PythonCallHooks, PythonHostCalls, PythonOwned, PythonRuntime, run_call,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError, asyncio::CancelledError},
@@ -169,6 +172,7 @@ pub struct SyntheticBinding {
     op: OpScript,
     classifier_fails: bool,
     pending_reply: Option<Reply<String>>,
+    cache: Option<Option<&'static str>>,
 }
 
 pub fn binding(log: &Log, op: OpScript) -> SyntheticBinding {
@@ -177,10 +181,19 @@ pub fn binding(log: &Log, op: OpScript) -> SyntheticBinding {
         op,
         classifier_fails: false,
         pending_reply: None,
+        cache: None,
     }
 }
 
 impl SyntheticBinding {
+    /// Looks every call up in a host cache holding `cached`, or nothing.
+    pub fn with_cache(self, cached: Option<&'static str>) -> Self {
+        Self {
+            cache: Some(cached),
+            ..self
+        }
+    }
+
     pub fn with_failing_classifier(self) -> Self {
         Self {
             classifier_fails: true,
@@ -239,6 +252,34 @@ impl PythonBinding for SyntheticBinding {
     fn encode_response(&mut self, py: Python<'_>, response: String) -> PyResult<Py<PyAny>> {
         self.log.push("complete");
         Ok(PyString::new(py, &response).into_any().unbind())
+    }
+
+    fn lookup(&mut self, py: Python<'_>) -> PyResult<Lookup<Synthetic>> {
+        let Some(cache) = self.cache else {
+            return Ok(Lookup::Miss);
+        };
+        self.log.push("lookup");
+        let Some(cached) = cache else {
+            return Ok(Lookup::Miss);
+        };
+        Ok(Lookup::Hit(Hit {
+            facts: ExecutionFacts {
+                provider: ProviderIdentity {
+                    model: "m".into(),
+                    provider: "p".into(),
+                },
+                source: ResultSource::Cache { key: "k".into() },
+                cost: Cost::CacheHit,
+            },
+            output: HitOutput::Response(PyString::new(py, cached).into_any().unbind()),
+        }))
+    }
+
+    fn store_response(&mut self, _: Python<'_>, response: &Bound<'_, PyAny>) -> PyResult<()> {
+        if self.cache.is_some() {
+            self.log.push(format!("store:{}", response.str()?));
+        }
+        Ok(())
     }
 
     fn map_error(&self, _: Python<'_>, error: Error) -> PyResult<Classified> {
@@ -321,6 +362,7 @@ pub enum HookScript {
     FailAfterSuccess,
     CancelTerminal,
     FailTerminal,
+    ReviewResult,
 }
 
 pub struct SyntheticHooks {
@@ -336,6 +378,21 @@ pub fn hooks(log: &Log, script: HookScript) -> SyntheticHooks {
 }
 
 impl CallHooks<PythonRuntime> for SyntheticHooks {
+    fn provider_result(
+        &mut self,
+        py: Python<'_>,
+        response: Py<PyAny>,
+    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
+        if !matches!(self.script, HookScript::ReviewResult) {
+            return Ok(HookStep::Ready(response));
+        }
+        self.log
+            .push(format!("provider_result:{}", response.bind(py).str()?));
+        Ok(HookStep::Ready(
+            PyString::new(py, "reviewed").into_any().unbind(),
+        ))
+    }
+
     fn prepare_arguments(
         &mut self,
         _: Python<'_>,
@@ -469,6 +526,18 @@ pub fn success_machine() -> MachineFactory {
                     .after_provider_response(RawResponse { body: "raw".into() })
                     .await?;
                 Ok(format!("{projected}|{signed}|{}", wire.url))
+            })
+        })
+    })
+}
+
+/// A call that offers its provider result for review and returns the text it keeps.
+pub fn reviewed_machine() -> MachineFactory {
+    Box::new(move |_| {
+        CallMachine::new(None, move |host| {
+            Box::pin(async move {
+                let _ = host;
+                Ok("provider".to_owned())
             })
         })
     })
