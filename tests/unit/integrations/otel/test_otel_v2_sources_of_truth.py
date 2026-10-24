@@ -1348,6 +1348,56 @@ def test_caller_trace_controls_carry_user_session_and_tags(request_data, expecte
     assert LLMCallEvent.from_dict({"litellm_params": request_data}).trace == expected
 
 
+def test_caller_trace_controls_carry_environment_release_and_version(monkeypatch):
+    """Caller-supplied environment, release, and version are mapped from headers or request metadata,
+    falling back to LANGFUSE_TRACING_ENVIRONMENT env var."""
+    # 1. Header precedence over metadata
+    from_headers: Final = caller_trace_controls(
+        {
+            "litellm_params": {
+                "proxy_server_request": {
+                    "headers": {
+                        "langfuse_environment": "prod-env",
+                        "langfuse_release": "rel-v2",
+                        "langfuse_version": "ver-3",
+                    }
+                },
+                "metadata": {
+                    "langfuse_environment": "staging-env",
+                    "trace_release": "rel-v1",
+                    "trace_version": "ver-2",
+                },
+            }
+        }
+    )
+    assert from_headers.environment == "prod-env"
+    assert from_headers.release == "rel-v2"
+    assert from_headers.version == "ver-3"
+
+    # 2. Metadata body precedence over env var fallback
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "env-fallback")
+    from_body: Final = caller_trace_controls(
+        {
+            "litellm_params": {
+                "metadata": {
+                    "langfuse_environment": "meta-env",
+                    "trace_release": "rel-v1",
+                    "trace_version": "ver-1",
+                }
+            }
+        }
+    )
+    assert from_body.environment == "meta-env"
+    assert from_body.release == "rel-v1"
+    assert from_body.version == "ver-1"
+
+    # 3. Environment variable fallback
+    from_env: Final = caller_trace_controls({"litellm_params": {}})
+    assert from_env.environment == "env-fallback"
+    assert from_env.release is None
+    assert from_env.version is None
+
+
 def test_llm_span_data_carries_the_caller_trace_controls():
     controls: Final = TraceControls(name="nightly-eval", user_id="u1", session_id="s1", tags=("a", "b"))
     data: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(), trace=controls)
