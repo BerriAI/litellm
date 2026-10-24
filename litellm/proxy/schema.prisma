@@ -1086,6 +1086,7 @@ model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
   request_id          String?
   tag                 String?   
+  team_id             String   @default("") // "" = the request had no team
   date                String
   api_key             String   
   model               String?
@@ -1111,9 +1112,10 @@ model LiteLLM_DailyTagSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([tag, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
+  @@unique([tag, team_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint], map: "LiteLLM_DailyTagSpend_tag_team_id_dimensions_key")
   @@index([date])
   @@index([tag, date])
+  @@index([team_id, date, tag])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
