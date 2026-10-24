@@ -269,7 +269,6 @@ class GenericAPILogger(CustomBatchLogger):
                 # retry transient statuses instead of treating the batch as delivered.
                 if response.status_code >= 400:
                     response.raise_for_status()
-                return response
             except Exception as e:
                 is_last_attempt = attempt == self.max_retries
                 should_retry = self._should_retry_exception(e)
@@ -284,6 +283,8 @@ class GenericAPILogger(CustomBatchLogger):
                     total_attempts,
                 )
                 await self._sleep_before_retry(attempt)
+            else:
+                return response
 
         raise RuntimeError("Generic API Logger retry loop exited unexpectedly")
 
