@@ -10049,6 +10049,7 @@ def _fast_serialize_simple_model_response_stream(
         "annotations",
         "reasoning_content",
         "thinking_blocks",
+        "reasoning_items",
         "provider_specific_fields",
         "refusal",
     )
