@@ -10,6 +10,7 @@ This ensures cost tracking is not disrupted by premature file deletion.
 
 import base64
 import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -50,7 +51,7 @@ def _make_batch_db_record(
     mock_batch.status = status
     mock_batch.file_object = json.dumps(file_object)
     mock_batch.created_by = created_by
-    mock_batch.created_at = 1700000000
+    mock_batch.created_at = datetime.now(timezone.utc)
     return mock_batch
 
 
