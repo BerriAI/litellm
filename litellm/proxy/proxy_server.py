@@ -10377,19 +10377,38 @@ def _make_keepalive_resolver(request_data: Mapping[str, object]) -> Callable[[ob
     return _resolve
 
 
+def _is_responses_stream_route(request: Request | None) -> bool:
+    """True when `request` targets a Responses API route (`/v1/responses`, ...).
+
+    Only the native `POST /v1/responses` route binds
+    `responses_stream_errors=True`; callers that serve the same routes through
+    the shared generator (other `/responses*` endpoints, wrappers around
+    `select_data_generator`) don't. The request itself carries the route, so
+    the frame shape is derived from it rather than leaking the generic
+    chat-completions `{"error": ...}` frame to Responses clients.
+    """
+    path: Final = getattr(getattr(request, "url", None), "path", None)
+    if not isinstance(path, str):
+        return False
+    return any(segment == "responses" for segment in path.split("/"))
+
+
 async def async_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict,
     request: Request | None = None,
     *,
-    responses_stream_errors: bool = False,
+    responses_stream_errors: bool | None = None,
     dispatched_call_type: str | None = None,
 ):
     verbose_proxy_logger.debug("inside generator")
     stream_completed = False
     client_disconnected = False
-    error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
+    serve_responses_stream_errors: Final = (
+        _is_responses_stream_route(request) if responses_stream_errors is None else responses_stream_errors
+    )
+    error_state: Final = ResponsesStreamErrorState() if serve_responses_stream_errors else None
     ends_with_openai_done: Final = not request_data.get("_litellm_skip_openai_stream_done")
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
     stream_iterator: Final = _object_stream(
@@ -10653,8 +10672,9 @@ def select_data_generator(
     request_data: dict,
     request: Request | None = None,
     *,
-    responses_stream_errors: bool = False,
+    responses_stream_errors: bool | None = None,
 ):
+    """`responses_stream_errors=None` auto-detects Responses routes from `request`."""
     return async_data_generator(
         response=response,
         user_api_key_dict=user_api_key_dict,
