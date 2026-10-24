@@ -393,6 +393,7 @@ class DeepKeepGuardrail(CustomGuardrail):
                 url=self.api_base,
                 json=guardrail_request,
                 headers=headers,
+                timeout=self.timeout,
             )
 
             response.raise_for_status()

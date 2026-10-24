@@ -6,7 +6,7 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,7 +18,8 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import Streami
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.llms.anthropic.pass_through.adapters.transformation import truncate_tool_name
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 
 class MockPassThroughGuardrail(CustomGuardrail):
@@ -49,9 +50,7 @@ class MockDynamicGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional[Any] = None,
     ) -> GenericGuardrailAPIInputs:
-        self.dynamic_params = self.get_guardrail_dynamic_request_body_params(
-            request_data
-        )
+        self.dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data)
         return inputs
 
 
@@ -157,6 +156,17 @@ class MockStructuredMaskingGuardrail(CustomGuardrail):
         return masked
 
 
+class MockNumberMaskingGuardrail(MockStructuredMaskingGuardrail):
+    @staticmethod
+    def _mask(text: str) -> str:
+        return (
+            text.replace("bob@example.com", "<EMAIL>")
+            .replace("5", "<NUMBER>")
+            .replace("null", "<NULL>")
+            .replace("山田太郎", "<NAME>")
+        )
+
+
 class TestAnthropicMessagesHandlerStreamingRequestData:
     """Post-call guardrails on streaming /v1/messages receive the response and identity metadata"""
 
@@ -184,7 +194,7 @@ class TestAnthropicMessagesHandlerStreamingRequestData:
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=True),
             patch(
-                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.build_complete_streaming_response",
                 return_value=mock_response,
             ),
         ):
@@ -198,9 +208,7 @@ class TestAnthropicMessagesHandlerStreamingRequestData:
 
         assert guardrail.request_data is not None
         assert guardrail.request_data["response"] is mock_response
-        assert (
-            guardrail.request_data["litellm_metadata"]["user_api_key_user_id"] == "u-1"
-        )
+        assert guardrail.request_data["litellm_metadata"]["user_api_key_user_id"] == "u-1"
 
     @pytest.mark.asyncio
     async def test_mid_stream_chunk_passes_responses_so_far_and_metadata(self):
@@ -212,9 +220,7 @@ class TestAnthropicMessagesHandlerStreamingRequestData:
 
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=False),
-            patch.object(
-                handler, "get_streaming_string_so_far", return_value="partial text"
-            ),
+            patch.object(handler, "get_streaming_string_so_far", return_value="partial text"),
         ):
             await handler.process_output_streaming_response(
                 responses_so_far=responses_so_far,
@@ -226,9 +232,7 @@ class TestAnthropicMessagesHandlerStreamingRequestData:
 
         assert guardrail.request_data is not None
         assert guardrail.request_data["responses"] is responses_so_far
-        assert (
-            guardrail.request_data["litellm_metadata"]["user_api_key_user_id"] == "u-1"
-        )
+        assert guardrail.request_data["litellm_metadata"]["user_api_key_user_id"] == "u-1"
 
 
 class TestAnthropicMessagesHandlerStreamingOutputProcessing:
@@ -249,7 +253,7 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=True),
             patch(
-                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.build_complete_streaming_response",
                 return_value=None,
             ),
         ):
@@ -391,6 +395,97 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert '"name": "lookup_fruit"' not in raw
         assert json.loads("".join(self._partial_jsons(chunks))) == {"fruit": "persimmon"}
 
+    @staticmethod
+    def _message_delta(chunks: list[bytes]) -> dict[str, object]:
+        lines: Final = b"".join(chunks).decode().split("\n")
+        events: Final = (json.loads(line[len("data:") :]) for line in lines if line.startswith("data:"))
+        return next(event["delta"] for event in events if event.get("type") == "message_delta")
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_text_rewrite_drops_the_upstream_explanations(self):
+        delta_fields: Final = {
+            "stop_details": {"type": "refusal", "category": "cyber", "explanation": "the reply says world"},
+            "safeguard_results": [
+                {"type": "prompt_injection", "status": {"type": "available", "explanation": "quotes world"}}
+            ],
+        }
+        source: Final[list[bytes]] = self._ended_sse_chunks()
+        chunks: Final = [
+            chunk.replace(
+                b'"stop_sequence": null}', b'"stop_sequence": null, ' + json.dumps(delta_fields)[1:-1].encode() + b"}"
+            )
+            for chunk in source
+        ]
+
+        await AnthropicMessagesHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert self._delta_texts(chunks) == ["hello [MASKED]", ""]
+        assert self._message_delta(chunks) == {
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": {"type": "refusal", "category": "cyber", "explanation": None},
+            "safeguard_results": [{"type": "prompt_injection", "status": {"type": "available"}}],
+        }
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_tool_use_rewrite_drops_the_verdict_of_the_rewritten_call_only(self):
+        class MaskPersimmon(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[LiteLLMLoggingObj] = None,
+            ) -> GenericGuardrailAPIInputs:
+                for tool_call in inputs.get("tool_calls", []):
+                    if isinstance(tool_call, ChatCompletionMessageToolCall) and "persimmon" in tool_call.function.arguments:
+                        tool_call.function.arguments = '{"fruit": "[MASKED]"}'
+                return inputs
+
+        first_call: Final[list[bytes]] = self._ended_tool_use_sse_chunks()
+        second_call: Final = [
+            chunk.replace(b'"index": 0', b'"index": 1')
+            .replace(b"toolu_1", b"toolu_2")
+            .replace(b"persim", b"pear")
+            .replace(b'mon\\"}', b'\\"}')
+            for chunk in first_call[1:6]
+        ]
+        verdicts: Final = {
+            "toolu_1": {"type": "evaluated", "outcome": "flagged", "explanation": "looks up persimmon"},
+            "toolu_2": {"type": "evaluated", "outcome": "not_flagged", "explanation": "looks up pear"},
+        }
+        safeguard_results: Final = [
+            {"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": verdicts}}
+        ]
+        message_delta: Final = first_call[6].replace(
+            b'"stop_sequence": null}',
+            b'"stop_sequence": null, "safeguard_results": ' + json.dumps(safeguard_results).encode() + b"}",
+        )
+        chunks: Final = [*first_call[:6], *second_call, message_delta, first_call[7]]
+
+        await AnthropicMessagesHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MaskPersimmon(guardrail_name="test"),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert self._partial_jsons(chunks)[:3] == ['{"fruit": "[MASKED]"}', "", ""]
+        assert self._message_delta(chunks)["safeguard_results"] == [
+            {
+                "type": "dangerous_tool_use",
+                "status": {
+                    "type": "available",
+                    "tool_uses": {"toolu_2": {"type": "evaluated", "outcome": "not_flagged"}},
+                },
+            }
+        ]
+
     @pytest.mark.asyncio
     async def test_ended_stream_tool_use_rewrite_leaves_chunks_untouched_by_default(self):
         handler = AnthropicMessagesHandler()
@@ -527,17 +622,11 @@ class TestAnthropicMessagesHandlerInputProcessing:
         data = {
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "hello"}],
-            "litellm_metadata": {
-                "guardrails": [
-                    {"cygnal-monitor": {"extra_body": {"policy_id": "policy-123"}}}
-                ]
-            },
+            "litellm_metadata": {"guardrails": [{"cygnal-monitor": {"extra_body": {"policy_id": "policy-123"}}}]},
         }
 
         with patch("litellm.proxy.proxy_server.premium_user", True):
-            await handler.process_input_messages(
-                data=data, guardrail_to_apply=guardrail
-            )
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
         assert data.get("litellm_metadata", {}).get("guardrails")
         assert guardrail.dynamic_params == {"policy_id": "policy-123"}
@@ -1367,7 +1456,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=True),
             patch(
-                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.build_complete_streaming_response",
                 return_value=mock_response,
             ),
         ):
@@ -1414,7 +1503,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=True),
             patch(
-                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.build_complete_streaming_response",
                 return_value=mock_response,
             ),
         ):
@@ -1439,9 +1528,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
         # Mock _check_streaming_has_ended to return False (stream not ended)
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=False),
-            patch.object(
-                handler, "get_streaming_string_so_far", return_value="partial text"
-            ),
+            patch.object(handler, "get_streaming_string_so_far", return_value="partial text"),
         ):
             responses_so_far = [b"data: some chunk"]
 
@@ -1472,9 +1559,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         data = {
             "model": "claude-opus-4-6",
-            "messages": [
-                {"role": "user", "content": "What is the weather in San Francisco?"}
-            ],
+            "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
             "tools": [
                 {
                     "type": "tool_search_tool_regex_20251119",
@@ -1637,18 +1722,14 @@ class TestAnthropicMessagesIncrementalScan:
         ]
         with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
-            await handler.process_input_messages(
-                data=self._data(turn1, sid), guardrail_to_apply=guardrail
-            )
+            await handler.process_input_messages(data=self._data(turn1, sid), guardrail_to_apply=guardrail)
             assert mock_api.call_count == 1
             assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
                 "You are a helpful geography assistant.",
                 "What is the capital of France?",
             ]
             mock_api.reset_mock()
-            await handler.process_input_messages(
-                data=self._data(turn2, sid), guardrail_to_apply=guardrail
-            )
+            await handler.process_input_messages(data=self._data(turn2, sid), guardrail_to_apply=guardrail)
             assert mock_api.call_count == 1
             assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
                 "Paris.",
@@ -2087,9 +2168,7 @@ class TestAnthropicMessagesScanOnlyToolResults:
 
         await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
-        assert guardrail.seen_texts == ["fetched POISON page"], (
-            "only the tool_result payload may reach the guardrail"
-        )
+        assert guardrail.seen_texts == ["fetched POISON page"], "only the tool_result payload may reach the guardrail"
         assert guardrail.captured_inputs is not None
         assert guardrail.captured_inputs.get("tools") is None
         assert [m["role"] for m in guardrail.captured_inputs["structured_messages"]] == ["tool"]
@@ -2098,6 +2177,45 @@ class TestAnthropicMessagesScanOnlyToolResults:
             "out-of-scope content must come back untouched, not masked or dropped"
         )
         assert data["messages"][2]["content"][0]["text"] == "sibling POISON text"
+
+    @staticmethod
+    def _strict_weather_tool() -> dict[str, Any]:
+        return {
+            "name": "get_weather",
+            "strict": True,
+            "input_schema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+            "input_examples": [{"city": "Paris"}],
+        }
+
+    @pytest.mark.asyncio
+    async def test_strict_tool_with_input_examples_is_forwarded_as_sent(self):
+        handler = AnthropicMessagesHandler()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "tools": [self._strict_weather_tool()],
+            "messages": [
+                {"role": "user", "content": "weather in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "tu1", "name": "get_weather", "input": {"city": "Paris"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "tu1", "content": "sunny"}],
+                },
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=self._guardrail())
+
+        assert data["tools"] == [self._strict_weather_tool()]
 
     @pytest.mark.asyncio
     async def test_guardrail_synthesized_tools_are_appended_without_replacing_request_tools(self):
@@ -2393,7 +2511,7 @@ class TestStructuredWriteBackKeepsToolResults:
     """A guardrail rewrite must never leave a tool_use without its tool_result (Claude Code ToolSearch, LIT-6103)."""
 
     @staticmethod
-    def _claude_code_tool_search_turns(tool_result_content):
+    def _claude_code_tool_search_turns(tool_result_content, tool_use_id="toolu_01"):
         return [
             {"role": "user", "content": "load WebFetch for bob@example.com"},
             {
@@ -2401,7 +2519,7 @@ class TestStructuredWriteBackKeepsToolResults:
                 "content": [
                     {
                         "type": "tool_use",
-                        "id": "toolu_01",
+                        "id": tool_use_id,
                         "name": "ToolSearch",
                         "input": {"query": "select:WebFetch"},
                     }
@@ -2410,7 +2528,7 @@ class TestStructuredWriteBackKeepsToolResults:
             {
                 "role": "user",
                 "content": [
-                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content},
+                    {"type": "tool_result", "tool_use_id": tool_use_id, "content": tool_result_content},
                     {"type": "text", "text": "Now fetch the page."},
                 ],
             },
@@ -2456,6 +2574,261 @@ class TestStructuredWriteBackKeepsToolResults:
         }
         later_blocks = [b for m in messages[tool_use_index + 1 :] for b in self._blocks(m)]
         assert {"type": "text", "text": "Now fetch the page."} in later_blocks
+
+    @pytest.mark.parametrize(
+        ("tool_result_content", "expected_written_back_content"),
+        [
+            (
+                [{"type": "text", "text": None}, {"type": "text", "text": "log for bob@example.com"}],
+                [{"type": "text", "text": None}, {"type": "text", "text": "log for <EMAIL>"}],
+            ),
+            (
+                [{"type": "text", "text": "log for bob@example.com"}, {"type": "text", "text": 73}],
+                [{"type": "text", "text": "log for <EMAIL>"}, {"type": "text", "text": 73}],
+            ),
+            ([{"type": "text", "text": None}], [{"type": "text", "text": None}]),
+            (
+                [
+                    {"type": "text", "text": None},
+                    {"type": "text", "text": "log for bob@example.com"},
+                    {"type": "text", "text": 5},
+                    {"type": "text", "text": "bob@example.com again"},
+                ],
+                [
+                    {"type": "text", "text": None},
+                    {"type": "text", "text": "log for <EMAIL>"},
+                    {"type": "text", "text": 5},
+                    {"type": "text", "text": "<EMAIL> again"},
+                ],
+            ),
+        ],
+        ids=["null-first", "number-last", "null-only", "interleaved"],
+    )
+    async def test_rewrite_keeps_a_non_string_tool_result_text_in_place(
+        self, tool_result_content, expected_written_back_content
+    ):
+        data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns(tool_result_content)}
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert "bob@example.com" not in json.dumps(data["messages"])
+        assert data["messages"][2]["content"][0] == {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": expected_written_back_content,
+        }
+
+    async def test_rewrite_keeps_a_non_string_tool_result_text_whose_tool_use_id_gets_sanitized(self):
+        tool_result_content = [{"type": "text", "text": None}, {"type": "text", "text": "log for bob@example.com"}]
+        data = {
+            "model": "claude-fable-5",
+            "messages": self._claude_code_tool_search_turns(tool_result_content, tool_use_id="functions.get_weather:0"),
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert data["messages"][2]["content"][0]["content"] == [
+            {"type": "text", "text": None},
+            {"type": "text", "text": "log for <EMAIL>"},
+        ]
+
+    async def test_rewrite_keeps_each_non_string_text_when_two_tool_use_ids_sanitize_alike(self):
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": "check both logs for bob@example.com"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "read:log", "name": "Read", "input": {"path": "a.log"}},
+                        {"type": "tool_use", "id": "read_log", "name": "Read", "input": {"path": "b.log"}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "read:log",
+                            "content": [{"type": "text", "text": "ok"}, {"type": "text", "text": None}],
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "read_log",
+                            "content": [{"type": "text", "text": 5}, {"type": "text", "text": "bob@example.com"}],
+                        },
+                    ],
+                },
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert [block["content"] for block in data["messages"][2]["content"]] == [
+            [{"type": "text", "text": "ok"}, {"type": "text", "text": None}],
+            [{"type": "text", "text": 5}, {"type": "text", "text": "<EMAIL>"}],
+        ]
+
+    @pytest.mark.parametrize(
+        ("text", "masked"),
+        [(5, "<NUMBER>"), (None, "<NULL>"), ({"owner": "山田太郎"}, '{"owner": "<NAME>"}')],
+        ids=["number", "null", "non-ascii-object"],
+    )
+    async def test_guardrail_scans_and_masks_a_non_string_tool_result_text(self, text, masked):
+        tool_result_content = [{"type": "text", "text": text}, {"type": "text", "text": "log for bob@example.com"}]
+        data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns(tool_result_content)}
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockNumberMaskingGuardrail()
+        )
+
+        assert data["messages"][2]["content"][0]["content"] == [
+            {"type": "text", "text": masked},
+            {"type": "text", "text": "log for <EMAIL>"},
+        ]
+
+
+class NamelessComputerToolGuardrail(CustomGuardrail):
+    """Guardrail that appends an OpenAI-format computer tool without a function name."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        computer = {"display_width_px": 1024, "display_height_px": 768}
+        inputs["tools"] = [
+            *(inputs.get("tools") or []),
+            {"type": "computer_20250124", "function": {"parameters": computer}},
+        ]
+        return inputs
+
+
+class TestLongToolNamesSurviveTheWriteBack:
+    """Names over OpenAI's 64-char limit are shortened only for the guardrail, never in the request (LIT-9528)."""
+
+    _PREFIX: Final = "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspace"
+    _SHORT_NAMES: Final = {"searched": "searched_tool", "called": "called_tool", "dropped": "dropped_tool"}
+    _LONG_NAMES: Final = {
+        "searched": _PREFIX + "Resources",
+        "called": _PREFIX + "Projects",
+        "dropped": _PREFIX + "Archives",
+    }
+
+    @staticmethod
+    def _tool(name: str) -> dict:
+        return {"name": name, "description": "Returns OK", "input_schema": {"type": "object", "properties": {}}}
+
+    def _request(self, searched: str, called: str, dropped: str) -> dict:
+        return {
+            "model": "claude-sonnet-5-5",
+            "tools": [self._tool("ToolSearch"), self._tool(searched), self._tool(called)],
+            "tool_choice": {"type": "tool", "name": called},
+            "messages": [
+                {"role": "user", "content": "find the tools for bob@example.com"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Searching."},
+                        {"type": "tool_use", "id": "toolu_01", "name": "ToolSearch", "input": {"query": "x"}},
+                        {"type": "tool_use", "id": "toolu_02", "name": called, "input": {"page": 2}},
+                        {"type": "tool_use", "id": "toolu_03", "name": dropped, "input": {"all": True}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_01",
+                            "content": [{"type": "tool_reference", "tool_name": searched}],
+                        },
+                        {"type": "tool_result", "tool_use_id": "toolu_02", "content": "OK"},
+                        {"type": "tool_result", "tool_use_id": "toolu_03", "content": "OK"},
+                    ],
+                },
+                {"role": "user", "content": "say done"},
+            ],
+        }
+
+    async def _processed(self, guardrail: CustomGuardrail, names: dict) -> dict:
+        data = self._request(**names)
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+        return {key: value for key, value in data.items() if key != "metadata"}
+
+    def _with_long_names(self, processed: dict) -> dict:
+        text = json.dumps(processed)
+        for role, short in self._SHORT_NAMES.items():
+            text = text.replace(f'"{short}"', f'"{self._LONG_NAMES[role]}"')
+        return json.loads(text)
+
+    @pytest.mark.parametrize(
+        "guardrail",
+        [
+            MockPassThroughGuardrail(guardrail_name="test"),
+            ToolAppendingGuardrail(guardrail_name="test"),
+            MockStructuredMaskingGuardrail(),
+        ],
+        ids=["echoed-tools", "injected-tool", "rewritten-messages"],
+    )
+    async def test_long_tool_names_come_back_exactly_like_short_ones(self, guardrail):
+        short = await self._processed(guardrail, self._SHORT_NAMES)
+        long = await self._processed(guardrail, self._LONG_NAMES)
+
+        assert long == self._with_long_names(short)
+        assert long["tool_choice"] == {"type": "tool", "name": self._LONG_NAMES["called"]}
+
+    @pytest.mark.parametrize(
+        "guardrail",
+        [MockPassThroughGuardrail(guardrail_name="test"), MockStructuredMaskingGuardrail()],
+        ids=["echoed-tools", "rewritten-messages"],
+    )
+    async def test_short_tool_named_like_a_shortened_history_tool_keeps_its_name(self, guardrail):
+        alias = truncate_tool_name(self._LONG_NAMES["dropped"])
+        names = {**self._LONG_NAMES, "called": alias}
+
+        data = await self._processed(guardrail, names)
+
+        assert [tool["name"] for tool in data["tools"]] == ["ToolSearch", self._LONG_NAMES["searched"], alias]
+        assert data["tool_choice"] == {"type": "tool", "name": alias}
+        assert data["messages"][1]["content"][2] == {
+            "type": "tool_use",
+            "id": "toolu_02",
+            "name": alias,
+            "input": {"page": 2},
+        }
+
+    async def test_history_tool_with_the_same_shortened_name_cannot_rename_a_declared_tool(self):
+        declared, historical = (
+            "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_7aeb",
+            "mcp__plugin_support-kit_remote-workspace__getAccessibleWorkspaceResources_c034",
+        )
+        assert truncate_tool_name(declared) == truncate_tool_name(historical)
+
+        data = await self._processed(
+            MockPassThroughGuardrail(guardrail_name="test"),
+            {**self._LONG_NAMES, "called": declared, "dropped": historical},
+        )
+
+        assert [tool["name"] for tool in data["tools"]] == ["ToolSearch", self._LONG_NAMES["searched"], declared]
+
+    async def test_guardrail_tool_without_a_function_name_still_reaches_the_request(self):
+        data = await self._processed(NamelessComputerToolGuardrail(guardrail_name="test"), self._LONG_NAMES)
+
+        assert data["tools"][-1] == {
+            "type": "computer_20250124",
+            "name": "computer",
+            "display_width_px": 1024,
+            "display_height_px": 768,
+        }
 
 
 class TestAnthropicMessagesHandlerStreamingScanKey:
@@ -2512,6 +2885,28 @@ class TestAnthropicMessagesHandlerStreamingScanKey:
         assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
         assert ended_key.tool_calls_in_flight is False
         assert ended_key != open_key
+
+    def test_released_stream_as_ended_keys_the_tool_use_the_client_already_received(self):
+        handler = AnthropicMessagesHandler()
+        tool_use = self._sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}},
+            },
+        )
+        stopped_key = handler.get_streaming_scan_key([self._text_delta("hi"), tool_use, self._stop("tool_use")])
+        released_key = handler.get_streaming_scan_key(
+            handler.released_stream_as_ended([self._text_delta("hi"), tool_use])
+        )
+        assert released_key.stream_ended is True
+        assert released_key == stopped_key
+
+    def test_released_stream_as_ended_leaves_a_text_only_stream_as_released(self):
+        released = (self._text_delta("hi"), self._text_delta(" there"))
+        ended = AnthropicMessagesHandler().released_stream_as_ended(released)
+        assert ended == released and all(a is b for a, b in zip(ended, released, strict=True))
 
 
 class PerRowTextGuardrail(CustomGuardrail):

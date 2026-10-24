@@ -1,13 +1,23 @@
 import asyncio
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal
+import hashlib
+import json
+from collections import OrderedDict
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
+from uuid import uuid4
 
 import httpx
 from fastapi import HTTPException, status
+from pydantic import BeforeValidator, TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.router_utils.common_utils import _is_proxy_admin_request
+from litellm.router_utils.common_utils import is_proxy_admin_request
 
 # Client-supplied params that make the router or the call path fabricate a
 # failure or a delay instead of calling the provider. The ``mock_testing_*``
@@ -35,7 +45,49 @@ else:
     LitellmRouter = Any
 
 
-def _route_user_config_request(data: dict, route_type: str):
+_PER_REQUEST_ROUTER_SETTINGS: Final = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+    "num_retries",
+    "timeout",
+    "model_group_retry_policy",
+    "routing_strategy",
+    "enable_tag_filtering",
+)
+_ROUTER_ONLY_SETTINGS: Final = frozenset(
+    ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "model_group_retry_policy")
+)
+
+
+class UserConfigRouters:
+    def __init__(self, max_size: int) -> None:
+        self._max_size: Final = max_size
+        self._routers: Final[OrderedDict[str, LitellmRouter]] = OrderedDict()  # mutable-ok: LRU evicts in place
+
+    def get(self, config: Mapping[str, object], build: Callable[[], LitellmRouter]) -> LitellmRouter:
+        key: Final = hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()
+        cached: Final = self._routers.get(key)
+        if cached is not None:
+            self._routers.move_to_end(key)
+            return cached
+        router: Final = build()
+        router.serve_through_request_logging()
+        self._routers[key] = router
+        if len(self._routers) > self._max_size:
+            self._routers.popitem(last=False)[1].discard()
+        return router
+
+    def clear(self) -> None:
+        for router in self._routers.values():
+            router.discard()
+        self._routers.clear()
+
+
+user_config_routers: Final = UserConfigRouters(max_size=32)
+
+
+async def _route_user_config_request(data: dict, route_type: str):
     """Route a request using the user-provided router config."""
     router_config: Final = data.pop("user_config")
 
@@ -44,10 +96,24 @@ def _route_user_config_request(data: dict, route_type: str):
     valid_args: Final = litellm.Router.get_valid_args()
     filtered_config: Final = {k: v for k, v in router_config.items() if k in valid_args}
 
-    user_router: Final = litellm.Router(**filtered_config)
-    ret_val: Final = getattr(user_router, f"{route_type}")(**data)
-    user_router.discard()
-    return ret_val
+    logging_obj: Final = _request_logging_obj(JSON_OBJECT_ADAPTER.validate_python(data), route_type)
+    cached_router: Final = user_config_routers.get(filtered_config, lambda: litellm.Router(**filtered_config))
+    cached_router.bind_to_request_logging(logging_obj)
+    return await getattr(cached_router, f"{route_type}")(**{**data, "litellm_logging_obj": logging_obj})
+
+
+def _request_logging_obj(data: Mapping[str, object], route_type: str) -> LiteLLMLoggingObj:
+    arrived_with: Final = data.get("litellm_logging_obj")
+    if isinstance(arrived_with, LiteLLMLoggingObj):
+        return arrived_with
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function=route_type,
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
+        is_async_call=True,
+        **{"litellm_call_id": str(uuid4()), **data},
+    )
+    return logging_obj
 
 
 def _is_a2a_agent_model(model_name: object) -> bool:
@@ -61,7 +127,7 @@ def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: object,
     if not isinstance(llm_router, litellm.Router):
         return
     deployments: Final = llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
-    if llm_router._are_all_deployments_blocked(deployments):
+    if llm_router.are_all_deployments_blocked(deployments):
         raise litellm.PermissionDeniedError(
             message="Model is blocked",
             model=model_name,
@@ -90,6 +156,9 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "acompact_responses": "/responses/compact",
     "aocr": "/ocr",
     "asearch": "/search",
+    "adecisions": "/decisions",
+    "asystemone": "/systemone",
+    "aextraction": "/extraction",
     "avideo_generation": "/videos",
     "avideo_list": "/videos",
     "avideo_status": "/videos/{video_id}",
@@ -142,6 +211,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "acancel_run": "/evals/{eval_id}/runs/{run_id}/cancel",
     "adelete_run": "/evals/{eval_id}/runs/{run_id}",
     "acreate_batch": "/batches",
+    "aretrieve_batch": "/batches",
 }
 
 
@@ -163,6 +233,54 @@ REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
 }
 
+REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "aspeech": ("input",),
+        "amoderation": ("input",),
+        "aimage_generation": ("prompt",),
+        "asearch": ("query",),
+        "atext_completion": ("prompt",),
+        "atranscription": ("file",),
+        "arerank": ("query", "documents"),
+        "acompact_responses": ("input",),
+        "anthropic_messages": ("messages", "max_tokens"),
+        "agenerate_content": ("contents",),
+        "aocr": ("document",),
+        "avector_store_search": ("query",),
+        "avector_store_file_create": ("file_id",),
+        "avector_store_file_update": ("attributes",),
+        "avideo_generation": ("prompt",),
+        "avideo_remix": ("prompt",),
+        "avideo_edit": ("prompt",),
+        "avideo_extension": ("prompt", "seconds"),
+        "avideo_create_character": ("name", "video"),
+        "acreate_container": ("name",),
+        "aupload_container_file": ("file",),
+        "acreate_agent": ("name",),
+        "acreate_interaction": ("input",),
+        "acreate_eval": ("data_source_config", "testing_criteria"),
+        "acreate_run": ("data_source",),
+    }
+)
+
+REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
+    {"acreate_interaction": ("model", "agent")}
+)
+
+JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_OPTIONAL_JSON_OBJECT_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Mapping[str, object] | None
+)
+
+
+def _none_unless_json_object(value: object) -> object:
+    return value if isinstance(value, Mapping) else None
+
+
+_JSON_OBJECT_OR_DROPPED_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Annotated[Mapping[str, object] | None, BeforeValidator(_none_unless_json_object)]
+)
+
 
 class ProxyMissingRequiredParamError(ProxyException):
     def __init__(self, route: str, param: str):
@@ -174,16 +292,143 @@ class ProxyMissingRequiredParamError(ProxyException):
         )
 
 
-def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
-    missing_param: Final = next(
+class ProxyMissingParamWithoutLoadedModelError(ProxyMissingRequiredParamError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class MissingBodyParam:
+    name: str
+    model_deployments_loaded: bool
+
+
+def _find_missing_required_body_param(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> MissingBodyParam | None:
+    one_of_params: Final = REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE.get(route_type)
+    if one_of_params is not None and all(data.get(param) is None for param in one_of_params):
+        return MissingBodyParam(name=one_of_params[0], model_deployments_loaded=True)
+    missing_merge_base_param: Final = next(
         (param for param in REQUIRED_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if data.get(param) is None),
         None,
     )
+    if missing_merge_base_param is not None:
+        return MissingBodyParam(name=missing_merge_base_param, model_deployments_loaded=True)
+    missing_present_params: Final = tuple(
+        param for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if param not in data
+    )
+    if not missing_present_params:
+        return None
+    candidate_litellm_params: Final = _candidate_deployment_litellm_params(data, llm_router)
+    router_default_litellm_params: Final = _router_default_litellm_params(
+        route_type, data, llm_router, model_listed=bool(candidate_litellm_params)
+    )
+    missing_param: Final = next(
+        (
+            param
+            for param in missing_present_params
+            if router_default_litellm_params.get(param) is None
+            and (
+                route_type in _ROUTE_TYPES_WITH_POSITIONAL_REQUIRED_PARAM
+                or not any(deployment_params.get(param) is not None for deployment_params in candidate_litellm_params)
+            )
+        ),
+        None,
+    )
+    if missing_param is None:
+        return None
+    return MissingBodyParam(name=missing_param, model_deployments_loaded=bool(candidate_litellm_params))
+
+
+# The Router method takes the route's required param positionally, so it binds before
+# any default or deployment param is merged in, and only the request body can supply it.
+_ROUTE_TYPES_WITH_POSITIONAL_REQUIRED_PARAM: Final[frozenset[str]] = frozenset(
+    {"aimage_generation", "aspeech", "atext_completion", "atranscription"}
+)
+
+_ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE: Final[frozenset[str]] = (
+    frozenset({"asearch", "acreate_agent", "acreate_eval", "acreate_run"}) | _ROUTE_TYPES_WITH_POSITIONAL_REQUIRED_PARAM
+)
+
+# The Router merges defaults on these only when `get_model_list` lists the model.
+_ROUTE_TYPES_MERGING_ONLY_LISTED_MODELS: Final[frozenset[str]] = frozenset({"amoderation"})
+
+
+def _router_default_litellm_params(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+    *,
+    model_listed: bool,
+) -> Mapping[str, object]:
+    # Mirror exactly the defaults the dispatching router will merge at dispatch time:
+    # the listed route types either never pass through the router's merge or take the
+    # param positionally, which binds before the merge; user_config requests dispatch on
+    # their own throwaway Router; model-less direct dispatch never merges; and moderation
+    # merges only for a model `get_model_list` lists.
+    if route_type in _ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE:
+        return {}
+    user_config: Final[Mapping[str, object] | None] = (
+        data.get("user_config") if isinstance(data.get("user_config"), Mapping) else None
+    )
+    if user_config is not None:
+        defaults: Final[Mapping[str, object] | None] = user_config.get("default_litellm_params")
+        return defaults if isinstance(defaults, Mapping) else {}
+    model_name: Final = data.get("model")
+    if (
+        not isinstance(model_name, str)
+        or not model_name
+        or (route_type in _ROUTE_TYPES_MERGING_ONLY_LISTED_MODELS and not model_listed)
+    ):
+        return {}
+    router_defaults: Final[Mapping[str, object] | None] = getattr(llm_router, "default_litellm_params", None)
+    return router_defaults if isinstance(router_defaults, Mapping) else {}
+
+
+def _candidate_deployment_litellm_params(
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> tuple[dict[str, object], ...]:
+    model_name: Final = data.get("model")
+    if llm_router is None or not isinstance(model_name, str):
+        return ()
+    deployments: Final = (
+        llm_router.get_model_list(
+            model_name=model_name,
+            team_id=get_team_id_from_data(dict(data)),
+        )
+        or ()
+    )
+    return tuple(
+        params for deployment in deployments if (params := _validated_deployment_litellm_params(deployment)) is not None
+    )
+
+
+def _validated_deployment_litellm_params(deployment: Mapping[str, object]) -> dict[str, object] | None:
+    try:
+        return JSON_OBJECT_ADAPTER.validate_python(deployment.get("litellm_params"))
+    except ValidationError:
+        return None
+
+
+def raise_if_required_body_param_missing(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> None:
+    missing_param: Final = _find_missing_required_body_param(route_type, data, llm_router)
     if missing_param is None:
         return
-    raise ProxyMissingRequiredParamError(
+    error_class: Final = (
+        ProxyMissingRequiredParamError
+        if missing_param.model_deployments_loaded
+        else ProxyMissingParamWithoutLoadedModelError
+    )
+    raise error_class(
         route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
-        param=missing_param,
+        param=missing_param.name,
     )
 
 
@@ -191,7 +436,7 @@ class MockTestingParamsDisabledError(HTTPException):
     def __init__(self, params: tuple[str, ...]):
         super().__init__(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={  # mutable-ok: HTTPException.detail has no immutable form; same shape as the sibling errors here
+            detail={
                 "error": (
                     f"Mock testing request params are disabled on this proxy: {', '.join(params)}. "
                     f"An admin can enable them by setting `general_settings.{MOCK_TESTING_CONFIG_KEY}: true` "
@@ -296,7 +541,9 @@ async def add_shared_session_to_data(data: dict) -> None:
                         "SESSION REUSE: Shared aiohttp session is None after re-check, recreating..."
                     )
                 try:
-                    new_session = await proxy_server._initialize_shared_aiohttp_session()
+                    new_session = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                        await proxy_server.initialize_shared_aiohttp_session()
+                    )
                 except Exception:
                     verbose_proxy_logger.exception("SESSION REUSE: Exception during shared session recreation")
                     new_session = None
@@ -372,6 +619,9 @@ RouteType = Literal[
     "avector_store_file_delete",
     "aocr",
     "asearch",
+    "adecisions",
+    "asystemone",
+    "aextraction",
     "avideo_generation",
     "avideo_list",
     "avideo_status",
@@ -423,6 +673,43 @@ RouteType = Literal[
 ]
 
 
+def _merge_router_settings_override(
+    data: dict[str, object],  # mutable-ok: route_request mutates the shared request body in place
+) -> frozenset[str]:
+    data.pop("enable_tag_filtering", None)
+    drop_params: Final = litellm.drop_params is True or normalize_drop_params(data.get("drop_params")) is True
+    router_settings_override_adapter: Final = (
+        _JSON_OBJECT_OR_DROPPED_ADAPTER if drop_params else _OPTIONAL_JSON_OBJECT_ADAPTER
+    )
+    try:
+        router_settings_override: Final = router_settings_override_adapter.validate_python(
+            data.pop("router_settings_override", None)
+        )
+    except ValidationError:
+        raise ProxyException(
+            message="router_settings_override must be a JSON object.",
+            type="invalid_request_error",
+            param="router_settings_override",
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from None
+    if "user_config" in data and data["user_config"] is None:
+        data.pop("user_config")
+    user_config: Final = _JSON_OBJECT_OR_DROPPED_ADAPTER.validate_python(data.get("user_config"))
+    router_settings_from_override: Final = MappingProxyType(
+        {
+            key: router_settings_override[key]
+            for key in _PER_REQUEST_ROUTER_SETTINGS
+            if router_settings_override.get(key) is not None
+            and key not in data
+            and (user_config is None or key not in user_config)
+        }
+        if router_settings_override is not None
+        else {}
+    )
+    data.update(router_settings_from_override)
+    return _ROUTER_ONLY_SETTINGS.intersection(router_settings_from_override)
+
+
 async def route_request(
     data: dict,
     llm_router: LitellmRouter | None,
@@ -433,17 +720,23 @@ async def route_request(
     """
     Common helper to route the request
     """
+    router_only_settings_from_override: Final = _merge_router_settings_override(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     try:
         return await _route_request_single_attempt(
             data=data,
             llm_router=llm_router,
             user_model=user_model,
             route_type=route_type,
+            router_only_settings_from_override=router_only_settings_from_override,
             user_api_key_dict=user_api_key_dict,
         )
-    except ProxyModelNotFoundError as e:
+    except (ProxyModelNotFoundError, ProxyMissingParamWithoutLoadedModelError) as e:
         requested_model: Final = data.get("model", "")
-        if not e.retryable_with_model_read_through or not isinstance(requested_model, str) or not requested_model:
+        if (
+            (isinstance(e, ProxyModelNotFoundError) and not e.retryable_with_model_read_through)
+            or not isinstance(requested_model, str)
+            or not requested_model
+        ):
             raise
         from litellm.proxy import proxy_server
         from litellm.proxy.common_utils.registry_read_through import (
@@ -457,6 +750,7 @@ async def route_request(
             llm_router=proxy_server.llm_router,
             user_model=user_model,
             route_type=route_type,
+            router_only_settings_from_override=router_only_settings_from_override,
             user_api_key_dict=user_api_key_dict,
         )
 
@@ -466,19 +760,27 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     llm_router: LitellmRouter | None,
     user_model: str | None,
     route_type: RouteType,
+    router_only_settings_from_override: frozenset[str],
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
-    raise_if_required_body_param_missing(route_type=route_type, data=data)
+    raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=llm_router)
 
     await add_shared_session_to_data(data)
 
     raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
 
-    data.pop("enable_tag_filtering", None)
+    def direct_litellm_kwargs() -> Mapping[str, object]:
+        return MappingProxyType(
+            {
+                key: value
+                for key, value in JSON_OBJECT_ADAPTER.validate_python(data).items()
+                if key not in router_only_settings_from_override
+            }
+        )
 
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.model_names if llm_router is not None else []
-    is_proxy_admin_without_team: Final = team_id is None and _is_proxy_admin_request(data)
+    is_proxy_admin_without_team: Final = team_id is None and is_proxy_admin_request(data)
 
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:
@@ -489,7 +791,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
         else:
-            return getattr(litellm, f"{route_type}")(**data)
+            return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
 
     elif (
         route_type == "acompletion"
@@ -508,35 +810,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     elif "user_config" in data:
         return _route_user_config_request(data, route_type)
 
-    elif "router_settings_override" in data:
-        # Apply per-request router settings overrides from key/team config
-        # Instead of creating a new Router (expensive), merge settings into kwargs
-        # The Router already supports per-request overrides for these settings
-        override_settings: Final = data.pop("router_settings_override")
-
-        # Settings that the Router accepts as per-request kwargs
-        # These override the global router settings for this specific request
-        per_request_settings: Final = [
-            "fallbacks",
-            "context_window_fallbacks",
-            "content_policy_fallbacks",
-            "num_retries",
-            "timeout",
-            "model_group_retry_policy",
-            "routing_strategy",
-            "enable_tag_filtering",
-        ]
-
-        # Merge override settings into data (only if not already set in request)
-        for key in per_request_settings:
-            if key in override_settings and key not in data:
-                data[key] = override_settings[key]
-
-        # Use main router with overridden kwargs
-        if llm_router is not None:
-            return getattr(llm_router, f"{route_type}")(**data)
-        else:
-            return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
         _raise_if_model_fully_blocked(llm_router=llm_router, model_name=data.get("model"), team_id=team_id)
         # Evals API: always route to litellm directly (not through router)
@@ -566,7 +839,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                         if (
                             deployment
                             and deployment.litellm_params
-                            and not llm_router._is_deployment_blocked(deployment)
+                            and not llm_router.is_deployment_blocked(deployment)
                         ):
                             deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
 
@@ -577,7 +850,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                     # If we can't get deployment creds, continue without them
                     pass
 
-            return getattr(litellm, f"{route_type}")(**data)
+            return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
         # Skip model-based routing for container operations
         if route_type in [
             "acreate_container",
@@ -628,9 +901,30 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             "aingest",
         ] and (data.get("model") is None or data.get("model") == ""):
             # These endpoints don't need a model, use custom_llm_provider directly
-            return getattr(litellm, f"{route_type}")(**data)
+            return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
 
-        team_model_name: Final = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
+        if "model" not in data:
+            raise ProxyMissingRequiredParamError(
+                route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
+                param="model",
+            )
+        custom_llm_provider: Final[object] = (
+            JSON_OBJECT_ADAPTER.validate_python(data).get("custom_llm_provider")
+            if route_type
+            in (
+                "avector_store_search",
+                "avector_store_retrieve",
+                "avector_store_update",
+                "avector_store_delete",
+            )
+            else None
+        )
+        team_model_provider: Final[str | None] = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        team_model_name: Final = (
+            llm_router.map_team_model(data["model"], team_id, custom_llm_provider=team_model_provider)
+            if team_id is not None
+            else None
+        )
         if team_model_name is not None:
             data["model"] = team_model_name
             return getattr(llm_router, f"{route_type}")(**data)
@@ -646,7 +940,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             # Check wildcards before checking deployment_names
             # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.router_general_settings.pass_through_all_models:
-                return getattr(litellm, f"{route_type}")(**data)
+                return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
             elif llm_router.default_deployment is not None or len(llm_router.pattern_router.patterns) > 0:
                 return getattr(llm_router, f"{route_type}")(**data)
             elif data["model"] in llm_router.deployment_names:
@@ -698,7 +992,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                     return getattr(llm_router, f"{route_type}")(**data)
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
-                    return getattr(litellm, f"{route_type}")(**data)
+                    return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
             elif _is_a2a_agent_model(data.get("model", "")):
                 from litellm.proxy.agent_endpoints.a2a_routing import (
                     route_a2a_agent_request,
@@ -710,7 +1004,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 # Fall through to raise exception below if result is None
 
     elif user_model is not None or route_type == "allm_passthrough_route":
-        return getattr(litellm, f"{route_type}")(**data)
+        return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
 
     # if no route found then it's a bad request
     route_name: Final = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
