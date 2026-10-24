@@ -2161,6 +2161,13 @@ def _extract_model_candidates_from_request(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _dedupe_model_candidates((f"{provider}/{decision_model}",))
+    if route.rstrip("/") == "/eu_jev/v1/systemone":
+        from litellm.llms.eu_jev.common_utils import eu_jev_registry_model
+
+        requested_model: Final = TypeAdapter(Mapping[str, object]).validate_python(request_data).get("model")
+        if requested_model is not None and not isinstance(requested_model, str):
+            raise HTTPException(status_code=400, detail="eu_jev model must be a string")
+        return [f"eu_jev/{eu_jev_registry_model(requested_model)}"]
     if route == "/cost/predict-cache":
         prediction_models: Final = _cache_prediction_model_candidates(request_data, llm_router, team_id)  # pyright: ignore[reportUnknownArgumentType]  # the typed reader validates each deployment ID from this legacy payload
         return _dedupe_model_candidates(prediction_models)

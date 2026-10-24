@@ -338,7 +338,7 @@ class PassThroughEndpointLogging:
             kwargs = transcribe_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         elif (
             self.is_typesafe_route(custom_llm_provider)
-            or custom_llm_provider in ("laya", "bespoke")
+            or custom_llm_provider in ("eu_jev", "laya", "bespoke")
             or self.is_openrouter_decisions_route(url_route, custom_llm_provider)
         ):
             from .llm_provider_handlers.typesafe_passthrough_logging_handler import (

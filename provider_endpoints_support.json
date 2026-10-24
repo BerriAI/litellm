@@ -1508,6 +1508,13 @@
         "systemone": true
       }
     },
+    "eu_jev": {
+      "display_name": "eu/jev (`eu_jev`)",
+      "url": "https://docs.litellm.ai/docs/pass_through/eu_jev",
+      "endpoints": {
+        "systemone": true
+      }
+    },
     "laya": {
       "display_name": "Laya (`laya`)",
       "url": "https://docs.litellm.ai/docs/auto_router/decision_classifiers",

@@ -71,6 +71,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
 from litellm.llms.oss_decision import validate_oss_request
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._lazy_features import lazy_owned_routes
@@ -409,9 +410,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     @staticmethod
     def get_endpoint_type(url: str, custom_llm_provider: str | None = None) -> EndpointType:
         parsed_url: Final = urlparse(url)
-        if custom_llm_provider in ("typesafe", "laya", "bespoke") and parsed_url.path.removesuffix("/").endswith(
-            "/v1/systemone"
-        ):
+        if custom_llm_provider in ("typesafe", "eu_jev", "laya", "bespoke") and parsed_url.path.removesuffix(
+            "/"
+        ).endswith("/v1/systemone"):
             return EndpointType.DECISIONS
         if (
             ("generateContent") in url
@@ -1228,6 +1229,13 @@ async def pass_through_request(
             decision_request: Final = TypeAdapter(Mapping[str, object]).validate_python(_parsed_body)
             checkpoint: Final = validate_oss_request(custom_llm_provider, decision_request)
             _parsed_body["model"] = f"{custom_llm_provider}/{checkpoint}"
+        eu_jev_client_body: Final = (
+            MappingProxyType(TypeAdapter(dict[str, object]).validate_python(_parsed_body))
+            if custom_llm_provider == "eu_jev"
+            else None
+        )
+        if eu_jev_client_body is not None:
+            _parsed_body["model"] = eu_jev_scoped_model(eu_jev_client_body)
 
         ### COLLECT GUARDRAILS FOR PASSTHROUGH ENDPOINT ###
         # Passthrough endpoints are opt-in only for guardrails
@@ -1307,6 +1315,12 @@ async def pass_through_request(
             )
             _ = validate_oss_request(custom_llm_provider, decision_body)
             _parsed_body = TypeAdapter(dict[str, object]).validate_python(decision_body)
+        if eu_jev_client_body is not None:
+            _parsed_body = TypeAdapter(dict[str, object]).validate_python(  # rebind-ok: body is rebound per stage
+                eu_jev_upstream_body(
+                    TypeAdapter(Mapping[str, object]).validate_python(_parsed_body), eu_jev_client_body
+                )
+            )
         resolved_timeout: Final = resolve_pass_through_request_timeout(timeout)
         async_client_obj: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PassThroughEndpoint,

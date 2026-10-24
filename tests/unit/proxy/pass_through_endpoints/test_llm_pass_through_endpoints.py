@@ -51,6 +51,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     bedrock_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
+    eu_jev_proxy_route,
     fal_ai_proxy_route,
     get_azure_ai_search_index_from_endpoint,
     get_vertex_base_url,
@@ -8322,6 +8323,142 @@ class TestTypeSafePassthroughRoute:
             custom_llm_provider="typesafe",
             is_streaming_request=False,
         )
+
+
+class _RecordsPreCallModel(CustomLogger):
+    def __init__(self, switch_to: str | None = None) -> None:
+        super().__init__()
+        self.switch_to: Final = switch_to
+        self.models: Final[list[object]] = []
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: str
+    ) -> dict | None:
+        self.models.append(data.get("model"))
+        return None if self.switch_to is None else {**data, "model": self.switch_to}
+
+
+class TestEuJevPassthroughRoute:
+    @pytest.fixture
+    def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setenv("EU_JEV_API_KEY", "eu-jev-test-key")
+        monkeypatch.setenv("EU_JEV_API_BASE", "https://eu-jev.example/base")
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+        yield TestClient(app)
+
+    def test_forwards_a_decision_upstream_with_the_eu_jev_key(self, client: TestClient) -> None:
+        body: Final = {"model": "eu-jeff-latest", "state": "x"}
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post("https://eu-jev.example/base/v1/systemone").mock(
+                return_value=httpx.Response(200, json={"id": "upstream_123"})
+            )
+            response = client.post("/eu_jev/v1/systemone", json=body)
+
+            assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
+            sent: Final = route.calls.last.request
+            assert sent.headers["authorization"] == "Bearer eu-jev-test-key"
+            assert json.loads(sent.content) == body
+
+    @pytest.mark.parametrize(
+        ("body", "hook_model"),
+        [
+            ({"state": "x"}, "eu_jev/eu-jeff-latest"),
+            ({"model": "jeff-latest", "state": "x"}, "eu_jev/eu-jeff-latest"),
+            ({"model": "eu-jeff-1.0.0", "state": "x"}, "eu_jev/eu-jeff-1.0.0"),
+        ],
+    )
+    def test_pre_call_hooks_see_the_model_key_limits_name_while_upstream_gets_the_client_body(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, body: dict[str, str], hook_model: str
+    ) -> None:
+        recorder: Final = _RecordsPreCallModel()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json=body)
+
+        assert response.status_code == 200
+        assert recorder.models == [hook_model]
+        assert json.loads(route.calls.last.request.content) == body
+
+    def test_forwards_the_release_a_pre_call_hook_switched_to(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [_RecordsPreCallModel(switch_to="eu_jev/eu-jeff-1.0.0")])
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"model": "jeff-latest", "state": "x"})
+
+        assert response.status_code == 200
+        assert json.loads(route.calls.last.request.content) == {"model": "eu-jeff-1.0.0", "state": "x"}
+
+    def test_forwards_query_params_to_the_decision_endpoint(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone", params={"trace": "yes"}).respond(
+                200, json={"answers": {}}
+            )
+            response: Final = client.post("/eu_jev/v1/systemone?trace=yes", json={"state": "x"})
+
+        assert response.status_code == 200
+        assert route.called
+
+    def test_uses_the_hosted_api_when_base_is_unset(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("EU_JEV_API_BASE")
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.com/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert response.status_code == 200
+        assert route.called
+
+    def test_answers_503_without_calling_upstream_when_the_key_is_unset(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("EU_JEV_API_KEY")
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.route(host="eu-jev.example").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert response.status_code == 503
+        assert "EU_JEV_API_KEY" in response.text
+        assert not route.called
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [("GET", "/eu_jev/api/account/keys"), ("DELETE", "/eu_jev/v1/keys/abc"), ("GET", "/eu_jev/v1/systemone")],
+    )
+    def test_forwards_nothing_but_a_decision(self, client: TestClient, method: str, path: str) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.route(host="eu-jev.example").respond(200, json={})
+            response: Final = client.request(method, path)
+
+        assert response.status_code in (404, 405)
+        assert not route.called
+
+    def test_rejects_custom_body_that_would_replace_the_authorized_request(self, client: TestClient) -> None:
+        smuggled: Final = {"model": "eu-jeff-latest", "state": "refund", "questions": {"q": {"type": "noul"}}}
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"model": "gpt-4o", "custom_body": smuggled})
+
+        assert response.status_code == 400
+        assert "custom_body" in response.text
+        assert not route.called
+
+    def test_rejects_streaming_that_would_skip_spend_tracking(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post(
+                "/eu_jev/v1/systemone", json={"model": "eu-jeff-latest", "state": "x", "stream": True}
+            )
+
+        assert response.status_code == 400
+        assert "Streaming" in response.text
+        assert not route.called
 
 
 @pytest.mark.parametrize("provider", ["laya", "bespoke"])

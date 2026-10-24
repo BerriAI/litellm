@@ -82,6 +82,7 @@ PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES: Final = MappingProxyType(
         "/tinyfish/{endpoint:path}": frozenset({"GET", "POST"}),
         "/laya/v1/systemone": frozenset({"POST"}),
         "/bespoke/v1/systemone": frozenset({"POST"}),
+        "/eu_jev/v1/systemone": frozenset({"POST"}),
     }
 )
 
