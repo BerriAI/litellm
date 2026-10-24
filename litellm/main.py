@@ -2643,6 +2643,12 @@ def _complete_custom_openai(
         or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization
+    if custom_llm_provider == "bitdeer-ai" and not api_key:
+        raise litellm.AuthenticationError(
+            message="Bitdeer AI requires api_key or BITDEER_API_KEY",
+            llm_provider=custom_llm_provider,
+            model=model,
+        )
     # set API KEY
     api_key = (
         api_key
@@ -7656,6 +7662,27 @@ def embedding(
                 client=client,
                 aembedding=aembedding,
                 litellm_params={},
+            )
+        elif JSONProviderRegistry.supports_embeddings(custom_llm_provider):
+            if not api_key:
+                raise litellm.AuthenticationError(
+                    message=f"{custom_llm_provider} embeddings need an api_key",
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                )
+            response = openai_chat_completions.embedding(  # rebind-ok: one assignment per provider branch
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                max_retries=max_retries,
+                litellm_params=litellm_params_dict,
             )
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
