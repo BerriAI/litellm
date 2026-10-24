@@ -18,6 +18,14 @@ else:
     PrometheusLogger = Any
 
 
+def resolved_model_and_provider(model: str, custom_llm_provider: str | None) -> tuple[str, str]:
+    try:
+        resolved_model, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return model, ""
+    return resolved_model, provider
+
+
 async def router_cooldown_event_callback(
     litellm_router_instance: LitellmRouter,
     deployment_id: str,
@@ -41,34 +49,28 @@ async def router_cooldown_event_callback(
     _litellm_params: Final = _deployment["litellm_params"]
     temp_litellm_params = copy.deepcopy(_litellm_params)
     temp_litellm_params = dict(temp_litellm_params)
-    _model_name: Final = _deployment.get("model_name", None) or ""
-    _api_base: Final = litellm.get_api_base(model=_model_name, optional_params=temp_litellm_params) or ""
+    model_group_name: Final = _deployment.get("model_name", None) or ""
+    _api_base: Final = litellm.get_api_base(model=model_group_name, optional_params=temp_litellm_params) or ""
     model_info: Final = _deployment["model_info"]
     model_id: Final = model_info.id
 
-    litellm_model_name: Final = temp_litellm_params.get("model") or ""
-    llm_provider = ""
-    try:
-        _, llm_provider, _, _ = litellm.get_llm_provider(
-            model=litellm_model_name,
-            custom_llm_provider=temp_litellm_params.get("custom_llm_provider"),
-        )
-    except Exception:
-        pass
+    litellm_model_name, llm_provider = resolved_model_and_provider(
+        temp_litellm_params.get("model") or "", temp_litellm_params.get("custom_llm_provider")
+    )
 
     # get the prometheus logger from in memory loggers
     prometheusLogger: Final[PrometheusLogger | None] = get_prometheus_logger_from_callbacks()
 
     if prometheusLogger is not None:
         prometheusLogger.set_deployment_complete_outage(
-            litellm_model_name=_model_name,
+            litellm_model_name=litellm_model_name,
             model_id=model_id,
             api_base=_api_base,
             api_provider=llm_provider,
         )
 
         prometheusLogger.increment_deployment_cooled_down(
-            litellm_model_name=_model_name,
+            litellm_model_name=model_group_name,
             model_id=model_id,
             api_base=_api_base,
             api_provider=llm_provider,

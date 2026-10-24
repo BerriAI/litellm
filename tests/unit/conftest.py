@@ -6,14 +6,18 @@ import shutil
 import tempfile
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 import boto3
 import httpx
 import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
+
+if TYPE_CHECKING:
+    from prometheus_client.samples import Sample
 
 HOST_ENVIRONMENT_ALLOWLIST: Final = frozenset(
     (
@@ -482,6 +486,40 @@ def fake_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 async def drained_logging_worker() -> None:
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.clear_queue(), timeout=10)
+
+
+@pytest.fixture
+def isolated_prometheus_registry() -> Iterator[None]:
+    from prometheus_client import REGISTRY
+
+    registered: Final = tuple(REGISTRY._collector_to_names)
+    for collector in registered:
+        REGISTRY.unregister(collector)
+    yield
+    for collector in tuple(REGISTRY._collector_to_names):
+        REGISTRY.unregister(collector)
+    for collector in registered:
+        REGISTRY.register(collector)
+
+
+@pytest.fixture
+def deployment_state_samples() -> Callable[[str], list["Sample"]]:
+    from prometheus_client import REGISTRY
+
+    def read(model_id: str) -> list["Sample"]:
+        families: Final = (family for family in REGISTRY.collect() if family.name == "litellm_deployment_state")
+        samples: Final = chain.from_iterable(family.samples for family in families)
+        return [sample for sample in samples if sample.labels["model_id"] == model_id]
+
+    return read
+
+
+@pytest.fixture
+def deployment_state_values(deployment_state_samples: Callable[[str], list["Sample"]]) -> Callable[[str], list[float]]:
+    def read(model_id: str) -> list[float]:
+        return sorted(sample.value for sample in deployment_state_samples(model_id))
+
+    return read
 
 
 def pytest_sessionfinish() -> None:
