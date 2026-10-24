@@ -39,6 +39,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
@@ -456,7 +457,7 @@ async def refetch_model_cost_map(
     on failure it returns ``ModelCostMapReloadUnavailable`` so callers keep the
     map they already have.
     """
-    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
+    if is_offline_mode() or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
         _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
         _cost_map_source_info.source = "local"
         _cost_map_source_info.url = None
@@ -740,7 +741,7 @@ def get_model_cost_map(
     _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
-    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process():
+    if is_offline_mode() or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process():
         _cost_map_source_info.source = "local"
         _cost_map_source_info.url = None
         _cost_map_source_info.is_env_forced = True

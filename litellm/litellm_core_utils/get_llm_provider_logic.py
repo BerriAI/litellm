@@ -972,3 +972,9 @@ def _get_openai_compatible_provider_info(
     if dynamic_api_key is None and api_key is not None:
         dynamic_api_key = api_key
     return model, custom_llm_provider, dynamic_api_key, api_base
+
+
+def get_provider_affinity_header(api_base: str | None) -> str | None:
+    from litellm.llms.opencode.transformation import OpenCodeProviderAdapter
+
+    return OpenCodeProviderAdapter().get_provider_affinity_header(api_base)
