@@ -3,6 +3,7 @@ import uuid
 from pathlib import Path
 from typing import Final
 
+import pytest
 from _langfuse_otel import (
     _arize_generation_span_attributes,
     _generation_marker_span_attributes,
@@ -176,6 +177,7 @@ def test_langfuse_otel_team_key_end_user_keeps_the_litellm_attributes(gateway: G
         assert attributes.get("litellm.key_alias") == f"key-alias-{marker[:12]}", attributes
 
 
+@pytest.mark.shares_worker_state
 def test_langfuse_otel_header_end_user_beats_the_body_user(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     with (

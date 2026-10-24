@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import pytest
 from _langfuse_otel import (
     _drained_unique_spans,
     _langfuse_proxy,
@@ -239,6 +240,7 @@ def test_langfuse_otel_worker_kill_mid_burst_keeps_serving_without_duplicates(ga
         assert all(count <= 1 for count in counts.values()), counts
 
 
+@pytest.mark.shares_worker_state
 def test_langfuse_otel_proxy_restart_mid_burst_keeps_every_marker(gateway: Gateway, tmp_path: Path) -> None:
     with (
         wire_server(lambda request: _upstream_reply_for(request, _marker_from_body(request))) as provider,
