@@ -5940,9 +5940,11 @@ class MCPServerManager:
             server_applies_tool_allowlist,
         )
 
+        if match_known_tool_name(tool_name, server, server.disallowed_tools or ()) is not None:
+            return False
         if server_applies_tool_allowlist(server):
             return match_known_tool_name(tool_name, server, server.allowed_tools or ()) is not None
-        return match_known_tool_name(tool_name, server, server.disallowed_tools or ()) is None
+        return True
 
     def validate_allowed_params(self, tool_name: str, arguments: _ToolArguments, server: MCPServer) -> None:
         """
