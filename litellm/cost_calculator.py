@@ -125,6 +125,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
+from litellm.types.tokenize import TokenizeResponse
 from litellm.types.utils import (
     CallTypesLiteral,
     LiteLLMRealtimeStreamLoggingObject,
@@ -2222,7 +2223,8 @@ def response_cost_calculator(
     | SearchResponse
     | DecisionsResponse
     | OpenAIDecisionResponse
-    | ExtractionResponse,
+    | ExtractionResponse
+    | TokenizeResponse,
     model: str,
     custom_llm_provider: str | None,
     call_type: Literal[
@@ -2250,6 +2252,8 @@ def response_cost_calculator(
         "asystemone",
         "extraction",
         "aextraction",
+        "tokenize",
+        "atokenize",
     ],
     optional_params: dict,
     cache_hit: bool | None = None,
@@ -2275,6 +2279,8 @@ def response_cost_calculator(
     Returns
     - float or None: cost of response
     """
+    if call_type in ("tokenize", "atokenize"):
+        return 0.0
     try:
         response_cost: float = 0.0
         if cache_hit is not None and cache_hit is True:

@@ -679,6 +679,8 @@ class CallTypes(str, Enum):
     #########################################################
     ocr = "ocr"
     aocr = "aocr"
+    tokenize = "tokenize"
+    atokenize = "atokenize"
 
     #########################################################
     # MCP Call Types
@@ -743,6 +745,8 @@ CallTypesLiteral = Literal[
     "agenerate_content_stream",
     "ocr",
     "aocr",
+    "tokenize",
+    "atokenize",
     "vector_store_create",
     "avector_store_create",
     "vector_store_search",
@@ -1143,6 +1147,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # OCR
     "/ocr": [CallTypes.aocr, CallTypes.ocr],
     "/v1/ocr": [CallTypes.aocr, CallTypes.ocr],
+    "/tokenize": [CallTypes.atokenize, CallTypes.tokenize],
+    "/v1/tokenize": [CallTypes.atokenize, CallTypes.tokenize],
 }
 
 
