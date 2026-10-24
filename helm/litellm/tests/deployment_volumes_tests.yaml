@@ -170,3 +170,60 @@ tests:
           value:
             - name: nginx-config
               mountPath: /etc/nginx/conf.d
+
+  - it: gateway deployment applies commonLabels, deploymentLabels and deploymentAnnotations
+    template: gateway/deployment.yaml
+    set:
+      commonLabels:
+        team: platform
+      gateway.deploymentLabels:
+        custom/label: gateway-label
+      gateway.deploymentAnnotations:
+        custom/annotation: gateway-annotation
+    asserts:
+      - isSubset:
+          path: metadata.labels
+          content:
+            team: platform
+            custom/label: gateway-label
+      - equal:
+          path: metadata.annotations["custom/annotation"]
+          value: gateway-annotation
+
+  - it: backend deployment applies commonLabels, deploymentLabels and deploymentAnnotations
+    template: backend/deployment.yaml
+    set:
+      commonLabels:
+        team: platform
+      backend.deploymentLabels:
+        custom/label: backend-label
+      backend.deploymentAnnotations:
+        custom/annotation: backend-annotation
+    asserts:
+      - isSubset:
+          path: metadata.labels
+          content:
+            team: platform
+            custom/label: backend-label
+      - equal:
+          path: metadata.annotations["custom/annotation"]
+          value: backend-annotation
+
+  - it: ui deployment applies commonLabels, deploymentLabels and deploymentAnnotations
+    template: ui/deployment.yaml
+    set:
+      commonLabels:
+        team: platform
+      ui.deploymentLabels:
+        custom/label: ui-label
+      ui.deploymentAnnotations:
+        custom/annotation: ui-annotation
+    asserts:
+      - isSubset:
+          path: metadata.labels
+          content:
+            team: platform
+            custom/label: ui-label
+      - equal:
+          path: metadata.annotations["custom/annotation"]
+          value: ui-annotation
