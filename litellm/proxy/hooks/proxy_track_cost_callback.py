@@ -12,6 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import batch_cost_is_final
+from litellm.caching.redis_batch import flush_post_call_redis_batches
 from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED, BILLED_RETRY_ATTEMPT_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
@@ -127,6 +128,8 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
     )
 )
 
+FAILURE_SPEND_COUNTER_WAIT_SECONDS: Final = 1.0
+
 
 _OBJECT_MAPPING: Final = TypeAdapter(ObjectMapping)
 
@@ -211,6 +214,12 @@ def _proxy_spend_writer() -> DBSpendUpdateWriter:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     return proxy_logging_obj.db_spend_update_writer
+
+
+def _proxy_spend_counters() -> "_IncrementSpendCounters":
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    return increment_spend_counters
 
 
 DeploymentLookup: TypeAlias = Callable[[str], Deployment | None]
@@ -339,11 +348,16 @@ class _ProxyDBLogger(CustomLogger):
         message_logging: bool = True,
         spend_writer: Callable[[], DBSpendUpdateWriter] = _proxy_spend_writer,
         deployment_lookup: DeploymentLookup = _proxy_deployment,
+        spend_counters: Callable[[], "_IncrementSpendCounters"] = _proxy_spend_counters,
+        failure_counter_wait_seconds: float = FAILURE_SPEND_COUNTER_WAIT_SECONDS,
     ) -> None:
         super().__init__(turn_off_message_logging=turn_off_message_logging, message_logging=message_logging)
         self.spend_event_producer = spend_event_producer
         self._spend_writer: Final = spend_writer
         self._deployment_lookup: Final = deployment_lookup
+        self._spend_counters: Final = spend_counters
+        self._failure_counter_wait_seconds: Final = failure_counter_wait_seconds
+        self._pending_increments: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: tasks leave when done
 
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
@@ -537,13 +551,16 @@ class _ProxyDBLogger(CustomLogger):
         start_time: datetime,
         spend_rows: Sequence[tuple[float, Mapping[str, object]]],
     ) -> None:
-        """One spend row (and one key/team/user spend deduction) per ``(response_cost, kwargs)`` pair."""
-        for row_cost, row_kwargs in spend_rows:
+        """One spend row (and one key/team/user spend deduction) per ``(response_cost, kwargs)`` pair, then the
+        live spend counters raised by every charged row that cost something."""
+        token: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
+        end_user_id: Final = None if litellm.disable_end_user_cost_tracking else user_api_key_dict.end_user_id
+        charged: Final = [
             await self._spend_writer().update_database(
-                token=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
+                token=token,
                 response_cost=row_cost,
                 user_id=user_api_key_dict.user_id,
-                end_user_id=None if litellm.disable_end_user_cost_tracking else user_api_key_dict.end_user_id,
+                end_user_id=end_user_id,
                 team_id=user_api_key_dict.team_id,
                 kwargs=dict(row_kwargs),
                 completion_response=original_exception,
@@ -552,6 +569,91 @@ class _ProxyDBLogger(CustomLogger):
                 org_id=user_api_key_dict.org_id,
                 project_id=user_api_key_dict.project_id,
             )
+            for row_cost, row_kwargs in spend_rows
+        ]
+        counted_rows: Final = tuple(
+            row for row, row_charged in zip(spend_rows, charged, strict=True) if row_charged and row[0] > 0
+        )
+        if counted_rows and not ProxyUpdateSpend.disable_spend_updates():
+            await self._increment_failure_spend_counters(
+                user_api_key_dict, token, end_user_id, counted_rows, start_time
+            )
+
+    async def _increment_failure_spend_counters(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        token: str | None,
+        end_user_id: str | None,
+        counted_rows: Sequence[tuple[float, Mapping[str, object]]],
+        start_time: datetime,
+    ) -> None:
+        """The counters the success path raises for the same spend, sent before the client sees the error. A
+        counter store slower than ``failure_counter_wait_seconds`` finishes them in the background instead of
+        holding the error back. The reservation was already released, so every counter takes the full row cost."""
+        increment: Final = asyncio.create_task(
+            self._raise_failure_spend_counters(user_api_key_dict, token, end_user_id, counted_rows, start_time)
+        )
+        self._pending_increments.add(increment)
+        increment.add_done_callback(self._pending_increments.discard)
+        finished, _ = await asyncio.wait((increment,), timeout=self._failure_counter_wait_seconds)
+        if not finished:
+            verbose_proxy_logger.warning(
+                "Spend counters for failure spend rows took over %ss, finishing them in the background",
+                self._failure_counter_wait_seconds,
+            )
+
+    async def _raise_failure_spend_counters(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        token: str | None,
+        end_user_id: str | None,
+        counted_rows: Sequence[tuple[float, Mapping[str, object]]],
+        start_time: datetime,
+    ) -> None:
+        for row_cost, row_kwargs in counted_rows:
+            await self._raise_row_spend_counters(
+                user_api_key_dict, token, end_user_id, row_cost, row_kwargs, start_time
+            )
+        await flush_post_call_redis_batches()
+
+    async def _raise_row_spend_counters(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        token: str | None,
+        end_user_id: str | None,
+        row_cost: float,
+        row_kwargs: Mapping[str, object],
+        start_time: datetime,
+    ) -> None:
+        standard_logging_object: Final = row_kwargs.get("standard_logging_object")
+        sl_object: Final = (
+            cast("StandardLoggingPayload", standard_logging_object)  # cast-ok: the failure snapshot dict
+            if isinstance(standard_logging_object, dict)
+            else None
+        )
+        metadata: Final = _str_keyed_fields(_str_keyed_fields(row_kwargs.get("litellm_params")).get("metadata"))
+        served_model_id: Final = _str_keyed_fields(metadata.get("model_info")).get("id") or _str_keyed_fields(
+            standard_logging_object
+        ).get("model_id")
+        try:
+            await self._spend_counters()(
+                token=token,
+                team_id=user_api_key_dict.team_id,
+                user_id=user_api_key_dict.user_id,
+                response_cost=row_cost,
+                org_id=user_api_key_dict.org_id,
+                end_user_id=end_user_id,
+                tags=_get_request_tags_for_cost_tracking(sl_object=sl_object, metadata=dict(metadata)),
+                request_started_at=start_time,
+                model_access_groups=debitable_model_access_groups(
+                    attributed=get_request_model_access_groups(row_kwargs),
+                    served_model_id=served_model_id if isinstance(served_model_id, str) else None,
+                    router=get_llm_router(),
+                ),
+                project_id=user_api_key_dict.project_id,
+            )
+        except Exception:  # noqa: BLE001  # one row's counter failure must not keep the other rows' counters from landing
+            verbose_proxy_logger.exception("Failed to raise spend counters for a failure spend row")
 
     async def _PROXY_track_cost_callback(
         self,
@@ -948,7 +1050,7 @@ def _metadata_keys(metadata: object) -> tuple[str, ...]:
     return tuple(sorted(str(key) for key in metadata))
 
 
-def _get_budget_reservation_from_metadata(metadata: dict) -> dict | None:
+def _get_budget_reservation_from_metadata(metadata: dict) -> dict[str, object] | None:
     return budget_reservation_from_metadata(metadata)
 
 
@@ -983,6 +1085,7 @@ class _IncrementSpendCounters(Protocol):
         tags: list[str] | None = None,
         request_started_at: datetime | None = None,
         model_access_groups: Sequence[str] | None = None,
+        project_id: str | None = None,
     ) -> None: ...
 
 
@@ -999,7 +1102,7 @@ async def _update_database_and_spend_counters(
     start_time: datetime | None,
     end_time: datetime | None,
     response_cost: float,
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
@@ -1060,7 +1163,7 @@ async def _update_database_and_spend_counters_in_batch(
     start_time: datetime | None,
     end_time: datetime | None,
     response_cost: float,
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
     request_tags: list[str] | None,
     model_access_groups: Sequence[str] | None,
     project_id: str | None,
