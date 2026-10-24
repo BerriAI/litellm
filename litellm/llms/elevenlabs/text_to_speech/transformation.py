@@ -58,7 +58,8 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         "mp3": "mp3_44100_128",
         "pcm": "pcm_44100",
         "opus": "opus_48000_128",
-        # ElevenLabs does not support WAV, AAC, or FLAC formats.
+        "wav": "wav_44100",
+        # ElevenLabs does not support AAC or FLAC formats.
     }
 
     ELEVENLABS_QUERY_PARAMS_KEY = "__elevenlabs_query_params__"
