@@ -5,6 +5,8 @@ Support for gpt model family
 from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
@@ -12,6 +14,13 @@ from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionR
 
 from ..chat.gpt_transformation import OpenAIGPTConfig
 from .utils import transform_prompt
+
+# Supported params the SDK's ``completions.create()`` has no keyword for. They go in ``extra_body``
+# so backends that accept them (e.g. vLLM) receive them, instead of the SDK raising a TypeError.
+_BODY_ONLY_PARAMS: Final = frozenset(
+    {"functions", "function_call", "response_format", "tools", "tool_choice", "top_logprobs"}
+)
+_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
 class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
@@ -155,8 +164,12 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         prompt: Final = transform_prompt(messages)
+        params: Final = _PARAMS.validate_python(optional_params)
+        body_only: Final = {key: params.pop(key) for key in _BODY_ONLY_PARAMS & params.keys()}
+        if body_only:
+            params["extra_body"] = {**_PARAMS.validate_python(params.get("extra_body") or {}), **body_only}
         return {
             "model": model,
             "prompt": prompt,
-            **optional_params,
+            **params,
         }
