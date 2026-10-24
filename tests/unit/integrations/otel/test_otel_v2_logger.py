@@ -351,12 +351,12 @@ def test_llm_call_span_withholds_an_end_user_the_metadata_allowlist_drops(metada
     assert not {"end-1", "caller-1"} & {str(value) for value in span.attributes.values()}
 
 
-def _end_user_spans(monkeypatch, mapper_names, limit, message_counts):
+def _user_spans(monkeypatch, mapper_names, limit, message_counts, metadata):
     monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(limit))
     logger, exporter = _logger_with(mapper_names=mapper_names, capture_message_content=CaptureMessageContent.SPAN_ONLY)
     for count in message_counts:
         messages = [{"role": "user", "content": f"m{index}"} for index in range(count)]
-        _emit_llm(logger, _user_kwargs({"user_api_key_end_user_id": "end-1"}, messages, f"call_{count}"))
+        _emit_llm(logger, _user_kwargs(metadata, messages, f"call_{count}"))
     return exporter.get_finished_spans()
 
 
@@ -372,7 +372,10 @@ def _end_user_spans(monkeypatch, mapper_names, limit, message_counts):
 def test_user_id_costs_no_other_attribute_at_the_span_limit(monkeypatch, mapper_names, limits, message_counts):
     def spans() -> list:
         return list(
-            chain.from_iterable(_end_user_spans(monkeypatch, mapper_names, limit, message_counts) for limit in limits)
+            chain.from_iterable(
+                _user_spans(monkeypatch, mapper_names, limit, message_counts, {"user_api_key_end_user_id": "end-1"})
+                for limit in limits
+            )
         )
 
     with_user_id: Final = spans()
@@ -385,15 +388,29 @@ def test_user_id_costs_no_other_attribute_at_the_span_limit(monkeypatch, mapper_
         assert with_user.dropped_attributes == without.dropped_attributes
 
 
-def test_langfuse_vocabulary_keeps_the_caller_trace_user_at_the_span_limit():
-    logger, exporter = _logger_with(
-        mapper_names=["genai", "openinference", "langfuse"], capture_message_content=CaptureMessageContent.SPAN_ONLY
-    )
-    messages: Final = [{"role": "user", "content": f"m{index}"} for index in range(80)]
-    _emit_llm(logger, _user_kwargs({"trace_user_id": "caller-1"}, messages))
-    (span,) = exporter.get_finished_spans()
-    assert span.attributes[User.ID] == "caller-1"
-    assert span.dropped_attributes == 0
+@pytest.mark.parametrize(
+    "metadata",
+    [{"trace_user_id": "caller-1"}, {"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}],
+    ids=["caller-trace-user", "caller-trace-user-and-end-user"],
+)
+@pytest.mark.parametrize(
+    "mapper_names",
+    [["genai", "langfuse"], ["genai", "openinference", "langfuse"]],
+    ids=["langfuse", "langfuse-with-openinference"],
+)
+def test_langfuse_vocabulary_keeps_the_caller_trace_user_at_the_span_limit(monkeypatch, mapper_names, metadata):
+    def spans() -> list:
+        return list(
+            chain.from_iterable(_user_spans(monkeypatch, mapper_names, limit, [1], metadata) for limit in range(16, 45))
+        )
+
+    with_user_id: Final = spans()
+    monkeypatch.delitem(GenAIMapper._LLM_CALL_ATTRS, User.ID)
+    without_user_id: Final = spans()
+    assert any(span.dropped_attributes and span.attributes.get(User.ID) == "caller-1" for span in with_user_id)
+    for with_user, without in zip(with_user_id, without_user_id, strict=True):
+        assert dict(with_user.attributes) == dict(without.attributes)
+        assert with_user.dropped_attributes == without.dropped_attributes
 
 
 def test_streaming_span_carries_time_to_first_chunk():

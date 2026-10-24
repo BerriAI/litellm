@@ -1,7 +1,8 @@
 """The span engine: dedup, start, run the mapper chain, set status, end."""
 
 from collections import OrderedDict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
@@ -83,6 +84,21 @@ def error_attributes(error: SpanError) -> Mapping[str, AttrValue]:
         (LiteLLMError.LLM_PROVIDER, error.llm_provider),
     )
     return MappingProxyType({key: value for key, value in pairs if value})
+
+
+def _without_user_id(attributes: Mapping[str, AttrValue]) -> Iterable[tuple[str, AttrValue]]:
+    return ((key, value) for key, value in attributes.items() if key != User.ID)
+
+
+def merge_mapped(outputs: Sequence[Mapping[str, AttrValue]]) -> Mapping[str, AttrValue]:
+    """The mappers' attributes in mapper order, a later mapper's value winning. ``user.id`` sits where the last
+    mapper that writes it puts it, so a full span evicts it no sooner than that mapper's other attributes."""
+    last_user_writer: Final = max((index for index, output in enumerate(outputs) if User.ID in output), default=-1)
+    placed: Final = (
+        output.items() if index == last_user_writer else _without_user_id(output)
+        for index, output in enumerate(outputs)
+    )
+    return MappingProxyType(dict(chain.from_iterable(placed)))
 
 
 def span_attribute_limit(span: Span) -> int | None:
@@ -311,9 +327,7 @@ class SpanEmitter:
             )
             else None
         )
-        mapped: Final = MappingProxyType(
-            {key: value for mapper in self._mappers for key, value in mapper.map(data).items()}
-        )
+        mapped: Final = merge_mapped(tuple(mapper.map(data) for mapper in self._mappers))
         stamped_later: Final = error_attributes(error) if error else _NO_ATTRIBUTES
         reserved: Final = len(stamped_later.keys() - mapped.keys())
         budget: Final = attribute_budget(span, reserved, frozenset(mapped))
