@@ -1588,36 +1588,49 @@ async def test_a_size_pass_that_fires_while_an_age_pass_is_running_in_the_same_p
 
 
 @pytest.mark.asyncio
-async def test_spend_logs_backlog_cannot_starve_tool_index_cleanup():
+async def test_spend_logs_backlog_cannot_starve_tool_index_cleanup() -> None:
     """
     Both spend-log tables share one run budget. Before the fix the spend-log
     loop ran against the whole deadline, so a backlog that outlasted the budget
     meant LiteLLM_SpendLogToolIndex never received a single delete batch, run
     after run. The index table must still get its own share of the budget.
     """
-    mock_prisma_client = MagicMock()
-    mock_db = MagicMock()
+    class FakeClock:
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def read(self) -> float:
+            return self.now
+
+        async def advance(self, seconds: float) -> None:
+            self.now += seconds
+
+    fake: Final = FakeClock()
+    mock_prisma_client: Final = MagicMock()
+    mock_db: Final = MagicMock()
     _wire_tx(mock_db)
     mock_db.execute_raw = AsyncMock(return_value=1000)
     mock_prisma_client.db = mock_db
 
-    cleaner = SpendLogCleanup(
+    cleaner: Final = SpendLogCleanup(
         general_settings={
             "maximum_spend_logs_retention_period": "7d",
             "maximum_spend_logs_cleanup_max_batches": 500,
             "maximum_spend_logs_cleanup_run_budget": "1s",
-        }
+        },
+        clock=fake.read,
+        sleep=fake.advance,
     )
     cleaner.pod_lock_manager = None
 
-    started_at = time.monotonic()
+    start: Final = fake.read()
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
-    elapsed = time.monotonic() - started_at
+    fake_now_at_end: Final = fake.read()
 
-    tables = [call[0][0].split('"')[1] for call in mock_db.execute_raw.call_args_list]
+    tables: Final = [call[0][0].split('"')[1] for call in mock_db.execute_raw.call_args_list]
     assert tables.count("LiteLLM_SpendLogs") > 0
     assert tables.count("LiteLLM_SpendLogToolIndex") > 0, "tool index cleanup was starved by the spend-log backlog"
-    assert elapsed < 2.5, f"splitting the budget must not extend the run: {elapsed}s"
+    assert fake_now_at_end - start <= 1.0 + 0.15
 
 
 @pytest.mark.asyncio
