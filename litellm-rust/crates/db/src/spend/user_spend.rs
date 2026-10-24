@@ -22,7 +22,7 @@ mod tests {
     use std::error::Error as StdError;
 
     use super::{EntitySpend, add_user_spend};
-    use crate::test_support::database_pool;
+    use crate::{Error, test_support::database_pool};
     use rstest::rstest;
     use sqlx::PgPool;
 
@@ -87,6 +87,87 @@ mod tests {
                 ("user-spend-z".into(), expected_z_spend, true),
             ]
         );
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::direct_duplicate_batch(vec![0.25, 0.75], 3.0)]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn user_spend_sums_duplicate_ids(
+        #[case] costs: Vec<f64>,
+        #[case] expected_spend: f64,
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Fixture writes are outside the compile-checked query set"
+        )]
+        let _inserted = sqlx::query(
+            r#"INSERT INTO "LiteLLM_UserTable" (user_id, spend, updated_at)
+               VALUES ('user-spend-duplicate', 2, '2000-01-01')"#,
+        )
+        .execute(&mut *tx)
+        .await?;
+        let spend = EntitySpend {
+            ids: vec!["user-spend-duplicate".into(), "user-spend-duplicate".into()],
+            costs,
+        };
+        add_user_spend(&mut *tx, &spend).await?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Test assertions are outside the compile-checked query set"
+        )]
+        let row: (f64, bool) = sqlx::query_as(
+            r#"SELECT spend, updated_at > TIMESTAMP '2000-01-01'
+               FROM "LiteLLM_UserTable" WHERE user_id = 'user-spend-duplicate'"#,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        assert_eq!(row, (expected_spend, true));
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::missing_cost(vec![])]
+    #[case::extra_cost(vec![0.25, 0.75])]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn user_spend_rejects_malformed_batch_without_writes(
+        #[case] costs: Vec<f64>,
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Fixture writes are outside the compile-checked query set"
+        )]
+        let _inserted = sqlx::query(
+            r#"INSERT INTO "LiteLLM_UserTable" (user_id, spend, updated_at)
+               VALUES ('user-spend-malformed', 2, '2000-01-01')"#,
+        )
+        .execute(&mut *tx)
+        .await?;
+        let spend = EntitySpend {
+            ids: vec!["user-spend-malformed".into()],
+            costs,
+        };
+        let result = add_user_spend(&mut *tx, &spend).await;
+        assert!(matches!(result, Err(Error::InvalidSpendBatch { .. })));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Test assertions are outside the compile-checked query set"
+        )]
+        let row: (f64, bool) = sqlx::query_as(
+            r#"SELECT spend, updated_at = TIMESTAMP '2000-01-01'
+               FROM "LiteLLM_UserTable" WHERE user_id = 'user-spend-malformed'"#,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        assert_eq!(row, (2.0, true));
         Ok(())
     }
 }
