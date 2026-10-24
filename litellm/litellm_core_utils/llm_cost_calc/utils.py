@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from typing_extensions import ReadOnly, assert_never
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._internal_context import current_billing_time
@@ -52,14 +52,17 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 
-BaseRateCacheWriteTTL = Literal["5m", "30m"]
-ExtendedCacheWriteTTL = Literal["1hr", "12hr"]
-CacheWriteTTL = Literal[BaseRateCacheWriteTTL, ExtendedCacheWriteTTL]
-_EXTENDED_CACHE_WRITE_RATE_KEYS: Final[Mapping[ExtendedCacheWriteTTL, str]] = MappingProxyType(
+CacheWriteTTL = Literal["5m", "30m", "1hr", "12hr"]
+_CACHE_WRITE_RATE_KEYS: Final[Mapping[CacheWriteTTL, str | None]] = MappingProxyType(
     {
+        "5m": None,
+        "30m": None,
         "1hr": "cache_creation_input_token_cost_above_1hr",
         "12hr": "cache_creation_input_token_cost_above_12hr",
     }
+)
+_TTL_SPECIFIC_CACHE_WRITE_RATE_KEYS: Final[Mapping[CacheWriteTTL, str]] = MappingProxyType(
+    {ttl: key for ttl, key in _CACHE_WRITE_RATE_KEYS.items() if key is not None}
 )
 
 
@@ -389,7 +392,7 @@ def _get_tiered_reasoning_rate(model_info: ModelInfo, usage: Usage) -> float | N
 
 def _get_tiered_base_costs(
     model_info: ModelInfo, usage: Usage
-) -> "tuple[TokenRates, Mapping[ExtendedCacheWriteTTL, float]] | None":
+) -> "tuple[TokenRates, Mapping[CacheWriteTTL, float]] | None":
     """
     Resolve the base rates from a model's ``tiered_pricing`` table, if it has one.
 
@@ -420,7 +423,7 @@ def _get_tiered_base_costs(
     return rates, MappingProxyType(
         {
             ttl: tier_rate(tier, key) if tier.get(key) is not None else cache_creation_rate
-            for ttl, key in _EXTENDED_CACHE_WRITE_RATE_KEYS.items()
+            for ttl, key in _TTL_SPECIFIC_CACHE_WRITE_RATE_KEYS.items()
         }
     )
 
@@ -567,7 +570,7 @@ class TokenBaseCosts:
     output_rate: float
     cache_read_rate: float
     cache_creation_rate: float
-    cache_creation_rates_by_ttl: Mapping[ExtendedCacheWriteTTL, float]
+    cache_creation_rates_by_ttl: Mapping[CacheWriteTTL, float]
 
 
 def resolve_explicit_cache_read_cost_rate(
@@ -687,7 +690,7 @@ def _apply_off_peak_to_base_costs(
     model_info: ModelInfo,
     current_time: datetime | None,
     base_rates: TokenRates,
-    cache_creation_rates_by_ttl: Mapping[ExtendedCacheWriteTTL, float],
+    cache_creation_rates_by_ttl: Mapping[CacheWriteTTL, float],
 ) -> TokenBaseCosts:
     """Apply off-peak rates to an already-resolved set of base costs, whichever pricing path
     produced them. off_peak_pricing has no field for the long-TTL cache-creation rates, so they
@@ -759,8 +762,8 @@ def _get_token_base_cost(
         if output_image_cost is not None:
             completion_base_cost = output_image_cost
     cache_creation_cost = get_cost_per_unit(model_info, cache_creation_cost_key, default_value=None)
-    cache_creation_keys_by_ttl: Mapping[ExtendedCacheWriteTTL, str] = MappingProxyType(
-        {ttl: get_service_tier_cost_key(key, service_tier) for ttl, key in _EXTENDED_CACHE_WRITE_RATE_KEYS.items()}
+    cache_creation_keys_by_ttl: Mapping[CacheWriteTTL, str] = MappingProxyType(
+        {ttl: get_service_tier_cost_key(key, service_tier) for ttl, key in _TTL_SPECIFIC_CACHE_WRITE_RATE_KEYS.items()}
     )
     cache_read_cost = get_cost_per_unit(model_info, cache_read_cost_key, default_value=None)
 
@@ -847,7 +850,8 @@ def _get_token_base_cost(
                             ttl: _first_present_key(
                                 model_info,
                                 get_service_tier_cost_key(
-                                    f"{_EXTENDED_CACHE_WRITE_RATE_KEYS[ttl]}_above_{threshold_str}_tokens", service_tier
+                                    f"{_TTL_SPECIFIC_CACHE_WRITE_RATE_KEYS[ttl]}_above_{threshold_str}_tokens",
+                                    service_tier,
                                 ),
                                 key,
                             )
@@ -1003,23 +1007,11 @@ def resolve_image_model_info(model: str, custom_llm_provider: str, model_info: M
     return resolved
 
 
-def _cache_write_rate(
-    ttl: CacheWriteTTL, base_rate: float, extended_rates: Mapping[ExtendedCacheWriteTTL, float]
-) -> float:
-    match ttl:
-        case "5m" | "30m":
-            return base_rate
-        case "1hr" | "12hr":
-            return extended_rates[ttl]
-        case _:
-            assert_never(ttl)
-
-
 def calculate_cache_writing_cost(
     cache_creation_tokens: int,
     cache_creation_token_details: CacheCreationTokenDetails | None,
     cache_creation_cost: float,
-    cache_creation_cost_by_ttl: Mapping[ExtendedCacheWriteTTL, float],
+    cache_creation_cost_by_ttl: Mapping[CacheWriteTTL, float],
 ) -> float:
     """
     Bill cache writes per lifetime: Anthropic reports 5m and 1h counts, OpenAI reports 30m and 12h counts.
@@ -1035,7 +1027,7 @@ def calculate_cache_writing_cost(
         }
     )
     return sum(
-        (tokens or 0) * _cache_write_rate(ttl, cache_creation_cost, cache_creation_cost_by_ttl)
+        (tokens or 0) * cache_creation_cost_by_ttl.get(ttl, cache_creation_cost)
         for ttl, tokens in tokens_by_ttl.items()
     )
 
@@ -1222,7 +1214,7 @@ def _calculate_input_cost(
     prompt_base_cost: float,
     cache_read_cost: float,
     cache_creation_cost: float,
-    cache_creation_cost_by_ttl: Mapping[ExtendedCacheWriteTTL, float],
+    cache_creation_cost_by_ttl: Mapping[CacheWriteTTL, float],
     service_tier: str | None = None,
 ) -> float:
     """
@@ -1681,7 +1673,7 @@ class BilledTokenRates:
     cache_read_input_token_cost: float
     cache_read_input_audio_token_cost: float
     cache_creation_input_token_cost: float
-    cache_creation_input_token_cost_by_ttl: Mapping[ExtendedCacheWriteTTL, float]
+    cache_creation_input_token_cost_by_ttl: Mapping[CacheWriteTTL, float]
     output_cost_per_reasoning_token: float
 
     def scaled(self, multiplier: float) -> "BilledTokenRates":
@@ -1745,9 +1737,7 @@ def _custom_pricing_rates(custom_cost_per_token: CostPerToken) -> BilledTokenRat
         cache_read_input_token_cost=cache_read_rate,
         cache_read_input_audio_token_cost=cache_read_rate,
         cache_creation_input_token_cost=cache_creation_rate,
-        cache_creation_input_token_cost_by_ttl=MappingProxyType(
-            {ttl: cache_creation_rate for ttl in _EXTENDED_CACHE_WRITE_RATE_KEYS}
-        ),
+        cache_creation_input_token_cost_by_ttl=MappingProxyType({}),
         output_cost_per_reasoning_token=output_rate,
     )
 
