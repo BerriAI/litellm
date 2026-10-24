@@ -40,12 +40,12 @@ class BoundedChunkBuffer(Sequence[bytes]):
     def __init__(self, max_bytes: int | None = None) -> None:
         self._head_limit: Final = None if max_bytes is None else max_bytes // 2
         self._tail_limit: Final = None if max_bytes is None else max_bytes - (max_bytes // 2)
-        self._head: Final[list[bytes]] = []
-        self._tail: Final[deque[bytes]] = deque()
-        self._head_size = 0  # rebind-ok: bytes currently held in the head
-        self._tail_size = 0  # rebind-ok: bytes currently held in the tail
-        self.total_bytes = 0  # rebind-ok: every byte seen, kept or not
-        self._head_closed = False  # rebind-ok: set once the head budget is spent
+        self._head: Final[list[bytes]] = []  # mutable-ok: append-only buffer owned by this class
+        self._tail: Final[deque[bytes]] = deque()  # mutable-ok: append-only buffer owned by this class
+        self._head_size = 0
+        self._tail_size = 0
+        self.total_bytes = 0
+        self._head_closed = False
 
     @property
     def truncated(self) -> bool:
@@ -61,18 +61,10 @@ class BoundedChunkBuffer(Sequence[bytes]):
             self._head.append(chunk)
             self._head_size += len(chunk)
             return
-        if not self._head_closed:
-            room = self._head_limit - self._head_size
-            if len(chunk) <= room:
-                self._head.append(chunk)
-                self._head_size += len(chunk)
-                return
-            if room > 0:
-                self._head.append(chunk[:room])
-                self._head_size += room
-            self._head_closed = True  # rebind-ok: the head never reopens
-            chunk = chunk[room:]
-        self._tail.append(chunk[-self._tail_limit :] if self._tail_limit else b"")
+        chunk_rest: Final = chunk if self._head_closed else self._fill_head(chunk, self._head_limit)
+        if chunk_rest is None:
+            return
+        self._tail.append(chunk_rest[-self._tail_limit :] if self._tail_limit else b"")
         self._tail_size += len(self._tail[-1])
         while self._tail_size > self._tail_limit:
             overflow = self._tail_size - self._tail_limit
@@ -83,7 +75,20 @@ class BoundedChunkBuffer(Sequence[bytes]):
                 break
             self._tail_size -= len(oldest)
 
-    def _frames(self) -> list[bytes]:
+    def _fill_head(self, chunk: bytes, head_limit: int) -> bytes | None:
+        """Keep what fits in the head; the rest of the chunk, or None when all of it fit."""
+        room: Final = head_limit - self._head_size
+        if len(chunk) <= room:
+            self._head.append(chunk)
+            self._head_size += len(chunk)
+            return None
+        if room > 0:
+            self._head.append(chunk[:room])
+            self._head_size += room
+        self._head_closed = True
+        return chunk[room:]
+
+    def _frames(self) -> Sequence[bytes]:
         if not self.truncated:
             return [*self._head, *self._tail]
         head: Final = b"".join(self._head)
@@ -104,8 +109,6 @@ class BoundedChunkBuffer(Sequence[bytes]):
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Sequence) and list(self) == list(other)
-
-    __hash__ = None  # type: ignore[assignment]
 
     def __bool__(self) -> bool:
         return self.total_bytes > 0
