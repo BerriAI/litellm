@@ -714,6 +714,20 @@ def test_exclude_labels_does_not_touch_unrelated_metrics(reset_prometheus_exclud
 # ==============================================================================
 
 
+def test_provider_budget_gauges_report_the_limit_next_to_what_remains():
+    """The max-budget gauge carries the configured provider limit, so limit minus remaining is the spend."""
+    from prometheus_client import generate_latest
+
+    clear_prometheus_registry()
+    logger = PrometheusLogger()
+
+    logger.track_provider_remaining_budget(provider="openai", spend=30.0, budget_limit=100.0)
+
+    scrape = generate_latest(REGISTRY).decode()
+    assert 'litellm_provider_max_budget_metric{api_provider="openai"} 100.0' in scrape
+    assert 'litellm_provider_remaining_budget_metric{api_provider="openai"} 70.0' in scrape
+
+
 # ==============================================================================
 # SEMANTIC VALIDATION TESTS - Detect logical errors in metric increments
 # ==============================================================================
