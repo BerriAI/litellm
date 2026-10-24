@@ -29,8 +29,8 @@ output "cloudsql_writer_ip" {
 }
 
 output "cloudsql_reader_ip" {
-  description = "Private IP of the Cloud SQL read replica."
-  value       = google_sql_database_instance.reader.private_ip_address
+  description = "Private IP of the Cloud SQL read replica, or null when create_read_replica is false."
+  value       = one(google_sql_database_instance.reader[*].private_ip_address)
 }
 
 output "redis_endpoint" {
