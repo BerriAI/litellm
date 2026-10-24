@@ -27,7 +27,7 @@ mod tests {
     use super::{begin, lock_team};
     use crate::test_support::database_pool;
     use rstest::rstest;
-    use sqlx::PgPool;
+    use sqlx::{PgPool, postgres::PgPoolOptions};
 
     #[rstest]
     #[case::transaction_scoped("team-lock-scope")]
@@ -37,18 +37,30 @@ mod tests {
         #[case] team_id: &str,
         #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
     ) -> Result<(), Box<dyn StdError>> {
-        let pool = database_pool?;
+        let database_pool = database_pool?;
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(database_pool.connect_options().as_ref().clone())
+            .await?;
         let mut first = begin(&pool).await?;
         let mut second = pool.begin().await?;
         #[expect(
             clippy::disallowed_methods,
             reason = "Test assertions are outside the compile-checked query set"
         )]
-        let timeout: String = sqlx::query_scalar("SELECT current_setting('lock_timeout')")
-            .fetch_one(&mut *first)
+        let original_timeout: String = sqlx::query_scalar("SELECT current_setting('lock_timeout')")
+            .fetch_one(&mut *second)
             .await?;
-        assert_eq!(timeout, "5s");
         lock_team(&mut first, team_id).await?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Test assertions are outside the compile-checked query set"
+        )]
+        let (backend, timeout): (i32, String) =
+            sqlx::query_as("SELECT pg_backend_pid(), current_setting('lock_timeout')")
+                .fetch_one(&mut *first)
+                .await?;
+        assert_eq!(timeout, "5s");
         #[expect(
             clippy::disallowed_methods,
             reason = "Test assertions are outside the compile-checked query set"
@@ -68,6 +80,18 @@ mod tests {
             .fetch_one(&mut *second)
             .await?;
         assert!(released);
+        let mut next = pool.begin().await?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Test assertions are outside the compile-checked query set"
+        )]
+        let (next_backend, next_timeout): (i32, String) =
+            sqlx::query_as("SELECT pg_backend_pid(), current_setting('lock_timeout')")
+                .fetch_one(&mut *next)
+                .await?;
+        assert_eq!(next_backend, backend);
+        assert_eq!(next_timeout, original_timeout);
+        next.rollback().await?;
         second.rollback().await?;
         Ok(())
     }
