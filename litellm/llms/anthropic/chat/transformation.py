@@ -3,7 +3,7 @@ import json
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
-from types import MappingProxyType
+from types import BuiltinFunctionType, FunctionType, MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
@@ -493,7 +493,26 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @classmethod
     def get_config(cls, *, model: str | None = None):
-        config: Final = super().get_config()
+        # defaults configured on the base class (litellm.AnthropicConfig(max_tokens=...)) live on
+        # AnthropicConfig itself and must keep reaching subclass requests (vertex/azure claude)
+        base: Final = {
+            k: v
+            for k, v in AnthropicConfig.__dict__.items()
+            if not k.startswith("_")
+            and not isinstance(
+                v,
+                (
+                    FunctionType,
+                    BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                    property,
+                ),
+            )
+            and v is not None
+            and not callable(v)
+        }
+        config: Final = {**base, **super().get_config()}
 
         # anthropic requires a default value for max_tokens
         if config.get("max_tokens") is None:
@@ -2385,7 +2404,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params["tools"] = tools
 
         ## Load Config
-        config: Final = litellm.AnthropicConfig.get_config(model=model)
+        config: Final = self.get_config(model=model)
         for k, v in config.items():
             if (
                 k not in optional_params
