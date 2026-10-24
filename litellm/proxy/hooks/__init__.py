@@ -1,6 +1,9 @@
 import os
 from typing import Final, Literal
 
+from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_logger import CustomLogger
+
 from . import *
 from .autorouter_baseline_cache import AutoRouterBaselineCache
 from .cache_control_check import (  # noqa: F401  # backwards-compatible package export
@@ -32,10 +35,10 @@ from .sensitive_data_routing import (  # noqa: F401  # backwards-compatible pack
 )
 
 # List of all available hooks that can be enabled.
-# Defined before the enterprise import below so that any module re-imported
-# transitively through `enterprise.enterprise_hooks` can resolve `PROXY_HOOKS`
+# Defined before the litellm_enterprise hook imports below so that any module re-imported
+# transitively through them can resolve `PROXY_HOOKS`
 # and `get_proxy_hook` from this partially-initialized module without circling.
-PROXY_HOOKS: Final = {
+PROXY_HOOKS: Final[dict[str, type[CustomLogger]]] = {  # mutable-ok: shared with cycle importers, extended below
     "parallel_request_limiter": PROXY_MaxParallelRequestsHandler_v3,
     "cache_control_check": PROXY_CacheControlCheck,
     "responses_id_security": ResponsesIDSecurity,
@@ -63,14 +66,14 @@ def get_proxy_hook(
     return PROXY_HOOKS[hook_name]
 
 
-### CHECK IF ENTERPRISE HOOKS ARE AVAILABLE ####
-
 try:
-    from enterprise.enterprise_hooks import ENTERPRISE_PROXY_HOOKS
-except ImportError:
-    ENTERPRISE_PROXY_HOOKS = {}
-
-
-### update PROXY_HOOKS with ENTERPRISE_PROXY_HOOKS ###
-
-PROXY_HOOKS.update(ENTERPRISE_PROXY_HOOKS)
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_vector_stores import PROXY_LiteLLMManagedVectorStores
+except ImportError as litellm_enterprise_import_error:
+    verbose_proxy_logger.warning(
+        "Managed files and managed vector stores are disabled because litellm_enterprise failed to import: %s",
+        litellm_enterprise_import_error,
+    )
+else:
+    PROXY_HOOKS["managed_files"] = PROXY_LiteLLMManagedFiles
+    PROXY_HOOKS["managed_vector_stores"] = PROXY_LiteLLMManagedVectorStores
