@@ -573,12 +573,12 @@ def test_anthropic_messages_keep_every_block_the_chat_converter_drops() -> None:
                 {"type": "input_image", "image_url": f"data:image/png;base64,{PNG_BASE64}", "detail": "auto"},
             ],
         },
-        {"type": "function_call", "call_id": "toolu_01", "name": "lookup_clause", "arguments": '{"id": "14"}'},
         {
             "type": "message",
             "role": "assistant",
             "content": [{"type": "output_text", "text": "Let me pull clause 14."}],
         },
+        {"type": "function_call", "call_id": "toolu_01", "name": "lookup_clause", "arguments": '{"id": "14"}'},
         {"type": "function_call_output", "call_id": "toolu_01", "output": "14. Indemnification."},
     )
 
