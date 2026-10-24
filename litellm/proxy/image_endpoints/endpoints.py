@@ -1,6 +1,7 @@
 import asyncio
 import io
 from collections.abc import Sequence
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, get_type_hints
@@ -131,6 +132,18 @@ async def image_generation(
         # get the actual model name
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
+
+        ## LOGGING OBJECT ## - as base_process_llm_request: created before the pre-call
+        ## hooks so a request the router rejects (budget, rpm, cooldown) still reaches
+        ## the failure callbacks; the router dispatches through data["litellm_logging_obj"].
+        logging_obj, data = litellm.utils.function_setup(  # rebind-ok: function_setup returns the call's kwargs, as base_process_llm_request rebinds self.data
+            original_function="aimage_generation",
+            rules_obj=litellm.utils.Rules(),
+            start_time=datetime.now(),  # noqa: DTZ005  # naive like base_process_llm_request's start_time; Logging diffs it against naive times
+            is_async_call=True,
+            **data,
+        )
+        data["litellm_logging_obj"] = logging_obj
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         prompt_value: Final = data.get("prompt")
