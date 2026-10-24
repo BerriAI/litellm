@@ -19,8 +19,60 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     gemini_convert_messages_with_history,
     transform_request_body,
 )
+from litellm.types.llms.openai import ChatCompletionTextObject, ChatCompletionVideoObject
 from litellm.types.llms.vertex_ai import BlobType, ContentType, PartType
 from litellm.types.utils import Message
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_parts"),
+    [
+        pytest.param(
+            [{"type": "video_url", "video_url": {"url": "data:video/quicktime;base64,dmlkZW8="}}],
+            [{"inline_data": {"data": "dmlkZW8=", "mime_type": "video/quicktime"}}, {"text": " "}],
+            id="video-only QuickTime after a model turn",
+        ),
+        pytest.param(
+            [
+                {"type": "text", "text": "Read the meter"},
+                {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,dmlkZW8="}},
+            ],
+            [{"text": "Read the meter"}, {"inline_data": {"data": "dmlkZW8=", "mime_type": "video/mp4"}}],
+            id="MP4 with text",
+        ),
+        pytest.param(
+            [{"type": "video_url", "video_url": "gs://test-bucket/video.mp4"}],
+            [{"file_data": {"file_uri": "gs://test-bucket/video.mp4", "mime_type": "video/mp4"}}, {"text": " "}],
+            id="video URL as a string",
+        ),
+        pytest.param(
+            [{"type": "video_url", "video_url": {"url": "gs://test-bucket/video.mp4", "detail": "high"}}],
+            [
+                {
+                    "file_data": {"file_uri": "gs://test-bucket/video.mp4", "mime_type": "video/mp4"},
+                    "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
+                },
+                {"text": " "},
+            ],
+            id="video detail reaches Gemini",
+        ),
+    ],
+)
+def test_video_url_preserves_user_turn_and_media(
+    content: list[ChatCompletionTextObject | ChatCompletionVideoObject], expected_parts: list[PartType]
+) -> None:
+    result: Final = gemini_convert_messages_with_history(
+        messages=[
+            {"role": "assistant", "content": "Please send a video"},
+            {"role": "user", "content": content},
+        ],
+        model="gemini-3.7-flash",
+    )
+
+    assert result == [
+        {"role": "model", "parts": [{"text": "Please send a video"}]},
+        {"role": "user", "parts": expected_parts},
+    ]
 
 
 def test_check_if_part_exists_in_parts():
