@@ -123,6 +123,46 @@ class TestLangfuseOtelIntegration:
                 "langfuse.observation.type", "generation"
             )
 
+    def test_set_messages_serializes_pydantic_message_objects(self):
+        """list[litellm.Message] in messages must not raise and must keep role and content."""
+        from litellm.integrations.langfuse.langfuse_otel_attributes import (
+            LangfuseLLMObsOTELAttributes,
+        )
+        from litellm.types.utils import Message
+
+        mock_span: Final = MagicMock()
+        kwargs: Final = {
+            "messages": [
+                Message(role="user", content="hello"),
+                Message(role="assistant", content="hi back"),
+            ]
+        }
+
+        LangfuseLLMObsOTELAttributes.set_messages(mock_span, kwargs)
+
+        key, value = mock_span.set_attribute.call_args.args
+        assert key == "langfuse.observation.input"
+        payload = json.loads(value)
+        assert payload["messages"][0]["role"] == "user"
+        assert payload["messages"][0]["content"] == "hello"
+        assert payload["messages"][1]["role"] == "assistant"
+        assert payload["messages"][1]["content"] == "hi back"
+
+    def test_set_messages_passes_through_plain_dicts(self):
+        """Plain-dict messages serialize unchanged."""
+        from litellm.integrations.langfuse.langfuse_otel_attributes import (
+            LangfuseLLMObsOTELAttributes,
+        )
+
+        mock_span: Final = MagicMock()
+        kwargs: Final = {"messages": [{"role": "user", "content": "hello"}]}
+
+        LangfuseLLMObsOTELAttributes.set_messages(mock_span, kwargs)
+
+        key, value = mock_span.set_attribute.call_args.args
+        assert key == "langfuse.observation.input"
+        assert json.loads(value) == {"messages": [{"role": "user", "content": "hello"}]}
+
     def test_set_langfuse_environment_attribute(self):
         """Test that Langfuse environment is set correctly when environment variable is present."""
         mock_span = MagicMock()
