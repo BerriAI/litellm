@@ -2,6 +2,10 @@
 pub enum Error {
     #[error("database query failed")]
     Query(#[from] sqlx::Error),
+    #[error("spend batch has {ids} ids and {costs} costs")]
+    InvalidSpendBatch { ids: usize, costs: usize },
+    #[error("invalid spend timestamp")]
+    InvalidTimestamp(#[from] chrono::ParseError),
 }
 
 impl Error {
@@ -13,7 +17,7 @@ impl Error {
             Self::Query(
                 sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed,
             ) => true,
-            Self::Query(_) => false,
+            _ => false,
         }
     }
 }
