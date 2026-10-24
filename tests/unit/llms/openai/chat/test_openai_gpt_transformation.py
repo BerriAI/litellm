@@ -1793,3 +1793,43 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         )
 
         assert request["tools"][0] is tool
+
+
+@pytest.mark.parametrize(
+    "provider_finish_reason, expected_finish_reason",
+    [
+        ("tool_calls", "stop"),
+        ("function_call", "stop"),
+        ("length", "length"),
+        ("stop", "stop"),
+    ],
+)
+def test_transform_choices_json_mode_reports_stop_only_for_tool_call_reasons(
+    provider_finish_reason, expected_finish_reason
+):
+    """json_mode folds a tool call into JSON content. Only tool-call reasons become
+    'stop'; a truncated ('length') or already-final reason must survive untouched."""
+    choice = [
+        {
+            "finish_reason": provider_finish_reason,
+            "index": 0,
+            "logprobs": None,
+            "message": {
+                "content": None,
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "json_tool_call", "arguments": '{"a": 1}'},
+                    }
+                ],
+            },
+        }
+    ]
+
+    out = OpenAIGPTConfig()._transform_choices(choices=choice, json_mode=True)
+
+    assert out[0].message.content == '{"a": 1}'
+    assert out[0].message.tool_calls is None
+    assert out[0].finish_reason == expected_finish_reason
