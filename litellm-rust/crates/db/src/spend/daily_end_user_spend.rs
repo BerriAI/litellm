@@ -36,6 +36,7 @@ pub async fn upsert_daily_end_user_spend(
         &column!(total_response_time_ms),
         &column!(timed_requests),
         &column!(spend),
+        &column!(mcp_namespaced_tool_name),
     )
     .execute(executor)
     .await?;
@@ -422,6 +423,69 @@ mod tests {
         assert_eq!(rows[3].date, "2026-01-15");
         assert!(rows[3].updated_at > seeded_updated_at);
         assert_eq!(rows[3].updated_at, expected_updated_at);
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::distinct_tools("server/tool-a", "server/tool-b")]
+    #[case::empty_and_named_tool("", "server/tool-b")]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn daily_end_user_spend_preserves_tool_attribution(
+        #[case] first_tool: &str,
+        #[case] second_tool: &str,
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        let first = DailySpend {
+            entity_id: "daily-end-user-tools".to_owned(),
+            date: "2026-02-21".to_owned(),
+            api_key: "tool-key".to_owned(),
+            model: "tool-model".to_owned(),
+            custom_llm_provider: "tool-provider".to_owned(),
+            endpoint: "/mcp".to_owned(),
+            mcp_namespaced_tool_name: first_tool.to_owned(),
+            prompt_tokens: 2,
+            spend: 0.25,
+            ..Default::default()
+        };
+        let second = DailySpend {
+            mcp_namespaced_tool_name: second_tool.to_owned(),
+            prompt_tokens: 5,
+            spend: 0.5,
+            ..first.clone()
+        };
+        upsert_daily_end_user_spend(&mut *tx, &[second, first.clone()]).await?;
+        upsert_daily_end_user_spend(&mut *tx, &[first]).await?;
+
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "The integration test reads stored tool attribution and counters"
+        )]
+        let rows: Vec<DailyEndUserRow> = sqlx::query_as(
+            r#"SELECT * FROM "LiteLLM_DailyEndUserSpend"
+               WHERE end_user_id = $1 AND date = $2 AND api_key = $3
+               ORDER BY mcp_namespaced_tool_name"#,
+        )
+        .bind("daily-end-user-tools")
+        .bind("2026-02-21")
+        .bind("tool-key")
+        .fetch_all(&mut *tx)
+        .await?;
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].mcp_namespaced_tool_name.as_deref(),
+            Some(first_tool)
+        );
+        assert_eq!(
+            rows[1].mcp_namespaced_tool_name.as_deref(),
+            Some(second_tool)
+        );
+        assert_eq!((rows[0].prompt_tokens, rows[0].spend), (4, 0.5));
+        assert_eq!((rows[1].prompt_tokens, rows[1].spend), (5, 0.5));
+        assert_ne!(rows[0].id, rows[1].id);
         Ok(())
     }
 
