@@ -14187,6 +14187,41 @@ class Router:
         )
 
     @staticmethod
+    def _deployment_declares_no_vision(deployment: DeploymentTypedDict, group: str) -> bool:
+        deployment_model_info: Final = deployment.get("model_info") or {}
+        declared: Final = deployment_model_info.get("supports_vision")
+        if declared is not None:
+            return declared is False
+        deployment_params: Final = deployment.get("litellm_params")
+        if not deployment_params:
+            return False
+        base_model: Final = deployment_model_info.get("base_model") or deployment_params.get("base_model")
+        try:
+            model, custom_llm_provider = Router._capability_model_and_provider(deployment_params, group)
+            return litellm.utils.is_vision_explicitly_disabled(
+                base_model if isinstance(base_model, str) else model, custom_llm_provider
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not narrow the request
+            verbose_router_logger.debug(
+                "litellm.router.py::_deployment_declares_no_vision: keeping deployment for model=%s. Got - %s", group, e
+            )
+            return False
+
+    @staticmethod
+    def _request_carries_image(
+        messages: list[dict[str, str]] | None,  # mutable-ok: handed to resolve_structured_messages as-is
+        request_kwargs: dict | None,  # mutable-ok: handed to resolve_structured_messages as-is
+    ) -> bool:
+        from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
+        from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
+
+        structured: Final = resolve_structured_messages(
+            messages=cast(list[dict[str, object]] | None, messages),  # cast-ok: chat messages are plain dicts
+            request_kwargs=request_kwargs if request_kwargs is not None else {},
+        )
+        return bool(structured) and request_contains_image_content(structured)
+
+    @staticmethod
     def _pre_call_check_requested_chat_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:
         requested: Final = litellm.utils.get_non_default_params(passed_params=dict(request_kwargs))
         return frozenset(
@@ -14212,6 +14247,7 @@ class Router:
         - model context window < message length. For azure openai models, requires 'base_model' is set. - https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models
         - filter models above rpm limits
         - if region given, filter out models not in that region / unknown region
+        - request carries an image and the deployment declares supports_vision false, unless every candidate does
         - [TODO] function call and model doesn't support function calling
         """
 
@@ -14371,9 +14407,20 @@ class Router:
                     model=model,
                     llm_provider="",
                 )
-        if len(excluded_indices) > 0:
+        remaining: Final = tuple(
+            (idx, deployment) for idx, deployment in param_candidates if idx not in excluded_indices
+        )
+        text_only_indices: Final = (
+            frozenset(idx for idx, deployment in remaining if self._deployment_declares_no_vision(deployment, model))
+            if remaining and self._request_carries_image(messages, request_kwargs)
+            else frozenset()
+        )
+        dropped_indices: Final = excluded_indices | (
+            text_only_indices if len(text_only_indices) < len(remaining) else frozenset()
+        )
+        if len(dropped_indices) > 0:
             # Single-pass filter using set for O(1) lookups (avoids O(n^2) from repeated pops)
-            _returned_deployments = [d for i, d in enumerate(_returned_deployments) if i not in excluded_indices]
+            _returned_deployments = [d for i, d in enumerate(_returned_deployments) if i not in dropped_indices]
 
         return _returned_deployments
 
