@@ -20,7 +20,9 @@ def _optional_params_mapping(optional_params: object) -> Mapping[str, object]:
     """optional_params arrives as a pydantic object from YAML, or as a plain dict when reconciled from the DB."""
     if optional_params is None:
         return MappingProxyType({})
-    raw: Final = optional_params.model_dump() if isinstance(optional_params, BaseModel) else optional_params
+    raw: Final = (
+        optional_params.model_dump(exclude_unset=True) if isinstance(optional_params, BaseModel) else optional_params
+    )
     return _CONFIG_MAPPING.validate_python(raw)
 
 

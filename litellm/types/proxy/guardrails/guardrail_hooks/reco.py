@@ -43,6 +43,8 @@ class RecoOptionalParams(BaseModel):
 class RecoConfigModel(GuardrailConfigModel[RecoOptionalParams]):
     """Configuration parameters for the Reco guardrail"""
 
+    model_config = ConfigDict(frozen=True)
+
     @staticmethod
     def ui_friendly_name() -> str:
         return "Reco"
