@@ -7,7 +7,7 @@ repository.workspace = true
 
 [dependencies]
 futures-util.workspace = true
-litellm-auth.workspace = true
+litellm-auth = { workspace = true, features = ["watsonx"] }
 litellm-core-utils.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true

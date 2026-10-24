@@ -10,7 +10,7 @@ use litellm_host::{
 use litellm_http::transport::Error as TransportError;
 use litellm_inference::{context::CallContext, provider::ResolvedProvider};
 use litellm_llms::base_llm::{
-    auth::resolve_auth,
+    auth::{AuthScheme, resolve_auth},
     tokenize::transformation::{BaseTokenizeConfig, TokenizeContext},
 };
 use litellm_llms_types::formats::tokenize::{TokenizeOutput, TokenizeResponse};
@@ -59,6 +59,10 @@ pub(crate) async fn execute(
     )?;
     let body =
         config.transform_tokenize_request(provider.model, &call.prompt, &params, &env_lookup)?;
+    let iam_config = match &environment.auth {
+        AuthScheme::WatsonxIam { config } => Some(config.clone()),
+        _ => None,
+    };
     let mut authenticated =
         resolve_auth(&route.auth, &route.http, environment, &env_lookup).await?;
     let wire = interceptors
@@ -82,6 +86,12 @@ pub(crate) async fn execute(
         )
         .await?;
     authenticated.headers = wire.headers;
+    let bearer = authenticated
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .and_then(|(_, value)| value.strip_prefix("Bearer "))
+        .map(litellm_auth::SecretValue::new);
     let outbound = litellm_inference::outbound::outbound_request(
         authenticated,
         wire.url,
@@ -92,6 +102,15 @@ pub(crate) async fn execute(
         .await
         .map_err(TransportError::from_reqwest_before_dispatch)?;
     let status = response.status();
+    if let (401, Some(config), Some(bearer)) =
+        (status.as_u16(), iam_config.as_ref(), bearer.as_ref())
+    {
+        route
+            .auth
+            .watsonx
+            .invalidate_if_matches(config, bearer)
+            .await;
+    }
     let text = response.text().await.map_err(TransportError::from)?;
     if !status.is_success() {
         return Err(TransportError::Http {

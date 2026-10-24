@@ -63,35 +63,52 @@ fn assert_credential_boundary_error(error: &Error) {
 }
 
 #[rstest]
+#[case::vllm(false)]
+#[case::watsonx(true)]
 #[tokio::test]
-async fn hosted_vllm_returns_a_typed_response(route: TokenizeRoute) {
+async fn providers_share_a_typed_response(route: TokenizeRoute, #[case] watsonx: bool) {
+    let (model, endpoint, params, request, response, token_ids, include_ids, include_tokens) =
+        if watsonx {
+            (
+                "watsonx/org/model",
+                "/ml/v1/text/tokenization",
+                json!({"project_id":"project","token":"test-key"}),
+                json!({"model_id":"org/model","input":"hello","project_id":"project","parameters":{"return_tokens":true}}),
+                json!({"model_id":"org/model","result":{"token_count":1,"tokens":["hello"]}}),
+                Value::Null,
+                false,
+                true,
+            )
+        } else {
+            (
+                "hosted_vllm/org/model",
+                "/tokenize",
+                json!({}),
+                json!({"model":"org/model","prompt":"hello","add_special_tokens":true,"return_token_strs":true}),
+                json!({"count":1,"max_model_len":4096,"tokens":[42],"token_strs":["hello"]}),
+                json!([42]),
+                true,
+                true,
+            )
+        };
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/tokenize"))
+        .and(path(endpoint))
         .and(header("authorization", "Bearer test-key"))
-        .and(body_json(json!({
-            "model":"org/model",
-            "prompt":"hello",
-            "add_special_tokens":true,
-            "return_token_strs":true
-        })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "count":1,
-            "max_model_len":4096,
-            "tokens":[42],
-            "token_strs":["hello"]
-        })))
+        .and(body_json(request))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
         .expect(1)
         .mount(&server)
         .await;
     let result = route
         .execute(
             TokenizeRequest {
-                model: "hosted_vllm/org/model".into(),
+                model: model.into(),
                 prompt: "hello".into(),
-                include: TokenizeInclude::new(true, true),
+                include: TokenizeInclude::new(include_ids, include_tokens),
                 api_base: Some(sourced(server.uri())),
                 api_key: Some(sourced(SecretValue::new("test-key"))),
+                optional_params: sourced_map(&params),
                 ..Default::default()
             },
             &(),
@@ -102,7 +119,7 @@ async fn hosted_vllm_returns_a_typed_response(route: TokenizeRoute) {
     assert_eq!(
         serde_json::to_value(result).unwrap(),
         json!({
-            "model":"org/model", "count":1, "token_ids":[42], "tokens":["hello"]
+            "model":"org/model", "count":1, "token_ids":token_ids, "tokens":["hello"]
         })
     );
 }
@@ -312,6 +329,305 @@ async fn upstream_status_is_preserved_without_replaying(route: TokenizeRoute, #[
 }
 
 #[rstest]
+#[case::project_id("project_id", json!("caller-project"))]
+#[case::project_alias("watsonx_project", json!("caller-project"))]
+#[case::space_id("space_id", json!("caller-space"))]
+#[case::api_version("api_version", json!("2025-01-01"))]
+#[case::endpoint("api_base", json!("https://caller.example"))]
+#[tokio::test]
+async fn request_watsonx_resources_are_rejected_with_environment_credentials(
+    #[case] field: &str,
+    #[case] value: Value,
+) {
+    let server = MockServer::start().await;
+    let api_base = server.uri();
+    let route = TokenizeRoute::new(
+        Client::plain_for_test(),
+        Arc::new(AuthServices::default()),
+        Arc::new(RecordingSecrets::new([
+            ("WATSONX_API_BASE", api_base.as_str()),
+            ("WATSONX_API_KEY", "host-api-key"),
+            ("WATSONX_PROJECT_ID", "host-project"),
+        ])),
+    );
+    let request = if field == "api_base" {
+        TokenizeRequest {
+            model: "watsonx/model".into(),
+            api_base: Some(sourced(value.as_str().unwrap().to_owned())),
+            ..Default::default()
+        }
+    } else {
+        TokenizeRequest {
+            model: "watsonx/model".into(),
+            optional_params: BTreeMap::from([(field.to_owned(), sourced(value))]),
+            ..Default::default()
+        }
+    };
+    let error = route.execute(request, &(), None).await.unwrap_err();
+    assert_credential_boundary_error(&error);
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn shadowed_request_alias_is_validated_before_precedence() {
+    let server = MockServer::start().await;
+    let api_base = server.uri();
+    let route = TokenizeRoute::new(
+        Client::plain_for_test(),
+        Arc::new(AuthServices::default()),
+        Arc::new(RecordingSecrets::new([
+            ("WATSONX_API_BASE", api_base.as_str()),
+            ("WATSONX_API_KEY", "host-api-key"),
+            ("WATSONX_PROJECT_ID", "host-project"),
+        ])),
+    );
+    let error = route
+        .execute(
+            TokenizeRequest {
+                model: "watsonx/model".into(),
+                deployment_params: BTreeMap::from([(
+                    "project_id".into(),
+                    sourced_at(json!("trusted-project"), InputSource::Deployment),
+                )]),
+                optional_params: BTreeMap::from([(
+                    "watsonx_project".into(),
+                    sourced(json!("caller-project")),
+                )]),
+                ..Default::default()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_credential_boundary_error(&error);
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[case::token_and_zen("token", "zen_api_key")]
+#[case::token_and_authorization("token", "Authorization")]
+#[case::zen_and_authorization("zen_api_key", "Authorization")]
+#[tokio::test]
+async fn mixed_credential_origins_fail_before_provider_io(
+    #[case] deployment_credential: &str,
+    #[case] request_credential: &str,
+) {
+    let server = MockServer::start().await;
+    let api_base = server.uri();
+    let route = TokenizeRoute::new(
+        Client::plain_for_test(),
+        Arc::new(AuthServices::default()),
+        Arc::new(RecordingSecrets::new([(
+            "WATSONX_API_BASE",
+            api_base.as_str(),
+        )])),
+    );
+    let params = BTreeMap::from([
+        (
+            deployment_credential.to_owned(),
+            sourced_at(json!("host-secret"), InputSource::Deployment),
+        ),
+        (
+            "project_id".into(),
+            sourced_at(json!("host-project"), InputSource::Deployment),
+        ),
+    ]);
+    let (extra_headers, optional_params) = if request_credential == "Authorization" {
+        (
+            BTreeMap::from([(
+                request_credential.to_owned(),
+                sourced(json!("Bearer caller-secret")),
+            )]),
+            BTreeMap::new(),
+        )
+    } else {
+        (
+            BTreeMap::new(),
+            BTreeMap::from([(
+                request_credential.to_owned(),
+                sourced(json!("caller-secret")),
+            )]),
+        )
+    };
+    let error = route
+        .execute(
+            TokenizeRequest {
+                model: "watsonx/model".into(),
+                deployment_params: params,
+                extra_headers,
+                optional_params,
+                ..Default::default()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_credential_boundary_error(&error);
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[case::api_base("api_base")]
+#[case::api_key("api_key")]
+#[case::api_key_alias("watsonx_api_key")]
+#[case::iam_url("WATSONX_IAM_URL")]
+#[case::reserved_deployment_params("_tokenize_deployment_params")]
+#[tokio::test]
+async fn unknown_watsonx_optional_parameters_fail_before_io(#[case] name: &str) {
+    let server = MockServer::start().await;
+    let route = TokenizeRoute::new(
+        Client::plain_for_test(),
+        Arc::new(AuthServices::default()),
+        no_secrets(),
+    );
+    let error = route
+        .execute(
+            TokenizeRequest {
+                model: "watsonx/model".into(),
+                optional_params: BTreeMap::from([(name.to_owned(), sourced(json!("unexpected")))]),
+                ..Default::default()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.is_request());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn request_owned_credentials_work_with_unselected_environment_defaults() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/ml/v1/text/tokenization"))
+        .and(header("authorization", "Bearer request-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {"token_count": 1, "tokens": ["hello"]}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let api_base = server.uri();
+    let route = TokenizeRoute::new(
+        Client::plain_for_test(),
+        Arc::new(AuthServices::default()),
+        Arc::new(RecordingSecrets::new([
+            ("WATSONX_API_BASE", "https://unused.example"),
+            ("WATSONX_API_KEY", "unused-host-key"),
+            ("WATSONX_TOKEN", "unused-host-token"),
+        ])),
+    );
+    let response = route
+        .execute(
+            TokenizeRequest {
+                model: "watsonx/model".into(),
+                prompt: "hello".into(),
+                api_base: Some(sourced(api_base)),
+                optional_params: BTreeMap::from([
+                    ("project_id".into(), sourced(json!("request-project"))),
+                    ("token".into(), sourced(json!("request-token"))),
+                ]),
+                ..Default::default()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.count, 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn environment_watsonx_token_precedes_request_zen_and_api_keys() {
+    let server = MockServer::start().await;
+    let api_base = server.uri();
+    let route = TokenizeRoute::new(
+        Client::plain_for_test(),
+        Arc::new(AuthServices::default()),
+        Arc::new(RecordingSecrets::new([
+            ("WATSONX_API_BASE", api_base.as_str()),
+            ("WATSONX_TOKEN", "host-token"),
+        ])),
+    );
+    let error = route
+        .execute(
+            TokenizeRequest {
+                model: "watsonx/model".into(),
+                prompt: "hello".into(),
+                api_key: Some(sourced(SecretValue::new("request-api-key"))),
+                deployment_params: BTreeMap::from([(
+                    "project_id".into(),
+                    sourced_at(json!("host-project"), InputSource::Deployment),
+                )]),
+                optional_params: BTreeMap::from([(
+                    "zen_api_key".into(),
+                    sourced(json!("request-zen-key")),
+                )]),
+                ..Default::default()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_credential_boundary_error(&error);
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn deployment_owned_sdk_inputs_are_accepted() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(header("authorization", "Bearer sdk-token"))
+        .and(body_json(json!({
+            "model_id": "model",
+            "input": "hello",
+            "project_id": "sdk-project",
+            "parameters": {"return_tokens": true}
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {"token_count": 1, "tokens": ["hello"]}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let route = TokenizeRoute::new(
+        Client::plain_for_test(),
+        Arc::new(AuthServices::default()),
+        no_secrets(),
+    );
+    let response = route
+        .execute(
+            TokenizeRequest {
+                model: "watsonx/model".into(),
+                prompt: "hello".into(),
+                api_base: Some(sourced_at(server.uri(), InputSource::Deployment)),
+                extra_headers: BTreeMap::from([(
+                    "Authorization".into(),
+                    sourced_at(json!("Bearer sdk-token"), InputSource::Deployment),
+                )]),
+                optional_params: BTreeMap::from([(
+                    "project_id".into(),
+                    sourced_at(json!("sdk-project"), InputSource::Deployment),
+                )]),
+                ..Default::default()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.count, 1);
+}
+
+#[rstest]
 #[tokio::test]
 async fn unsupported_deployment_defaults_are_filtered_before_provider_validation() {
     let server = MockServer::start().await;
@@ -417,6 +733,40 @@ async fn directly_constructed_empty_model_is_rejected_before_dispatch(route: Tok
 }
 
 #[rstest]
+#[tokio::test]
+async fn unsupported_provider_representation_fails_before_secret_resolution() {
+    let secrets = Arc::new(RecordingSecrets::new([(
+        "WATSONX_APIKEY",
+        "must-not-be-requested",
+    )]));
+    let route = TokenizeRoute::new(
+        Client::plain_for_test(),
+        Arc::new(AuthServices::default()),
+        secrets.clone(),
+    );
+    let error = route
+        .execute(
+            TokenizeRequest {
+                model: "watsonx/org/model".into(),
+                prompt: "hello".into(),
+                include: TokenizeInclude::new(true, false),
+                api_base: Some(sourced("https://example.invalid".to_string())),
+                ..Default::default()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::Unsupported("requested tokenize output")
+    ));
+    assert!(secrets.requested().is_empty());
+}
+
+#[rstest]
 #[case::enabled(true)]
 #[case::disabled(false)]
 #[tokio::test]
@@ -460,6 +810,39 @@ async fn top_level_special_token_policy_reaches_vllm_wire(
         )
         .await
         .unwrap();
+}
+
+#[rstest]
+#[case::enabled(true)]
+#[case::disabled(false)]
+#[tokio::test]
+async fn watsonx_special_token_policy_is_rejected_before_secret_resolution(
+    #[case] add_special_tokens: bool,
+) {
+    let secrets = Arc::new(RecordingSecrets::new([(
+        "WATSONX_APIKEY",
+        "must-not-be-requested",
+    )]));
+    let route = TokenizeRoute::new(
+        Client::plain_for_test(),
+        Arc::new(AuthServices::default()),
+        secrets.clone(),
+    );
+    let error = route
+        .execute(
+            TokenizeRequest {
+                model: "watsonx/org/model".into(),
+                add_special_tokens: Some(add_special_tokens),
+                ..Default::default()
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, Error::Unsupported("add_special_tokens")));
+    assert!(secrets.requested().is_empty());
 }
 
 #[rstest]

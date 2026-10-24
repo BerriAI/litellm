@@ -16,6 +16,6 @@ The count-only response contains a count with null representation arrays. A repr
 {"model":"public-alias","prompt":"hello","include":["token_ids","tokens"]}
 ```
 
-Omitting `add_special_tokens` preserves the provider policy. Hosted vLLM accepts explicit true and false values. Operational metadata belongs to the host envelope and is not forwarded as provider kwargs. Existing provider wire flags are unchanged, and count-only projection does not claim provider-side wire or cost savings
+Omitting `add_special_tokens` preserves the provider policy. Hosted vLLM accepts explicit true and false values, and Watsonx rejects either explicit value before secret resolution. Operational metadata belongs to the host envelope and is not forwarded as provider kwargs. Existing provider wire flags are unchanged, and count-only projection does not claim provider-side wire or cost savings
 
 Downstream issue28444 acceptance requires fresh native-build coverage for `/tokenize` and `/v1/tokenize` across count-only and requested representation modes. A registered `CustomLogger` must prove that pre-call prompt mutation reaches the executed input, post-success response replacement reaches the wire HTTP result with correct `Content-Length` and context, each hook runs exactly once, and the mutation-bypass negative check remains enforced. Native `after_provider_response` is a notification and does not rewrite responses. This is not a generic passthrough fix, and legacy `/utils/token_counter` behavior remains unchanged
