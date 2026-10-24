@@ -77,9 +77,7 @@ class TestRecoGuardrailConfiguration:
     def test_litellm_params_stay_assignable_for_registry_secret_resolution(self) -> None:
         litellm_params: Final = LitellmParams(guardrail="reco", mode="pre_call")
 
-        litellm_params.api_base = (
-            "https://edge1.us.reco.ai"
-        )
+        litellm_params.api_base = "https://edge1.us.reco.ai"
 
         assert litellm_params.api_base == "https://edge1.us.reco.ai"
 
