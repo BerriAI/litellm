@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Dict, List, Optional
+from typing import Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -111,6 +111,23 @@ class TestApplyToolsetScope:
         assert op is not None
         assert op.mcp_servers == ["server-a"]
         assert op.mcp_tool_permissions == toolset_perms
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "owner_role",
+        [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+        ids=["proxy_admin", "proxy_admin_viewer"],
+    )
+    async def test_admin_owned_team_key_without_the_toolset_grant_is_denied(self, owner_role: LitellmUserRoles):
+        from litellm.proxy._experimental.mcp_server.server import apply_toolset_scope
+
+        team_key: Final = UserAPIKeyAuth(
+            api_key="sk-test", team_id="team-a", user_role=owner_role, object_permission=None
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await apply_toolset_scope(team_key, "toolset-123", granted=_granted_through_team("toolset-other"))
+
+        assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
     async def test_team_granted_toolset_is_served_to_a_key_without_its_own_grant(self):
