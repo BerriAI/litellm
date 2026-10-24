@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     parse_mime_type,
     sanitize_messages_for_tool_calling,
     THOUGHT_SIGNATURE_SEPARATOR,
+    tool_exchange_texts,
 )
 from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
 from litellm.types.utils import ChatCompletionMessageToolCall, Function
@@ -8671,3 +8672,88 @@ def test_wrong_type_template_field_in_requests_leaves_the_deployments_in_rotatio
     response = router.completion(model="template-group", messages=TEMPLATE_MESSAGES, mock_response="Blue")
 
     assert response.choices[0].message.content == "Blue"
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_1", "name": "search", "input": {"query": "café"}}],
+            },
+            (("tool call", 'search({"query": "café"})'),),
+            id="anthropic_tool_use_non_ascii",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "ledger"}}
+                ],
+            },
+            (("tool call", 'web_search({"query": "ledger"})'),),
+            id="anthropic_server_tool_use",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "mcp_tool_use",
+                        "id": "mcptoolu_1",
+                        "name": "read_doc",
+                        "server_name": "docs",
+                        "input": {"path": "TASK.md"},
+                    }
+                ],
+            },
+            (("tool call", 'read_doc({"path": "TASK.md"})'),),
+            id="anthropic_mcp_tool_use",
+        ),
+        pytest.param(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "mcp_tool_result",
+                        "tool_use_id": "mcptoolu_1",
+                        "is_error": False,
+                        "content": [{"type": "text", "text": "migrate the ledger"}],
+                    }
+                ],
+            },
+            (("tool result", "migrate the ledger"),),
+            id="anthropic_mcp_tool_result",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "search", "arguments": {"query": "café"}}}
+                ],
+            },
+            (("tool call", 'search({"query": "café"})'),),
+            id="chat_object_arguments",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "function_call": {"name": "read_file", "arguments": '{"path": "a"}'},
+            },
+            (("tool call", 'read_file({"path": "a"})'),),
+            id="legacy_function_call",
+        ),
+        pytest.param(
+            {"role": "function", "name": "read_file", "content": "migrate the ledger"},
+            (("tool result", "migrate the ledger"),),
+            id="legacy_function_role",
+        ),
+    ],
+)
+def test_tool_exchange_texts_reads_every_tool_shape(
+    message: dict[str, object], expected: tuple[tuple[str, str], ...]
+) -> None:
+    assert tool_exchange_texts(message) == expected
