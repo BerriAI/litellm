@@ -21,5 +21,5 @@ pub use failure::DbFailure;
 pub use spend::{
     DailySpend, EntitySpend, SpendLog, SpendLogRow, TeamMemberSpend, add_end_user_spend,
     add_key_spend, add_team_member_spend, add_team_spend, add_user_spend, begin, insert_spend_logs,
-    lock_team, upsert_daily_user_spend,
+    lock_team, upsert_daily_team_spend, upsert_daily_user_spend,
 };
