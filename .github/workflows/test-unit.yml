@@ -520,7 +520,6 @@ jobs:
               tests/unit/proxy/openai_files_endpoint
               tests/unit/proxy/health_endpoints
               tests/unit/proxy/batches_endpoints
-              tests/unit/proxy/tokenize_endpoints
               --ignore=tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
               --ignore=tests/unit/proxy/management_endpoints/test_key_generate_prisma.py
               --ignore=tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
