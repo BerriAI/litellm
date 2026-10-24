@@ -11,6 +11,7 @@ the usage slice to the strategy, so selection does not read again.
 import asyncio
 import itertools
 from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -97,14 +98,13 @@ class RoutingPrefetch:
         litellm_router_instance: "Router",
         usage_selector: LowestTPMLoggingHandler_v2 | None,
         deployments: list,
+        cooldown_model_ids: AbstractSet[str],
     ) -> None:
         request: Final = active_request_redis_batches()
         redis_cache: Final = litellm_router_instance.cache.redis_cache
         if request is None or redis_cache is None or _PREFETCH_SLOT in request.prefetched:
             return
-        cooldown_keys: Final = tuple(
-            CooldownCache.get_cooldown_cache_key(model_id) for model_id in litellm_router_instance.get_model_ids()
-        )
+        cooldown_keys: Final = tuple(CooldownCache.get_cooldown_cache_key(model_id) for model_id in cooldown_model_ids)
         usage_keys: Final = (
             () if usage_selector is None else tuple(itertools.chain(*usage_selector.usage_counter_keys(deployments)))
         )
@@ -188,14 +188,15 @@ class RoutingReadBatch:
         self,
         litellm_router_instance: "Router",
         healthy_deployments: list,
+        model_ids: AbstractSet[str],
         parent_otel_span: "Span | None",
     ) -> list[str]:
         """
-        `_async_get_cooldown_deployments`, with the strategy's tpm/rpm counters for
+        `_async_get_cooldown_deployments` for `model_ids`, with the strategy's tpm/rpm counters for
         `healthy_deployments` fetched in the same MGET and kept as `prefetched_usage`.
         """
-        model_ids: Final = litellm_router_instance.get_model_ids()
-        cooldown_keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
+        read_ids: Final = tuple(model_ids)
+        cooldown_keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in read_ids]
         selector: Final = self.usage_selector
         usage_keys: Final = (
             () if selector is None else tuple(itertools.chain(*selector.usage_counter_keys(healthy_deployments)))
@@ -217,7 +218,7 @@ class RoutingReadBatch:
             )
 
         cooldown_models: Final = litellm_router_instance.cooldown_cache.active_cooldowns_from_results(
-            model_ids, cooldown_results
+            read_ids, cooldown_results
         )
         verbose_router_logger.debug("retrieve cooldown models: %s", cooldown_models)
         return [model_id for model_id, _ in cooldown_models]

@@ -9,6 +9,7 @@ Router cooldown handlers
 import asyncio
 import math
 from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -574,16 +575,21 @@ def set_cooldown_deployments(
 _set_cooldown_deployments = set_cooldown_deployments
 
 
+def _cooldown_read_ids(litellm_router_instance: LitellmRouter, model_ids: AbstractSet[str] | None) -> Sequence[str]:
+    """The deployments a cooldown lookup reads, every deployment on the router when no ids are given"""
+    return litellm_router_instance.get_model_ids() if model_ids is None else tuple(model_ids)
+
+
 async def async_get_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
     parent_otel_span: Span | None,
+    model_ids: AbstractSet[str] | None = None,
 ) -> list[str]:
     """
     Async implementation of 'get_cooldown_deployments'
     """
-    model_ids: Final = litellm_router_instance.get_model_ids()
     cooldown_models: Final = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
-        model_ids=model_ids,
+        model_ids=_cooldown_read_ids(litellm_router_instance, model_ids),
         parent_otel_span=parent_otel_span,
     )
 
@@ -622,7 +628,11 @@ async def async_get_cooldown_deployments_with_debug_info(
 _async_get_cooldown_deployments_with_debug_info = async_get_cooldown_deployments_with_debug_info
 
 
-def get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel_span: Span | None) -> list[str]:
+def get_cooldown_deployments(
+    litellm_router_instance: LitellmRouter,
+    parent_otel_span: Span | None,
+    model_ids: AbstractSet[str] | None = None,
+) -> list[str]:
     """
     Get the list of models being cooled down for this minute
     """
@@ -631,10 +641,8 @@ def get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel
     # ----------------------
     # Return cooldown models
     # ----------------------
-    model_ids: Final = litellm_router_instance.get_model_ids()
-
     cooldown_models: Final = litellm_router_instance.cooldown_cache.get_active_cooldowns(
-        model_ids=model_ids, parent_otel_span=parent_otel_span
+        model_ids=_cooldown_read_ids(litellm_router_instance, model_ids), parent_otel_span=parent_otel_span
     )
 
     cached_value_deployment_ids = []
