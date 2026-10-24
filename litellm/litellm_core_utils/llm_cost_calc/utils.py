@@ -392,9 +392,7 @@ def _get_tiered_reasoning_rate(model_info: ModelInfo, usage: Usage) -> float | N
     return tier_rate(tier, "output_cost_per_reasoning_token", "output_cost_per_token")
 
 
-def _get_tiered_base_costs(
-    model_info: ModelInfo, usage: Usage
-) -> "tuple[TokenRates, Mapping[str, float | None]] | None":
+def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> "tuple[TokenRates, dict[str, object]] | None":
     """
     Resolve the base rates from a model's ``tiered_pricing`` table, if it has one.
 
@@ -422,12 +420,7 @@ def _get_tiered_base_costs(
         cache_creation_rate=cache_creation_rate,
         reasoning_rate=None,
     )
-    return rates, MappingProxyType(
-        {
-            ttl: tier_rate(tier, key) if tier.get(key) is not None else None
-            for ttl, key in _TTL_PRICED_CACHE_WRITE_RATE_KEYS.items()
-        }
-    )
+    return rates, tier
 
 
 def _is_within_off_peak_window(off_peak_hours_utc: str | Sequence[str], current_time: datetime | None = None) -> bool:
@@ -692,11 +685,12 @@ def _apply_off_peak_to_base_costs(
     model_info: ModelInfo,
     current_time: datetime | None,
     base_rates: TokenRates,
-    cache_creation_rates_by_ttl: Mapping[str, float | None],
+    tier: dict[str, object],
 ) -> TokenBaseCosts:
-    """Apply off-peak rates to an already-resolved set of base costs, whichever pricing path
-    produced them. off_peak_pricing has no field for the long-TTL cache-creation rates, so they
-    pass through untouched. Reasoning is left to _resolve_billed_reasoning_rate.
+    """Apply off-peak rates to the base costs resolved from a pricing tier. off_peak_pricing has no
+    field for the long-TTL cache-creation rates, so a tier that declares one keeps it, and a tier
+    that does not bills that TTL at the off-peak-adjusted write rate. Reasoning is left to
+    _resolve_billed_reasoning_rate.
     """
     rates: Final = apply_off_peak_pricing(model_info, current_time, base_rates)
     return TokenBaseCosts(
@@ -706,8 +700,8 @@ def _apply_off_peak_to_base_costs(
         cache_creation_rate=rates.cache_creation_rate,
         cache_creation_rates_by_ttl=MappingProxyType(
             {
-                ttl: rates.cache_creation_rate if rate is None else rate
-                for ttl, rate in cache_creation_rates_by_ttl.items()
+                ttl: rates.cache_creation_rate if tier.get(key) is None else tier_rate(tier, key)
+                for ttl, key in _TTL_PRICED_CACHE_WRITE_RATE_KEYS.items()
             }
         ),
     )
