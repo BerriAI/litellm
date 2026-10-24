@@ -2384,9 +2384,13 @@ export interface paths {
          *     - claude plugin marketplace add <url>
          *     - claude plugin install <name>@<marketplace>
          *
-         *     Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
+         *     Without a key the catalog holds the enabled (public) plugins. With `?key=sk-...`
          *     the key is authenticated and the catalog also holds the disabled plugins granted
          *     to it through `object_permission.skills` or an access group on the key or its team.
+         *
+         *     With `general_settings.claude_code_marketplace_auth_required: true` a caller with
+         *     no key gets a 401, and the key may also come in the `Authorization` or
+         *     `x-litellm-api-key` header (Claude Code sends them from the marketplace's `headers`).
          *
          *     Returns:
          *         Marketplace catalog with list of available plugins and their git sources.
@@ -13759,7 +13763,7 @@ export interface paths {
         };
         /**
          * Public Skill Hub
-         * @description Return enabled (public) Claude Code skills — no auth required.
+         * @description Return enabled (public) Claude Code skills, or none when the marketplace requires a key.
          */
         get: operations["public_skill_hub_public_skill_hub_get"];
         put?: never;
@@ -29829,6 +29833,12 @@ export interface components {
             claude_code_gateway_managed_settings?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Claude Code Marketplace Auth Required
+             * @description If True, GET /claude-code/marketplace.json requires a LiteLLM key (Authorization or x-litellm-api-key header, the litellm_key_header_name header, or ?key=) and answers 401 without one, and GET /public/skill_hub returns an empty list. Default is False, which serves the enabled plugins to anyone.
+             * @default false
+             */
+            claude_code_marketplace_auth_required: boolean;
             /**
              * Completion Model
              * @description proxy level default model for all chat completion calls

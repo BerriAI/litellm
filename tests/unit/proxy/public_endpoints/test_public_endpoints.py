@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from importlib.resources import files
 from itertools import chain
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -1723,3 +1725,58 @@ def test_public_skill_hub_echoes_registered_installation_preference(preference):
     assert [(p["name"], p["installation_preference"]) for p in response.json()["plugins"]] == [
         ("security-review", preference)
     ]
+
+
+_INTERNAL_PLUGIN: Final = SimpleNamespace(
+    id="plugin-id",
+    name="deploy-helper",
+    enabled=True,
+    created_at=None,
+    updated_at=None,
+    manifest_json=json.dumps(
+        {
+            "source": {
+                "source": "git-subdir",
+                "url": "https://gitlab.internal.example.com/platform/claude-skills.git",
+                "path": "plugins/deploy-helper",
+            }
+        }
+    ),
+)
+
+
+def _skill_hub_response(find_many: AsyncMock, general_settings: Mapping[str, object]) -> httpx.Response:
+    table: Final = MagicMock()
+    table.find_many = find_many
+    prisma: Final = MagicMock()
+    prisma.db.litellm_claudecodeplugintable = table
+    app: Final = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", dict(general_settings)),
+    ):
+        return TestClient(app).get("/public/skill_hub")
+
+
+def test_public_skill_hub_is_empty_when_marketplace_auth_is_required() -> None:
+    find_many: Final = AsyncMock(return_value=[_INTERNAL_PLUGIN])
+
+    public: Final = _skill_hub_response(find_many, {})
+    gated: Final = _skill_hub_response(find_many, {"claude_code_marketplace_auth_required": True})
+
+    assert [plugin["name"] for plugin in public.json()["plugins"]] == ["deploy-helper"]
+    assert gated.status_code == 200
+    assert gated.json()["plugins"] == []
+    assert "gitlab.internal.example.com" not in gated.text
+
+
+def test_public_skill_hub_500_body_carries_no_exception_text() -> None:
+    response: Final = _skill_hub_response(
+        AsyncMock(side_effect=RuntimeError("could not reach postgres://admin:hunter2@db.internal")), {}
+    )
+
+    assert response.status_code == 500
+    assert "hunter2" not in response.text
+    assert "db.internal" not in response.text

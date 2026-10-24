@@ -5,14 +5,18 @@ Covers the git-subdir and archive source types added alongside the existing gith
 """
 
 import json
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints import claude_code_marketplace
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
@@ -964,3 +968,87 @@ def test_marketplace_response_rejects_unknown_installation_preference():
 
     with pytest.raises(ValidationError):
         MarketplaceResponse.model_validate(catalog)
+
+
+def _require_marketplace_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "general_settings", {"claude_code_marketplace_auth_required": True}
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache())
+
+
+async def _get_marketplace_over_http(
+    headers: Mapping[str, str] = MappingProxyType({}), params: Mapping[str, str] = MappingProxyType({})
+) -> httpx.Response:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=litellm.proxy.proxy_server.app), base_url="http://test"
+    ) as client:
+        return await client.get("/claude-code/marketplace.json", headers=dict(headers), params=dict(params))
+
+
+@pytest.mark.asyncio
+async def test_marketplace_auth_required_refuses_an_anonymous_caller(monkeypatch: pytest.MonkeyPatch) -> None:
+    _require_marketplace_auth(monkeypatch)
+    await _register_public_and_private_plugins()
+
+    response: Final = await _get_marketplace_over_http()
+
+    assert response.status_code == 401
+    assert "public-skill" not in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers, params",
+    [
+        ({"Authorization": f"Bearer {MASTER_KEY}"}, {}),
+        ({"x-litellm-api-key": f"Bearer {MASTER_KEY}"}, {}),
+        ({}, {"key": MASTER_KEY}),
+    ],
+)
+async def test_marketplace_auth_required_serves_a_caller_with_a_valid_key(
+    monkeypatch: pytest.MonkeyPatch, headers: Mapping[str, str], params: Mapping[str, str]
+) -> None:
+    _require_marketplace_auth(monkeypatch)
+    await _register_public_and_private_plugins()
+
+    response: Final = await _get_marketplace_over_http(headers, params)
+
+    assert response.status_code == 200
+    assert sorted(plugin["name"] for plugin in response.json()["plugins"]) == ["private-skill", "public-skill"]
+
+
+@pytest.mark.asyncio
+async def test_marketplace_auth_required_refuses_an_unknown_bearer_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    _require_marketplace_auth(monkeypatch)
+    litellm.proxy.proxy_server.prisma_client.get_data = AsyncMock(return_value=None)
+    await _register_public_and_private_plugins()
+
+    response: Final = await _get_marketplace_over_http({"Authorization": "Bearer sk-not-a-litellm-key"})
+
+    assert response.status_code == 401
+    assert "public-skill" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_marketplace_without_auth_required_ignores_an_unrelated_authorization_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    await _register_public_and_private_plugins()
+
+    response: Final = await _get_marketplace_over_http({"Authorization": "Bearer an-identity-aware-proxy-token"})
+
+    assert response.status_code == 200
+    assert [plugin["name"] for plugin in response.json()["plugins"]] == ["public-skill"]
+
+
+@pytest.mark.asyncio
+async def test_marketplace_500_body_carries_no_exception_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    table: Final = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    table.find_many = AsyncMock(side_effect=RuntimeError("could not reach postgres://admin:hunter2@db.internal"))
+
+    response: Final = await _get_marketplace_over_http()
+
+    assert response.status_code == 500
+    assert "hunter2" not in response.text
+    assert "db.internal" not in response.text
