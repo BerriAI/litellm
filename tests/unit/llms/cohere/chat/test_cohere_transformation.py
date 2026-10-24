@@ -1,7 +1,7 @@
 import json
 from collections.abc import Callable, Iterator
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -11,7 +11,8 @@ import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.cohere.chat.transformation import CohereChatConfig
 from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
-from unittest.mock import AsyncMock, patch
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall, ChatCompletionToolCallChunk
+from litellm.types.utils import ModelResponse
 
 COHERE_V1_CHAT_URL: Final = "https://api.cohere.ai/v1/chat"
 COHERE_V2_CHAT_URL: Final = "https://api.cohere.com/v2/chat"
@@ -140,6 +141,70 @@ class TestCohereV2Transform:
         )
 
         assert optional_params["max_tokens"] == 256
+
+    def test_v2_response_preserves_tool_call_fields_without_synthetic_index(self) -> None:
+        expected: Final[ChatCompletionAssistantToolCall] = {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"location": "Paris"}'},
+        }
+        response: Final = httpx.Response(
+            status_code=200,
+            json={
+                "id": "res-1",
+                "message": {"role": "assistant", "tool_calls": [expected]},
+                "usage": {"tokens": {"input_tokens": 10, "output_tokens": 20}},
+            },
+        )
+        result: Final = self.config.transform_response(
+            model=self.model,
+            raw_response=response,
+            model_response=ModelResponse(),
+            logging_obj=None,
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.model_dump(exclude_none=True)["tool_calls"] == [expected]
+
+    @pytest.mark.parametrize("use_async", [False, True])
+    @pytest.mark.asyncio
+    async def test_v2_request_preserves_tool_call_fields_without_stream_index(self, use_async: bool) -> None:
+        indexed_call: Final[ChatCompletionToolCallChunk] = {
+            "index": 0,
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"location": "Paris"}'},
+        }
+        messages: Final[list[AllMessageValues]] = [
+            {"role": "user", "content": "What is the weather in Paris?"},
+            {"role": "assistant", "content": None, "tool_calls": [indexed_call]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "18C, sunny"},
+        ]
+        result: Final = (
+            await self.config.async_transform_request(self.model, messages, {}, {}, {})
+            if use_async
+            else self.config.transform_request(self.model, messages, {}, {}, {})
+        )
+
+        assert result["messages"] == [
+            {"role": "user", "content": "What is the weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"location": "Paris"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "18C, sunny"},
+        ]
 
 
 @pytest.mark.asyncio
@@ -613,9 +678,7 @@ async def test_cohere_v2_annotations(respx_mock: respx.MockRouter) -> None:
 def test_cohere_v2_parameter_mapping(respx_mock: respx.MockRouter) -> None:
     messages: Final = [{"role": "user", "content": "Generate a creative story."}]
     route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
-        return_value=httpx.Response(
-            200, json=_cohere_v2_response({"content": [{"type": "text", "text": "A story."}]})
-        )
+        return_value=httpx.Response(200, json=_cohere_v2_response({"content": [{"type": "text", "text": "A story."}]}))
     )
 
     litellm.completion(
