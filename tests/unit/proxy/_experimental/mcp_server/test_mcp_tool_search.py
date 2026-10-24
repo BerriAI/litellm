@@ -1198,6 +1198,57 @@ class TestDispatchVirtualMcpTool:
         pre_call_hook.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_virtual_logger_setup_failure_does_not_block_tool(self) -> None:
+        uak = UserAPIKeyAuth(api_key="k")
+
+        with patch.object(
+            mcp_operations,
+            "function_setup",
+            side_effect=RuntimeError("logging unavailable"),
+        ):
+            logging_obj = await mcp_operations._build_virtual_call_logging_obj(
+                name="math-add",
+                arguments={"a": 1},
+                user_api_key_auth=uak,
+            )
+
+        assert logging_obj is None
+
+    @pytest.mark.asyncio
+    async def test_call_failure_logs_and_propagates(self) -> None:
+        uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
+        sentinel_logging_obj = object()
+        failure = RuntimeError("tool failed")
+
+        with (
+            patch.object(
+                mcp_operations,
+                "_build_virtual_call_logging_obj",
+                new_callable=AsyncMock,
+                return_value=sentinel_logging_obj,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_call",
+                new_callable=AsyncMock,
+                side_effect=failure,
+            ),
+            patch.object(
+                mcp_operations,
+                "fire_mcp_tool_call_failure_logging",
+                new_callable=AsyncMock,
+            ) as mock_failure_log,
+        ):
+            with pytest.raises(RuntimeError, match="tool failed"):
+                await mcp_operations._dispatch_virtual_mcp_tool(
+                    name=MCP_TOOL_CALL_TOOL_NAME,
+                    arguments={"tool_name": "math-add", "arguments": {"a": 1}},
+                    user_api_key_auth=uak,
+                    client_ip=None,
+                )
+
+        mock_failure_log.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_search_coerces_non_int_top_k(self) -> None:
         """Regression: a non-integer top_k from an MCP client must not raise; it
         falls back to the default instead of ValueError propagating out."""

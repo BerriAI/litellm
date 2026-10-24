@@ -393,23 +393,13 @@ if MCP_AVAILABLE:
         # MCP_TOOL_CALL_TOOL_NAME: the real tool call below owns admission and guardrails.
         # Building the logger separately prevents a second RPM or parallel slot charge.
         _request_start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the tool start time below
-        try:
-            virtual_logging_obj: Final = await _build_virtual_call_logging_obj(
-                name=tool_arguments.get("tool_name", ""),
-                arguments=tool_arguments.get("arguments") or {},
-                user_api_key_auth=user_api_key_dict,
-                raw_headers=virtual_raw_headers,
-                client_ip=rest_client_ip,
-            )
-        except Exception as e:
-            await _safe_fire_mcp_tool_call_failure_logging(
-                None,
-                e,
-                _request_start_time,
-                user_api_key_dict,
-                data,
-            )
-            raise
+        virtual_logging_obj: Final = await _build_virtual_call_logging_obj(
+            name=tool_arguments.get("tool_name", ""),
+            arguments=tool_arguments.get("arguments") or {},
+            user_api_key_auth=user_api_key_dict,
+            raw_headers=virtual_raw_headers,
+            client_ip=rest_client_ip,
+        )
         _tool_start_time: Final = datetime.now()
         try:
             result: Final = await handle_mcp_tool_call(
