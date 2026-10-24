@@ -161,7 +161,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_set_attribute(
                     span,
                     LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
-                    safe_dumps(transformed_tool_calls),
+                    safe_dumps(transformed_tool_calls, ensure_ascii=False),
                 )
             else:
                 output_data: Final = {}
@@ -173,7 +173,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                     safe_set_attribute(
                         span,
                         LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
-                        safe_dumps(output_data),
+                        safe_dumps(output_data, ensure_ascii=False),
                     )
 
         output: Final = response_obj.get("output", [])
@@ -218,7 +218,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_set_attribute(
                     span,
                     LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
-                    safe_dumps(output_items_data),
+                    safe_dumps(output_items_data, ensure_ascii=False),
                 )
 
     @staticmethod
@@ -253,7 +253,7 @@ class LangfuseOtelLogger(OpenTelemetry):
             safe_set_attribute(
                 span,
                 LangfuseSpanAttributes.OBSERVATION_INPUT.value,
-                safe_dumps(messages),
+                safe_dumps(messages, ensure_ascii=False),
             )
 
         completion_start_time: Final = kwargs.get("completion_start_time")
