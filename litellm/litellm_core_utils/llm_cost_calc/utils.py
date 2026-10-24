@@ -288,7 +288,7 @@ def _parse_above_token_threshold(key: str) -> float:
     return _parse_token_threshold(key.rsplit("_above_", 1)[1].split("_tokens")[0])
 
 
-def _prompt_exceeds_threshold(prompt_tokens: int, threshold: float, inclusive: bool) -> bool:
+def _prompt_exceeds_threshold(prompt_tokens: float, threshold: float, inclusive: bool) -> bool:
     return prompt_tokens > threshold or (inclusive and prompt_tokens == threshold)
 
 
@@ -689,6 +689,78 @@ def _apply_off_peak_to_base_costs(
     )
 
 
+def _loose_token_count(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
+
+
+def _detail_token(details: PromptTokensDetailsWrapper, field_name: str) -> int | None:
+    if field_name not in details.__dict__:
+        return None
+    if field_name == "text_tokens":
+        return details.text_tokens
+    if field_name == "cached_tokens":
+        return details.cached_tokens
+    if field_name == "cache_creation_tokens":
+        return details.cache_creation_tokens
+    if field_name == "audio_tokens":
+        return details.audio_tokens
+    if field_name == "image_tokens":
+        return details.image_tokens
+    if field_name == "video_tokens":
+        return details.video_tokens
+    return None
+
+
+def _loose_model_extra_token(usage: Usage, field_name: str) -> float:
+    extra: Final = usage.model_extra
+    if not isinstance(extra, dict) or field_name not in extra:
+        return 0.0
+    token: Final = extra.get(field_name)
+    if isinstance(token, bool) or not isinstance(token, (int, float)):
+        return 0.0
+    return float(token)
+
+
+def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
+    """Return the total effective input tokens for tier-threshold comparisons.
+
+    Some providers report cache tokens inside prompt_tokens, while others keep
+    them separate. When prompt_tokens_details is present, prefer the category
+    fields so the threshold check can avoid double-counting cache tokens.
+    """
+    prompt_tokens: Final = float(usage.prompt_tokens or 0)
+    details: Final = usage.prompt_tokens_details
+    if details is None:
+        cache_read_tokens: Final = _loose_model_extra_token(usage, "cache_read_input_tokens")
+        cache_creation_tokens: Final = _loose_model_extra_token(usage, "cache_creation_input_tokens")
+        return prompt_tokens + cache_read_tokens + cache_creation_tokens
+
+    raw_text_tokens: Final = _detail_token(details, "text_tokens")
+    cached_tokens: Final = _loose_token_count(_detail_token(details, "cached_tokens"))
+    cache_creation: Final = _loose_token_count(_detail_token(details, "cache_creation_tokens"))
+    if raw_text_tokens is None:
+        # Some providers populate prompt_tokens_details without text_tokens.
+        # If prompt_tokens already covers the cache detail total, use it as
+        # the rolled-up input total. Otherwise cache tokens were reported
+        # outside prompt_tokens and must be added for the tier threshold.
+        cache_detail_tokens: Final = cached_tokens + cache_creation
+        if cache_detail_tokens > 0 and prompt_tokens < cache_detail_tokens:
+            return prompt_tokens + cache_detail_tokens
+        return prompt_tokens
+
+    text_tokens: Final = float(raw_text_tokens)
+    audio_tokens: Final = _loose_token_count(_detail_token(details, "audio_tokens"))
+    image_tokens: Final = _loose_token_count(_detail_token(details, "image_tokens"))
+    video_tokens: Final = _loose_token_count(_detail_token(details, "video_tokens"))
+    detail_total: Final = text_tokens + audio_tokens + image_tokens + video_tokens + cached_tokens + cache_creation
+    modality_cache_tokens: Final = cached_tokens + cache_creation
+    if modality_cache_tokens > 0 and detail_total > prompt_tokens:
+        return prompt_tokens
+    return max(prompt_tokens, detail_total)
+
+
 def _get_token_base_cost(
     model_info: ModelInfo,
     usage: Usage,
@@ -761,6 +833,7 @@ def _get_token_base_cost(
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
     threshold: float | None = None
+    effective_prompt_tokens: Final = _get_effective_prompt_tokens_for_tiered_pricing(usage)
     for key in sorted(threshold_keys, key=_parse_above_token_threshold):
         value = model_info.get(key)
         if value is not None:
@@ -768,7 +841,7 @@ def _get_token_base_cost(
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
                 threshold_str = key.rsplit("_above_", 1)[1].split("_tokens")[0]
                 threshold = _parse_above_token_threshold(key)
-                if _prompt_exceeds_threshold(usage.prompt_tokens, threshold, threshold_is_inclusive):
+                if _prompt_exceeds_threshold(effective_prompt_tokens, threshold, threshold_is_inclusive):
                     # Prefer a service_tier-specific above-threshold key when available,
                     # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
                     # ON_DEMAND_PRIORITY.  Falls back to the standard key automatically
