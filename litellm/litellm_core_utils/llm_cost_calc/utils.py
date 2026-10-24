@@ -384,7 +384,9 @@ def _get_tiered_reasoning_rate(model_info: ModelInfo, usage: Usage) -> float | N
     return tier_rate(tier, "output_cost_per_reasoning_token", "output_cost_per_token")
 
 
-def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> "tuple[TokenRates, Mapping[str, float]] | None":
+def _get_tiered_base_costs(
+    model_info: ModelInfo, usage: Usage
+) -> "tuple[TokenRates, Mapping[str, float | None]] | None":
     """
     Resolve the base rates from a model's ``tiered_pricing`` table, if it has one.
 
@@ -413,7 +415,10 @@ def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> "tuple[TokenR
         reasoning_rate=None,
     )
     return rates, MappingProxyType(
-        {ttl: tier_rate(tier, key) for ttl, key in _CACHE_WRITE_RATE_KEYS.items() if tier.get(key) is not None}
+        {
+            ttl: tier_rate(tier, key) if tier.get(key) is not None else None
+            for ttl, key in _CACHE_WRITE_RATE_KEYS.items()
+        }
     )
 
 
@@ -679,7 +684,7 @@ def _apply_off_peak_to_base_costs(
     model_info: ModelInfo,
     current_time: datetime | None,
     base_rates: TokenRates,
-    cache_creation_rates_by_ttl: Mapping[str, float],
+    cache_creation_rates_by_ttl: Mapping[str, float | None],
 ) -> TokenBaseCosts:
     """Apply off-peak rates to an already-resolved set of base costs, whichever pricing path
     produced them. off_peak_pricing has no field for the long-TTL cache-creation rates, so they
@@ -691,17 +696,12 @@ def _apply_off_peak_to_base_costs(
         output_rate=rates.output_rate,
         cache_read_rate=rates.cache_read_rate,
         cache_creation_rate=rates.cache_creation_rate,
-        cache_creation_rates_by_ttl=_default_to_base_cache_write_rate(
-            cache_creation_rates_by_ttl, rates.cache_creation_rate
+        cache_creation_rates_by_ttl=MappingProxyType(
+            {
+                ttl: rates.cache_creation_rate if rate is None else rate
+                for ttl, rate in cache_creation_rates_by_ttl.items()
+            }
         ),
-    )
-
-
-def _default_to_base_cache_write_rate(
-    declared_rates_by_ttl: Mapping[str, float], cache_creation_rate: float
-) -> Mapping[str, float]:
-    return MappingProxyType(
-        {ttl: declared_rates_by_ttl.get(ttl, cache_creation_rate) for ttl in _CACHE_WRITE_RATE_KEYS}
     )
 
 
@@ -883,15 +883,13 @@ def _get_token_base_cost(
         output_rate=base_rates.output_rate,
         cache_read_rate=base_rates.cache_read_rate,
         cache_creation_rate=base_rates.cache_creation_rate,
-        cache_creation_rates_by_ttl=_default_to_base_cache_write_rate(
-            MappingProxyType(
-                {
-                    ttl: rate
-                    for ttl, key in cache_creation_keys_by_ttl.items()
-                    if (rate := get_cost_per_unit(model_info, key, default_value=None)) is not None
-                }
-            ),
-            base_rates.cache_creation_rate,
+        cache_creation_rates_by_ttl=MappingProxyType(
+            {
+                ttl: base_rates.cache_creation_rate
+                if (rate := get_cost_per_unit(model_info, key, default_value=None)) is None
+                else rate
+                for ttl, key in cache_creation_keys_by_ttl.items()
+            }
         ),
     )
 
