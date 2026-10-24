@@ -36,6 +36,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 
 # Cache for the loaded configuration
 _BETA_HEADERS_CONFIG: dict | None = None
@@ -145,7 +146,7 @@ def get_beta_headers_config(url: str) -> dict:
         Dict containing the beta headers configuration
     """
     # Check if local-only mode is enabled
-    if os.getenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "").lower() == "true":
+    if is_offline_mode() or os.getenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "").lower() == "true":
         # verbose_logger.debug("Using local Anthropic beta headers config (LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS=True)")
         return GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
 

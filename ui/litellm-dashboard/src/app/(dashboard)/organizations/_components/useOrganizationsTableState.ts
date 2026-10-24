@@ -4,7 +4,17 @@ const FILTER_COLUMNS = ["org_id"] as const;
 type FilterColumn = (typeof FILTER_COLUMNS)[number];
 
 const TABLE_STATE_OPTIONS: UrlTableStateOptions<FilterColumn> = {
-  sortFields: ["organization_id", "organization_alias", "created_at", "spend"],
+  sortFields: [
+    "organization_id",
+    "organization_alias",
+    "created_at",
+    "spend",
+    "max_budget",
+    "models",
+    "members",
+    "tpm_limit",
+    "rpm_limit",
+  ],
   defaultSort: { id: "created_at", desc: true },
   defaultPageSize: 25,
   filterColumns: FILTER_COLUMNS,

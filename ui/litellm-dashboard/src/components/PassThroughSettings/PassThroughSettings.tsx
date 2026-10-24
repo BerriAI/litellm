@@ -19,7 +19,6 @@ interface PassThroughSettingsProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
-  premiumUser?: boolean;
 }
 
 export interface passThroughItem {
@@ -37,7 +36,7 @@ export interface passThroughItem {
   is_from_config?: boolean;
 }
 
-const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, userRole, userID, premiumUser }) => {
+const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, userRole, userID }) => {
   const [generalSettings, setGeneralSettings] = useState<passThroughItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
@@ -116,7 +115,6 @@ const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, 
         onClose={() => setSelectedEndpointId(null)}
         accessToken={accessToken}
         isAdmin={userRole === "Admin" || userRole === "admin"}
-        premiumUser={premiumUser}
         onEndpointUpdated={handleEndpointUpdated}
       />
     );
@@ -133,7 +131,6 @@ const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, 
         accessToken={accessToken}
         setPassThroughItems={setGeneralSettings}
         passThroughItems={generalSettings}
-        premiumUser={premiumUser}
       />
 
       <PassThroughEndpointsTable

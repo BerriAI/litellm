@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChatComposer } from "./ChatComposer";
 
@@ -110,5 +111,24 @@ describe("ChatComposer", () => {
     fireEvent.click(addonOf(container));
 
     expect(screen.getByTestId("chat-composer-input")).toHaveFocus();
+  });
+
+  it.each([
+    { label: "Find a model", control: <input aria-label="Find a model" /> },
+    {
+      label: "Choose a model",
+      control: (
+        <select aria-label="Choose a model">
+          <option>Chat model</option>
+        </select>
+      ),
+    },
+  ])("should preserve focus when clicking the $label toolbar control", async ({ label, control }) => {
+    renderComposer({ tools: control });
+
+    await userEvent.setup().click(screen.getByLabelText(label));
+
+    expect(screen.getByLabelText(label)).toHaveFocus();
+    expect(screen.getByPlaceholderText("Send a message")).not.toHaveFocus();
   });
 });

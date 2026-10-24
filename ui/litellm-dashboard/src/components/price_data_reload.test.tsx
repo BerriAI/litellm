@@ -59,6 +59,19 @@ describe("PriceDataReload", () => {
     expect(screen.getByText("No periodic reload scheduled")).toBeInTheDocument();
   });
 
+  it("names both variables that force the bundled cost map", async () => {
+    vi.mocked(getModelCostMapSource).mockResolvedValue({
+      ...remoteSource,
+      source: "local",
+      url: null,
+      is_env_forced: true,
+    } as never);
+    render(<PriceDataReload accessToken="sk-test" />);
+
+    expect(await screen.findByText("LITELLM_LOCAL_MODEL_COST_MAP")).toBeInTheDocument();
+    expect(screen.getByText("LITELLM_OFFLINE_MODE")).toBeInTheDocument();
+  });
+
   it("shows which revision of the cost map is loaded when the source reports one", async () => {
     vi.mocked(getModelCostMapSource).mockResolvedValue({ ...remoteSource, ...provenance } as never);
     render(<PriceDataReload accessToken="sk-test" />);

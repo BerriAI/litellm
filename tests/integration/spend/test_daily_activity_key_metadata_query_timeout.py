@@ -99,16 +99,9 @@ class _Activity(BaseModel):
     results: tuple[_Day, ...]
 
 
-class _UpstreamMessage(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    role: str | None = None
-
-
 class _UpstreamRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
     stream: bool | None = None
-    tools: tuple[JsonValue, ...] | None = None
-    messages: tuple[_UpstreamMessage, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,17 +164,6 @@ def _stream_frames() -> tuple[bytes, ...]:
     return (*(f"data: {json.dumps({**envelope, **frame})}\n\n".encode() for frame in frames), b"data: [DONE]\n\n")
 
 
-def _usage_tool_call() -> Mapping[str, JsonValue]:
-    arguments: Final = json.dumps({"start_date": _day(-1), "end_date": _day(1)})
-    return {
-        "role": "assistant",
-        "content": None,
-        "tool_calls": [
-            {"id": "call_usage", "type": "function", "function": {"name": "get_usage_data", "arguments": arguments}}
-        ],
-    }
-
-
 def _response_object() -> bytes:
     return json.dumps(
         {
@@ -216,9 +198,6 @@ def _respond(request: Request) -> Reply:
     body: Final = _UpstreamRequest.model_validate_json(request.body or b"{}")
     if body.stream:
         return Reply(content_type="text/event-stream", chunks=_stream_frames())
-    roles: Final = frozenset(message.role for message in body.messages)
-    if body.tools and "tool" not in roles:
-        return Reply(body=_completion(_usage_tool_call(), "tool_calls"))
     return Reply(body=_completion({"role": "assistant", "content": REPLY_TEXT}, "stop"))
 
 
@@ -456,12 +435,6 @@ def _restore(database_url: str, digest: str) -> None:
         """UPDATE "LiteLLM_SpendLogs" SET api_key = substr(api_key, 8) WHERE api_key = 'parked-' || %s""",
         (digest,),
         database_url=database_url,
-    )
-
-
-def _events(response: httpx.Response) -> tuple[Mapping[str, JsonValue], ...]:
-    return tuple(
-        json.loads(line.removeprefix("data: ")) for line in response.text.splitlines() if line.startswith("data: ")
     )
 
 
@@ -714,39 +687,19 @@ def _rig(gateway: Gateway, directory: Path) -> Generator[tuple[Gateway, str]]:
 
 
 @pytest.mark.timeout(360)
-def test_usage_ai_chat_timeout_then_second_timeout_still_recovers_key_alias_after_database_frees(
+def test_usage_page_timeout_then_second_timeout_still_recovers_key_alias_after_database_frees(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with _rig(gateway, tmp_path) as (proxy, database_url):
-        spender: Final = _spender(proxy, database_url, "ai-chat")
+        spender: Final = _spender(proxy, database_url, "repeated-timeout")
         with _pinned(proxy) as pinned:
             with _locked_spend_logs(database_url):
-                with _recording(database_url) as during_chat:
-                    chat: Final = pinned.request(
-                        "POST",
-                        "/usage/ai/chat",
-                        body={
-                            "messages": [{"role": "user", "content": "What did we spend?"}],
-                            "model": "openai/gpt-4o-mini",
-                        },
-                    )
-                assert chat.status_code == 200, chat.text
-                assert chat.elapsed >= FAILED_LOOKUP_FLOOR, chat.elapsed
-                tool_call: Final = {
-                    "type": "tool_call",
-                    "tool_name": "get_usage_data",
-                    "tool_label": "global usage data",
-                    "arguments": {"start_date": _day(-1), "end_date": _day(1)},
-                }
-                assert _events(chat) == (
-                    {"type": "status", "message": "Thinking..."},
-                    {**tool_call, "status": "running"},
-                    {**tool_call, "status": "complete"},
-                    {"type": "status", "message": "Analyzing results..."},
-                    {"type": "chunk", "content": REPLY_TEXT},
-                    {"type": "done"},
-                ), chat.text
-                assert len(_lookups(during_chat)) == 1
+                with _recording(database_url) as during_timeout:
+                    timed_out: Final = _read(pinned, spender.digest)
+                assert timed_out.status_code == 200, timed_out.text
+                assert timed_out.elapsed >= FAILED_LOOKUP_FLOOR, timed_out.elapsed
+                assert _aliases(timed_out, spender.digest) == (None,), timed_out.text
+                assert len(_lookups(during_timeout)) == 1
                 cached_miss: Final = _read(pinned, spender.digest)
                 assert cached_miss.elapsed < FAILED_LOOKUP_FLOOR, cached_miss.elapsed
                 assert _aliases(cached_miss, spender.digest) == (None,), cached_miss.text
@@ -1087,44 +1040,3 @@ def test_usage_page_rejects_bad_key_filters_and_unrelated_routes_ignore_a_locked
             assert gateway_activity == 200, gateway_activity
             chat: Final = proxy.chat(MODEL, text=f"locked {uuid.uuid4().hex}")
             assert object_value(chat["usage"]) == dict(USAGE), chat
-
-
-@pytest.mark.timeout(300)
-def test_usage_ai_chat_survives_a_dropped_database_connection_during_alias_recovery(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    with (
-        scratch_database() as database_url,
-        database_relay(database_url, b"AS " + LOOKUP_MARKER.encode()) as (relay, relayed_url),
-        wire_server(_respond) as wire,
-        _proxy(gateway, tmp_path, relayed_url, wire.url) as proxy,
-    ):
-        spender: Final = _spender(proxy, database_url, "dropped-ai-chat")
-        with _pinned(proxy) as pinned:
-            relay.arm()
-            chat: Final = pinned.request(
-                "POST",
-                "/usage/ai/chat",
-                body={
-                    "messages": [{"role": "user", "content": "What did we spend?"}],
-                    "model": "openai/gpt-4o-mini",
-                },
-            )
-            assert chat.status_code == 200, chat.text
-            assert relay.tripped.is_set(), chat.text
-            tool_call: Final = {
-                "type": "tool_call",
-                "tool_name": "get_usage_data",
-                "tool_label": "global usage data",
-                "arguments": {"start_date": _day(-1), "end_date": _day(1)},
-            }
-            assert _events(chat) == (
-                {"type": "status", "message": "Thinking..."},
-                {**tool_call, "status": "running"},
-                {**tool_call, "status": "complete"},
-                {"type": "status", "message": "Analyzing results..."},
-                {"type": "chunk", "content": REPLY_TEXT},
-                {"type": "done"},
-            ), chat.text
-            recovered: Final = _named_once_reconnected(pinned, spender)
-            assert _metadata(recovered, spender.digest) == _full_metadata(spender), recovered.text

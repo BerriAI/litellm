@@ -73,7 +73,7 @@ DecisionQuestion: TypeAlias = Annotated[
 
 DecisionQuestionMap: TypeAlias = Annotated[
     Mapping[Annotated[str, Field(min_length=1)], DecisionQuestion],
-    Field(min_length=1, max_length=MAX_DECISION_QUESTIONS),
+    Field(min_length=1),
 ]
 
 

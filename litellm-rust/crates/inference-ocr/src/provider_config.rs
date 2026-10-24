@@ -249,7 +249,7 @@ pub(crate) fn resolve_provider_config<'a>(
                 provider: LlmProviders::Mistral,
             }
         }
-        Err(litellm_inference::RouteError::InvalidProvider(provider)) => {
+        Err(litellm_inference::Error::InvalidProvider(provider)) => {
             return Err(Error::InvalidProvider(provider));
         }
         Err(error) => return Err(Error::InvalidProvider(error.to_string())),

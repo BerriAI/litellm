@@ -425,6 +425,7 @@ jobs:
               tests/unit/realtime_api
               tests/unit/rerank_api
               tests/unit/search
+              tests/unit/text_completions
               tests/unit/vector_stores
               tests/unit/videos
             python-version: "3.12"

@@ -202,7 +202,9 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+    ) -> BaseLLMException:
         from litellm.llms.openai.openai import OpenAIConfig
 
         return OpenAIConfig().get_error_class(error_message=error_message, status_code=status_code, headers=headers)

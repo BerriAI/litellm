@@ -8,6 +8,7 @@ from litellm import CustomLLM
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
+    get_provider_affinity_header,
     inferred_provider,
     is_registered_custom_provider,
 )
@@ -706,3 +707,11 @@ class TestClaudeModelPatternMatching:
         set_fallback_generalizations([])
         with pytest.raises(litellm.BadRequestError):
             litellm.get_llm_provider(model="claude-opus-4-9")
+
+
+@pytest.mark.parametrize("prefix", ["openai", "anthropic", "custom_openai", "openai_like"])
+def test_opencode_affinity_resolution_preserves_existing_transport(prefix: str) -> None:
+    api_base: Final = "https://opencode.ai/zen/go/v1"
+    model, provider, _, destination = get_llm_provider(model=f"{prefix}/test-model", api_base=api_base)
+    assert (model, provider, destination) == ("test-model", prefix, api_base)
+    assert get_provider_affinity_header(destination) == "x-opencode-session"

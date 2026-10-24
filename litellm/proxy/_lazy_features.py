@@ -300,11 +300,6 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/vantage",),
     ),
     LazyFeature(
-        name="usage_ai",
-        module_path="litellm.proxy.management_endpoints.usage_endpoints",
-        path_prefixes=("/usage/ai",),
-    ),
-    LazyFeature(
         name="prompts",
         module_path="litellm.proxy.prompts.prompt_endpoints",
         path_prefixes=("/prompts", "/utils/dotprompt_json_converter"),

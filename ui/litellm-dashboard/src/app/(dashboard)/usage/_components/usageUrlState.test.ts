@@ -2,10 +2,14 @@ import moment from "moment";
 import { createLoader, createSerializer } from "nuqs";
 import { describe, expect, it } from "vitest";
 
+import { UsageClient } from "./components/overview/agentCatalog";
 import type { UsageOption } from "./components/UsageViewSelect/UsageViewSelect";
 import { USAGE_OPTIONS } from "./components/UsageViewSelect/UsageViewSelect";
 import {
   cleanUsageUrl,
+  clientDateRangeFromParams,
+  clientDateRangePatch,
+  clientPanelPatch,
   dateRangeFromParams,
   dateRangePatch,
   entitySelectionPatch,
@@ -263,5 +267,107 @@ describe("cross-page links", () => {
     const params: UsageUrlParams = load(href.slice(href.indexOf("?")));
 
     expect(params.user).toBe("alice+ops@example.com");
+  });
+});
+
+describe("client usage filters", () => {
+  it("should preserve a recognized client and person in a share link", () => {
+    const params = load("?user=u1&client=claude-desktop&range=7d");
+    expect(params.client).toBe("claude-desktop");
+    expect(clean("?user=u1&client=claude-desktop&range=7d")).toBeNull();
+    expect(load(serialize(params)).user).toBe("u1");
+  });
+
+  it("should reject an unknown client", () => {
+    expect(load("?client=made-up").client).toBeNull();
+  });
+
+  it("should clear the client when changing to another usage view", () => {
+    expect(load(applyPatch("?client=claude-desktop&user=u1", usageViewPatch("team"))).client).toBeNull();
+    expect(clean("?view=organization&client=claude-desktop")).toEqual({
+      query: "?view=organization",
+      deniedAccess: false,
+    });
+    expect(clean("?view=team&client=claude-desktop")).toBeNull();
+  });
+
+  it("should preserve the underlying tab and person when a client panel opens", () => {
+    const query = applyPatch("?user=u1&tab=keys&range=7d", { client: UsageClient.ClaudeDesktop, client_user: "u2" });
+    expect(usageTabFromParams(load(query))).toBe("keys");
+    expect(clean(query)).toBeNull();
+    expect(load(query).user).toBe("u1");
+    expect(load(query).client_user).toBe("u2");
+    expect(applyPatch(query, { client: null, client_user: null })).toBe("?user=u1&tab=keys&range=7d");
+  });
+
+  it("should remove stray panel person filters", () => {
+    expect(clean("?client_user=u2&range=7d")).toEqual({ query: "?range=7d", deniedAccess: false });
+    expect(clean("?client=claude-desktop&client_user=u2", internalUserAccess)).toEqual({
+      query: "?client=claude-desktop",
+      deniedAccess: false,
+    });
+  });
+});
+
+describe("client panel date range", () => {
+  it("should change the panel dates without changing overview filters or dates", () => {
+    const query = applyPatch("?user=u1&tab=models&range=30d&client=claude-desktop", clientDateRangePatch({}, "7d"));
+    const params = load(query);
+    expect(params.range).toBe("30d");
+    expect(params.user).toBe("u1");
+    expect(params.tab).toBe("models");
+    expect(params.client_range).toBe("7d");
+    expect(clientDateRangeFromParams(params)).toBeDefined();
+    expect(clean(query)).toBeNull();
+  });
+
+  it("should round-trip custom panel dates independently", () => {
+    const value = { from: new Date(2026, 9, 20), to: new Date(2026, 9, 22) };
+    const query = applyPatch("?client=claude-desktop&client_range=7d&range=30d", clientDateRangePatch(value, null));
+    const params = load(query);
+    expect(params.client_range).toBeNull();
+    expect(params.client_from).toBe("2026-10-20");
+    expect(params.client_to).toBe("2026-10-22");
+    expect(moment(clientDateRangeFromParams(params)?.from).format("YYYY-MM-DD")).toBe("2026-10-20");
+    expect(params.range).toBe("30d");
+  });
+
+  it("should clear only panel state on close or when opening a different client", () => {
+    const query = "?client=claude-desktop&client_user=u2&client_range=7d&range=30d&user=u1&tab=keys";
+    expect(applyPatch(query, clientPanelPatch(null))).toBe("?range=30d&user=u1&tab=keys");
+    const next = load(applyPatch(query, clientPanelPatch(UsageClient.ClaudeCode)));
+    expect(next.client).toBe("claude-code");
+    expect(next.client_range).toBeNull();
+    expect(next.range).toBe("30d");
+  });
+
+  it("should remove invalid or orphaned panel dates without clearing overview dates", () => {
+    expect(clean("?range=7d&client_range=30d")).toEqual({ query: "?range=7d", deniedAccess: false });
+    expect(clean("?range=7d&client=claude-desktop&client_from=bad&client_to=2026-10-22")).toEqual({
+      query: "?range=7d&client=claude-desktop",
+      deniedAccess: false,
+    });
+  });
+});
+
+describe("client team scope", () => {
+  it("should preserve an administered-team member filter and independent dates", () => {
+    const query =
+      "?view=team&team=engineering&client=claude-desktop&client_team=engineering&client_user=member&client_range=30d";
+    const access = { allowedViews: USAGE_OPTIONS, isAdmin: false, canViewTeamClients: true };
+    expect(cleanUsageUrl(load(query), access)).toBeNull();
+  });
+
+  it("should discard an unscoped person filter for an internal user", () => {
+    const cleanup = cleanUsageUrl(load("?client=claude-desktop&client_user=other"), internalUserAccess);
+    expect(cleanup?.patch).toMatchObject({ client_user: null });
+  });
+
+  it("should clear panel team and member without changing the overview's selected teams", () => {
+    const query = applyPatch(
+      "?view=team&team=engineering&client=claude-desktop&client_team=design&client_user=member",
+      clientPanelPatch(null),
+    );
+    expect(query).toBe("?view=team&team=engineering");
   });
 });

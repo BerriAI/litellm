@@ -12,6 +12,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     audio_or_image_in_message_content,
     convert_content_list_to_str,
+    drop_tool_reference_parts_from_tool_messages,
     filter_value_from_dict,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -250,7 +251,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         Operates on a deep copy so the caller's messages keep their thinking blocks
         and provider metadata, which a fallback to another provider still needs.
         """
-        stripped_messages: Final = copy.deepcopy(messages)
+        stripped_messages: Final = copy.deepcopy(drop_tool_reference_parts_from_tool_messages(messages))
         for message in stripped_messages:
             message_dict = cast(dict, message)  # cast-ok: TypedDict is a runtime dict stripped on our copy
             for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:

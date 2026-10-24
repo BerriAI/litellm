@@ -87,7 +87,7 @@ async def ollama_aembeddings(
     model: str,
     prompts: list[str],
     model_response: EmbeddingResponse,
-    optional_params: dict,
+    optional_params: Mapping[str, object],
     logging_obj: object,
     encoding: TokenEncoder | None,
 ):
@@ -110,7 +110,7 @@ def ollama_embeddings(
     api_base: str,
     model: str,
     prompts: list[str],
-    optional_params: dict,
+    optional_params: Mapping[str, object],
     model_response: EmbeddingResponse,
     logging_obj: object,
     encoding: TokenEncoder | None = None,

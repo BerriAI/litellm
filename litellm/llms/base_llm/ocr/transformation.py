@@ -4,7 +4,7 @@ Base OCR types shared by the Rust OCR route and Python consumers.
 
 import builtins
 from collections.abc import Mapping
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from pydantic import PrivateAttr
 
@@ -45,7 +45,7 @@ class OCRPageImage(LiteLLMPydanticObjectBase):
     """Image extracted from OCR page."""
 
     image_base64: str | None = None
-    bbox: dict[str, Any] | None = None
+    bbox: dict[str, builtins.object] | None = None
 
     model_config = {"extra": "allow"}
 
@@ -80,7 +80,7 @@ class OCRResponse(LiteLLMPydanticObjectBase):
 
     pages: list[OCRPage]
     model: str
-    document_annotation: Any | None = None
+    document_annotation: builtins.object | None = None
     usage_info: OCRUsageInfo | None = None
     content: str | None = None
     tables: list[dict[str, builtins.object]] | None = None

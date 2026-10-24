@@ -5,7 +5,7 @@ Might include fastapi/proxy requirements.txt related imports
 """
 
 from collections.abc import Iterable, Sequence
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from fastapi_sso.sso.base import OpenID
 
@@ -94,4 +94,4 @@ def get_litellm_user_role(role_str: object) -> LitellmUserRoles | None:
 class CustomOpenID(OpenID):
     team_ids: list[str]
     user_role: LitellmUserRoles | None = None
-    extra_fields: dict[str, Any] | None = None
+    extra_fields: dict[str, object] | None = None

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import type { DateRangePickerValue } from "./date_picker_types";
 import moment from "moment";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 
 interface AdvancedDatePickerProps {
   value: DateRangePickerValue;
@@ -13,6 +13,7 @@ interface AdvancedDatePickerProps {
   className?: string;
   showTimeRange?: boolean;
   align?: "left" | "right";
+  compact?: boolean;
 }
 
 export interface RelativeTimeOption {
@@ -84,7 +85,9 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   className,
   showTimeRange = true,
   align = "right",
+  compact = false,
 }) => {
+  const inputId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
@@ -279,21 +282,28 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   };
 
   return (
-    <div className={cn("flex items-center gap-3", className)}>
+    <div
+      className={cn("flex items-center gap-3", compact && "w-full min-w-0 flex-col items-stretch gap-1.5", className)}
+    >
       {label && <p className="text-sm font-medium text-foreground whitespace-nowrap">{label}</p>}
-      <div className="relative" ref={dropdownRef}>
+      <div className={cn("relative", compact && "w-full min-w-0")} ref={dropdownRef}>
         {/* Main input display */}
         <button
           type="button"
           data-slot="advanced-date-picker-trigger"
           aria-expanded={isOpen}
-          className="w-[300px] px-3 py-2 text-sm text-left border border-border rounded-md bg-card cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring"
+          className={cn(
+            "px-3 py-2 text-sm text-left border border-border rounded-md bg-card cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring",
+            compact ? "w-full min-w-0" : "w-[300px]",
+          )}
           onClick={() => setIsOpen(!isOpen)}
         >
           <span className="flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <Clock className="size-4 text-muted-foreground" />
-              <span className="text-foreground">{formatDisplayRange(value.from, value.to)}</span>
+            <span className={cn("flex items-center gap-2", compact && "min-w-0")}>
+              <Clock className="size-4 shrink-0 text-muted-foreground" />
+              <span className={cn("text-foreground", compact && "truncate")}>
+                {formatDisplayRange(value.from, value.to)}
+              </span>
             </span>
             <svg
               className={`w-4 h-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`}
@@ -312,17 +322,18 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
             data-slot="advanced-date-picker-panel"
             data-align={align}
             className={cn(
-              "absolute top-full z-floating min-w-[600px] mt-1 bg-card border border-border rounded-lg shadow-xl",
+              "absolute top-full z-floating mt-1 bg-card border border-border rounded-lg shadow-xl",
+              compact ? "min-w-0 w-full" : "min-w-[600px]",
               align === "left" ? "left-0" : "right-0",
             )}
           >
-            <div className="flex">
+            <div className={cn("flex", compact && "flex-col")}>
               {/* Left side - Relative time options */}
-              <div className="w-1/2 border-r border-border">
+              <div className={cn("border-border", compact ? "w-full border-b" : "w-1/2 border-r")}>
                 <div className="p-3 border-b border-border">
                   <span className="text-sm font-semibold text-foreground">Relative time</span>
                 </div>
-                <div className="h-[350px] overflow-y-auto">
+                <div className={cn("overflow-y-auto", compact ? "grid h-auto grid-cols-2" : "h-[350px]")}>
                   {relativeTimeOptions.map((option) => {
                     const isSelected = selectedOption === option.shortLabel;
                     return (
@@ -331,9 +342,11 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                         type="button"
                         data-slot="advanced-date-picker-preset"
                         aria-pressed={isSelected}
-                        className={`flex w-full items-center justify-between px-5 py-4 text-left cursor-pointer border-b border-border transition-colors ${
-                          isSelected ? "bg-info/10 hover:bg-info/15 border-info/20" : "hover:bg-accent"
-                        }`}
+                        className={cn(
+                          "flex w-full items-center justify-between text-left cursor-pointer border-b border-border transition-colors",
+                          compact ? "min-w-0 gap-2 px-3 py-2.5" : "px-5 py-4",
+                          isSelected ? "bg-info/10 hover:bg-info/15 border-info/20" : "hover:bg-accent",
+                        )}
                         onClick={() => handleRelativeTimeSelect(option)}
                       >
                         <span className={`text-sm ${isSelected ? "text-info font-medium" : "text-foreground"}`}>
@@ -353,7 +366,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
               </div>
 
               {/* Right side - Custom date selection */}
-              <div className="w-1/2 relative">
+              <div className={cn("relative", compact ? "w-full min-w-0" : "w-1/2")}>
                 <div className="p-3.5 border-b border-border">
                   <div className="flex items-center gap-2">
                     <Calendar className="size-4 text-muted-foreground" />
@@ -361,46 +374,61 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                   </div>
                 </div>
 
-                <div className="p-6 space-y-6 pb-20">
+                <div className={compact ? "grid grid-cols-2 gap-3 p-3" : "p-6 space-y-6 pb-20"}>
                   {/* Start date */}
-                  <div>
-                    <label className="text-sm text-foreground mb-1 block">Start date</label>
+                  <div className={compact ? "min-w-0" : undefined}>
+                    <label htmlFor={`${inputId}-start`} className="text-sm text-foreground mb-1 block">
+                      Start date
+                    </label>
                     <input
+                      id={`${inputId}-start`}
                       type="date"
                       value={startDate}
                       onChange={(e) => {
                         setPickedPreset(null);
                         setStartDate(e.target.value);
                       }}
-                      className={`w-65 px-3 py-2 text-sm border rounded-md cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring ${
+                      className={cn(
+                        "px-3 py-2 text-sm border rounded-md cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring",
+                        compact ? "w-full min-w-0" : "w-65",
                         !validation.isValid
                           ? "border-destructive/30 focus:border-destructive focus:ring-red-200"
-                          : "border-border"
-                      }`}
+                          : "border-border",
+                      )}
                     />
                   </div>
 
                   {/* End date */}
-                  <div>
-                    <label className="text-sm text-foreground mb-1 block">End date</label>
+                  <div className={compact ? "min-w-0" : undefined}>
+                    <label htmlFor={`${inputId}-end`} className="text-sm text-foreground mb-1 block">
+                      End date
+                    </label>
                     <input
+                      id={`${inputId}-end`}
                       type="date"
                       value={endDate}
                       onChange={(e) => {
                         setPickedPreset(null);
                         setEndDate(e.target.value);
                       }}
-                      className={`w-65 px-3 py-2 text-sm border rounded-md cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring ${
+                      className={cn(
+                        "px-3 py-2 text-sm border rounded-md cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring",
+                        compact ? "w-full min-w-0" : "w-65",
                         !validation.isValid
                           ? "border-destructive/30 focus:border-destructive focus:ring-red-200"
-                          : "border-border"
-                      }`}
+                          : "border-border",
+                      )}
                     />
                   </div>
 
                   {/* Error message */}
                   {!validation.isValid && validation.error && (
-                    <div className="bg-destructive/10 border border-destructive/20 rounded-md p-3">
+                    <div
+                      className={cn(
+                        "bg-destructive/10 border border-destructive/20 rounded-md p-3",
+                        compact && "col-span-2",
+                      )}
+                    >
                       <div className="flex items-center gap-2">
                         <svg className="w-4 h-4 text-destructive" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path
@@ -417,7 +445,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
                   {/* Current selection time range */}
                   {tempValue.from && tempValue.to && validation.isValid && (
-                    <div className="bg-info/10 p-3 rounded-md space-y-1">
+                    <div className={cn("bg-info/10 p-3 rounded-md space-y-1", compact && "col-span-2")}>
                       <div className="text-xs text-info">
                         <span className="font-medium">From:</span>{" "}
                         {moment(tempValue.from).format("MMM D, YYYY [at] HH:mm:ss")}
@@ -430,7 +458,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                   )}
                 </div>
 
-                <div className="absolute bottom-4 right-4">
+                <div className={compact ? "flex justify-end px-3 pb-3" : "absolute bottom-4 right-4"}>
                   <div className="flex gap-2">
                     <Button variant="secondary" onClick={handleCancel}>
                       Cancel

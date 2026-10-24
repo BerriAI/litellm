@@ -7,7 +7,7 @@ import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrgan
 
 export default function UsagePage() {
   useAuthorized();
-  const { data: teams } = useTeams();
+  const { data: teams, isLoading: teamsLoading } = useTeams();
   const { data: organizations } = useOrganizations();
-  return <NewUsagePage teams={teams ?? []} organizations={organizations ?? []} />;
+  return <NewUsagePage teams={teams ?? []} organizations={organizations ?? []} teamsLoading={teamsLoading} />;
 }
