@@ -3122,6 +3122,15 @@ def cost_tracking():
         litellm.logging_callback_manager.add_litellm_callback(db_logger)
         litellm.logging_callback_manager.add_litellm_async_success_callback(db_logger)
         litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
+    else:
+        # No DB logger means nothing reconciled auth's in-memory reservation after
+        # success (callback_bound=True skipped the request-end release). Register a
+        # success-only reconciler so no-database custom_auth budgets do not stick. #45895
+        from litellm.proxy.hooks.budget_reservation_reconcile_logger import (
+            BudgetReservationReconcileLogger,
+        )
+
+        litellm.logging_callback_manager.add_litellm_async_success_callback(BudgetReservationReconcileLogger())
 
 
 async def _drain_spend_event_producer_on_shutdown() -> None:
