@@ -739,3 +739,21 @@ async def test_recomputed_cost_of_a_served_bridge_response_prices_the_reasoning_
     assert logging_obj.cost_breakdown is not None
     assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+@pytest.mark.parametrize("tool_choice", [{}, {"name": "get_weather"}, {"type": "web_search"}])
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_messages_rejects_invalid_tool_choice_before_provider_call(
+    tool_choice: dict[str, str], stream: bool
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.anthropic_messages(
+            model="openai/gpt-6.1-sol",
+            max_tokens=8,
+            messages=[{"role": "user", "content": "Hello"}],
+            tool_choice=tool_choice,
+            stream=stream,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "tool_choice" in exc_info.value.message

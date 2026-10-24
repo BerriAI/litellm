@@ -29,6 +29,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
     prompt_cache_key_from_user_id,
+    validate_anthropic_tool_choice,
 )
 from litellm.types.llms.anthropic import (
     AllAnthropicPassThroughMessageValues,
@@ -496,6 +497,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         tool_choice: AnthropicMessagesToolChoice,
     ) -> str | dict[str, object]:
         """Convert Anthropic tool_choice to Responses API tool_choice."""
+        validate_anthropic_tool_choice(tool_choice)
         tc_type: Final = tool_choice.get("type")
         if tc_type == "any":
             return "required"
@@ -662,7 +664,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         # tool_choice
         tool_choice: Final = anthropic_request.get("tool_choice")
-        if tool_choice:
+        if tool_choice is not None:
             responses_kwargs["tool_choice"] = self.translate_tool_choice_to_responses_api(
                 cast(AnthropicMessagesToolChoice, tool_choice)
             )

@@ -624,7 +624,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data["temperature"] = temperature
         if thinking:
             request_data["thinking"] = thinking
-        if tool_choice:
+        if tool_choice is not None:
             request_data["tool_choice"] = tool_choice
         if tools:
             request_data["tools"] = tools
