@@ -1069,10 +1069,8 @@ def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
     [
         # Model with supported_regions=["global"], no user region -> use "global"
         ({"supported_regions": ["global"]}, None, "global"),
-        # Model with supported_regions=["global"], user passes unsupported region -> override to "global"
-        ({"supported_regions": ["global"]}, "us-central1", "global"),
-        # Model with supported_regions=["global"], user passes unsupported region -> override to "global"
-        ({"supported_regions": ["global"]}, "europe-west1", "global"),
+        ({"supported_regions": ["global"]}, "us-central1", "us-central1"),
+        ({"supported_regions": ["global"]}, "europe-west1", "europe-west1"),
         # Model with supported_regions=["us-west2"], no user region -> use "us-west2"
         ({"supported_regions": ["us-west2"]}, None, "us-west2"),
         # Model with supported_regions=["us-west2", "us-central1"], user passes supported region -> respect it
@@ -1081,11 +1079,10 @@ def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
             "us-central1",
             "us-central1",
         ),
-        # Model with supported_regions=["us-west2", "us-central1"], user passes unsupported region -> override
         (
             {"supported_regions": ["us-west2", "us-central1"]},
             "europe-west1",
-            "us-west2",
+            "europe-west1",
         ),
         # No model_cost entry, no user region -> default us-central1
         ({}, None, "us-central1"),
@@ -1110,6 +1107,32 @@ def test_get_vertex_region_global_only_model(model_cost_entry, vertex_region, ex
         result = vertex_base.get_vertex_region(vertex_region=vertex_region, model="test-model")
 
         assert result == expected_region
+
+
+@pytest.mark.parametrize("model", ["gemini-3.7-flash", "gemini-3.8-flash", "gemini-4-argon"])
+@pytest.mark.parametrize(
+    "vertex_region, expected_region",
+    [
+        (None, "global"),
+        ("global", "global"),
+        ("us", "us"),
+        ("eu", "eu"),
+        ("us-central1", "us-central1"),
+        ("europe-west1", "europe-west1"),
+    ],
+)
+def test_gemini_defaults_to_global_and_preserves_explicit_regions(
+    model: str, vertex_region: str | None, expected_region: str
+) -> None:
+    """Location availability verified 2026-10-19:
+
+    https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-7-flash
+    https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-8-flash
+    https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-argon
+    """
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    assert VertexBase.get_vertex_region(vertex_region=vertex_region, model=model) == expected_region
 
 
 def test_vertex_filter_format_uri():
