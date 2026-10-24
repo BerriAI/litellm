@@ -60,3 +60,20 @@ pub async fn add_team_spend(
         .await?;
     Ok(())
 }
+
+pub async fn add_end_user_spend(
+    executor: impl PgExecutor<'_>,
+    spend: &EntitySpend,
+) -> Result<(), Error> {
+    if spend.is_empty() {
+        return Ok(());
+    }
+    sqlx::query_file!(
+        "queries/spend/add_end_user_spend.sql",
+        &spend.ids,
+        &spend.costs
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
