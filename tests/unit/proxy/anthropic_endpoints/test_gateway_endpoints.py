@@ -875,7 +875,8 @@ def test_gateway_model_discovery_disabled(monkeypatch: pytest.MonkeyPatch, setti
 
 
 @pytest.mark.asyncio
-async def test_gateway_model_discovery_preserves_route_exemptions(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("route", ["/models", "/v1/models", "/claude_code_gateway/v1/models"])
+async def test_gateway_model_discovery_preserves_route_exemptions(monkeypatch: pytest.MonkeyPatch, route: str) -> None:
     from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
 
     import litellm
@@ -883,7 +884,6 @@ async def test_gateway_model_discovery_preserves_route_exemptions(monkeypatch: p
     from litellm.proxy.auth.auth_checks import common_checks
     from litellm.proxy.auth.route_checks import RouteChecks
 
-    route: Final = "/claude_code_gateway/v1/models"
     monkeypatch.setattr(litellm, "max_budget", 1.0)
     result: Final = await common_checks(
         request_body={},
