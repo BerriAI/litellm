@@ -1,9 +1,10 @@
 use std::sync::LazyLock;
 
+use http::{HeaderMap, header::AUTHORIZATION};
+
 use litellm_auth::{AwsParams, CredentialPlacement, ParamKind, ParamSpec, SecretValue};
 use litellm_auth_aws::{AwsCredentialSource, resolve_aws_region};
 use litellm_core_utils::settings::resolve_non_empty;
-use litellm_http::request::{header_value, with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
@@ -18,7 +19,7 @@ use crate::{
         transformation::{transform_messages_request, update_headers_with_safeguards_beta},
     },
     base_llm::{
-        auth::{AuthScheme, Headers, ValidatedEnvironment},
+        auth::{AuthScheme, ValidatedEnvironment, header_str, header_value},
         messages::{context::MessagesTransformContext, transformation::BaseMessagesConfig},
     },
     bedrock::common_utils::validated_region,
@@ -58,14 +59,14 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
 
     fn validate_environment(
         &self,
-        headers: Headers,
+        mut headers: HeaderMap,
         api_key: Option<&str>,
         _model: &str,
         optional_params: &MessagesOptionalParams,
         params: &LitellmParams,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        let workspace = header_value(&headers, WORKSPACE_HEADER)
+        let workspace = header_str(&headers, WORKSPACE_HEADER)
             .filter(|value| !value.trim().is_empty())
             .or_else(|| {
                 WORKSPACE_FIELDS.iter().find_map(|field| {
@@ -75,18 +76,19 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
             });
         let workspace = resolve_non_empty(workspace, env, WORKSPACE_ENVS)
             .ok_or_else(|| Error::Auth(WORKSPACE.missing("Claude Platform on AWS")))?;
-        let headers = with_header(headers, WORKSPACE_HEADER, workspace);
+        headers.insert(WORKSPACE_HEADER, header_value(WORKSPACE_HEADER, workspace)?);
         let key = resolve_non_empty(api_key, env, &["ANTHROPIC_AWS_API_KEY"]);
-        let headers = without_headers(headers, &["authorization"]);
-        if header_value(&headers, "x-api-key").is_some_and(|value| !value.trim().is_empty()) {
+        headers.remove(AUTHORIZATION);
+        if header_str(&headers, "x-api-key").is_some_and(|value| !value.trim().is_empty()) {
             return Ok(ValidatedEnvironment {
                 headers,
                 auth: AuthScheme::Forwarded,
             });
         }
+        headers.remove("x-api-key");
         if let Some(key) = key {
             return Ok(ValidatedEnvironment {
-                headers: without_headers(headers, &["x-api-key"]),
+                headers,
                 auth: AuthScheme::Credential {
                     placement: CredentialPlacement::Header("x-api-key"),
                     secret: SecretValue::new(key),
@@ -95,7 +97,7 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         }
         let base = resolve_non_empty(params.api_base.as_deref(), env, BASE_ENVS);
         Ok(ValidatedEnvironment {
-            headers: without_headers(headers, &["x-api-key"]),
+            headers,
             auth: AuthScheme::AwsSigV4 {
                 region: platform_region(base.as_deref(), params, env)?,
                 service: SERVICE,
@@ -161,8 +163,12 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         DEFAULT_HEADERS
     }
 
-    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        let headers = match WORKSPACE_FIELDS.iter().find_map(|field| {
+    fn request_headers(
+        &self,
+        mut headers: HeaderMap,
+        request: &MessagesRequest,
+    ) -> Result<HeaderMap, Error> {
+        if let Some(workspace) = WORKSPACE_FIELDS.iter().find_map(|field| {
             request
                 .params
                 .extra
@@ -170,9 +176,8 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
                 .as_str()
                 .filter(|value| !value.trim().is_empty())
         }) {
-            Some(workspace) => with_header(headers, WORKSPACE_HEADER, workspace.into()),
-            None => headers,
-        };
+            headers.insert(WORKSPACE_HEADER, header_value(WORKSPACE_HEADER, workspace)?);
+        }
         update_headers_with_safeguards_beta(headers, request, BetaProvider::Anthropic)
     }
 
@@ -251,6 +256,7 @@ fn invalid_request(error: serde_json::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use litellm_http::request::header_map;
     use litellm_llms_types::providers::anthropic::AnthropicBeta;
     use rstest::rstest;
     use serde_json::json;
@@ -260,7 +266,7 @@ mod tests {
         assert_eq!(
             BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
                 .validate_environment(
-                    vec![],
+                    HeaderMap::new(),
                     Some("key"),
                     "claude-test",
                     &MessagesOptionalParams::default(),
@@ -278,10 +284,7 @@ mod tests {
     fn forwarded_keys_win_and_blank_keys_fall_back(#[case] key: &str, #[case] forwarded: bool) {
         let environment = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
             .validate_environment(
-                vec![
-                    ("X-Api-Key".into(), key.into()),
-                    ("authorization".into(), "stale".into()),
-                ],
+                header_map(&[("X-Api-Key", key), ("authorization", "stale")]),
                 Some("explicit"),
                 "claude-test",
                 &MessagesOptionalParams::default(),
@@ -290,15 +293,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            header_value(&environment.headers, WORKSPACE_HEADER),
+            header_str(&environment.headers, WORKSPACE_HEADER),
             Some("workspace")
         );
-        assert_eq!(header_value(&environment.headers, "authorization"), None);
+        assert_eq!(header_str(&environment.headers, "authorization"), None);
         if forwarded {
-            assert_eq!(header_value(&environment.headers, "x-api-key"), Some(key));
+            assert_eq!(header_str(&environment.headers, "x-api-key"), Some(key));
             assert!(matches!(environment.auth, AuthScheme::Forwarded));
         } else {
-            assert_eq!(header_value(&environment.headers, "x-api-key"), None);
+            assert_eq!(header_str(&environment.headers, "x-api-key"), None);
             assert!(
                 matches!(environment.auth, AuthScheme::Credential { secret, placement: CredentialPlacement::Header("x-api-key") } if secret.expose() == "explicit")
             );
@@ -351,7 +354,7 @@ mod tests {
             .unwrap();
         let environment = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
             .validate_environment(
-                vec![],
+                HeaderMap::new(),
                 None,
                 "claude-test",
                 &MessagesOptionalParams::default(),
@@ -376,9 +379,11 @@ mod tests {
         #[case] expected: Option<&str>,
     ) {
         let request = serde_json::from_value(json!({"model": "claude-test", "max_tokens": 16, "messages": [], "safeguards": safeguards})).unwrap();
-        let headers = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG.request_headers(vec![], &request);
+        let headers = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .request_headers(HeaderMap::new(), &request)
+            .unwrap();
         assert_eq!(
-            header_value(&headers, "anthropic-beta").map(|value| value.to_string()),
+            header_str(&headers, "anthropic-beta").map(|value| value.to_string()),
             expected.map(str::to_string)
         );
     }
@@ -404,10 +409,12 @@ mod tests {
         let transformed = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
             .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
             .unwrap();
-        let headers = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG.request_headers(vec![], &transformed);
+        let headers = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .request_headers(HeaderMap::new(), &transformed)
+            .unwrap();
         let expected_beta = AnthropicBeta::ContextManagement20250627.to_string();
         assert_eq!(
-            header_value(&headers, "anthropic-beta")
+            header_str(&headers, "anthropic-beta")
                 .is_some_and(|value| value.split(',').any(|beta| beta == expected_beta)),
             keep_context
         );

@@ -202,7 +202,7 @@ async fn projection_custom_operations_and_hooks_feed_the_http_response(intercept
                 .before_provider_request(
                     WireRequest {
                         url: request.into(),
-                        headers: Vec::new(),
+                        headers: http::HeaderMap::new(),
                         body: json!({}),
                     },
                     RequestContext {
@@ -510,7 +510,7 @@ async fn hook_rejection_stops_execution_and_is_reported_once(
                     .before_provider_request(
                         WireRequest {
                             url: "url".into(),
-                            headers: Vec::new(),
+                            headers: http::HeaderMap::new(),
                             body: json!({}),
                         },
                         RequestContext {
@@ -624,7 +624,7 @@ async fn unary_calls_use_into_response_after_hooks_and_before_success(intercepto
                 .before_provider_request(
                     WireRequest {
                         url: request.into(),
-                        headers: Vec::new(),
+                        headers: http::HeaderMap::new(),
                         body: json!({}),
                     },
                     RequestContext {

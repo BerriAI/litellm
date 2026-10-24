@@ -24,10 +24,12 @@ from uvicorn.main import main as uvicorn_main
 
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 from litellm.proxy.db.pgbouncer import (
+    PGBOUNCER_MANAGED_SHUTDOWN_SECONDS,
     ManagedPgBouncerRuntime,
     PgBouncerError,
     PgBouncerSettings,
     export_pooled_database_url,
+    pgbouncer_startup_signals,
     start_in_container_pgbouncer,
     start_managed_pgbouncer,
 )
@@ -60,7 +62,12 @@ def pool_database_url(
     upstream_url: Final = environ.get("DATABASE_URL")
     if upstream_url is None:
         return PgBouncerError("LITELLM_PGBOUNCER_ENABLED is set but no DATABASE_URL could be assembled")
-    return start_in_container_pgbouncer(pgbouncer, upstream_url, token_auth=settings.token_auth())
+    return start_in_container_pgbouncer(
+        pgbouncer,
+        upstream_url,
+        token_auth=settings.token_auth(),
+        shutdown_timeout_seconds=PGBOUNCER_MANAGED_SHUTDOWN_SECONDS,
+    )
 
 
 def managed_pool_database_url(
@@ -149,14 +156,16 @@ def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -
                 sys.exit(f"LiteLLM gateway supervisor: {failure.reason}")
             return
 
-    python_settings: Final = DatabaseURLSettings.from_env()
-    python_settings.apply_to_env()
-    pooled_url: Final = pool_database_url(python_settings, PgBouncerSettings(), os.environ)
-    if isinstance(pooled_url, PgBouncerError):
-        sys.exit(f"LiteLLM gateway: in-container pgbouncer could not start: {pooled_url.reason}")
-    if pooled_url is not None:
-        export_pooled_database_url(pooled_url)
-    serve(uvicorn_argv(argv, os.environ))
+    pgbouncer: Final = PgBouncerSettings()
+    with pgbouncer_startup_signals(pgbouncer.enabled):
+        settings: Final = DatabaseURLSettings.from_env()
+        settings.apply_to_env()
+        pooled_url: Final = pool_database_url(settings, pgbouncer, os.environ)
+        if isinstance(pooled_url, PgBouncerError):
+            sys.exit(f"LiteLLM gateway: in-container pgbouncer could not start: {pooled_url.reason}")
+        if pooled_url is not None:
+            export_pooled_database_url(pooled_url)
+        serve(uvicorn_argv(argv, os.environ))
 
 
 if __name__ == "__main__":

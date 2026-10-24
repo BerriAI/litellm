@@ -1,3 +1,5 @@
+use http::{HeaderMap, header::AUTHORIZATION};
+use litellm_auth::{CredentialPlacement, http::apply_credential};
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -47,7 +49,7 @@ pub struct MistralOcrConfig;
 impl BaseOcrConfig for MistralOcrConfig {
     type OcrParams = OpaqueParams;
     type ProviderRequest = MistralOcrRequest;
-    type Environment = Vec<(String, String)>;
+    type Environment = HeaderMap;
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &[
@@ -113,7 +115,7 @@ impl BaseOcrConfig for MistralOcrConfig {
         model: &str,
         document: OcrDocument,
         optional_params: &OpaqueParams,
-        _headers: &[(String, String)],
+        _headers: &HeaderMap,
     ) -> Result<MistralOcrRequest, Error> {
         Ok(MistralOcrRequest {
             model: model.to_string(),
@@ -137,8 +139,8 @@ impl MistralOcrConfig {
         &self,
         connection: &OcrConnection,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-    ) -> Result<Vec<(String, String)>, Error> {
-        if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
+    ) -> Result<HeaderMap, Error> {
+        if connection.extra_headers.contains_key(AUTHORIZATION) {
             return Ok(connection.extra_headers.clone());
         }
         let api_key = connection
@@ -156,11 +158,11 @@ impl MistralOcrConfig {
                 provider: "Mistral",
                 environment_variable: MISTRAL_OCR_API_KEY_ENV_VAR,
             })?;
-        Ok(
-            std::iter::once(("Authorization".into(), format!("Bearer {api_key}")))
-                .chain(connection.extra_headers.clone())
-                .collect(),
-        )
+        Ok(apply_credential(
+            connection.extra_headers.clone(),
+            &api_key,
+            CredentialPlacement::Bearer,
+        )?)
     }
 
     fn build_ocr_url(&self, api_base: Option<&str>) -> Result<String, Error> {
@@ -216,11 +218,11 @@ mod tests {
     #[fixture]
     fn connection(
         #[default(None)] api_key: Option<&str>,
-        #[default(vec![])] extra_headers: Vec<(String, String)>,
+        #[default(&[])] extra_headers: &[(&str, &str)],
     ) -> OcrConnection {
         OcrConnection {
             api_key: api_key.map(litellm_auth::SecretValue::new),
-            extra_headers,
+            extra_headers: litellm_http::request::header_map(extra_headers),
             ..OcrConnection::default()
         }
     }
@@ -312,7 +314,7 @@ mod tests {
     fn request_transform_uses_already_mapped_params_without_filtering_again(document: OcrDocument) {
         let params = serde_json::from_value(json!({"extension":{"nested":null}})).unwrap();
         let body = MistralOcrConfig
-            .transform_ocr_request("model", document, &params, &[])
+            .transform_ocr_request("model", document, &params, &http::HeaderMap::new())
             .unwrap();
         assert_eq!(
             serde_json::to_value(body).unwrap()["extension"],
@@ -483,7 +485,7 @@ mod tests {
             .unwrap();
         let result = serde_json::to_value(
             MistralOcrConfig
-                .transform_ocr_request("model", document.clone(), &params, &[])
+                .transform_ocr_request("model", document.clone(), &params, &http::HeaderMap::new())
                 .unwrap(),
         )
         .unwrap();
@@ -509,7 +511,12 @@ mod tests {
         let params: OpaqueParams = serde_json::from_value(json!({name:value.clone()})).unwrap();
         let result = serde_json::to_value(
             MistralOcrConfig
-                .transform_ocr_request("mistral-ocr-latest", document, &params, &[])
+                .transform_ocr_request(
+                    "mistral-ocr-latest",
+                    document,
+                    &params,
+                    &http::HeaderMap::new(),
+                )
                 .unwrap(),
         )
         .unwrap();
@@ -527,7 +534,12 @@ mod tests {
         .unwrap();
         let result = serde_json::to_value(
             MistralOcrConfig
-                .transform_ocr_request("mistral-ocr-latest", document, &params, &[])
+                .transform_ocr_request(
+                    "mistral-ocr-latest",
+                    document,
+                    &params,
+                    &http::HeaderMap::new(),
+                )
                 .unwrap(),
         )
         .unwrap();
@@ -614,15 +626,14 @@ mod tests {
         assert_eq!(
             MistralOcrConfig
                 .resolve_headers(&connection, &|_| Some("environment".into()))
-                .unwrap()[0],
-            ("Authorization".into(), expected.into())
+                .unwrap(),
+            litellm_http::request::header_map(&[("authorization", expected)])
         );
     }
 
     #[rstest]
     fn environment_preserves_forwarded_authorization(
-        #[with(None, vec![("authorization".into(), "Bearer forwarded".into())])]
-        connection: OcrConnection,
+        #[with(None, &[("authorization", "Bearer forwarded")])] connection: OcrConnection,
     ) {
         assert_eq!(
             MistralOcrConfig
@@ -634,17 +645,16 @@ mod tests {
 
     #[rstest]
     fn environment_keeps_extra_headers_after_the_bearer_key(
-        #[with(Some("explicit"), vec![("X-Trace".into(), "trace-1".into())])]
-        connection: OcrConnection,
+        #[with(Some("explicit"), &[("X-Trace", "trace-1")])] connection: OcrConnection,
     ) {
         assert_eq!(
             MistralOcrConfig
                 .resolve_headers(&connection, &|_| None)
                 .unwrap(),
-            [
-                ("Authorization".to_string(), "Bearer explicit".to_string()),
-                ("X-Trace".to_string(), "trace-1".to_string()),
-            ]
+            litellm_http::request::header_map(&[
+                ("authorization", "Bearer explicit"),
+                ("x-trace", "trace-1"),
+            ])
         );
     }
 

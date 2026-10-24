@@ -3356,6 +3356,7 @@ version = "0.0.1"
 name = "litellm-auth"
 version = "0.1.0"
 dependencies = [
+ "http 1.4.2",
  "litellm-auth-aws",
  "litellm-auth-azure",
  "litellm-auth-gcp",
@@ -3429,6 +3430,7 @@ dependencies = [
 name = "litellm-auth-types"
 version = "0.1.0"
 dependencies = [
+ "http 1.4.2",
  "litellm-error",
  "rstest",
  "serde",
@@ -3648,6 +3650,7 @@ dependencies = [
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
+ "http 1.4.2",
  "litellm-auth",
  "litellm-error",
  "litellm-host",
@@ -3930,6 +3933,7 @@ name = "litellm-host"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-coroutine",
  "rstest",
@@ -3959,6 +3963,7 @@ name = "litellm-host-native"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "http 1.4.2",
  "litellm-host",
  "rstest",
  "serde_json",
@@ -3971,6 +3976,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures-util",
+ "http 1.4.2",
  "litellm-coroutine",
  "litellm-error",
  "litellm-host",
@@ -4018,6 +4024,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-cache",
  "litellm-cache-memory",
@@ -4047,6 +4054,7 @@ name = "litellm-inference-chat"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-cache-memory",
  "litellm-cache-response",
@@ -4074,6 +4082,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-cache-memory",
@@ -4107,6 +4116,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-gcp",
@@ -4140,6 +4150,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-cache",
  "litellm-cache-memory",
@@ -4181,6 +4192,7 @@ name = "litellm-inference-transcription"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-core-utils",
  "litellm-error",
@@ -4207,6 +4219,7 @@ dependencies = [
  "bytes",
  "data-url",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-azure",

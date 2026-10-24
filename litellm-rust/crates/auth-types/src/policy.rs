@@ -1,3 +1,5 @@
+use http::HeaderMap;
+
 use crate::http::apply_credential;
 use crate::{CredentialPlacement, Error, ErrorDetail, ResolvedCredential};
 
@@ -30,27 +32,23 @@ pub struct ProviderAuthPolicy {
 }
 
 impl ProviderAuthPolicy {
-    pub fn has_existing_credential(&self, headers: &[(String, String)]) -> bool {
+    pub fn has_existing_credential(&self, headers: &HeaderMap) -> bool {
         self.existing_credential_header(headers).is_some()
     }
 
-    fn existing_credential_header(&self, headers: &[(String, String)]) -> Option<&'static str> {
+    fn existing_credential_header(&self, headers: &HeaderMap) -> Option<&'static str> {
         self.accepted_existing_headers
             .iter()
             .copied()
-            .find(|accepted| {
-                headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(accepted))
-            })
+            .find(|accepted| headers.contains_key(*accepted))
     }
 
     pub fn apply(
         &self,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         kind: CredentialPlanKind,
         credential: &ResolvedCredential,
-    ) -> Result<Vec<(String, String)>, Error> {
+    ) -> Result<HeaderMap, Error> {
         if let Some(existing) = self.existing_credential_header(&headers) {
             return match self.existing_header_behavior {
                 ExistingHeaderBehavior::Preserve => Ok(headers),
@@ -89,23 +87,21 @@ mod tests {
     fn rules_define_allowed_plans_and_credential_placement() {
         let headers = POLICY
             .apply(
-                Vec::new(),
+                http::HeaderMap::new(),
                 CredentialPlanKind::Static,
                 &ResolvedCredential::Static(SecretValue::new("secret")),
             )
             .unwrap();
 
-        assert_eq!(
-            headers,
-            vec![("x-api-key".to_string(), "secret".to_string())]
-        );
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers["x-api-key"], "secret");
     }
 
     #[test]
     fn unsupported_plan_is_rejected() {
         let error = POLICY
             .apply(
-                Vec::new(),
+                http::HeaderMap::new(),
                 CredentialPlanKind::Entra,
                 &ResolvedCredential::Static(SecretValue::new("secret")),
             )

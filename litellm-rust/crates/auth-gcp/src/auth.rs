@@ -1,6 +1,7 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use gcp_auth::{CustomServiceAccount, TokenProvider};
+use http::{HeaderMap, header::AUTHORIZATION};
 use litellm_auth_types::{CredentialPlacement, Error, ErrorDetail, http::apply_credential};
 use moka::future::Cache;
 use serde_json::Value;
@@ -18,7 +19,7 @@ use crate::{
 };
 
 pub struct VertexEnvironment {
-    pub headers: Vec<(String, String)>,
+    pub headers: HeaderMap,
     pub project_id: String,
 }
 
@@ -57,14 +58,12 @@ impl VertexAuth {
 
     pub async fn validate_environment(
         &self,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         api_key: Option<&str>,
         config: &VertexConfig,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<VertexEnvironment, Error> {
-        let has_authorization = headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("Authorization"));
+        let has_authorization = headers.contains_key(AUTHORIZATION);
         let static_token = api_key
             .map(str::trim)
             .filter(|value| !value.is_empty())

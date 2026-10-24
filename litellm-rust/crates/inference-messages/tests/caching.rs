@@ -64,7 +64,7 @@ async fn messages_cache_identity_includes_provider_native_parameters(
                     },
                     Some(&WireRequest {
                         url: "https://example.test/v1/messages".into(),
-                        headers: vec![],
+                        headers: http::HeaderMap::new(),
                         body: json!({
                             "model":"test", "messages":[{"role":"user","content":"hello"}],
                             "max_tokens":32, (field):value

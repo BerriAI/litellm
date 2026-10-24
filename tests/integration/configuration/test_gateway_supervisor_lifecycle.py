@@ -5,12 +5,18 @@ import subprocess
 import sys
 import textwrap
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 import pytest
 
+from gateway.launch import (
+    _pooled_child_environments,  # pyright: ignore[reportPrivateUsage]  # exercise the child env policy
+)
+from gateway.supervisor import ChildProcess, SupervisorConfig, SupervisorFailure, supervise
 from litellm.proxy.db.pgbouncer import (
     ManagedPgBouncerRuntime,
     PgBouncerSettings,
@@ -74,6 +80,18 @@ signal.signal(signal.SIGTERM, stop)
 if role == "python" and mode == "exit":
     threading.Timer(0.5, server.shutdown).start()
 server.serve_forever()
+"""
+LAUNCH_MAIN_SOURCE: Final = """\
+import os
+from pathlib import Path
+from gateway.launch import main
+
+def serve(_argv):
+    Path(os.environ["TEST_SERVE_MARKER"]).write_text(
+        os.environ["LITELLM_PGBOUNCER_ENABLED"] + "|" + os.environ.get("DATABASE_URL", "")
+    )
+
+main((), serve)
 """
 SUPERVISOR_SOURCE: Final = """\
 import os
@@ -140,6 +158,28 @@ if failure is not None:
     print(failure.reason, file=sys.stderr)
     sys.exit(1)
 """
+
+
+@dataclass(frozen=True, slots=True)
+class _FailAfterPythonStartRunner:
+    python_command: tuple[str, ...]
+    python_pid_file: Path
+    cleanup: ExitStack
+
+    def start(self, command: tuple[str, ...], environment: Mapping[str, str]) -> ChildProcess:
+        if command != self.python_command:
+            raise OSError("injected Rust gateway start failure")
+        process: Final = subprocess.Popen(
+            command,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        self.cleanup.callback(_terminate_if_running, process)
+        self.python_pid_file.write_text(str(process.pid))
+        return process
 
 
 def _start_supervisor(
@@ -266,7 +306,7 @@ def test_managed_pgbouncer_stop_is_bounded_and_guards_its_owned_pid(tmp_path: Pa
 def test_launch_cleans_up_managed_pooler_when_startup_is_interrupted(tmp_path: Path) -> None:
     pid_file: Final = tmp_path / "pooler.pid"
     config_file: Final = tmp_path / "pooler-config"
-    process: Final = subprocess.Popen(
+    process: Final = subprocess.Popen(  # test-quality-ok: child must import the working-tree gateway.launch module
         (
             sys.executable,
             "-m",
@@ -293,7 +333,7 @@ def test_launch_cleans_up_managed_pooler_when_startup_is_interrupted(tmp_path: P
     )
     try:
         pooler_pid: Final = _wait_for_pid(pid_file)
-        os.kill(process.pid, signal.SIGTERM)
+        os.kill(process.pid, signal.SIGTERM)  # test-quality-ok: Interrupt startup to exercise managed cleanup
         assert process.wait(timeout=20) == 143
         assert not Path(f"/proc/{pooler_pid}").exists()
         runtime_dir: Final = Path(config_file.read_text()).parent
@@ -304,16 +344,13 @@ def test_launch_cleans_up_managed_pooler_when_startup_is_interrupted(tmp_path: P
 
 def _wait_for_pid(pid_file: Path) -> int:
     deadline: Final = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        try:
-            pid: Final = int(pid_file.read_text())
-        except (OSError, ValueError):
-            time.sleep(0.05)
-            continue
-        if Path(f"/proc/{pid}").exists():
-            return pid
-        time.sleep(0.05)
-    pytest.fail("managed PgBouncer did not record a live process")
+    pooler_pid: Final = next(
+        (pid for pid in _recorded_pooler_pids(pid_file, deadline) if Path(f"/proc/{pid}").exists()),
+        None,
+    )
+    if pooler_pid is None:
+        pytest.fail("managed PgBouncer did not record a live process")
+    return pooler_pid
 
 
 def _recorded_pooler_pids(pid_file: Path, deadline: float) -> Iterator[int]:
@@ -337,23 +374,53 @@ def _wait_for_replacement_pooler(pid_file: Path, original_pid: int) -> int | Non
     )
 
 
+def test_database_free_python_child_runs_launch_with_pooling_disabled(tmp_path: Path) -> None:
+    serve_marker: Final = tmp_path / "serve"
+    inherited_environment: Final = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("DATABASE_") and name not in ("DIRECT_URL", "LITELLM_PGBOUNCER_POOLED_DATABASE_URL")
+    }
+    rust_environment: Final = {
+        **inherited_environment,
+        "LITELLM_RUST_GATEWAY": "false",
+        "LITELLM_PGBOUNCER_ENABLED": "true",
+        "TEST_SERVE_MARKER": str(serve_marker),
+    }
+    python_environment, _ = _pooled_child_environments(rust_environment, {}, None)
+    child: Final = subprocess.run(
+        (sys.executable, "-P", "-c", LAUNCH_MAIN_SOURCE),
+        cwd=ROOT,
+        env=python_environment,
+        capture_output=True,
+        timeout=10,
+    )
+    assert child.returncode == 0, child.stderr.decode(errors="replace")
+    assert serve_marker.read_text() == "false|"
+
+
 def _wait_for_gateway(process: subprocess.Popen[bytes], port: int) -> None:
     deadline: Final = time.monotonic() + 10
     while time.monotonic() < deadline:
         if process.poll() is not None:
             pytest.fail(f"supervisor exited early with status {process.returncode}")
-        connection: Final = http.client.HTTPConnection("127.0.0.1", port, timeout=0.2)
-        try:
-            connection.request("GET", "/health/readiness")
-            response: Final = connection.getresponse()
-            response.read()
-            if response.status == 200:
-                return
-        except OSError:
-            pass
-        finally:
-            connection.close()
+        if _gateway_readiness_status(port) == 200:
+            return
+        time.sleep(0.05)
     pytest.fail("supervisor did not start both child listeners")
+
+
+def _gateway_readiness_status(port: int) -> int | None:
+    connection: Final = http.client.HTTPConnection("127.0.0.1", port, timeout=0.2)
+    try:
+        connection.request("GET", "/health/readiness")
+        response: Final = connection.getresponse()
+        response.read()
+        return response.status
+    except OSError:
+        return None
+    finally:
+        connection.close()
 
 
 def _terminate_if_running(process: subprocess.Popen[bytes]) -> None:
@@ -399,6 +466,57 @@ def test_supervisor_cleans_up_python_when_rust_cannot_start(tmp_path: Path) -> N
         assert events.read_text().splitlines() == ["python"]
     finally:
         _terminate_if_running(process)
+
+
+def test_supervisor_cleans_children_and_managed_pooler_when_rust_start_raises(tmp_path: Path) -> None:
+    server: Final = tmp_path / "server.py"
+    server.write_text(SERVER_SOURCE)
+    python_pid_file: Final = tmp_path / "python.pid"
+    python_command: Final = (
+        sys.executable,
+        "-P",
+        str(server),
+        "python",
+        str(allocate_port()),
+        str(tmp_path / "events"),
+        "normal",
+        str(tmp_path / "orphan.pid"),
+    )
+    pooler: Final = start_managed_pgbouncer(
+        PgBouncerSettings(enabled=True, port=allocate_port(), binary=str(_fake_pgbouncer(tmp_path))),
+        "postgresql://litellm:password@127.0.0.1/litellm",
+    )
+    assert isinstance(pooler, ManagedPgBouncerRuntime), pooler
+    pooler_pid: Final = pooler.pooler.pid
+    config: Final = SupervisorConfig(
+        python_command=python_command,
+        rust_command=("/injected/rust-gateway",),
+        python_environment={},
+        rust_environment={},
+        public_probe_host="127.0.0.1",
+        public_port=allocate_port(),
+        private_port=int(python_command[4]),
+        startup_timeout=5,
+        rust_drain_timeout=1,
+        python_grace_timeout=1,
+        termination_grace_timeout=5,
+        managed_pooler=pooler,
+    )
+    try:
+        with ExitStack() as child_cleanup:
+            failure: Final = supervise(
+                config,
+                runner=_FailAfterPythonStartRunner(python_command, python_pid_file, child_cleanup),
+            )
+            assert isinstance(failure, SupervisorFailure)
+            assert "injected Rust gateway start failure" in failure.reason
+            python_pid: Final = int(python_pid_file.read_text())
+            assert not Path(f"/proc/{python_pid}").exists()
+            assert pooler_pid is not None
+            assert not Path(f"/proc/{pooler_pid}").exists()
+            assert not pooler.runtime_dir.exists()
+    finally:
+        pooler.stop(time.monotonic() + 2)
 
 
 @pytest.mark.parametrize("exiting_child", ("python", "rust"))

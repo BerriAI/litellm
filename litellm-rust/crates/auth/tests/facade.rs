@@ -20,14 +20,12 @@ fn facade_applies_shared_auth_policy() {
 
     let headers = policy
         .apply(
-            Vec::new(),
+            http::HeaderMap::new(),
             CredentialPlanKind::Static,
             &ResolvedCredential::Static(SecretValue::new("secret")),
         )
         .expect("facade policy applies");
 
-    assert_eq!(
-        headers,
-        vec![("x-api-key".to_string(), "secret".to_string())]
-    );
+    assert_eq!(headers.len(), 1);
+    assert_eq!(headers["x-api-key"], "secret");
 }

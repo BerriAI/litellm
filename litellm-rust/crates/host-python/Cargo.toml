@@ -22,5 +22,6 @@ pyo3-async-runtimes.workspace = true
 pythonize = "0.29.0"
 
 [dev-dependencies]
+http.workspace = true
 rstest.workspace = true
 serde_json.workspace = true

@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 futures-util.workspace = true
+http.workspace = true
 litellm-auth.workspace = true
 litellm-coroutine.workspace = true
 serde_json.workspace = true

@@ -47,13 +47,12 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Generator, Mapping, Sequence
-from contextlib import ExitStack
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from types import MappingProxyType
-from typing import Final
+from types import FrameType, MappingProxyType
+from typing import Final, NoReturn
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -77,6 +76,7 @@ PGBOUNCER_CA_NAME: Final = "server-ca.pem"
 PGBOUNCER_RESTART_DELAY_SECONDS: Final = 1.0
 PGBOUNCER_READY_TIMEOUT_SECONDS: Final = 15.0
 PGBOUNCER_STOP_GRACE_SECONDS: Final = 10.0
+PGBOUNCER_MANAGED_SHUTDOWN_SECONDS: Final = 30.0
 PGBOUNCER_UNPRIVILEGED_USER: Final = "nobody"
 PGBOUNCER_MIN_VERSION: Final = (1, 19)
 PGBOUNCER_MAX_PASSWORD_BYTES: Final = 2048
@@ -398,6 +398,8 @@ class PgBouncerTokenRefresher:
             token: Final = self._source.mint()
         except Exception as mint_error:
             return PgBouncerError(f"could not mint a {label} for the in-container pgbouncer: {mint_error!r}")
+        if self._stopping.is_set():
+            return self._fallback_seconds
         if len(token.encode()) >= PGBOUNCER_MAX_PASSWORD_BYTES:
             return PgBouncerError(
                 f"the {label} is {len(token.encode())} bytes long, but PgBouncer's auth file holds passwords of at "
@@ -442,8 +444,11 @@ class PgBouncerTokenRefresher:
         )
         return outcome
 
-    def stop(self, deadline: float | None = None) -> None:
+    def request_stop(self) -> None:
         self._stopping.set()
+
+    def stop(self, deadline: float | None = None) -> None:
+        self.request_stop()
         if self._thread is not None:
             if deadline is None:
                 self._thread.join()
@@ -676,6 +681,10 @@ def _install_upstream_password(
     pooler: PgBouncerProcess,
     token_auth: DatabaseTokenAuth | None,
     upstream_url: str,
+    startup_cleanup: ExitStack,
+    refresher_factory: Callable[
+        [PgBouncerTokenSource, Callable[[str], None]], PgBouncerTokenRefresher
+    ] = PgBouncerTokenRefresher,
 ) -> PgBouncerTokenRefresher | None | PgBouncerError:
     if token_auth is None:
         if plan.upstream_password is None:
@@ -685,15 +694,12 @@ def _install_upstream_password(
             )
         write_userlist(plan.userlist(plan.upstream_password), runtime_dir, run_as_user)
         return None
-    refresher: Final = PgBouncerTokenRefresher(
+    refresher: Final = refresher_factory(
         PgBouncerTokenSource(auth=token_auth, endpoint=parse_iam_endpoint_from_url(upstream_url)),
         functools.partial(install_pgbouncer_token, plan, runtime_dir, run_as_user, pooler),
     )
-    try:
-        failed: Final = refresher.start()
-    except BaseException:
-        refresher.stop(time.monotonic() + PGBOUNCER_STOP_GRACE_SECONDS)
-        raise
+    startup_cleanup.callback(_stop_managed_refresher, refresher)
+    failed: Final = refresher.start()
     if failed is not None:
         return failed
     return refresher
@@ -708,6 +714,28 @@ def _only_in_this_process(action: Callable[[], None]) -> Callable[[], None]:
             action()
 
     return run
+
+
+def _raise_for_startup_signal(signum: int, _frame: FrameType | None) -> NoReturn:
+    raise SystemExit(128 + signum)
+
+
+@contextmanager
+def pgbouncer_startup_signals(enabled: bool) -> Generator[None, None, None]:
+    if not enabled:
+        yield
+        return
+    previous_term: Final = signal.getsignal(signal.SIGTERM)
+    previous_int: Final = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGTERM, _raise_for_startup_signal)
+    try:
+        signal.signal(signal.SIGINT, _raise_for_startup_signal)
+        try:
+            yield
+        finally:
+            signal.signal(signal.SIGINT, previous_int)
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
 
 
 def _stop_managed_pooler(pooler: PgBouncerProcess) -> None:
@@ -731,18 +759,25 @@ class ManagedPgBouncerRuntime:
             yield pid
 
     def stop(self, deadline: float | None = None) -> None:
+        if self.refresher is not None:
+            self.refresher.request_stop()
         try:
             self.pooler.stop(deadline)
         finally:
-            if self.refresher is not None:
-                self.refresher.stop(deadline)
-            shutil.rmtree(self.runtime_dir, ignore_errors=True)
+            try:
+                if self.refresher is not None:
+                    self.refresher.stop(deadline)
+            finally:
+                shutil.rmtree(self.runtime_dir, ignore_errors=True)
 
 
 def start_managed_pgbouncer(
     settings: PgBouncerSettings,
     upstream_url: str,
     token_auth: DatabaseTokenAuth | None = None,
+    refresher_factory: Callable[
+        [PgBouncerTokenSource, Callable[[str], None]], PgBouncerTokenRefresher
+    ] = PgBouncerTokenRefresher,
 ) -> ManagedPgBouncerRuntime | PgBouncerError:
     version: Final = pgbouncer_version(settings.binary)
     if isinstance(version, PgBouncerError):
@@ -753,10 +788,10 @@ def start_managed_pgbouncer(
             f"cannot tell it apart from another listener; {PGBOUNCER_MIN_VERSION[0]}.{PGBOUNCER_MIN_VERSION[1]} "
             "or newer is required"
         )
-    runtime_dir: Final = Path(tempfile.mkdtemp(prefix="litellm-pgbouncer-"))
-    run_as_user: Final = PGBOUNCER_UNPRIVILEGED_USER if os.geteuid() == 0 else None
     with ExitStack() as startup_cleanup:
+        runtime_dir: Final = Path(tempfile.mkdtemp(prefix="litellm-pgbouncer-"))
         startup_cleanup.callback(shutil.rmtree, runtime_dir, ignore_errors=True)
+        run_as_user: Final = PGBOUNCER_UNPRIVILEGED_USER if os.geteuid() == 0 else None
         plan: Final = plan_pgbouncer(upstream_url, settings, runtime_dir, run_as_user)
         if isinstance(plan, PgBouncerError):
             return plan
@@ -770,12 +805,17 @@ def start_managed_pgbouncer(
         )
         startup_cleanup.callback(_stop_managed_pooler, pooler)
         refresher_result: Final = _install_upstream_password(
-            plan, runtime_dir, run_as_user, pooler, token_auth, upstream_url
+            plan,
+            runtime_dir,
+            run_as_user,
+            pooler,
+            token_auth,
+            upstream_url,
+            startup_cleanup,
+            refresher_factory,
         )
         if isinstance(refresher_result, PgBouncerError):
             return refresher_result
-        if refresher_result is not None:
-            startup_cleanup.callback(_stop_managed_refresher, refresher_result)
         failed: Final = pooler.start(time.monotonic() + PGBOUNCER_STOP_GRACE_SECONDS)
         if failed is not None:
             return failed
@@ -789,11 +829,17 @@ def start_managed_pgbouncer(
         return runtime
 
 
+def _stop_managed_runtime_before_exit(runtime: ManagedPgBouncerRuntime, timeout_seconds: float) -> None:
+    runtime.stop(time.monotonic() + timeout_seconds)
+
+
 def start_in_container_pgbouncer(
     settings: PgBouncerSettings,
     upstream_url: str,
     token_auth: DatabaseTokenAuth | None = None,
     register_exit_hook: Callable[[Callable[[], None]], object] = atexit.register,
+    *,
+    shutdown_timeout_seconds: float | None = None,
 ) -> str | PgBouncerError:
     """Start the pooler for ``upstream_url`` and return the loopback URL the workers must use.
 
@@ -807,7 +853,12 @@ def start_in_container_pgbouncer(
     runtime: Final = start_managed_pgbouncer(settings, upstream_url, token_auth)
     if isinstance(runtime, PgBouncerError):
         return runtime
-    register_exit_hook(_only_in_this_process(runtime.stop))
+    cleanup: Final = (
+        runtime.stop
+        if shutdown_timeout_seconds is None
+        else functools.partial(_stop_managed_runtime_before_exit, runtime, shutdown_timeout_seconds)
+    )
+    register_exit_hook(_only_in_this_process(cleanup))
     verbose_proxy_logger.info(
         "In-container pgbouncer (pid %s) listening on %s:%s; capping this pod at %s upstream database connections%s.",
         runtime.pooler.pid,

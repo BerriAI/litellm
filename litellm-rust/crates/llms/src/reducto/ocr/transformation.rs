@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
 
+use http::{HeaderMap, header::AUTHORIZATION};
+use litellm_auth::{CredentialPlacement, http::apply_credential};
+
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -91,7 +94,7 @@ pub struct ReductoParseV3Config;
 impl BaseOcrConfig for ReductoParseV3Config {
     type OcrParams = ReductoV3Params;
     type ProviderRequest = ReductoV3Request;
-    type Environment = Vec<(String, String)>;
+    type Environment = HeaderMap;
 
     fn secret_names(&self) -> Vec<&'static str> {
         vec![REDUCTO_API_KEY_ENV]
@@ -135,7 +138,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
         _model: &str,
         document: OcrDocument,
         optional_params: &Self::OcrParams,
-        _headers: &[(String, String)],
+        _headers: &HeaderMap,
     ) -> Result<Self::ProviderRequest, Error> {
         Ok(ReductoV3Request {
             input: uploaded_file_id(document)?,
@@ -148,7 +151,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
         _model: &str,
         document: OcrDocument,
         optional_params: &ReductoV3Params,
-        headers: &[(String, String)],
+        headers: &HeaderMap,
         context: OcrRequestContext<'_>,
     ) -> Result<ReductoV3Request, Error> {
         let file_id = ensure_file_id_async(document, headers, context).await?;
@@ -183,7 +186,7 @@ pub struct ReductoParseLegacyConfig;
 impl BaseOcrConfig for ReductoParseLegacyConfig {
     type OcrParams = ReductoLegacyParams;
     type ProviderRequest = ReductoLegacyRequest;
-    type Environment = Vec<(String, String)>;
+    type Environment = HeaderMap;
 
     fn secret_names(&self) -> Vec<&'static str> {
         vec![REDUCTO_API_KEY_ENV]
@@ -227,7 +230,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         _model: &str,
         document: OcrDocument,
         optional_params: &Self::OcrParams,
-        _headers: &[(String, String)],
+        _headers: &HeaderMap,
     ) -> Result<Self::ProviderRequest, Error> {
         Ok(build_legacy_body(
             uploaded_file_id(document)?,
@@ -240,7 +243,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         _model: &str,
         document: OcrDocument,
         optional_params: &ReductoLegacyParams,
-        headers: &[(String, String)],
+        headers: &HeaderMap,
         context: OcrRequestContext<'_>,
     ) -> Result<ReductoLegacyRequest, Error> {
         let file_id = ensure_file_id_async(document, headers, context).await?;
@@ -269,7 +272,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
 /// Reducto differs from the shared `BaseOcrConfig::prepare_request` flow:
 /// guardrails see the *source* document before it is uploaded, because the
 /// final body only carries the opaque Reducto file id.
-async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, String)>>>(
+async fn prepare_upload_request<C: BaseOcrConfig<Environment = HeaderMap>>(
     config: &C,
     request: &PreparedOcrRequest,
     client: &OcrClient,
@@ -451,8 +454,8 @@ fn complete_endpoint_url(api_base: Option<&str>, path: &str) -> Result<String, E
 fn resolve_headers(
     connection: &OcrConnection,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Vec<(String, String)>, Error> {
-    if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
+) -> Result<HeaderMap, Error> {
+    if connection.extra_headers.contains_key(AUTHORIZATION) {
         return Ok(connection.extra_headers.clone());
     }
     let api_key = connection
@@ -470,11 +473,11 @@ fn resolve_headers(
             credential: REDUCTO_API_KEY_ENV,
             guidance: "set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()",
         })?;
-    Ok(
-        std::iter::once(("Authorization".into(), format!("Bearer {api_key}")))
-            .chain(connection.extra_headers.clone())
-            .collect(),
-    )
+    Ok(apply_credential(
+        connection.extra_headers.clone(),
+        &api_key,
+        CredentialPlacement::Bearer,
+    )?)
 }
 
 fn build_legacy_body(
@@ -494,7 +497,7 @@ fn build_legacy_body(
 
 async fn ensure_file_id_async(
     document: OcrDocument,
-    headers: &[(String, String)],
+    headers: &HeaderMap,
     context: OcrRequestContext<'_>,
 ) -> Result<ReductoFileId, Error> {
     if document.source().starts_with(REDUCTO_ID_PREFIX) {
@@ -518,7 +521,7 @@ async fn ensure_file_id_async(
 async fn upload_bytes_async(
     bytes: Vec<u8>,
     mime: &str,
-    headers: &[(String, String)],
+    headers: &HeaderMap,
     context: OcrRequestContext<'_>,
 ) -> Result<ReductoFileId, Error> {
     let OcrRequestContext { client, connection } = context;
@@ -589,7 +592,7 @@ mod tests {
                 "parse-v3",
                 document,
                 &params,
-                &[],
+                &http::HeaderMap::new(),
                 OcrRequestContext {
                     client: &client,
                     connection: &connection,
@@ -694,7 +697,7 @@ mod tests {
             ..Default::default()
         };
         let headers = resolve_headers(&connection, &|_| Some("env-key".into())).unwrap();
-        assert_eq!(headers[0].1, "Bearer passed-key");
+        assert_eq!(headers[AUTHORIZATION], "Bearer passed-key");
     }
 
     #[test]
@@ -704,13 +707,16 @@ mod tests {
             ..Default::default()
         };
         let headers = resolve_headers(&connection, &|_| Some(" env-key ".into())).unwrap();
-        assert_eq!(headers[0].1, "Bearer env-key");
+        assert_eq!(headers[AUTHORIZATION], "Bearer env-key");
     }
 
     #[test]
     fn existing_authorization_skips_key_lookup() {
         let connection = OcrConnection {
-            extra_headers: vec![("authorization".into(), "Bearer existing".into())],
+            extra_headers: litellm_http::request::header_map(&[(
+                "authorization",
+                "Bearer existing",
+            )]),
             ..Default::default()
         };
         assert_eq!(

@@ -105,10 +105,7 @@ async fn a_body_rewritten_by_before_send_is_what_gets_signed_and_sent() {
     let host = LocalOcrHost::new(textract_request(DETECT, &upstream.uri())).with_before_send(
         |mut wire, _| {
             assert!(
-                !wire
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case("authorization")),
+                !wire.headers.contains_key(http::header::AUTHORIZATION),
                 "the hook ran after signing"
             );
             wire.body["Document"]["Bytes"] = Value::from("cmVkYWN0ZWQ=");

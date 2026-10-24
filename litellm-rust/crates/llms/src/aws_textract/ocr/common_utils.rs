@@ -1,4 +1,5 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
+use http::{HeaderMap, HeaderValue, header::CONTENT_TYPE};
 use litellm_auth::AwsParams;
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer, resolve_aws_region};
 use litellm_http::outbound::RequestSigner;
@@ -14,8 +15,7 @@ use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrPage,
 
 const TEXTRACT_SERVICE: &str = "textract";
 const AWS_JSON_CONTENT_TYPE: &str = "application/x-amz-json-1.1";
-const TARGET_HEADER: &str = "X-Amz-Target";
-const CONTENT_TYPE_HEADER: &str = "Content-Type";
+const TARGET_HEADER: &str = "x-amz-target";
 const UNSUPPORTED_DOCUMENT: &str = "UnsupportedDocumentException";
 const SYNC_API_GUIDANCE: &str = "aws_textract uses Textract's synchronous API, which reads a JPEG, PNG, or a single-page PDF or TIFF; other formats and multi-page documents are not supported";
 const SYNC_DOCUMENT_MAX_BYTES: usize = 10 * 1024 * 1024;
@@ -211,13 +211,13 @@ pub struct TextractResponse {
 }
 
 pub struct TextractEnvironment {
-    headers: Vec<(String, String)>,
+    headers: HeaderMap,
     region: String,
     signer: SigV4Signer,
 }
 
 impl OcrEnvironment for TextractEnvironment {
-    fn headers(&self) -> &[(String, String)] {
+    fn headers(&self) -> &HeaderMap {
         &self.headers
     }
 
@@ -260,28 +260,14 @@ pub(super) async fn environment(
 
 /// A caller's copy of an operation header would reach the wire next to ours
 /// while the signature covers only one value, which Textract rejects.
-fn operation_headers(
-    extra_headers: &[(String, String)],
-    operation: TextractOperation,
-) -> Vec<(String, String)> {
-    let operation = [
-        (TARGET_HEADER, operation.target()),
-        (CONTENT_TYPE_HEADER, AWS_JSON_CONTENT_TYPE),
-    ];
-    extra_headers
-        .iter()
-        .filter(|(name, _)| {
-            !operation
-                .iter()
-                .any(|(operation_name, _)| name.eq_ignore_ascii_case(operation_name))
-        })
-        .cloned()
-        .chain(
-            operation
-                .iter()
-                .map(|(name, value)| (name.to_string(), value.to_string())),
-        )
-        .collect()
+fn operation_headers(extra_headers: &HeaderMap, operation: TextractOperation) -> HeaderMap {
+    let mut headers = extra_headers.clone();
+    headers.insert(TARGET_HEADER, HeaderValue::from_static(operation.target()));
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static(AWS_JSON_CONTENT_TYPE),
+    );
+    headers
 }
 
 pub(super) fn endpoint(request: &PreparedOcrRequest, environment: &TextractEnvironment) -> String {
@@ -598,12 +584,7 @@ mod tests {
         #[case] extra_headers: Vec<(&str, &str)>,
         #[case] kept: Vec<(&str, &str)>,
     ) {
-        let owned = |headers: Vec<(&str, &str)>| -> Vec<(String, String)> {
-            headers
-                .into_iter()
-                .map(|(name, value)| (name.to_string(), value.to_string()))
-                .collect()
-        };
+        let owned = |headers: Vec<(&str, &str)>| litellm_http::request::header_map(&headers);
 
         let headers =
             operation_headers(&owned(extra_headers), TextractOperation::DetectDocumentText);

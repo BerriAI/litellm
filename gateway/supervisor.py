@@ -23,7 +23,7 @@ from pydantic import TypeAdapter
 from uvicorn.main import main as uvicorn_main
 
 from gateway.launch import uvicorn_argv
-from litellm.proxy.db.pgbouncer import ManagedPgBouncerRuntime
+from litellm.proxy.db.pgbouncer import ManagedPgBouncerRuntime, pgbouncer_startup_signals
 
 RUST_GATEWAY_FLAG: Final = "LITELLM_RUST_GATEWAY"
 RUST_GATEWAY_BINARY: Final = "LITELLM_RUST_GATEWAY_BINARY"
@@ -397,21 +397,11 @@ def _restore_signal_handlers(
 
 @contextmanager
 def startup_scope() -> Generator[None, None, None]:
-    signals: Final = (signal.SIGTERM, signal.SIGINT)
-    previous: Final = tuple((handled, signal.getsignal(handled)) for handled in signals)
-
-    def abort_startup(signum: int, _frame: FrameType | None) -> None:
-        raise SystemExit(128 + signum)
-
-    try:
-        for handled in signals:
-            signal.signal(handled, abort_startup)
+    with pgbouncer_startup_signals(True):
         subreaper_failure: Final = _enable_subreaper()
         if subreaper_failure is not None:
             raise SystemExit(subreaper_failure.reason)
         yield
-    finally:
-        _restore_signal_handlers(previous)
 
 
 def _tcp_ready(host: str, port: int) -> bool:

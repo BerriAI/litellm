@@ -1,12 +1,13 @@
 use std::future::Future;
 
+use http::HeaderMap;
 use serde_json::Value;
 
 /// The provider request as it is about to leave, offered to the host for rewriting.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WireRequest {
     pub url: String,
-    pub headers: Vec<(String, String)>,
+    pub headers: HeaderMap,
     pub body: Value,
 }
 
@@ -158,7 +159,7 @@ mod tests {
     fn wire(url: &str) -> WireRequest {
         WireRequest {
             url: url.into(),
-            headers: Vec::new(),
+            headers: HeaderMap::new(),
             body: json!({}),
         }
     }

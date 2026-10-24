@@ -157,7 +157,7 @@ fn dispatching_call() -> TestMachine {
                 .before_provider_request(
                     WireRequest {
                         url: request.into(),
-                        headers: Vec::new(),
+                        headers: http::HeaderMap::new(),
                         body: json!({}),
                     },
                     RequestContext {

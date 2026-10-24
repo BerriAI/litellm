@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_core_utils::call_arguments::CallArguments;
 use serde::{Deserialize, Serialize};
 
@@ -72,7 +73,7 @@ impl BaseOcrConfig for TextractDetectTextConfig {
         _model: &str,
         document: OcrDocument,
         _optional_params: &(),
-        _headers: &[(String, String)],
+        _headers: &HeaderMap,
     ) -> Result<DetectDocumentTextRequest, Error> {
         Ok(DetectDocumentTextRequest {
             document: document_bytes(&document)?,
@@ -84,7 +85,7 @@ impl BaseOcrConfig for TextractDetectTextConfig {
         model: &str,
         document: OcrDocument,
         optional_params: &(),
-        headers: &[(String, String)],
+        headers: &HeaderMap,
         context: OcrRequestContext<'_>,
     ) -> Result<DetectDocumentTextRequest, Error> {
         let document = inline_document(document, context).await?;
@@ -201,7 +202,7 @@ mod tests {
     #[rstest]
     fn the_request_is_only_the_document_bytes(document: OcrDocument) {
         let request = TextractDetectTextConfig
-            .transform_ocr_request(MODEL, document, &(), &[])
+            .transform_ocr_request(MODEL, document, &(), &http::HeaderMap::new())
             .unwrap();
 
         assert_eq!(
@@ -215,7 +216,7 @@ mod tests {
         #[with("https://example.com/a.pdf")] document: OcrDocument,
     ) {
         let error = TextractDetectTextConfig
-            .transform_ocr_request(MODEL, document, &(), &[])
+            .transform_ocr_request(MODEL, document, &(), &http::HeaderMap::new())
             .unwrap_err();
 
         assert!(matches!(error, Error::InvalidDataUri));
@@ -227,7 +228,7 @@ mod tests {
 
         assert!(
             TextractDetectTextConfig
-                .transform_ocr_request(MODEL, document, &(), &[])
+                .transform_ocr_request(MODEL, document, &(), &http::HeaderMap::new())
                 .is_ok()
         );
     }

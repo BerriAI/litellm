@@ -1,3 +1,4 @@
+use http::HeaderMap;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
@@ -6,7 +7,7 @@ use serde_json::Value;
 
 use super::context::MessagesTransformContext;
 
-pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
+pub use crate::base_llm::auth::ValidatedEnvironment;
 use crate::{Error, base_llm::messages::streaming::StreamDecoder};
 
 pub trait BaseMessagesConfig: Sync {
@@ -54,7 +55,7 @@ pub trait BaseMessagesConfig: Sync {
     /// for every config.
     fn validate_environment(
         &self,
-        headers: Headers,
+        headers: HeaderMap,
         api_key: Option<&str>,
         model: &str,
         optional_params: &MessagesOptionalParams,
@@ -73,8 +74,12 @@ pub trait BaseMessagesConfig: Sync {
         &[("content-type", "application/json")]
     }
 
-    fn request_headers(&self, headers: Headers, _request: &MessagesRequest) -> Headers {
-        headers
+    fn request_headers(
+        &self,
+        headers: HeaderMap,
+        _request: &MessagesRequest,
+    ) -> Result<HeaderMap, Error> {
+        Ok(headers)
     }
 
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:
@@ -88,6 +93,7 @@ pub trait BaseMessagesConfig: Sync {
 mod tests {
     use super::*;
     use crate::base_llm::auth::AuthScheme;
+    use litellm_http::request::header_map as headers;
     use rstest::rstest;
 
     struct DefaultsConfig;
@@ -110,7 +116,7 @@ mod tests {
 
         fn validate_environment(
             &self,
-            headers: Headers,
+            headers: HeaderMap,
             _api_key: Option<&str>,
             _model: &str,
             _optional_params: &MessagesOptionalParams,
@@ -135,7 +141,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             DefaultsConfig.request_headers(headers(&[("x-api-key", "sk")]), &request),
-            headers(&[("x-api-key", "sk")])
+            Ok(headers(&[("x-api-key", "sk")]))
         );
     }
 
@@ -158,12 +164,5 @@ mod tests {
             DefaultsConfig.default_headers(),
             &[("content-type", "application/json")]
         );
-    }
-
-    fn headers(pairs: &[(&str, &str)]) -> Headers {
-        pairs
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect()
     }
 }
