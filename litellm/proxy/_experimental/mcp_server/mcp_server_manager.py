@@ -7216,11 +7216,30 @@ class MCPServerManager:
         if tool_name in self.tool_name_to_mcp_server_name_mapping:
             server_name: Final = self.tool_name_to_mcp_server_name_mapping[tool_name]
             normalised_lookup: Final = normalize_server_name(server_name)
-            if normalised_lookup in prefix_to_server:
-                return prefix_to_server[normalised_lookup]
-            for server in registry_servers:
-                if normalize_server_name(server.name) == normalised_lookup:
-                    return server
+            registry_prefix_hit: Final = prefix_to_server.get(normalised_lookup)
+            registry_candidate: Final = (
+                registry_prefix_hit
+                if registry_prefix_hit is not None
+                else next(
+                    (server for server in registry_servers if normalize_server_name(server.name) == normalised_lookup),
+                    None,
+                )
+            )
+            # The bare-name mapping is keyed off each server's own tool
+            # names, so any server may claim an arbitrary bare-name key. A
+            # name that carries a prefix-qualified wire form of a *different*
+            # registered server must not dispatch through the bare-name
+            # branch: an attacker server advertising e.g. "github-delete_repo"
+            # otherwise shadows the prefix-qualified github tool (and bypasses
+            # its per-tool ACL) (R2-23).
+            if registry_candidate is not None:
+                foreign_prefixes: Final = tuple(
+                    known_prefix
+                    for known_prefix, mapped_server in prefix_to_server.items()
+                    if mapped_server is not registry_candidate
+                )
+                if match_known_server_prefix(tool_name, foreign_prefixes) is None:
+                    return registry_candidate
 
         # If not found and tool name is prefixed, extract the prefix and
         # match against any known form.
