@@ -37,7 +37,6 @@ from litellm.constants import (
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
     DB_RETRY_SAFE_ERROR_TYPES,
     BaseDailySpendTransaction,
     DailyAgentSpendTransaction,
@@ -74,7 +73,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendTransaction,
     WindowSpendUpdateQueue,
 )
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, db_write_failure_is_requeue_safe
 from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.request_error_tracking import request_error_accumulator
 from litellm.proxy.db.rollup_lock_timeout import apply_rollup_lock_timeout
@@ -251,16 +250,6 @@ class _DailySpendCommit(Protocol[_DailySpendTransactionT]):
     ) -> None: ...
 
 
-_DATA_REJECTED_SQLSTATE_CLASSES: Final = frozenset({"22", "23"})
-
-
-def _spend_commit_failure_is_requeue_safe(e: Exception) -> bool:
-    if isinstance(e, DB_CONNECTION_ERROR_TYPES):
-        return isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
-    sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
-    return sqlstate is None or sqlstate[:2] not in _DATA_REJECTED_SQLSTATE_CLASSES
-
-
 _SpendTableName = Literal[
     "user_list_transactions",
     "end_user_list_transactions",
@@ -298,7 +287,7 @@ def _spend_tables_left_to_send(
         _SPEND_TABLE_COMMIT_ORDER[len(committed)] if len(committed) < len(_SPEND_TABLE_COMMIT_ORDER) else None
     )
     dropped: Final[frozenset[_SpendTableName]] = (
-        frozenset() if in_flight is None or _spend_commit_failure_is_requeue_safe(failure) else frozenset({in_flight})
+        frozenset() if in_flight is None or db_write_failure_is_requeue_safe(failure) else frozenset({in_flight})
     )
     if dropped and in_flight is not None:
         spend_log_error(
@@ -1635,8 +1624,6 @@ class DBSpendUpdateWriter:
             window_spend_update_queue=self.window_spend_update_queue,
         )
 
-        await self._flush_tool_discovery_queue(prisma_client=prisma_client)
-
         # Only commit from redis to db if this pod is the leader
         if await self.pod_lock_manager.acquire_lock(
             cronjob_id=DB_SPEND_UPDATE_JOB_NAME,
@@ -1781,7 +1768,7 @@ class DBSpendUpdateWriter:
                             window_spend_transactions=window_spend_update_transactions,
                         )
                     except Exception as e:
-                        if not _spend_commit_failure_is_requeue_safe(e):
+                        if not db_write_failure_is_requeue_safe(e):
                             uncommitted.pop("window_spend_update_transactions", None)
                             spend_log_error(
                                 "Spend tracking - dropped %d budget window increments: the failed statement may have "
@@ -1947,7 +1934,7 @@ class DBSpendUpdateWriter:
                 window_spend_transactions=window_spend_update_transactions,
             )
         except Exception as e:  # noqa: BLE001  # the increments go back on the queue; the rest of the flush must run
-            if _spend_commit_failure_is_requeue_safe(e):
+            if db_write_failure_is_requeue_safe(e):
                 spend_log_error(
                     "Spend tracking - failed to commit budget window spend updates. "
                     "Re-queued %d window increments for retry on next tick. Error: %s",
@@ -1964,9 +1951,6 @@ class DBSpendUpdateWriter:
                     str(e),
                     exc=e,
                 )
-
-        ################## Tool Registry Upserts ##################
-        await self._flush_tool_discovery_queue(prisma_client=prisma_client)
 
     async def commit_daily_tag_spend_to_db(
         self,
@@ -2099,20 +2083,6 @@ class DBSpendUpdateWriter:
             )
             raise
 
-    async def _flush_tool_discovery_queue(
-        self,
-        prisma_client: PrismaClient,
-    ) -> None:
-        """Flush ToolDiscoveryQueue and batch-upsert new tools into LiteLLM_ToolTable."""
-        from litellm.proxy.db.tool_registry_writer import batch_upsert_tools
-
-        try:
-            items: Final = self.tool_discovery_queue.flush()
-            if items:
-                await batch_upsert_tools(prisma_client=prisma_client, items=items)
-        except Exception as e:
-            verbose_proxy_logger.debug("_flush_tool_discovery_queue error (non-blocking): %s", e)
-
     @staticmethod
     async def handle_spend_update_failure(
         e: Exception,
@@ -2124,7 +2094,6 @@ class DBSpendUpdateWriter:
         """Retry a failed spend-update transaction on connection errors, deadlocks or a rollup
         ``lock_timeout`` (55P03), else re-raise. All three roll the transaction back before any
         increment applied, so re-sending the same batch cannot double-count."""
-        from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
         from litellm.proxy.utils import raise_failed_update_spend_exception
 
         is_retryable = (
@@ -2633,7 +2602,7 @@ class DBSpendUpdateWriter:
                                 _mark_daily_spend_commit_started()
                             _mark_daily_spend_commit_finished()
                         except Exception as batch_error:
-                            if _spend_commit_failure_is_requeue_safe(batch_error):
+                            if db_write_failure_is_requeue_safe(batch_error):
                                 spend_log_error(
                                     "Daily %s spend batch upsert failed. Table: %s, Rows: %d, Error: %s",
                                     entity_type,

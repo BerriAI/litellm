@@ -8,6 +8,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
+    DB_RETRY_SAFE_ERROR_TYPES,
     ProxyErrorTypes,
     ProxyException,
 )
@@ -637,3 +638,14 @@ async def call_with_db_reconnect_retry(
         # propagate — repeated reconnect-loops are the watchdog's job, not
         # this helper's.
         return await coro_factory()
+
+
+_DATA_REJECTED_SQLSTATE_CLASSES: Final = frozenset({"22", "23"})
+
+
+def db_write_failure_is_requeue_safe(e: Exception) -> bool:
+    """Whether a failed write provably never applied, so its rows can be sent again without double counting."""
+    if isinstance(e, DB_CONNECTION_ERROR_TYPES):
+        return isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
+    sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
+    return sqlstate is None or sqlstate[:2] not in _DATA_REJECTED_SQLSTATE_CLASSES
