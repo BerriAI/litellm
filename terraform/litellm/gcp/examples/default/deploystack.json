@@ -34,7 +34,7 @@
     },
     {
       "name": "allow_plaintext_lb",
-      "description": "Skip TLS on the load balancer (HTTP-only). Set true for trial/dev. For production, leave false and add lb_domains to terraform.tfvars after the first apply",
+      "description": "Skip TLS on the load balancer (HTTP-only). Set true for trial/dev. For EXTERNAL_MANAGED production, leave false and add lb_domains after bootstrap. For INTERNAL_MANAGED TLS, set both lb_domains and certificate_manager_certificates",
       "default": "true",
       "options": ["true", "false"]
     }
