@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readChatAttachment, toResponsesMessages } from "./attachmentHelpers";
 import { MAX_CHAT_IMAGE_BYTES } from "./imageHelpers";
-import type { ChatFileAttachment } from "./types";
+import type { ChatFileAttachment, MCPEvent } from "./types";
 
 const file: ChatFileAttachment = {
   id: "document-1",
@@ -34,12 +34,19 @@ describe("chat attachments", () => {
     await expect(readChatAttachment(large)).rejects.toThrow("10 MB");
   });
 
-  it("should preserve mixed files, images, and assistant history for Responses", () => {
+  it("should preserve mixed files, images, and tool-only assistant history for Responses", () => {
     const image = { id: "image-1", name: "diagram.png", url: "data:image/png;base64,aW1hZ2U=" };
+    const mcpEvents: MCPEvent[] = [
+      {
+        type: "response.output_item.done",
+        item: { type: "mcp_call", id: "lookup-1", name: "lookup", arguments: "{}", output: "Found it" },
+      },
+    ];
     expect(
       toResponsesMessages([
         { role: "user", content: "Compare", attachments: [image, file] },
-        { role: "assistant", content: "I read the file." },
+        { role: "assistant", content: "I read the file.", mcpEvents },
+        { role: "assistant", content: "", mcpEvents },
       ]),
     ).toEqual([
       {
@@ -50,7 +57,8 @@ describe("chat attachments", () => {
           { type: "input_file", filename: file.name, file_data: file.url },
         ],
       },
-      { role: "assistant", content: "I read the file." },
+      { role: "assistant", content: "I read the file.", mcpEvents },
+      { role: "assistant", content: "", mcpEvents },
     ]);
   });
 

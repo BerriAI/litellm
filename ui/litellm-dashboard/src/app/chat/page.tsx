@@ -23,7 +23,7 @@ import { recordChatQuery } from "@/lib/telemetry/chat";
 
 const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
 
-type ReplayMessage = Pick<ChatMessage, "role" | "content" | "attachments" | "generatedImages">;
+type ReplayMessage = Pick<ChatMessage, "role" | "content" | "attachments" | "generatedImages" | "mcpEvents">;
 
 function hasMessageContent(text: string, images: ChatAttachment[], mode: ChatMode): boolean {
   return Boolean(text.trim()) || (mode === "chat" && images.length > 0);
@@ -101,6 +101,8 @@ export default function ChatConversationPage() {
   const [isLoadingModels, setIsLoadingModels] = useState(true);
 
   const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
+  const responsesSessionGenerationRef = useRef(0);
+  const previousResponsesConversationRef = useRef(activeConversationId);
   const [prevConversationIdForSessionReset, setPrevConversationIdForSessionReset] = useState(activeConversationId);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
@@ -144,6 +146,16 @@ export default function ChatConversationPage() {
       .finally(() => setIsLoadingModels(false));
   }, [accessToken]);
 
+  useLayoutEffect(() => {
+    if (
+      previousResponsesConversationRef.current !== null &&
+      previousResponsesConversationRef.current !== activeConversationId
+    ) {
+      responsesSessionGenerationRef.current += 1;
+    }
+    previousResponsesConversationRef.current = activeConversationId;
+  }, [activeConversationId]);
+
   // Reset the responses session when switching between conversations so that
   // previous_response_id from conversation A is never sent for conversation B.
   if (activeConversationId !== prevConversationIdForSessionReset) {
@@ -167,6 +179,7 @@ export default function ChatConversationPage() {
         setAttachmentError("Remove the attached files before switching to image generation.");
         return;
       }
+      responsesSessionGenerationRef.current += 1;
       setSelectedModel(model.model_group);
       setMode(modelChatMode(model));
       setResponsesSessionId(null);
@@ -230,6 +243,7 @@ export default function ChatConversationPage() {
       const model = generationModel ?? selectedModel;
       if (!hasMessageContent(trimmed, images, requestMode) || !model) return;
       if (isStreaming || abortControllerRef.current || readAttachmentsRef.current) return;
+      const sessionGeneration = responsesSessionGenerationRef.current;
       setInputText("");
 
       let convId = activeConversationId;
@@ -286,7 +300,9 @@ export default function ChatConversationPage() {
         messages: history,
         previousResponseId,
         mcpServers: selectedMCPServers,
-        onResponseId: setResponsesSessionId,
+        onResponseId: (id: string | null) => {
+          if (responsesSessionGenerationRef.current === sessionGeneration) setResponsesSessionId(id);
+        },
         onUpdate: (updates: AssistantMessageUpdate) => updateLastAssistantMessage(convId, updates),
       };
       try {

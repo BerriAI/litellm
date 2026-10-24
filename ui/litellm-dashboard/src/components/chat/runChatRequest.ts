@@ -10,7 +10,10 @@ interface ChatRequestOptions {
   prompt: string;
   accessToken: string;
   signal: AbortSignal;
-  messages: Pick<ChatMessage, "role" | "content" | "attachments" | "generatedImages" | "imageGeneration">[];
+  messages: Pick<
+    ChatMessage,
+    "role" | "content" | "attachments" | "generatedImages" | "imageGeneration" | "mcpEvents"
+  >[];
   previousResponseId?: string | null;
   mcpServers?: string[];
   onResponseId: (id: string | null) => void;
@@ -93,11 +96,12 @@ export async function runChatRequest({
       (totalLatency) => onUpdate({ totalLatency }),
     );
     signal.throwIfAborted();
-    if (mcpEvents.length) onUpdate({ mcpEvents });
   } catch (error: unknown) {
     onResponseId(null);
     const stopped = signal.aborted || (error instanceof Error && error.name === "AbortError");
     const errorMessage = requestErrorMessage(error, messages, mode);
     onUpdate({ content: stopped ? content + " [stopped]" : content || errorMessage });
+  } finally {
+    if (mcpEvents.length) onUpdate({ mcpEvents });
   }
 }

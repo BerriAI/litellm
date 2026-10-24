@@ -1,4 +1,5 @@
-import type { MessageType, MultimodalContent } from "@/components/chat_ui/types";
+import type { MultimodalContent } from "@/components/chat_ui/types";
+import type { ResponsesMessage } from "@/components/llm_calls/responses_api";
 import { v4 as uuid } from "uuid";
 import { CHAT_IMAGE_ACCEPT, MAX_CHAT_IMAGE_BYTES, isChatImageUrl, readChatImage } from "./imageHelpers";
 import type { ChatAttachment, ChatFileAttachment, ChatMessage } from "./types";
@@ -72,12 +73,23 @@ export async function readChatAttachment(file: File): Promise<ChatAttachment> {
 }
 
 export function toResponsesMessages(
-  messages: Pick<ChatMessage, "role" | "content" | "attachments" | "generatedImages" | "imageGeneration">[],
-): MessageType[] {
-  return messages.flatMap((message): MessageType[] => {
+  messages: Pick<
+    ChatMessage,
+    "role" | "content" | "attachments" | "generatedImages" | "imageGeneration" | "mcpEvents"
+  >[],
+): ResponsesMessage[] {
+  return messages.flatMap((message): ResponsesMessage[] => {
     if (message.role === "tool") return [];
     if (message.role === "assistant") {
-      return message.content.trim() ? [{ role: "assistant", content: message.content }] : [];
+      return message.content.trim() || message.mcpEvents?.length
+        ? [
+            {
+              role: "assistant",
+              content: message.content,
+              ...(message.mcpEvents?.length ? { mcpEvents: message.mcpEvents } : {}),
+            },
+          ]
+        : [];
     }
     if (!message.attachments?.length) return [{ role: "user", content: message.content }];
     const content: MultimodalContent[] = [];

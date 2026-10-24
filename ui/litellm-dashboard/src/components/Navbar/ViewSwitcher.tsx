@@ -20,8 +20,10 @@ const CHAT = "chat";
 const MOYAI = "moyai";
 type WorkspaceIconName = typeof GATEWAY | typeof CHAT | typeof MOYAI;
 
-function isRoute(pathname: string, href: string): boolean {
-  return pathname === href || pathname.startsWith(`${href}/`);
+function isWorkspaceRoute(pathname: string, workspace: string): boolean {
+  const routes = [uiHref(workspace)];
+  if (process.env.NODE_ENV === "development") routes.push(`/ui/${workspace}`);
+  return routes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
 }
 
 function activeWorkspaceFor(
@@ -85,8 +87,8 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   const moyaiUrl = (uiSettings?.values?.moyai_url as string | undefined) ?? null;
 
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
-  const isChatRoute = isRoute(normalizedPathname, uiHref(CHAT));
-  const isMoyaiRoute = isRoute(normalizedPathname, uiHref(MOYAI));
+  const isChatRoute = isWorkspaceRoute(normalizedPathname, CHAT);
+  const isMoyaiRoute = isWorkspaceRoute(normalizedPathname, MOYAI);
   const isStandaloneRoute = isChatRoute || isMoyaiRoute;
 
   const { label: activeLabel, icon: activeIcon } = activeWorkspaceFor(
