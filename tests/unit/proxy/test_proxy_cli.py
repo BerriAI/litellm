@@ -1,4 +1,5 @@
 import inspect
+import json
 import logging
 import os
 from contextlib import nullcontext
@@ -23,6 +24,8 @@ import yaml
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
+import litellm
+from litellm._logging import turn_on_json
 from litellm.constants import GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
@@ -2875,6 +2878,22 @@ class TestRunServerDbSetup:
         mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
         assert ("--enforce_prisma_migration_check is deprecated and has no effect" in capsys.readouterr().out) is warned
 
+    @pytest.mark.parametrize("argument", ("--health", "--test"), ids=("health", "test"))
+    def test_the_retired_enforce_prisma_migration_check_opt_in_warns_on_health_and_test(self, argument, capsys):
+        """`--health` and `--test` return before the config is read, where a server start emits the
+        deprecation line; they still print it, as they did when the notice came before those returns."""
+        from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
+
+        with (
+            patch.object(ProxyInitializationHelpers, "run_health_check") as mock_health_check,
+            patch.object(ProxyInitializationHelpers, "run_test_chat_completion") as mock_test_chat,
+        ):
+            run_server.main([argument, "--enforce_prisma_migration_check"], standalone_mode=False)
+
+        expected_calls = (1, 0) if argument == "--health" else (0, 1)
+        assert (mock_health_check.call_count, mock_test_chat.call_count) == expected_calls
+        assert "--enforce_prisma_migration_check is deprecated and has no effect" in capsys.readouterr().out
+
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database", return_value=True)
@@ -3935,3 +3954,140 @@ class TestValidateConfigFlag:
         assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
         assert "config OK" in result.output
         mock_popen.assert_not_called()
+
+
+class TestJsonLogsConfigReachesSpawnedWorkers:
+    """`litellm_settings.json_logs: true` turns JSON on inside the CLI process, but the workers that
+    uvicorn or granian spawn are fresh interpreters that pick plain or JSON from the JSON_LOGS
+    environment variable at import. The CLI has to export it, or every worker logs plain text until
+    its own load_config reaches the key."""
+
+    @staticmethod
+    def _json_logs_env_after_boot(config_path: Path, litellm_settings: dict[str, object]) -> str | None:
+        config_path.write_text(yaml.dump({"model_list": [], "litellm_settings": litellm_settings}))
+        mock_proxy_config: Final = MagicMock()
+        mock_proxy_config.return_value.get_config = AsyncMock(return_value=yaml.safe_load(config_path.read_text()))
+        mock_proxy_module: Final = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=mock_proxy_config,
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "JSON_LOGS")}
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+            patch("atexit.register"),
+            patch("litellm.turn_on_json"),  # test-quality-ok: it swaps every logger handler in this pytest worker
+        ):
+            run_server.main(["--config", str(config_path), "--local", "--skip_server_startup"], standalone_mode=False)
+            return os.environ.get("JSON_LOGS")
+
+    def test_json_logs_true_exports_json_logs_to_spawned_workers(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(litellm, "json_logs", False)  # run_server flips it on; undone at teardown
+        assert self._json_logs_env_after_boot(tmp_path / "config.yaml", {"json_logs": True}) == "true"
+
+    def test_plain_logs_config_leaves_json_logs_unset(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(litellm, "json_logs", False)
+        assert self._json_logs_env_after_boot(tmp_path / "config.yaml", {}) is None
+
+
+class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:
+    """With a config file, the `--enforce_prisma_migration_check` deprecation notice waits until the config
+    is read, so a `json_logs: true` set only there makes it a JSON record. It is printed once either way,
+    and a boot whose config read fails still prints it before the error, as it did before the wait."""
+
+    NOTICE: Final = "--enforce_prisma_migration_check is deprecated and has no effect"
+
+    @staticmethod
+    def _boot(config_path: Path, get_config: AsyncMock) -> None:
+        mock_proxy_config: Final = MagicMock()
+        mock_proxy_config.return_value.get_config = get_config
+        mock_proxy_module: Final = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=mock_proxy_config,
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "JSON_LOGS")}
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+            patch("atexit.register"),
+            patch("litellm.turn_on_json"),  # test-quality-ok: it swaps every logger handler in this pytest worker
+        ):
+            run_server.main(
+                ["--config", str(config_path), "--local", "--skip_server_startup", "--enforce_prisma_migration_check"],
+                standalone_mode=False,
+            )
+
+    def test_a_config_read_that_fails_still_prints_the_notice(self, tmp_path: Path, monkeypatch, capsys) -> None:
+        monkeypatch.setattr(litellm, "json_logs", False)
+        missing: Final = tmp_path / "missing.yaml"
+
+        with pytest.raises(FileNotFoundError):
+            self._boot(missing, AsyncMock(side_effect=FileNotFoundError(f"Config file not found: {missing}")))
+
+        assert capsys.readouterr().out.count(self.NOTICE) == 1
+
+    def test_a_plain_config_prints_the_notice_once(self, tmp_path: Path, monkeypatch, capsys) -> None:
+        monkeypatch.setattr(litellm, "json_logs", False)
+
+        self._boot(tmp_path / "config.yaml", AsyncMock(return_value={"model_list": [], "litellm_settings": {}}))
+
+        assert capsys.readouterr().out.count(self.NOTICE) == 1
+
+    def test_a_config_only_json_logs_makes_the_notice_one_json_record(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        monkeypatch.setattr(litellm, "json_logs", False)  # run_server flips it on; undone at teardown
+        config: Final = {"model_list": [], "litellm_settings": {"json_logs": True}}
+
+        self._boot(tmp_path / "config.yaml", AsyncMock(return_value=config))
+
+        notice_lines: Final = [line for line in capsys.readouterr().out.splitlines() if self.NOTICE in line]
+        assert len(notice_lines) == 1, notice_lines
+        assert self.NOTICE in json.loads(notice_lines[0])["message"]
+
+
+def test_granian_flag_notices_are_json_records_in_json_mode(monkeypatch, capfd):
+    """The yellow notices for the flags Granian ignores (`--max_requests_before_restart`, `--ciphers`) are
+    printed while the launcher starts; with json_logs on they are INFO records on stdout like every other
+    line, not plaintext between the records."""
+    pytest.importorskip("granian")
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    turn_on_json()
+
+    with (
+        patch("granian.Granian") as mock_granian_cls,
+        patch("granian.constants.Interfaces", SimpleNamespace(ASGI="asgi")),
+    ):
+        ProxyInitializationHelpers._init_granian_server(
+            host="0.0.0.0",
+            port=4000,
+            num_workers=2,
+            ssl_certfile_path=None,
+            ssl_keyfile_path=None,
+            max_requests_before_restart=100,
+            ciphers="ECDHE",
+            granian_runtime_threads=None,
+        )
+
+    mock_granian_cls.return_value.serve.assert_called_once()
+    out, err = capfd.readouterr()
+    assert err == ""
+    records: Final = [json.loads(raw) for raw in out.splitlines() if raw.strip()]
+    assert [record["message"] for record in records] == [
+        "LiteLLM Proxy: Starting server on 0.0.0.0:4000 using Granian",
+        "LiteLLM: --max_requests_before_restart is not supported by Granian "
+        "(Granian uses workers_lifetime in seconds, not a per-request limit).",
+        "LiteLLM: --ciphers is not applied when using --run_granian.",
+    ]
+    assert {record["level"] for record in records} == {"INFO"}

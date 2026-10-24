@@ -1,6 +1,12 @@
+import json
+import logging
+import sys
+from typing import Final
 
 import pytest
 
+import litellm
+from litellm._logging import turn_on_json, verbose_logger, verbose_proxy_logger
 
 
 def test_check_migration_out_of_sync(mocker):
@@ -69,3 +75,37 @@ def test_migrate_diff_without_the_prisma_runner_skips_instead_of_crashing_boot(m
     monkeypatch.setitem(sys.modules, "litellm_proxy_extras.prisma_toolchain", None)
 
     assert check_prisma_schema_diff_helper("postgresql://u:p@localhost:9/x") == (False, [])
+
+
+def test_migrate_diff_announces_the_schema_changes_as_one_json_record(fake_prisma_cli, monkeypatch, capfd):
+    """
+    The "Changes to DB Schema detected" notice and its SQL went to stdout as plaintext;
+    with json_logs on they are one INFO record, so a log pipeline keeps parsing. The
+    loggers sit at WARNING, as they do at boot without LITELLM_LOG, and the record
+    still goes out: the print it replaces had no level.
+    """
+    from litellm.proxy.db.check_migration import check_prisma_schema_diff_helper
+
+    monkeypatch.setenv(
+        "FAKE_PRISMA_STDOUT", '-- AlterTable\nALTER TABLE "LiteLLM_UserTable" ADD COLUMN "nickname" TEXT;\n'
+    )
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    turn_on_json()
+    verbose_logger.setLevel(logging.WARNING)
+    verbose_proxy_logger.setLevel(logging.WARNING)
+
+    assert check_prisma_schema_diff_helper("postgresql://u:p@localhost:9/x") == (
+        True,
+        ['ALTER TABLE "LiteLLM_UserTable" ADD COLUMN "nickname" TEXT;'],
+    )
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
+    assert len(lines) == 1, lines
+    record: Final = json.loads(lines[0])
+    assert record["level"] == "INFO"
+    assert record["message"] == (
+        'Changes to DB Schema detected\nRequired SQL commands:\nALTER TABLE "LiteLLM_UserTable" ADD COLUMN "nickname" TEXT;'
+    )

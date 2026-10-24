@@ -6,10 +6,11 @@ Configuration structure:
 - policy_attachments: Define WHERE policies apply (teams, keys, models)
 """
 
+import sys
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional
 
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import print_startup_message, verbose_proxy_logger
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_validator import PolicyValidator
@@ -32,12 +33,9 @@ def _print_policies_on_startup(
     """
     Print loaded policies to console on startup (similar to model list).
     """
-    import sys
-
-    print(  # noqa: T201
+    lines: Final = [
         f"{_green_color_code}\nLiteLLM Policy Engine: Loaded {len(policies_config)} policies{_reset_color_code}\n"
-    )
-    sys.stdout.flush()
+    ]
 
     for policy_name, policy_data in policies_config.items():
         guardrails = policy_data.get("guardrails", {})
@@ -49,23 +47,21 @@ def _print_policies_on_startup(
         guardrails_remove = guardrails.get("remove", []) if isinstance(guardrails, dict) else []
         inherit_str = f" (inherits: {inherit})" if inherit else ""
 
-        print(  # noqa: T201
-            f"{_blue_color_code}  - {policy_name}{inherit_str}{_reset_color_code}"
-        )
+        lines.append(f"{_blue_color_code}  - {policy_name}{inherit_str}{_reset_color_code}")
         if description:
-            print(f"      description: {description}")  # noqa: T201
+            lines.append(f"      description: {description}")
         if guardrails_add:
-            print(f"      guardrails.add: {guardrails_add}")  # noqa: T201
+            lines.append(f"      guardrails.add: {guardrails_add}")
         if guardrails_remove:
-            print(f"      guardrails.remove: {guardrails_remove}")  # noqa: T201
+            lines.append(f"      guardrails.remove: {guardrails_remove}")
         if condition:
             model_condition = condition.get("model") if isinstance(condition, dict) else None
             if model_condition:
-                print(f"      condition.model: {model_condition}")  # noqa: T201
+                lines.append(f"      condition.model: {model_condition}")
 
     # Print attachments
     if policy_attachments_config:
-        print(  # noqa: T201
+        lines.append(
             f"\n{_yellow_color_code}Policy Attachments: {len(policy_attachments_config)} attachment(s){_reset_color_code}"
         )
         for attachment in policy_attachments_config:
@@ -86,13 +82,14 @@ def _print_policies_on_startup(
                 scope_parts.append(f"models={models}")
             scope_str = ", ".join(scope_parts) if scope_parts else "all"
 
-            print(f"  - {policy} -> {scope_str}")  # noqa: T201
+            lines.append(f"  - {policy} -> {scope_str}")
+        lines.append("")
+        print_startup_message("\n".join(lines))
     else:
-        print(  # noqa: T201
-            f"\n{_yellow_color_code}Warning: No policy_attachments configured. Policies will not be applied to any requests.{_reset_color_code}"
+        print_startup_message("\n".join(lines))
+        print_startup_message(
+            f"\n{_yellow_color_code}Warning: No policy_attachments configured. Policies will not be applied to any requests.{_reset_color_code}\n",
         )
-
-    print()  # noqa: T201
     sys.stdout.flush()
 
 

@@ -1,6 +1,7 @@
 import ast
 import contextvars
 import functools
+import inspect
 import itertools
 import logging
 import os
@@ -896,6 +897,61 @@ verbose_router_logger.addFilter(_diagnostic_filter)
 verbose_proxy_logger.addFilter(_diagnostic_filter)
 verbose_proxy_stdout_logger.addFilter(_diagnostic_filter)
 verbose_logger.addFilter(_diagnostic_filter)
+
+_ANSI_ESCAPE: Final = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def print_startup_message(message: str) -> None:
+    """Write a boot-time message meant for the operator's terminal.
+
+    Plain mode prints it unchanged, colors and spacing included. With JSON logs on, every line of
+    stdout is read by a log pipeline, so the message goes out as one INFO record of the proxy logger
+    instead, on stdout like the print whatever handlers the logging config gave that logger, with the
+    ANSI color codes and surrounding blank lines removed, located at the caller and emitted at any log
+    level; a blank spacer produces no record.
+    """
+    if not litellm.json_logs:
+        print(message)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
+        return
+    text: Final = _ANSI_ESCAPE.sub("", message).strip("\n")
+    if not text:
+        return
+    frame: Final = inspect.currentframe()
+    caller: Final = frame.f_back if frame is not None else None
+    record: Final = verbose_proxy_logger.makeRecord(
+        verbose_proxy_logger.name,
+        logging.INFO,
+        caller.f_code.co_filename if caller is not None else __file__,
+        caller.f_lineno if caller is not None else 0,
+        text,
+        (),
+        None,
+        func=caller.f_code.co_name if caller is not None else None,
+    )
+    # The print this replaces shows at any log level, so the record skips the level checks of the
+    # proxy logger (at the root's WARNING in the CLI process until initialize() runs) and of its JSON
+    # handler (LITELLM_LOG). It also skips the logger's stdout cap: that cap bounds echoed request
+    # payloads, while a startup message is operator text the print showed whole (the required migration
+    # SQL, the policy list). It skips secret redaction too, which the print never had and whose sk-
+    # pattern turns a model named risk-assessment-gpt4o into riREDACTED. The processed record counts as
+    # scrubbed, so the handler's secret filter and the formatter leave it alone too.
+    if not _process_record(record, base64_limit=_get_max_base64_length_stdout_log(), text_limit=0, redact=False):
+        return
+    # The print wrote to stdout whatever the logging config said, so the record goes through the proxy's
+    # own JSON handler on stdout rather than the proxy logger's handlers: uvicorn applies an operator
+    # --log_config after proxy_cli's turn_on_json() and before initialize() re-installs the JSON handler
+    # through load_config(), and in that window, where the banner and the feedback box are emitted, a
+    # config that names "LiteLLM Proxy" has left the logger with no handler or with the operator's own.
+    _startup_json_handler().handle(record)
+
+
+def _startup_json_handler() -> logging.Handler:
+    """The proxy's JSON handler on stdout, filters included, for one startup message."""
+    handler: Final = LevelRoutingStreamHandler()
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(_secret_filter)
+    handler.addFilter(_correlation_filter)
+    return handler
 
 
 def _suppress_loggers():
