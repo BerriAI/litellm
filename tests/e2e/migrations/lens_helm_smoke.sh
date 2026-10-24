@@ -109,7 +109,23 @@ stop_forwards() {
 forward_bundled() {
   stop_forwards
   qualification_forward_control
-  forward lens-lens-worker 14419 4318
+  forward "$lens_deployment" 14419 4318
+}
+
+install_external_lens() {
+  helm upgrade --install external-lens helm/litellm-helm/charts/lens-0.1.0-dev.0.tgz \
+    -n "$namespace" --wait --timeout 5m \
+    --set fullnameOverride=external-lens \
+    --set image.repository=lens-ci-worker --set "image.tag=$1" --set image.pullPolicy=Never \
+    --set adminTokenSecret.name=lens-secrets --set adminTokenSecret.key=master-key \
+    --set gateway.enabled=true --set gateway.secretName=lens-secrets \
+    --set gateway.secretKey=gateway-secret --set serviceTokenSecret.name=lens-secrets \
+    --set clickhouseSecret.name=lens-secrets --set clickhouseDatabase=existing_traces \
+    --set publicUrl=http://127.0.0.1:14419
+}
+
+lens_image() {
+  if [[ "$chart" == litellm ]]; then install_external_lens "$1"; else "${install[@]}" --set "lensWorker.image.tag=$1"; fi
 }
 
 deployment_pods() {
@@ -266,6 +282,15 @@ migrationJob:
   hooks:
     helm: {enabled: true}
     argocd: {enabled: false}
+YAML
+  if [[ "$chart" == litellm-helm ]]; then
+    control=lens
+    control_port=4000
+    lens_deployment=lens-lens-worker
+    lens_external=(--set lensWorker.mode=external --set lensWorker.externalUrl=http://external-lens:4318)
+    lens_disabled=(--set lensWorker.mode=disabled)
+    cat > "$qa_dir/chart.yaml" <<'YAML'
+image: {repository: lens-ci-monolith, tag: v0.0.0-lens-ci-baseline, pullPolicy: Never}
 lensWorker:
   enabled: true
   image: {repository: lens-ci-worker, tag: baseline, pullPolicy: Never}
@@ -275,12 +300,6 @@ lensWorker:
   clickhouseDatabase: existing_traces
   retentionDays: 45
   publicUrl: http://127.0.0.1:14419
-YAML
-  if [[ "$chart" == litellm-helm ]]; then
-    control=lens
-    control_port=4000
-    cat > "$qa_dir/chart.yaml" <<'YAML'
-image: {repository: lens-ci-monolith, tag: v0.0.0-lens-ci-baseline, pullPolicy: Never}
 masterkeySecretName: lens-secrets
 masterkeySecretKey: master-key
 envVars: {STORE_MODEL_IN_DB: "True"}
@@ -300,8 +319,18 @@ YAML
   else
     control=lens-backend
     control_port=4001
+    lens_deployment=external-lens
+    lens_external=(--set lens.url=http://external-lens:4318)
+    lens_disabled=(--set lens.enabled=false)
+    install_external_lens baseline
     cat > "$qa_dir/chart.yaml" <<'YAML'
 masterKey: {secretName: lens-secrets, secretKey: master-key}
+lens:
+  enabled: true
+  url: http://external-lens:4318
+  publicUrl: http://127.0.0.1:14419
+  gatewaySecret: {name: lens-secrets, key: gateway-secret}
+  serviceTokenSecret: {name: lens-secrets, key: service-token}
 database:
   writer:
     host: postgres
@@ -364,7 +393,7 @@ YAML
   kubectl -n "$namespace" get deployments -l app.kubernetes.io/instance=lens -o json \
     | jq -S '[.items[] | select(.metadata.name != "lens-lens-worker") | {name:.metadata.name,template:.spec.template}] | sort_by(.name)' \
     > "$qa_dir/gateway-before.json"
-  "${install[@]}" --set lensWorker.image.tag=upgrade || diagnose
+  lens_image upgrade || diagnose
   kubectl -n "$namespace" get deployments -l app.kubernetes.io/instance=lens -o json \
     | jq -S '[.items[] | select(.metadata.name != "lens-lens-worker") | {name:.metadata.name,template:.spec.template}] | sort_by(.name)' \
     > "$qa_dir/gateway-after.json"
@@ -372,13 +401,13 @@ YAML
   forward_bundled
   saved_trace
   qualification_read_boundaries lens-upgrade
-  "${install[@]}" || diagnose
+  lens_image baseline || diagnose
   forward_bundled
   saved_trace
   qualification_read_boundaries lens-rollback
-  kubectl -n "$namespace" get deployment lens-lens-worker -o json \
+  kubectl -n "$namespace" get deployment "$lens_deployment" -o json \
     | jq -S .spec.template > "$qa_dir/lens-before.json"
-  deployment_pods lens-lens-worker > "$qa_dir/lens-pods-before.json"
+  deployment_pods "$lens_deployment" > "$qa_dir/lens-pods-before.json"
   gateway_components=(monolith)
   gateway_upgrade=(--set image.tag=v0.0.0-lens-ci)
   migration_baseline=lens-ci-monolith:v0.0.0-lens-ci-baseline
@@ -397,10 +426,10 @@ YAML
   "${install[@]}" || diagnose
   migration_after=$(migration_job "$migration_current")
   test "$migration_before" != "$migration_after"
-  kubectl -n "$namespace" get deployment lens-lens-worker -o json \
+  kubectl -n "$namespace" get deployment "$lens_deployment" -o json \
     | jq -S .spec.template > "$qa_dir/lens-after.json"
   cmp "$qa_dir/lens-before.json" "$qa_dir/lens-after.json"
-  deployment_pods lens-lens-worker > "$qa_dir/lens-pods-after.json"
+  deployment_pods "$lens_deployment" > "$qa_dir/lens-pods-after.json"
   cmp "$qa_dir/lens-pods-before.json" "$qa_dir/lens-pods-after.json"
   for component in "${gateway_components[@]}"; do
     gateway_pods "$component" v0.0.0-lens-ci > "$qa_dir/$component-after.json"
@@ -414,31 +443,21 @@ YAML
   saved_trace
   qualification_read_boundaries gateway-upgrade
   if [[ "$qualification_mode" != smoke ]]; then
-    install+=(--set lensWorker.image.tag=upgrade)
-    "${install[@]}" || diagnose
+    if [[ "$chart" == litellm ]]; then install_external_lens upgrade; else install+=(--set lensWorker.image.tag=upgrade); "${install[@]}" || diagnose; fi
     forward_bundled
     qualification_read_boundaries both-candidates
   fi
   stop_forwards
-  kubectl -n "$namespace" rollout restart "deployment/$control" deployment/lens-lens-worker
+  kubectl -n "$namespace" rollout restart "deployment/$control" "deployment/$lens_deployment"
   kubectl -n "$namespace" rollout status "deployment/$control" --timeout=180s
-  kubectl -n "$namespace" rollout status deployment/lens-lens-worker --timeout=180s
+  kubectl -n "$namespace" rollout status "deployment/$lens_deployment" --timeout=180s
   qualification_forward_control
   saved_trace
   qualification_outage
   printf '%s: fresh install, ingestion, Lens upgrade and rollback, independent gateway image upgrade, and restart passed\n' "$chart"
   stop_forwards
-  helm upgrade --install external-lens helm/litellm-helm/charts/lens-0.1.0-dev.0.tgz \
-    -n "$namespace" --wait --timeout 5m \
-    --set fullnameOverride=external-lens \
-    --set image.repository=lens-ci-worker --set image.tag=upgrade --set image.pullPolicy=Never \
-    --set adminTokenSecret.name=lens-secrets --set adminTokenSecret.key=master-key \
-    --set gateway.enabled=true --set gateway.secretName=lens-secrets \
-    --set gateway.secretKey=gateway-secret --set serviceTokenSecret.name=lens-secrets \
-    --set clickhouseSecret.name=lens-secrets --set clickhouseDatabase=existing_traces \
-    --set publicUrl=http://127.0.0.1:14419
-  "${install[@]}" --set lensWorker.mode=external \
-    --set lensWorker.externalUrl=http://external-lens:4318 || diagnose
+  install_external_lens upgrade
+  "${install[@]}" "${lens_external[@]}" || diagnose
   test -z "$(kubectl -n "$namespace" get deployment lens-lens-worker --ignore-not-found -o name)"
   qualification_forward_control
   forward external-lens 14419 4318
@@ -461,7 +480,7 @@ YAML
   if [[ "$chart" == litellm ]]; then
     tracing_setting=gateway.config.proxy_config.general_settings.tracing.enabled
   fi
-  "${install[@]}" --set lensWorker.mode=disabled --set "$tracing_setting=false" || diagnose
+  "${install[@]}" "${lens_disabled[@]}" --set "$tracing_setting=false" || diagnose
   test -z "$(kubectl -n "$namespace" get deployment lens-lens-worker --ignore-not-found -o name)"
   qualification_forward_control
   api /lens/service | jq -e '.configured == false and .connected == false'

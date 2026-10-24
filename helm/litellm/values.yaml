@@ -654,70 +654,24 @@ ui:
   topologySpreadConstraints: []
 
 lens:
-  library: true
-
-lensWorker:
-  retainResources: false
-  mode: ""
-  externalUrl: ""
-  externalServiceName: ""
-  gateway:
-    secretName: ""
-    secretKey: gateway-secret
-  standaloneUrl: ""
-  adminTokenSecret:
-    name: ""
-    key: admin-token
-  extraEnv: []
-  extraEnvFrom: []
+  # Connects the gateway and backend to a Lens service deployed from its own
+  # chart (https://github.com/BerriAI/lens/tree/main/helm/lens).
   enabled: false
-  replicaCount: 1
-  image:
-    repository: ghcr.io/berriai/lens
-    tag: "0.1.0-dev.0"
-    digest: ""
-    pullPolicy: IfNotPresent
-  tokenSecret:
+  # Address the gateway and backend call, e.g. http://lens.lens.svc:4318.
+  url: ""
+  # Address agents upload traces to; a path prefix such as /lens-ingest stays,
+  # /v1/traces is added by the gateway.
+  publicUrl: ""
+  # Service of that Lens in this release's namespace. When name is set, the chart
+  # ingress routes /lens-ingest to it. For a Lens in another namespace leave it
+  # empty and point publicUrl at that Lens's own ingress.
+  service:
     name: ""
-    key: token
+    port: 4318
+  # Secrets created for the Lens deployment and shared with this release.
+  gatewaySecret:
+    name: ""
+    key: gateway-secret
   serviceTokenSecret:
     name: ""
     key: service-token
-  clickhouse:
-    enabled: true
-    image: clickhouse/clickhouse-server:26.9.6.6@sha256:eb4870e7ca7ed70c259eebfcfbee6cf797017f6b5436c2926bbbfe3d4d28486e
-    storage: 20Gi
-    storageClassName: null
-    resources:
-      requests:
-        cpu: 100m
-        memory: 512Mi
-      limits:
-        memory: 2Gi
-  clickhouseDatabase: litellm
-  retentionDays: 14
-  clickhouseSecret:
-    name: ""
-    key: url
-  publicUrl: ""
-  service:
-    port: 4318
-    annotations: {}
-  ingress:
-    enabled: false
-    path: /v1/
-    className: ""
-    host: ""
-    annotations: {}
-    tls: []
-  url: ""
-  tmpSizeLimit: 1Gi
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      memory: 2Gi
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}

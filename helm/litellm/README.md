@@ -1,8 +1,8 @@
 # LiteLLM componentized chart
 
-This chart deploys separate gateway, backend and UI services. Configure Lens through `lensWorker.mode`: `disabled` keeps it off, `bundled` installs the Lens dependency, and `external` connects an existing Lens service
+This chart deploys separate gateway, backend and UI services. Lens is off by default. To connect one, deploy Lens from [its own chart](https://github.com/BerriAI/lens/tree/main/helm/lens) and set `lens.enabled: true` with `lens.url` (the address the gateway calls), `lens.publicUrl` (the address agents upload traces to) and the two Secrets Lens created, `lens.gatewaySecret.name` and `lens.serviceTokenSecret.name`, whose keys default to `gateway-secret` and `service-token`
 
-Bundled mode generates separate service and identity-signing credentials. External mode requires `lensWorker.gateway.secretName` and `lensWorker.serviceTokenSecret.name`; their keys default to `gateway-secret` and `service-token`. Provision distinct values matching the external Lens deployment
+When that Lens runs in the same namespace as this release (an Ingress backend cannot reach a Service in another namespace), `lens.service.name` (and `lens.service.port`, default 4318) adds a `/lens-ingest` route for it to the chart ingress, so agents can upload through the gateway hostname
 
 Follow the [Lens Helm connection guide](https://github.com/BerriAI/lens/blob/main/helm/lens/README.md#connect-a-gateway) for the complete values and verification flow. It also links the GitOps credential requirements and existing-data migration. Source-chart installation requires a built Lens image until the first signed Lens release is published
 
