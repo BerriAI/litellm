@@ -21,6 +21,18 @@ if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 
 
+def _function_calling_disabled_in_model_map(model: str, custom_llm_provider: str) -> bool:
+    from litellm.utils import get_model_info_helper
+
+    try:
+        return (
+            get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider).get("supports_function_calling")
+            is False
+        )
+    except Exception:  # noqa: BLE001  # get_model_info_helper raises bare Exception for unmapped models
+        return False
+
+
 def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
 
@@ -98,14 +110,12 @@ def create_config_class(provider: SimpleProviderConfig):
 
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
-            that don't support function calling."""
-            from litellm.utils import supports_function_calling, supports_reasoning
+            the model map marks as not supporting function calling."""
+            from litellm.utils import supports_reasoning
 
             supported_params: Final = super().get_supported_openai_params(model=model)
 
-            _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
-
-            if not _supports_fc:
+            if _function_calling_disabled_in_model_map(model=model, custom_llm_provider=provider.slug):
                 tool_params: Final = [
                     "tools",
                     "tool_choice",
