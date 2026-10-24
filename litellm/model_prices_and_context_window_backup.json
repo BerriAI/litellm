@@ -72447,6 +72447,16 @@
             "notes": "Self-hosted decision model; infrastructure costs are paid separately"
         }
     },
+    "nadir/bucket": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "nadir",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://getnadir.com/docs/decision-api/",
+        "metadata": {
+            "notes": "Nadir's simple, medium or complex tier decision from POST /v1/bucket, which Nadir does not bill"
+        }
+    },
     "strands_decider/strands-decider-2B-hobson-v19": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "strands_decider",

@@ -61,6 +61,7 @@ from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
+from litellm.llms.nadir.decisions.transformation import NADIR_DECISIONS_CONFIG
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -887,6 +888,22 @@ def _truncate(text: str, limit: int) -> str:
     return f"{text[:head_chars]}{_TRUNCATION_MARKER}{text[len(text) - tail_chars :]}"
 
 
+_DEPLOYMENT_PARAMS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_NO_REQUEST_KWARGS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _is_nadir_deployment(deployment: Mapping[str, object]) -> bool:
+    try:
+        params: Final = _DEPLOYMENT_PARAMS.validate_python(deployment.get("litellm_params"))
+    except ValidationError:
+        return False
+    provider: Final = params.get("custom_llm_provider")
+    if isinstance(provider, str) and provider:
+        return provider == "nadir"
+    model: Final = params.get("model")
+    return isinstance(model, str) and model.split("/", 1)[0] == "nadir"
+
+
 def _iter_context_turns_newest_first(
     messages: Sequence[Mapping[str, object]],
     include_assistant: bool,
@@ -1363,6 +1380,14 @@ class ComplexityRouter(CustomLogger):
                 api_base=databricks.api_base,
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
                 provider="databricks",
+            )
+        if config.provider == "nadir":
+            nadir_base, nadir_key = NADIR_DECISIONS_CONFIG.resolve_connection(config.api_base, config.api_key)
+            return HttpJevClassifierClient(
+                api_key=nadir_key,
+                api_base=nadir_base,
+                http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+                provider="nadir",
             )
         api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
         if not api_key:
@@ -2318,6 +2343,9 @@ class ComplexityRouter(CustomLogger):
             model=config.model,
             instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
             criteria=criteria,
+            messages=self._classifier_context_messages(prompt, system_prompt, request_kwargs, messages)
+            if self._classifier_reads_conversation(config)
+            else None,
         )
         try:
             response: Final = await asyncio.wait_for(client.evaluate(request, timeout_s, request_kwargs), timeout_s)
@@ -2565,6 +2593,54 @@ class ComplexityRouter(CustomLogger):
             else system_prompt
         )
 
+    def _classifier_reads_conversation(self, config: OpenSourceClassifierConfig) -> bool:
+        """Nadir classifies the conversation itself, whether it is named as the provider or serves the
+        decision deployment, so it gets role-tagged messages in place of the LLM-judge payload."""
+        if config.deployment_name is None:
+            return config.provider == "nadir"
+        deployments: Final = self._group_deployments(config.deployment_name)
+        return bool(deployments) and all(_is_nadir_deployment(deployment) for deployment in deployments)
+
+    def _classifier_prior_turns(
+        self,
+        prompt: str,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> tuple[tuple[str, str], ...]:
+        if not messages or self.config.classifier_context_window_size <= 0:
+            return ()
+        return _extract_prior_turns(
+            messages,
+            current_ask=prompt,
+            window_size=self.config.classifier_context_window_size,
+            budget_chars=self.config.classifier_context_budget_chars,
+            per_turn_chars=self.config.classifier_context_per_turn_chars,
+            include_assistant=self.config.classifier_context_include_assistant_turns,
+            marker_pairs=self._reminder_markers_for_request(request_kwargs or _NO_REQUEST_KWARGS),
+        )
+
+    def _classifier_context_messages(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> tuple[Mapping[str, str], ...]:
+        """The classifier payload's context as chat messages, for a classifier trained on raw conversations.
+
+        Same caller constraints and same budgeted prior turns as the text payload, so the context window
+        settings bound what leaves the gateway exactly as they do there, minus the LLM-judge framing.
+        """
+        caller_prompt: Final = self._classifier_caller_constraints(system_prompt, request_kwargs)
+        return (
+            *((MappingProxyType({"role": "system", "content": caller_prompt}),) if caller_prompt else ()),
+            *(
+                MappingProxyType({"role": role, "content": text})
+                for role, text in self._classifier_prior_turns(prompt, request_kwargs, messages)
+            ),
+            MappingProxyType({"role": "user", "content": prompt}),
+        )
+
     def _classifier_context_payload(
         self,
         prompt: str,
@@ -2577,19 +2653,7 @@ class ComplexityRouter(CustomLogger):
         include_assistant: Final = self.config.classifier_context_include_assistant_turns
         marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
         context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
-        prior_turns: Final = (
-            _extract_prior_turns(
-                messages,
-                current_ask=prompt,
-                window_size=self.config.classifier_context_window_size,
-                budget_chars=self.config.classifier_context_budget_chars,
-                per_turn_chars=self.config.classifier_context_per_turn_chars,
-                include_assistant=include_assistant,
-                marker_pairs=marker_pairs,
-            )
-            if context_enabled
-            else ()
-        )
+        prior_turns: Final = self._classifier_prior_turns(prompt, request_kwargs, messages)
         has_prior_conversation: Final = (
             context_enabled
             and len(tuple(islice(_iter_context_turns_newest_first(messages or (), include_assistant, marker_pairs), 2)))

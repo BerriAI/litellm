@@ -7,7 +7,11 @@ import { Textarea } from "@/components/ui/textarea";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { defaultJevClassifierConfig, fixedClassifierModels } from "./jev_classifier_config";
+import {
+  acceptsClassifierInstructions,
+  defaultJevClassifierConfig,
+  fixedClassifierModels,
+} from "./jev_classifier_config";
 
 const providerDescriptions = {
   jev: "Uses TypeSafe System One Choice evaluation with your configured tiers",
@@ -16,6 +20,8 @@ const providerDescriptions = {
     "Uses Bespoke Nimble with your configured tiers. Set BESPOKE_API_BASE on the gateway to connect your Nimble server.",
   databricks:
     "Uses the Databricks ai_decide AI Function, or a decision serving endpoint you name, with your configured tiers. Set DATABRICKS_API_BASE to https://<workspace-host>/serving-endpoints and DATABRICKS_API_KEY on the gateway.",
+  nadir:
+    "Uses Nadir's tier decision with your configured tiers. Set NADIR_API_KEY on the gateway; without it, calls use Nadir's anonymous, rate-limited tier. Set NADIR_API_BASE for a self-hosted Nadir.",
 };
 
 export default function JevClassifierConfig({
@@ -38,34 +44,36 @@ export default function JevClassifierConfig({
       {section !== "advanced" && !config.deployment_name && (
         <>
           <p className="text-sm text-muted-foreground">{providerDescriptions[config.provider ?? "jev"]}</p>
-          <div className="space-y-2">
-            <Label htmlFor={`${id}-model`}>Classifier Model</Label>
-            {models ? (
-              <Select value={config.model} onValueChange={(model) => model && update({ model })}>
-                <SelectTrigger id={`${id}-model`} className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {models.map((model) => (
-                    <SelectItem key={model} value={model}>
-                      {model}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <Input
-                id={`${id}-model`}
-                value={config.model}
-                placeholder={
-                  config.provider === "databricks"
-                    ? "ai_decide, or a serving endpoint name such as databricks-openjev-qwen35-4b"
-                    : undefined
-                }
-                onChange={(event) => update({ model: event.target.value })}
-              />
-            )}
-          </div>
+          {config.provider !== "nadir" && (
+            <div className="space-y-2">
+              <Label htmlFor={`${id}-model`}>Classifier Model</Label>
+              {models ? (
+                <Select value={config.model} onValueChange={(model) => model && update({ model })}>
+                  <SelectTrigger id={`${id}-model`} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {models.map((model) => (
+                      <SelectItem key={model} value={model}>
+                        {model}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  id={`${id}-model`}
+                  value={config.model}
+                  placeholder={
+                    config.provider === "databricks"
+                      ? "ai_decide, or a serving endpoint name such as databricks-openjev-qwen35-4b"
+                      : undefined
+                  }
+                  onChange={(event) => update({ model: event.target.value })}
+                />
+              )}
+            </div>
+          )}
         </>
       )}
       {section !== "model" && (
@@ -90,27 +98,29 @@ export default function JevClassifierConfig({
               })
             }
           />
-          <div className="space-y-2">
-            <Label htmlFor={`${id}-instructions`}>Classifier Instructions</Label>
-            <AutoRouterAllowanceNote
-              feature="tier_or_classifier_prompt"
-              label="Custom instructions share the custom-tier allowance"
-            />
-            <Textarea
-              id={`${id}-instructions`}
-              value={config.instructions ?? ""}
-              placeholder="Leave blank to use the built-in instructions"
-              onChange={(event) => update({ instructions: event.target.value || undefined })}
-            />
-            {config.instructions && (
-              <Button variant="outline" type="button" onClick={() => update({ instructions: undefined })}>
-                Restore built-in instructions
-              </Button>
-            )}
-            <p className="text-xs text-muted-foreground">
-              Built-in decision model classification is available without a license and uses the shipped tier criteria
-            </p>
-          </div>
+          {acceptsClassifierInstructions(config.provider) && (
+            <div className="space-y-2">
+              <Label htmlFor={`${id}-instructions`}>Classifier Instructions</Label>
+              <AutoRouterAllowanceNote
+                feature="tier_or_classifier_prompt"
+                label="Custom instructions share the custom-tier allowance"
+              />
+              <Textarea
+                id={`${id}-instructions`}
+                value={config.instructions ?? ""}
+                placeholder="Leave blank to use the built-in instructions"
+                onChange={(event) => update({ instructions: event.target.value || undefined })}
+              />
+              {config.instructions && (
+                <Button variant="outline" type="button" onClick={() => update({ instructions: undefined })}>
+                  Restore built-in instructions
+                </Button>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Built-in decision model classification is available without a license and uses the shipped tier criteria
+              </p>
+            </div>
+          )}
         </>
       )}
     </div>

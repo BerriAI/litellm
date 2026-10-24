@@ -717,7 +717,7 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     deployment_name: str | None = Field(default=None, min_length=1)
-    provider: Literal["jev", "laya", "bespoke", "databricks"] = "jev"
+    provider: Literal["jev", "laya", "bespoke", "databricks", "nadir"] = "jev"
     model: str = "jev-latest"
     api_key: str | None = Field(default=None, description="Provider API key; optional for self-hosted providers")
     api_base: str | None = Field(
@@ -736,6 +736,18 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
     @classmethod
     def _normalize_provider_alias(cls, value: object) -> object:
         return "jev" if value == "typesafe" else value
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_nadir_model(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+        fields: Final = TypeAdapter(Mapping[str, object]).validate_python(data)
+        if fields.get("provider") != "nadir" or "model" in fields:
+            return fields
+        from litellm.llms.nadir.decisions.transformation import NADIR_CLASSIFIER_MODEL
+
+        return {**fields, "model": NADIR_CLASSIFIER_MODEL}
 
     @field_validator("instructions")
     @classmethod
@@ -780,6 +792,14 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
                     f"{DATABRICKS_AI_DECIDE_MODEL!r} or a serving endpoint name, e.g. databricks-openjev-qwen35-4b"
                 )
             _ = validate_databricks_decisions_model(self.model)
+        if self.provider == "nadir":
+            if self.instructions is not None:
+                raise ValueError(
+                    "opensource_classifier_config.instructions has no effect for provider 'nadir', "
+                    "which classifies with its own model"
+                )
+            # NADIR_DECISIONS_CONFIG keeps NADIR_API_KEY on NADIR_API_BASE; a keyless call is anonymous.
+            return self
         if self.api_base is not None and self.api_key is None:
             raise ValueError(
                 "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: "
