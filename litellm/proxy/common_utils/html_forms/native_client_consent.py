@@ -59,7 +59,7 @@ button {{ flex: 1; padding: 10px; border-radius: 6px; font-size: 15px; cursor: p
 <div class="container">
 <h1>Authorize CLI access</h1>
 <p>A command-line client at <code>{escape(client_origin)}</code> wants to call LiteLLM as <strong>{escape(user_id)}</strong>.</p>
-<p>Approving issues it a personal credential that expires within {CLI_JWT_EXPIRATION_HOURS} hours. <code>lite logout</code> stops it from being renewed. Only approve if you started this sign-in yourself.</p>
+<p>Approving issues it a personal credential that expires within {CLI_JWT_EXPIRATION_HOURS} hours. <code>lite logout</code> stops it from being renewed. Only approve if you started this sign-in, yourself or through an agent you are running.</p>
 <form method="post" action="{escape(complete_url)}">
 <input type="hidden" name="flow" value="{escape(flow_handle)}">
 {_team_field(teams)}

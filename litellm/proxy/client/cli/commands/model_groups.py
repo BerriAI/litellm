@@ -7,6 +7,7 @@ import rich.table
 
 from ... import Client
 from ._cli_context import cli_context_values
+from .auto_sign_in import SignInOnUnauthorizedGroup
 
 
 def create_client(ctx: click.Context) -> Client:
@@ -19,7 +20,7 @@ def _rendered_field(group: Mapping[str, object], key: str, default: str) -> str:
     return str(group.get(key, default))
 
 
-@click.group(name="model-groups")
+@click.group(name="model-groups", cls=SignInOnUnauthorizedGroup)
 def model_groups() -> None:
     """Inspect model groups your key can access on the proxy"""
 

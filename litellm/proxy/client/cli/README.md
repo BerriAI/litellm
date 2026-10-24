@@ -49,6 +49,22 @@ lite config unset hidden_commands   # list everything again
 
 Hidden commands drop out of both `lite --help` and the interactive shell's "Available commands" block, and stay runnable so existing scripts keep working
 
+## Automatic Browser Sign-In for Agents
+
+When a command that calls the proxy (`lite keys`, `lite models`, `lite model-groups`, `lite users`, `lite teams`, `lite credentials`) gets a 401 and you did not pass a key with `--api-key` or `LITELLM_PROXY_API_KEY`, `lite` signs you in through your browser and then runs the same command again with the new key. That covers a proxy you never logged in to and a stored login the proxy no longer accepts. It needs no terminal, so an AI agent that runs `lite` through its shell tool finishes the command on its own once you approve the sign-in in the browser:
+
+```bash
+lite --base-url https://your-proxy.example.com keys generate --models gpt-5.4-mini --key-alias experiment-1
+```
+
+The sign-in is the browser flow of `lite login --pkce`, so you pick your team on the consent page, the credential is stored where `lite login` stores it, and its refresh token renews the key on its own from then on. Every line about the sign-in goes to stderr, so stdout carries only the command's own output, such as the JSON from `lite keys generate`. If another `lite` process is already signing in, the command waits for it to finish and then uses the login it stored, so parallel commands open one browser tab. When that sign-in ends without a login the proxy accepts, or is still waiting after 6 minutes, the command fails instead of opening a second tab. If another `lite` process stored a newer login for the same proxy in the meantime, that key is tried first and no browser opens. `lite` keeps one stored login, so when that login is for a different proxy, the command fails and tells you to run `lite --base-url <proxy> login --pkce` to switch, instead of replacing and revoking the other proxy's login on its own
+
+Nothing signs in ahead of time. A proxy that accepts the request without a key never opens a browser, and neither does `--help`. The proxy also answers 401 when a valid key lacks the role a command needs, such as a non-admin key running `lite credentials list`, so before it signs in, `lite` checks a rejected stored login against `/key/info`. When the proxy accepts the login there, the command fails with an error that says the login likely lacks the role, and no browser opens. A key you passed yourself is never swapped out or checked again, and a 401 for it fails with an error that names `--api-key` and `LITELLM_PROXY_API_KEY`. When the browser sign-in cannot finish (the machine has no web browser or only a text-mode one such as `w3m` or `lynx`, the shell runs over SSH with no display and `BROWSER` is unset, the browser fails to open, the proxy does not serve `/.well-known/litellm-cli-auth`, you deny the request, or nobody approves it within 5 minutes), the command fails and tells you to run `lite login --pkce` from a terminal on a machine with a browser, `lite login` on one without, or set `LITELLM_PROXY_API_KEY`. `lite` prints that 5-minute wait on stderr when the sign-in starts, so an agent whose shell tool stops commands sooner knows to run the command again with a longer timeout
+
+When the `CI` environment variable is set to anything but empty, `0`, or `false`, `lite` never opens a browser and the command fails at once with the same message, without checking the stored login against the proxy first. Set `CI=1` for a script or cron job that should fail instead of waiting for a sign-in
+
+`lite chat`, `lite encryption migrate`, `lite http request`, `lite keys import`, and `lite teams assign-key` do not sign in on their own. `lite chat` and `lite teams assign-key` are interactive, `lite encryption migrate` is a one-time admin migration you run with an admin key, `lite keys import` also talks to a second proxy, and `lite http request` cannot tell a 401 from the proxy apart from a provider's 401 that the proxy passes through
+
 ## Global Options
 
 - `--version`, `-v`: Print the LiteLLM Proxy client and server version and exit.

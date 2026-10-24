@@ -10,6 +10,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from ...credentials import CredentialsManagementClient
 from ._cli_context import cli_context_values
+from .auto_sign_in import SignInOnUnauthorizedGroup
 
 
 class _CredentialInfo(TypedDict):
@@ -39,7 +40,7 @@ def _print_json(data: object) -> None:
     rich.print_json(data=data)
 
 
-@click.group()
+@click.group(cls=SignInOnUnauthorizedGroup)
 def credentials():
     """Manage credentials for the LiteLLM proxy server"""
 

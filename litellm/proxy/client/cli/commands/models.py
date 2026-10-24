@@ -14,7 +14,9 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 # local imports
 from ... import Client
+from ...exceptions import UnauthorizedError
 from ._cli_context import cli_context_values
+from .auto_sign_in import SignInOnUnauthorizedGroup
 
 if TYPE_CHECKING:
     from rich.console import JustifyMethod
@@ -103,7 +105,7 @@ def create_client(ctx: click.Context) -> Client:
     return Client(base_url=context["base_url"], api_key=context["api_key"])
 
 
-@click.group()
+@click.group(cls=SignInOnUnauthorizedGroup)
 def models() -> None:
     """Manage models on your LiteLLM proxy server"""
 
@@ -449,6 +451,13 @@ def import_models(
                     model_params=model_info_obj.model_params,
                     model_info=model_info_obj.model_info,
                 )
+            except UnauthorizedError as error:
+                if added_models:
+                    raise click.ClickException(
+                        f"The proxy rejected the API key after {len(added_models)} of {len(filtered_model_list)} "
+                        "models were sent, so the import stopped there."
+                    ) from error
+                raise
             except Exception:
                 pass  # For summary, ignore errors
         added_models.append(model_info_obj)

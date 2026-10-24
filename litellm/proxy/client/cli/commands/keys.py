@@ -11,6 +11,7 @@ from rich.table import Table
 from typing_extensions import ReadOnly, TypedDict
 
 from ...keys import KeysManagementClient
+from .auto_sign_in import SignInOnUnauthorizedGroup
 
 
 class _CliContext(TypedDict):
@@ -37,7 +38,7 @@ def _cli_context(view: _CliContextView) -> _CliContext:
     return view.obj
 
 
-@click.group()
+@click.group(cls=SignInOnUnauthorizedGroup)
 def keys():
     """Manage API keys for the LiteLLM proxy server"""
 
@@ -352,7 +353,7 @@ def _import_keys_to_destination(
     return imported_count, failed_count
 
 
-@keys.command(name="import")
+@keys.command(name="import", cls=click.Command)
 @click.option(
     "--source-base-url",
     required=True,

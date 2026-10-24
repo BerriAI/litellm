@@ -5,9 +5,10 @@ import rich
 
 from ... import UsersManagementClient
 from ._cli_context import cli_context_values
+from .auto_sign_in import SignInOnUnauthorizedGroup
 
 
-@click.group()
+@click.group(cls=SignInOnUnauthorizedGroup)
 def users():
     """Manage users on your LiteLLM proxy server"""
 
