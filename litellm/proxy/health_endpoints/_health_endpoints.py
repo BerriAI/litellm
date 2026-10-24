@@ -2322,9 +2322,11 @@ async def test_model_connection(
             stored_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
             request_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
         )
+        stored_model: Final = _OBJECT_MAPPING.validate_python(config_litellm_params).get("model")
         litellm_params = update_litellm_params_for_health_check(
             model_info=dict(probe_model_info),
             litellm_params=litellm_params,
+            deployment_model=stored_model if isinstance(stored_model, str) else None,
         )
 
         ## Auth check, on the final probe params so health_check_params cannot retarget it afterwards
