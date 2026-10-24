@@ -16,7 +16,8 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import aembedding, completion, embedding, aresponses, responses
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.caching.caching import Cache
+from litellm.caching.caching import Cache, CacheMode
+from litellm.router import Router
 from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator
 
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -3231,3 +3232,92 @@ async def test_a_cache_hit_inside_an_internal_sub_call_is_free_and_fires_no_call
     assert async_logging.async_success_handler.called is not internal
     assert async_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
     assert sync_logging.handle_sync_cache_hit_success_callbacks.called is not internal
+
+
+@pytest.mark.parametrize(
+    "call_metadata",
+    (
+        {"call_type": "aembedding", "route_type": "acompletion"},
+        {"route_type": "_aembedding"},
+        {"original_function": litellm.aembedding},
+        {"original_function": Router._aembedding},
+        {"call_type": CallTypes.aembedding},
+    ),
+)
+def test_excluded_call_types_neither_read_nor_write_cache(call_metadata: Mapping[str, object]) -> None:
+    cache: Final = Cache(type="local", supported_call_types=["acompletion"])
+    response: Final = {"value": "cached"}
+    cache.add_cache(response, cache_key="existing")
+
+    cache.add_cache(response, cache_key="excluded", **call_metadata)
+
+    assert cache.get_cache(cache_key="existing", **call_metadata) is None
+    assert cache.get_cache(cache_key="excluded") is None
+    assert cache.get_cache(cache_key="existing", call_type="acompletion") == response
+
+
+def test_router_function_names_preserve_supported_cache_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache: Final = Cache(type="local", supported_call_types=["acompletion"])
+    monkeypatch.setattr(litellm, "cache", cache)
+    handler: Final = LLMCachingHandler(
+        original_function=Router._aembedding, request_kwargs={}, start_time=datetime(2026, 1, 1)
+    )
+
+    assert handler.should_store_result_in_cache(original_function=Router._aembedding, kwargs={}) is False
+    assert handler.should_store_result_in_cache(original_function=Router._acompletion, kwargs={}) is True
+    assert cache.should_use_cache(call_type="_acompletion") is True
+
+
+def test_call_type_filter_preserves_responses_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache: Final = Cache(type="local", supported_call_types=["responses"])
+    monkeypatch.setattr(litellm, "cache", cache)
+    handler: Final = LLMCachingHandler(
+        original_function=litellm.aresponses, request_kwargs={}, start_time=datetime(2026, 1, 1)
+    )
+
+    assert cache.should_use_cache(call_type=CallTypes.aresponses) is True
+    assert handler.should_store_result_in_cache(original_function=litellm.aresponses, kwargs={}) is True
+
+
+@pytest.mark.parametrize("allow_inference", [True, False])
+def test_none_and_empty_call_type_lists(monkeypatch: pytest.MonkeyPatch, allow_inference: bool) -> None:
+    cache: Final = Cache(type="local", supported_call_types=None if allow_inference else [])
+    monkeypatch.setattr(litellm, "cache", cache)
+    handler: Final = LLMCachingHandler(
+        original_function=Router._aembedding, request_kwargs={}, start_time=datetime(2026, 1, 1)
+    )
+
+    assert cache.should_use_cache(call_type="_aembedding") is allow_inference
+    assert handler.should_store_result_in_cache(original_function=Router._aembedding, kwargs={}) is allow_inference
+
+
+def test_none_call_types_do_not_read_or_store_file_listings(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache: Final = Cache(type="local", supported_call_types=None)
+    monkeypatch.setattr(litellm, "cache", cache)
+    handler: Final = LLMCachingHandler(
+        original_function=litellm.afile_list, request_kwargs={}, start_time=datetime(2026, 1, 1)
+    )
+    response: Final = {"object": "list", "data": [{"id": "private-file", "object": "file"}]}
+
+    handler.sync_set_cache(result=response, kwargs={"cache_key": "file-list"})
+    assert cache.get_cache(cache_key="file-list") is None
+
+    cache.add_cache(response, cache_key="existing")
+    assert cache.get_cache(cache_key="existing", call_type="afile_list") is None
+
+    cache.add_cache(response, cache_key="direct-file-list", call_type="afile_list")
+    assert cache.get_cache(cache_key="direct-file-list") is None
+
+
+def test_call_type_filter_preserves_message_limit_and_opt_in() -> None:
+    cache: Final = Cache(type="local", mode=CacheMode.default_off, max_messages=1)
+    assert cache.should_use_cache(call_type="acompletion") is False
+    assert cache.should_use_cache(call_type="acompletion", cache={"use-cache": True}) is True
+    assert (
+        cache.should_use_cache(
+            call_type="acompletion",
+            cache={"use-cache": True},
+            messages=[{"role": "user", "content": "one"}, {"role": "user", "content": "two"}],
+        )
+        is False
+    )
