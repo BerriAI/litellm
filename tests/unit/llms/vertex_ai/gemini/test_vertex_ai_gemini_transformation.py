@@ -1625,7 +1625,8 @@ def test_convert_tool_response_with_base64_image():
 
     # Convert tool response with nested multimodal functionResponse.parts.
     result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
+        tool_message, last_message_with_tool_calls,
+        forward_function_call_id=True,  # Gemini 3+: media nested in functionResponse.parts
     )
 
     assert isinstance(result, list), "Should return a parts list when media is present"
@@ -1683,7 +1684,7 @@ def test_gemini_history_nests_multimodal_tool_response_parts():
         },
     ]
 
-    contents = gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages, model="gemini-3.8-flash")
 
     tool_response_parts = contents[-1]["parts"]
     assert len(tool_response_parts) == 1
@@ -2009,7 +2010,8 @@ def test_convert_tool_response_with_pdf_file():
 
     # Convert tool response with nested multimodal functionResponse.parts.
     result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
+        tool_message, last_message_with_tool_calls,
+        forward_function_call_id=True,  # Gemini 3+: media nested in functionResponse.parts
     )
 
     assert isinstance(result, list), "Should return a parts list when media is present"
@@ -2059,7 +2061,8 @@ def test_convert_tool_response_with_input_file_type():
 
     # Convert tool response
     result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
+        tool_message, last_message_with_tool_calls,
+        forward_function_call_id=True,  # Gemini 3+: media nested in functionResponse.parts
     )
 
     # Check inline_data is nested under functionResponse.parts.
@@ -2096,7 +2099,8 @@ def test_convert_tool_response_with_nested_file_object():
 
     # Convert tool response
     result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
+        tool_message, last_message_with_tool_calls,
+        forward_function_call_id=True,  # Gemini 3+: media nested in functionResponse.parts
     )
 
     # Check inline_data is nested under functionResponse.parts.
@@ -2755,7 +2759,7 @@ def test_convert_tool_response_with_url_image(monkeypatch: pytest.MonkeyPatch) -
         ]
     }
 
-    result: Final = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
+    result: Final = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls, forward_function_call_id=True)  # Gemini 3+: media nested in functionResponse.parts
 
     assert isinstance(result, list)
     assert len(result) == 1
