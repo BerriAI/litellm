@@ -438,6 +438,7 @@ class BaseConfig(ABC):
         sync_stream: bool,
         json_mode: bool | None,
         optional_params: Mapping[str, object],
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> object:
         if sync_stream:
             return self.get_model_response_iterator(
