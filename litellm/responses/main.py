@@ -185,6 +185,7 @@ def mock_responses_api_response(
 
 
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_FORWARDED_VALUE: Final = TypeAdapter(object)
 
 
 def _client_trace_id(request_kwargs: Mapping[str, object]) -> str | None:
@@ -819,7 +820,7 @@ async def aresponses(
     stream: bool | None = None,
     temperature: float | None = None,
     text: Optional["ResponseText"] = None,
-    text_format: type["BaseModel"] | dict | None = None,
+    text_format: type["BaseModel"] | dict[str, object] | None = None,
     tool_choice: ToolChoice | None = None,
     tools: Iterable[ToolParam] | None = None,
     top_p: float | None = None,
@@ -1308,7 +1309,7 @@ def _responses_try_dispatch_emulated_file_search(
     user: str | None,
     service_tier: str | None,
     safety_identifier: str | None,
-    text_format: type[BaseModel] | dict | None,
+    text_format: type[BaseModel] | dict[str, object] | None,
     allowed_openai_params: list[str] | None,
     extra_headers: dict[str, object] | None,
     extra_query: dict[str, object] | None,
@@ -1343,7 +1344,7 @@ def _responses_try_dispatch_emulated_file_search(
         "background": background,
         "stream": stream,
         "temperature": temperature,
-        "text": text,
+        "text": _FORWARDED_VALUE.validate_python(text),
         "tool_choice": tool_choice,
         "top_p": top_p,
         "truncation": truncation,
@@ -1388,7 +1389,7 @@ def responses(
     stream: bool | None = None,
     temperature: float | None = None,
     text: Optional["ResponseText"] = None,
-    text_format: type["BaseModel"] | dict | None = None,
+    text_format: type["BaseModel"] | dict[str, object] | None = None,
     tool_choice: ToolChoice | None = None,
     tools: Iterable[ToolParam] | None = None,
     top_p: float | None = None,

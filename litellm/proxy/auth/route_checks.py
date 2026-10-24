@@ -160,7 +160,7 @@ class RouteChecks:
                 if allowed_route in LiteLLMRoutes._member_names_:
                     if RouteChecks.check_route_access(
                         route=route,
-                        allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
+                        allowed_routes=LiteLLMRoutes[allowed_route].value,
                     ):
                         if (
                             allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
