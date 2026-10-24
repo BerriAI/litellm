@@ -14978,17 +14978,12 @@ class Router:
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
-        healthy_deployments = self._without_declared_text_only_deployments(
-            await self.async_callback_filter_deployments(
-                model=model,
-                healthy_deployments=healthy_deployments,
-                messages=(cast(list[AllMessageValues], messages) if messages is not None else None),
-                request_kwargs=request_kwargs,
-                parent_otel_span=parent_otel_span,
-            ),
-            model,
-            messages,
-            cast(Mapping[str, object], request_kwargs),  # cast-ok: legacy signature uses a bare dict
+        healthy_deployments = await self.async_callback_filter_deployments(
+            model=model,
+            healthy_deployments=healthy_deployments,
+            messages=(cast(list[AllMessageValues], messages) if messages is not None else None),
+            request_kwargs=request_kwargs,
+            parent_otel_span=parent_otel_span,
         )
 
         if self.enable_pre_call_checks and (messages is not None or input is not None):
@@ -15026,8 +15021,11 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = cast(  # cast-ok: router deployments are plain dicts
-            list[dict[str, object]], healthy_deployments
+        batch_candidates: Final = self._without_declared_text_only_deployments(
+            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+            model,
+            messages,
+            cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
             batch_candidates,
@@ -16249,11 +16247,8 @@ class Router:
             )
             healthy_deployments = _pre_cooldown_deployments
 
-        healthy_deployments = self._without_declared_text_only_deployments(
-            continuation_deployments(self._filter_blocked_deployments(healthy_deployments), routing_kwargs),
-            model,
-            messages,
-            cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
+        healthy_deployments = continuation_deployments(
+            self._filter_blocked_deployments(healthy_deployments), routing_kwargs
         )
 
         # filter pre-call checks
@@ -16269,8 +16264,11 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = cast(  # cast-ok: router deployments are plain dicts
-            list[dict[str, object]], healthy_deployments
+        batch_candidates: Final = self._without_declared_text_only_deployments(
+            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+            model,
+            messages,
+            cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
             batch_candidates,

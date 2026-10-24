@@ -12029,18 +12029,22 @@ class TestResponseCostFromLoggingObjForCacheHits:
         assert cost == ""
 
 
-class TestMaybeGetModelIdFromRequestData:
-    def test_reads_the_chat_metadata_the_router_updated_in_place(self):
-        processing_obj = ProxyBaseLLMRequestProcessing(data={"metadata": {"model_info": {"id": "declared-text"}}})
+def test_maybe_get_model_id_reads_the_chat_metadata_the_router_updated_in_place():
+    processing_obj = ProxyBaseLLMRequestProcessing(data={"metadata": {"model_info": {"id": "declared-text"}}})
 
-        assert processing_obj.maybe_get_model_id(None) == "declared-text"
+    assert processing_obj.maybe_get_model_id(None) == "declared-text"
 
-    def test_prefers_litellm_metadata_over_caller_metadata_without_a_deployment(self):
-        processing_obj = ProxyBaseLLMRequestProcessing(
-            data={"metadata": {"trace_id": "t-1"}, "litellm_metadata": {"model_info": {"id": "vision"}}}
-        )
 
-        assert processing_obj.maybe_get_model_id(None) == "vision"
+def test_maybe_get_model_id_prefers_litellm_metadata_over_caller_metadata_without_a_deployment():
+    processing_obj = ProxyBaseLLMRequestProcessing(
+        data={
+            "metadata": {"trace_id": "t-1"},
+            "litellm_metadata": {"model_info": {"id": "vision"}},
+        }
+    )
 
-    def test_returns_none_before_the_router_picked_a_deployment(self):
-        assert ProxyBaseLLMRequestProcessing(data={"metadata": {}}).maybe_get_model_id(None) is None
+    assert processing_obj.maybe_get_model_id(None) == "vision"
+
+
+def test_maybe_get_model_id_returns_none_before_the_router_picked_a_deployment():
+    assert ProxyBaseLLMRequestProcessing(data={"metadata": {}}).maybe_get_model_id(None) is None

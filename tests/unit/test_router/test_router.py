@@ -30034,7 +30034,7 @@ def _candidate_ids(
     messages: list[dict[str, object]] | None = None,
     request_kwargs: dict[str, object] | None = None,
 ) -> list[str]:
-    candidates = router._without_declared_text_only_deployments(
+    candidates: Final = router._without_declared_text_only_deployments(
         router.get_model_list(model_name="mixed"), "mixed", messages, request_kwargs
     )
     return [d["model_info"]["id"] for d in candidates]
@@ -30051,10 +30051,22 @@ def test_router_picks_the_vision_leg_for_image_requests_without_enable_pre_call_
 async def test_async_router_picks_the_vision_leg_for_responses_images_without_enable_pre_call_checks():
     router = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
     for _ in range(5):
-        deployment = await router.async_get_available_deployment(
+        deployment: Final = await router.async_get_available_deployment(
             model="mixed", request_kwargs={"input": _IMAGE_RESPONSES_INPUT}
         )
         assert deployment["model_info"]["id"] == "vision"
+
+
+def test_router_sends_an_image_to_the_text_only_leg_when_pre_call_checks_drop_the_vision_leg():
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "mixed", **_VISION_LEG, "model_info": {"id": "vision", "max_input_tokens": 1}},
+            {"model_name": "mixed", **_DECLARED_TEXT_LEG},
+        ],
+        routing_strategy="latency-based-routing",
+        enable_pre_call_checks=True,
+    )
+    assert router.get_available_deployment(model="mixed", messages=_IMAGE_CHAT)["model_info"]["id"] == "declared-text"
 
 
 def test_router_sends_an_image_to_the_text_only_leg_when_the_vision_leg_is_cooling_down():
