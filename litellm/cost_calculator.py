@@ -1550,9 +1550,9 @@ def _decision_rerank_cost(
     ) -> tuple[float, CostBreakdown | None, float]:
         if logging_obj is not None:
             logging_obj.cost_breakdown = None
-        cost: Final = price(response)
-        breakdown: Final = logging_obj.cost_breakdown if logging_obj is not None else None
         provider_cost: Final = get_response_cost_from_hidden_params(response.hidden_params)
+        cost: Final = price(response) if custom_pricing or provider_cost is None else provider_cost
+        breakdown: Final = logging_obj.cost_breakdown if logging_obj is not None else None
         fixed: Final = (
             _apply_cost_margin(
                 0.0,
@@ -1639,7 +1639,7 @@ def completion_cost(
         return _decision_rerank_cost(
             completion_response.decision_responses,
             partial(
-                response_cost_calculator,
+                completion_cost,
                 model=model or (decision_rerank_child.model if decision_rerank_child is not None else ""),
                 call_type="decisions",
                 custom_llm_provider=custom_llm_provider,
@@ -2380,7 +2380,6 @@ def response_cost_calculator(
     ### VERTEX LOCATION ###
     vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
     region_name: str | None = None,
-    custom_cost_per_token: CostPerToken | None = None,
 ) -> float:
     """
     Returns
@@ -2398,7 +2397,7 @@ def response_cost_calculator(
                         getattr(response_object, HIDDEN_PARAMS_ATTR),
                     )
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
-                    if provider_response_cost is not None and not custom_pricing and custom_cost_per_token is None:
+                    if provider_response_cost is not None and not custom_pricing:
                         return provider_response_cost
 
             response_cost = completion_cost(
@@ -2419,7 +2418,6 @@ def response_cost_calculator(
                 data_residency=data_residency,
                 vertex_location=vertex_location,
                 region_name=region_name,
-                custom_cost_per_token=custom_cost_per_token,
             )
         return response_cost
     except Exception as e:

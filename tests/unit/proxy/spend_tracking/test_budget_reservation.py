@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 import math
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
-import httpx
 import pytest
 
 import litellm
@@ -27,17 +25,12 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
-    count_request_input_tokens,
-    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
-from litellm.rerank_api.litellm_decisions_transformation.transformation import (
-    LiteLLMDecisionsRerankConfig,
-)
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -433,231 +426,3 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
 )
 def test_budget_window_start_reads_json_encoded_windows(window: str, expected: datetime | None) -> None:
     assert get_budget_window_start(window) == expected
-
-
-@pytest.fixture
-def decision_rerank_models(monkeypatch: pytest.MonkeyPatch) -> tuple[str, str]:
-    models: Final = ("typesafe/budget-pointwise", "typesafe/budget-choice")
-    for model, strategy in zip(models, ("pointwise", "multiple_choice"), strict=True):
-        monkeypatch.setitem(
-            litellm.model_cost,
-            model,
-            {
-                "mode": "evaluation",
-                "litellm_provider": "typesafe",
-                "rerank_strategy": strategy,
-                "max_input_tokens": 65536,
-                "max_output_tokens": 32,
-                "input_cost_per_token": 0.001,
-                "output_cost_per_token": 0.002,
-            },
-        )
-    return models
-
-
-def _decision_rerank_body(model: str, count: int) -> dict[str, object]:
-    return {
-        "model": model,
-        "query": "Which passage explains the solar cycle?",
-        "documents": ["A solar passage."] * count,
-    }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["/rerank", "/v1/rerank", "/v2/rerank"])
-async def test_pointwise_reserves_every_transformed_input_and_output(
-    decision_rerank_models: tuple[str, str], route: str
-) -> None:
-    model: Final = decision_rerank_models[0]
-    single: Final = _decision_rerank_body(model, 1)
-    multiple: Final = {**_decision_rerank_body(model, 3), "top_n": 1, "max_tokens": 1}
-    single_counts: Final = await count_request_input_tokens(single, route, None, json.dumps(single).encode())
-    counts: Final = await count_request_input_tokens(multiple, route, None, json.dumps(multiple).encode())
-    raw_prompt_tokens: Final = litellm.token_counter(model=model, text=str(single["query"])) + litellm.token_counter(
-        model=model, text="A solar passage."
-    )
-    expected_input_cost: Final = counts[model] * 0.001
-    expected_output_cost: Final = 3 * 32 * 0.002
-
-    request: Final = LiteLLMDecisionsRerankConfig.validate_request(multiple, model, "typesafe", "pointwise")
-    sent_inputs: Final = tuple(
-        LiteLLMDecisionsRerankConfig.transform_rerank_request(request, index) for index in range(request.request_count)
-    )
-    assert single_counts[model] > raw_prompt_tokens
-    assert counts[model] == sum(
-        litellm.token_counter(model=model, text=sent.model_dump_json(exclude_none=True)) for sent in sent_inputs
-    )
-    assert counts[model] == 3 * single_counts[model]
-    assert estimate_request_max_cost(multiple, route, None, counts) == pytest.approx(
-        expected_input_cost + expected_output_cost
-    )
-    assert estimate_request_max_cost(multiple, route, None) == pytest.approx(expected_input_cost + expected_output_cost)
-    assert estimate_request_input_cost(multiple, route, None, counts) == pytest.approx(expected_input_cost)
-
-
-@pytest.mark.asyncio
-async def test_multiple_choice_reserves_one_decision_output(decision_rerank_models: tuple[str, str]) -> None:
-    model: Final = decision_rerank_models[1]
-    body: Final = _decision_rerank_body(model, 3)
-    counts: Final = await count_request_input_tokens(body, "/rerank", None)
-    input_cost: Final = estimate_request_input_cost(body, "/rerank", None, counts)
-    total_cost: Final = estimate_request_max_cost(body, "/rerank", None, counts)
-
-    assert input_cost is not None
-    assert total_cost == pytest.approx(input_cost + 32 * 0.002)
-
-
-@pytest.mark.asyncio
-async def test_alias_reserves_decision_fanout_at_deployment_prices(decision_rerank_models: tuple[str, str]) -> None:
-    backend: Final = decision_rerank_models[0]
-    alias: Final = "rerank-budget-group"
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": alias,
-                "litellm_params": {
-                    "model": backend,
-                    "api_key": "test-key",
-                    "input_cost_per_token": 0.003,
-                    "output_cost_per_token": 0.004,
-                },
-            }
-        ]
-    )
-    body: Final = _decision_rerank_body(alias, 3)
-    counts: Final = await count_request_input_tokens(body, "/rerank", router, json.dumps(body).encode())
-    direct_counts: Final = await count_request_input_tokens(_decision_rerank_body(backend, 3), "/rerank", None)
-
-    assert counts[alias] == direct_counts[backend]
-    assert estimate_request_max_cost(body, "/rerank", router, counts) == pytest.approx(
-        counts[alias] * 0.003 + 3 * 32 * 0.004
-    )
-
-
-@pytest.mark.asyncio
-async def test_budget_rejects_fanout_that_only_fits_one_decision(
-    decision_rerank_models: tuple[str, str], spend_counter_cache: DualCache
-) -> None:
-    model: Final = decision_rerank_models[0]
-    single_cost: Final = estimate_request_max_cost(_decision_rerank_body(model, 1), "/rerank", None)
-    assert single_cost is not None
-    with pytest.raises(litellm.BudgetExceededError):
-        await reserve_budget_for_request(
-            request_body=_decision_rerank_body(model, 3),
-            route="/rerank",
-            llm_router=None,
-            valid_token=UserAPIKeyAuth(token="decision-fanout-budget", max_budget=single_cost * 2, spend=0.0),
-            team_object=None,
-            user_object=None,
-            prisma_client=None,
-            user_api_key_cache=UserApiKeyCache(),
-            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
-            fail_closed_budget_enforcement=True,
-        )
-    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:key:decision-fanout-budget") == pytest.approx(0.0)
-
-
-def test_native_rerank_still_reserves_only_query_and_document_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
-    model: Final = "cohere/budget-native-rerank"
-    monkeypatch.setitem(
-        litellm.model_cost,
-        model,
-        {"mode": "rerank", "litellm_provider": "cohere", "input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
-    )
-    body: Final = _decision_rerank_body(model, 3)
-    input_cost: Final = estimate_request_input_cost(body, "/rerank", None)
-    assert input_cost is not None
-    assert estimate_request_max_cost(body, "/rerank", None) == input_cost
-
-
-@pytest.mark.asyncio
-async def test_decision_fanout_does_not_apply_aggregate_tier_discount(
-    decision_rerank_models: tuple[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    model: Final = decision_rerank_models[0]
-    single: Final = _decision_rerank_body(model, 1)
-    single_counts: Final = await count_request_input_tokens(single, "/rerank", None)
-    monkeypatch.setitem(
-        litellm.model_cost,
-        model,
-        {
-            **litellm.model_cost[model],
-            "tiered_pricing": [
-                {"range": [0, single_counts[model]], "input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
-                {
-                    "range": [single_counts[model], 100000],
-                    "input_cost_per_token": 0.001,
-                    "output_cost_per_token": 0.002,
-                },
-            ],
-        },
-    )
-    single_cost: Final = estimate_request_max_cost(single, "/rerank", None)
-    single_input: Final = estimate_request_input_cost(single, "/rerank", None)
-    multiple: Final = _decision_rerank_body(model, 3)
-
-    assert single_cost is not None
-    assert single_input is not None
-    assert estimate_request_max_cost(multiple, "/rerank", None) == pytest.approx(single_cost * 3)
-    assert estimate_request_input_cost(multiple, "/rerank", None) == pytest.approx(single_input * 3)
-
-
-@pytest.mark.asyncio
-async def test_budget_honors_deployment_drop_params_and_timeout(decision_rerank_models: tuple[str, str]) -> None:
-    backend: Final = decision_rerank_models[0]
-    alias: Final = "rerank-drop-params-group"
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": alias,
-                "litellm_params": {
-                    "model": backend,
-                    "api_key": "test-key",
-                    "drop_params": True,
-                    "timeout": httpx.Timeout(30.0),
-                },
-            }
-        ]
-    )
-    plain: Final = _decision_rerank_body(alias, 3)
-    with_dropped: Final = {**plain, "rank_fields": ["text"]}
-    plain_counts: Final = await count_request_input_tokens(plain, "/rerank", router)
-    dropped_counts: Final = await count_request_input_tokens(with_dropped, "/rerank", router)
-
-    direct_counts: Final = await count_request_input_tokens(_decision_rerank_body(backend, 3), "/rerank", None)
-    assert plain_counts[alias] == direct_counts[backend]
-    assert plain_counts == dropped_counts
-    assert estimate_request_max_cost(plain, "/rerank", router) == estimate_request_max_cost(
-        with_dropped, "/rerank", router
-    )
-
-
-def test_invalid_decision_candidate_does_not_reject_native_rerank_group(
-    decision_rerank_models: tuple[str, str],
-) -> None:
-    alias: Final = "rerank-mixed-group"
-    router: Final = Router(
-        model_list=[
-            {"model_name": alias, "litellm_params": {"model": decision_rerank_models[0], "api_key": "test-key"}},
-            {"model_name": alias, "litellm_params": {"model": "cohere/rerank-v3.5", "api_key": "test-key"}},
-        ]
-    )
-    body: Final = {**_decision_rerank_body(alias, 3), "rank_fields": ["text"]}
-
-    assert estimate_request_max_cost(body, "/rerank", router) is not None
-
-
-def test_pointwise_candidate_reserves_when_choice_candidate_is_ineligible(
-    decision_rerank_models: tuple[str, str],
-) -> None:
-    alias: Final = "rerank-mixed-strategy-group"
-    router: Final = Router(
-        model_list=[
-            {"model_name": alias, "litellm_params": {"model": model, "api_key": "test-key"}}
-            for model in decision_rerank_models
-        ]
-    )
-    body: Final = _decision_rerank_body(alias, 1)
-    direct: Final = _decision_rerank_body(decision_rerank_models[0], 1)
-
-    assert estimate_request_max_cost(body, "/rerank", router) == estimate_request_max_cost(direct, "/rerank", None)

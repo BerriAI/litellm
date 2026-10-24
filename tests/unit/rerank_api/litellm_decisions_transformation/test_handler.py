@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timezone
 from threading import Event
 from types import SimpleNamespace
 from typing import Final
@@ -13,6 +14,7 @@ import litellm
 from litellm.caching.caching import Cache
 from litellm.cost_calculator import _decision_rerank_breakdown
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import CallTypes, CostBreakdown
 from litellm.utils import return_raw_request
@@ -825,12 +827,16 @@ async def test_async_deadline_bills_responses_returned_during_cancellation_once(
 async def test_caller_cancellation_retains_usage_returned_during_transport_cleanup(
     respx_mock,
 ):
-    from litellm.rerank_api.litellm_decisions_transformation.handler import (
-        DecisionRerankLoggingCapture,
-    )
-
     started = asyncio.Event()
-    capture = DecisionRerankLoggingCapture("cancelled-rerank")
+    logging_obj = Logging(
+        model=MODEL,
+        messages=[],
+        stream=False,
+        call_type="arerank",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="cancelled-rerank",
+        function_id="cancelled-rerank",
+    )
 
     async def score(request):
         started.set()
@@ -840,28 +846,26 @@ async def test_caller_cancellation_retains_usage_returned_during_transport_clean
             return response(output_tokens=3)
 
     route = respx_mock.post(URL).mock(side_effect=score)
-    with capture.capture():
-        task = asyncio.create_task(
-            rerank(
-                False,
-                documents=["one", "two"],
-                concurrency=1,
-                litellm_call_id=capture.call_id,
-            )
+    task = asyncio.create_task(
+        rerank(
+            False,
+            documents=["one", "two"],
+            concurrency=1,
+            litellm_logging_obj=logging_obj,
         )
-        await asyncio.wait_for(started.wait(), 5)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+    )
+    await asyncio.wait_for(started.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
     assert route.call_count == 1
-    assert capture.logging_obj is not None
-    usage = capture.logging_obj.model_call_details["combined_usage_object"]
+    usage = logging_obj.model_call_details["combined_usage_object"]
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
         10,
         3,
         13,
     )
-    assert capture.logging_obj.model_call_details["response_cost"] == pytest.approx(10 * RATE)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(10 * RATE)
 
 
 async def test_direct_token_price_override_is_respected(respx_mock):

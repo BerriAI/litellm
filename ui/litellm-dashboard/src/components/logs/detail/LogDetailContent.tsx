@@ -30,7 +30,6 @@ import { JsonViewer } from "./JsonViewer";
 import { RoutingDecisionCard, type RoutingDecision } from "./RoutingDecisionCard";
 import {
   formatData,
-  formatGatewayEndpoint,
   checkHasMessages,
   checkHasResponse,
   normalizeGuardrailEntries,
@@ -151,9 +150,6 @@ export function LogDetailContent({
               <DescriptionItem label="Model">{logEntry.model}</DescriptionItem>
               <DescriptionItem label="Provider">{logEntry.custom_llm_provider || "-"}</DescriptionItem>
               <DescriptionItem label="Call Type">{logEntry.call_type}</DescriptionItem>
-              <DescriptionItem label="Gateway endpoint">
-                {formatGatewayEndpoint(metadata) ?? "Not recorded"}
-              </DescriptionItem>
               {logEntry.user && (
                 <DescriptionItem label="User">
                   <UserIdentity userId={logEntry.user} email={userEmail} />
@@ -162,7 +158,7 @@ export function LogDetailContent({
               <DescriptionItem label="Model ID">
                 <TruncatedValue value={logEntry.model_id} />
               </DescriptionItem>
-              <DescriptionItem label="Provider API base">
+              <DescriptionItem label="API Base">
                 <TruncatedValue value={logEntry.api_base} maxWidth={API_BASE_MAX_WIDTH} />
               </DescriptionItem>
               {podRouting && typeof podRouting === "object" && (

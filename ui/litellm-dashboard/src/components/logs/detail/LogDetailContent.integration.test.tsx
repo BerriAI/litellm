@@ -56,39 +56,6 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("completion")).toBeInTheDocument();
   });
 
-  it("should distinguish the recorded gateway endpoint from the provider API base", () => {
-    render(
-      <LogDetailContent
-        logEntry={createLogEntry({
-          call_type: "arerank",
-          api_base: "https://api.typesafe.ai/v1",
-          metadata: { spend_logs_metadata: { gateway_endpoint: { method: "POST", path: "/v1/rerank" } } },
-        })}
-      />,
-    );
-
-    expect(screen.getByText("Gateway endpoint")).toBeInTheDocument();
-    expect(screen.getByText("POST /v1/rerank")).toBeInTheDocument();
-    expect(screen.getByText("Provider API base")).toBeInTheDocument();
-    expect(screen.getByText("https://api.typesafe.ai/v1")).toBeInTheDocument();
-    expect(screen.getByText("arerank")).toBeInTheDocument();
-    expect(screen.queryByText("POST /rerank")).not.toBeInTheDocument();
-  });
-
-  it.each([
-    { status: "success" },
-    { spend_logs_metadata: { gateway_endpoint: { method: ["POST"], path: "/rerank" } } },
-  ])(
-    "should show that the gateway endpoint was not recorded when its metadata is unavailable or invalid",
-    (metadata) => {
-      render(<LogDetailContent logEntry={createLogEntry({ call_type: "arerank", metadata })} />);
-
-      expect(screen.getByText("Gateway endpoint")).toBeInTheDocument();
-      expect(screen.getByText("Not recorded")).toBeInTheDocument();
-      expect(screen.queryByText("POST /rerank")).not.toBeInTheDocument();
-    },
-  );
-
   it("shows the requesting user's email and id in Request Details when the email is resolved", () => {
     render(
       <LogDetailContent logEntry={createLogEntry({ user: "106514937785257944828" })} userEmail="alice@example.com" />,

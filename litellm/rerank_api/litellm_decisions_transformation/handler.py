@@ -2,10 +2,8 @@
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, wait
-from contextlib import contextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import partial
 from queue import Empty, SimpleQueue
@@ -34,29 +32,6 @@ from litellm.types.utils import Usage
 
 _CHILD_OMIT: Final = frozenset({"litellm_logging_obj", "litellm_call_id"})
 _MAX_CONCURRENCY: Final = 8
-
-
-class DecisionRerankLoggingCapture:
-    def __init__(self, call_id: str) -> None:
-        self.call_id: Final = call_id
-        self.logging_obj: Logging | None = None
-
-    @contextmanager
-    def capture(self) -> Generator[None]:
-        token: Final = _LOGGING_CAPTURE.set(self)
-        try:
-            yield
-        finally:
-            _LOGGING_CAPTURE.reset(token)
-
-    def record(self, logging_obj: Logging) -> None:
-        if logging_obj.litellm_call_id == self.call_id:
-            self.logging_obj = logging_obj
-
-
-_LOGGING_CAPTURE: Final[ContextVar[DecisionRerankLoggingCapture | None]] = ContextVar(
-    "decision_rerank_logging_capture", default=None
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,9 +297,6 @@ def rerank_with_decisions(
     params: Mapping[str, object],
     kwargs: Mapping[str, object],
 ) -> DecisionRerankResponse | Awaitable[DecisionRerankResponse]:
-    logging_capture: Final = _LOGGING_CAPTURE.get()
-    if logging_capture is not None:
-        logging_capture.record(logging_obj)
     request: Final = LiteLLMDecisionsRerankConfig.validate_request(params, model, provider, strategy)
     deadline: Final = time.monotonic() + request.timeout
     logging_obj.update_from_kwargs(  # pyright: ignore[reportUnknownMemberType]  # Logging accepts legacy provider kwargs

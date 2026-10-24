@@ -1,27 +1,9 @@
-import { z } from "zod";
-
 /**
  * Utility functions for LogDetailsDrawer component.
  * These functions handle data formatting, validation, and guardrail calculations.
  */
 
 export type SessionLogSortMode = "duration" | "start_time";
-
-const gatewayEndpointMetadataSchema = z.object({
-  spend_logs_metadata: z.object({
-    gateway_endpoint: z.object({
-      method: z.string().regex(/^[A-Z]+$/),
-      path: z.string().regex(/^\/(?!\/)[^?#\s]*$/),
-    }),
-  }),
-});
-
-export function formatGatewayEndpoint(metadata: unknown): string | null {
-  const parsed = gatewayEndpointMetadataSchema.safeParse(metadata);
-  if (!parsed.success) return null;
-  const { method, path } = parsed.data.spend_logs_metadata.gateway_endpoint;
-  return `${method} ${path}`;
-}
 
 type SortableSessionLog = { startTime: string; endTime: string; request_duration_ms?: number };
 
