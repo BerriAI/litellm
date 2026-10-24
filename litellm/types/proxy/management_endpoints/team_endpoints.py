@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -133,8 +133,8 @@ class TeamMemberAddResult(LiteLLMBaseModel):
     user_email: str | None = None
     success: bool
     error: str | None = None
-    updated_user: dict[str, Any] | None = None
-    updated_team_membership: dict[str, Any] | None = None
+    updated_user: dict[str, object] | None = None
+    updated_team_membership: dict[str, object] | None = None
 
 
 class BulkTeamMemberAddResponse(LiteLLMBaseModel):
@@ -145,7 +145,7 @@ class BulkTeamMemberAddResponse(LiteLLMBaseModel):
     total_requested: int
     successful_additions: int
     failed_additions: int
-    updated_team: dict[str, Any] | None = None
+    updated_team: dict[str, object] | None = None
 
 
 class TeamMemberRef(MemberDeleteRequest):

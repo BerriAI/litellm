@@ -5,6 +5,7 @@ from typing import Final
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.utils import NormalizedName, canonicalize_name
+from packaging.version import Version
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -18,6 +19,8 @@ OPTIONAL_DEPENDENCIES: Final = PYPROJECT["project"]["optional-dependencies"]
 AIOHTTP_POOL_POISONING_RANGE: Final = SpecifierSet(">=3.14.0,<3.14.2")
 AIOHTTP_POOL_POISONING_RELEASES: Final = ("3.14.0", "3.14.1")
 AIOHTTP_POOL_POISONING_SOURCE: Final = "aio-libs/aiohttp#12953, fixed in aiohttp 3.14.2"
+ANYIO_STRANDED_LOCK_WAITER_FIX: Final = Version("4.14.0")
+ANYIO_STRANDED_LOCK_WAITER_SOURCE: Final = "agronholm/anyio#1145, fixed in anyio 4.14.0 released 2026-06-15"
 CLI_RUNTIME_DEPENDENCIES: Final = frozenset({"rich", "pyyaml", "requests"})
 PROXY_SERVER_ONLY_DEPENDENCIES: Final = frozenset(
     {
@@ -92,3 +95,17 @@ def test_locked_aiohttp_version_is_not_pool_poisoning() -> None:
     locked: Final = _locked_package("aiohttp")["version"]
     assert isinstance(locked, str)
     assert not AIOHTTP_POOL_POISONING_RANGE.contains(locked), AIOHTTP_POOL_POISONING_SOURCE
+
+
+def test_declared_anyio_floor_is_at_or_above_stranded_lock_waiter_fix() -> None:
+    declared: Final = tuple(
+        Requirement(requirement)
+        for requirement in PYPROJECT["project"]["dependencies"]
+        if canonicalize_name(Requirement(requirement).name) == "anyio"
+    )
+    assert len(declared) == 1, ANYIO_STRANDED_LOCK_WAITER_SOURCE
+    assert declared[0].marker is None, ANYIO_STRANDED_LOCK_WAITER_SOURCE
+    assert any(
+        specifier.operator == ">=" and Version(specifier.version) >= ANYIO_STRANDED_LOCK_WAITER_FIX
+        for specifier in declared[0].specifier
+    ), ANYIO_STRANDED_LOCK_WAITER_SOURCE

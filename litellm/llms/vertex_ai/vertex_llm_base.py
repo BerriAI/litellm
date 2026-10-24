@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
@@ -295,23 +296,22 @@ class VertexBase:
 
         if api_base is None:
             api_base = get_vertex_base_url(vertex_location)
+        location_path: Final = f"projects/{vertex_project}/locations/{vertex_location}"
+        raw_predict_method: Final = "streamRawPredict" if stream else "rawPredict"
         if partner == VertexPartnerProvider.llama:
-            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
+            return join_api_base(api_base, f"v1/{location_path}/endpoints/openapi/chat/completions")
         elif partner == VertexPartnerProvider.mistralai:
-            if stream:
-                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
-            else:
-                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
+            return join_api_base(
+                api_base, f"v1/{location_path}/publishers/mistralai/models/{model}:{raw_predict_method}"
+            )
         elif partner == VertexPartnerProvider.ai21:
-            if stream:
-                return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:streamRawPredict"
-            else:
-                return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:rawPredict"
+            return join_api_base(
+                api_base, f"v1beta1/{location_path}/publishers/ai21/models/{model}:{raw_predict_method}"
+            )
         elif partner == VertexPartnerProvider.claude:
-            if stream:
-                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:streamRawPredict"
-            else:
-                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
+            return join_api_base(
+                api_base, f"v1/{location_path}/publishers/anthropic/models/{model}:{raw_predict_method}"
+            )
 
     def get_complete_vertex_url(
         self,
@@ -658,7 +658,7 @@ class VertexBase:
                 # For Gemini (Google AI Studio), construct the full path like other providers
                 if model is None:
                     raise ValueError("Model parameter is required for Gemini custom API base URLs")
-                url = f"{api_base}/models/{model}:{endpoint}"
+                url = join_api_base(api_base, f"models/{model}:{endpoint}")
                 if gemini_api_key is None:
                     raise ValueError(
                         "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
@@ -678,20 +678,17 @@ class VertexBase:
                     model_for_url: Final = get_vertex_base_model_name(model=model)
                     # Format: {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
                     version: Final = vertex_api_version or "v1"
-                    url = "{}/{}/projects/{}/locations/{}/endpoints/{}:{}".format(
-                        api_base.rstrip("/"),
-                        version,
-                        vertex_project,
-                        vertex_location,
-                        model_for_url,
-                        endpoint,
+                    url = join_api_base(
+                        api_base,
+                        f"{version}/projects/{vertex_project}/locations/{vertex_location}"
+                        f"/endpoints/{model_for_url}:{endpoint}",
                     )
                 elif urlparse(api_base).path in ("", "/"):
-                    url = api_base.rstrip("/") + urlparse(url).path
+                    url = join_api_base(api_base, urlparse(url).path)
                 elif urlparse(api_base).path.rstrip("/") in ("/v1", "/v1beta1") and "/projects/" in urlparse(url).path:
                     url = graft_default_vertex_path(api_base=api_base, default_url=url)
                 else:
-                    url = f"{api_base}:{endpoint}"
+                    url = f"{api_base.rstrip('/')}:{endpoint}"
             if stream is True:
                 parsed_stream_url: Final = urlparse(url)
                 stream_query: Final = f"{parsed_stream_url.query}&alt=sse" if parsed_stream_url.query else "alt=sse"

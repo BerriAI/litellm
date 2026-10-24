@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { agentDailyData, isUserAgentTag, topAgents, userAgentProduct, type TagSummaryRow } from "./agentCatalog";
+import {
+  agentDailyData,
+  isUserAgentTag,
+  parseUsageClient,
+  topAgents,
+  usageClientFromUserAgent,
+  userAgentProduct,
+  UsageClient,
+  type TagSummaryRow,
+} from "./agentCatalog";
 import type { DailyData } from "@/components/UsagePage/types";
 
 const metric = (spend: number, tokens: number) => ({
@@ -31,6 +40,26 @@ const row = (
   successful_requests: requests,
   failed_requests: 0,
   unique_users: users,
+});
+
+describe("client identification", () => {
+  it("should accept only supported client IDs at a selection boundary", () => {
+    expect(parseUsageClient("claude-desktop")).toBe(UsageClient.ClaudeDesktop);
+    expect(parseUsageClient("claude-code")).toBe(UsageClient.ClaudeCode);
+    expect(parseUsageClient("claude-cli")).toBeNull();
+    expect(parseUsageClient(null)).toBeNull();
+  });
+
+  it.each<[string, UsageClient | null]>([
+    [" User Agent: claude-desktop/1.0 ", UsageClient.ClaudeDesktop],
+    ["claude-cli/1.0 (external, cli)", UsageClient.ClaudeCode],
+    ["claude-cli/1.0 (external, cli, claude-desktop-3p)", UsageClient.ClaudeDesktop],
+    ["python-httpx/1.0 (claude-desktop-3p)", null],
+    ["claude-cli/1.0 (integration=claude-desktop-3p)", null],
+    ["claude-cli", null],
+  ])("should classify the full user agent %s without matching incidental markers", (agent, expected) => {
+    expect(usageClientFromUserAgent(agent)).toBe(expected);
+  });
 });
 
 describe("userAgentProduct", () => {
@@ -79,13 +108,14 @@ describe("topAgents", () => {
     expect(agents[0].logo).toBeTruthy();
   });
 
-  it("maps claude-cli to Claude Code and ranks by tokens", () => {
+  it("should keep a bare claude-cli rollup unspecified and rank by tokens", () => {
     const agents = topAgents([
       row("User-Agent: python", 600, 300),
       row("User-Agent: claude-cli", 370, 343),
       row("User-Agent: Cursor/1.0", 1, 7),
     ]);
-    expect(agents.map((agent) => agent.label)).toEqual(["Claude Code", "Python", "Cursor"]);
+    expect(agents.map((agent) => agent.label)).toEqual(["Claude (unspecified)", "Python", "Cursor"]);
+    expect(agents[0]).toMatchObject({ description: "Client not identified", tags: ["User-Agent: claude-cli"] });
     expect(agents[0].kind).toBe("agent");
     expect(agents[1].kind).toBe("sdk");
   });
@@ -138,7 +168,10 @@ describe("topAgents", () => {
       row("User-Agent: claude-cli/2.1.263 (external, cli)", 10, 100),
       row("User-Agent: claude-code", 2, 20),
     ]);
-    expect([...agent.tags].sort()).toEqual(["User-Agent: claude-cli", "User-Agent: claude-code"]);
+    expect([...agent.tags].sort()).toEqual([
+      "User-Agent: claude-cli/2.1.263 (external, cli)",
+      "User-Agent: claude-code",
+    ]);
     expect(agent).toMatchObject({ spend: 12, tokens: 120 });
   });
 
@@ -151,6 +184,100 @@ describe("topAgents", () => {
       "User-Agent: opencode/1.18.29 ai-sdk",
       "User-Agent: opencode/1.18.30 ai-sdk",
     ]);
+  });
+
+  it("should split Desktop and Code from full user agents without counting their bare rollup again", () => {
+    const desktop = row("User-Agent: claude-cli/2.1.263 (external, claude-desktop-3p)", 4, 400, { requests: 2 });
+    const code = row("User-Agent: claude-cli/2.1.264 (external, cli)", 6, 600, { requests: 3 });
+    const agents = topAgents([row("User-Agent: claude-cli", 10, 1000, { requests: 5 }), desktop, code]);
+    const expectedDesktop = {
+      label: "Claude Desktop",
+      spend: 4,
+      tokens: 400,
+      requests: 2,
+      tags: [desktop.tag],
+    };
+    const expectedCode = {
+      label: "Claude Code",
+      spend: 6,
+      tokens: 600,
+      requests: 3,
+      tags: [code.tag],
+    };
+    expect(agents).toHaveLength(2);
+    expect(agents.find((agent) => agent.id === "claude-desktop")).toMatchObject(expectedDesktop);
+    expect(agents.find((agent) => agent.id === "claude-code")).toMatchObject(expectedCode);
+  });
+
+  it("should identify Desktop before cli markers and keep unmarked versions unspecified without a rollup", () => {
+    const desktopTag = "User-Agent: CLAUDE-CLI/2.1.263 (external, cli, claude-desktop-3p)";
+    const ambiguousTag = "User-Agent: claude-cli/2.1.264";
+    const agents = topAgents([row(desktopTag, 4, 400), row(ambiguousTag, 6, 600)]);
+    expect(agents).toHaveLength(2);
+    expect(agents.find((agent) => agent.id === "claude-desktop")).toMatchObject({
+      spend: 4,
+      tokens: 400,
+      tags: [desktopTag],
+    });
+    expect(agents.find((agent) => agent.id === "claude-unspecified")).toMatchObject({
+      spend: 6,
+      tokens: 600,
+      tags: [ambiguousTag],
+    });
+  });
+
+  it("should not treat an unknown cli-like marker as proof of Claude Code", () => {
+    const tag = "User-Agent: claude-cli/2.1.263 (external, custom-cli)";
+    const [agent] = topAgents([row(tag, 4, 400)]);
+    expect(agent).toMatchObject({ id: "claude-unspecified", tags: [tag] });
+  });
+
+  it("should retain missing version usage as unspecified without offering an inaccurate bare-tag filter", () => {
+    const agents = topAgents([
+      row("User-Agent: claude-cli", 10, 1000, { requests: 5, users: 4 }),
+      row("User-Agent: claude-cli/2.1.263 (external, claude-desktop-3p)", 4, 400, { requests: 2, users: 2 }),
+      row("User-Agent: claude-cli/2.1.264", 2, 200, { requests: 1, users: 1 }),
+    ]);
+    const expectedUnspecified = {
+      spend: 6,
+      tokens: 600,
+      requests: 3,
+      users: 1,
+      tags: [],
+    };
+    expect(agents).toHaveLength(2);
+    expect(agents.find((agent) => agent.id === "claude-desktop")).toMatchObject({ spend: 4, tokens: 400, requests: 2 });
+    expect(agents.find((agent) => agent.id === "claude-unspecified")).toMatchObject(expectedUnspecified);
+  });
+
+  it.each([
+    { spend: 11, tokens: 1000, requests: 5 },
+    { spend: 10, tokens: 1001, requests: 5 },
+    { spend: 10, tokens: 1000, requests: 6 },
+  ])("should keep the rollup unspecified when version totals exceed it (%j)", ({ spend, tokens, requests }) => {
+    const rollup = row("User-Agent: claude-cli", 10, 1000, { requests: 5 });
+    const agents = topAgents([
+      rollup,
+      row("User-Agent: claude-cli/2.1.263 (external, claude-desktop-3p)", spend, tokens, { requests }),
+    ]);
+    const expectedRollup = {
+      id: "claude-unspecified",
+      spend: 10,
+      tokens: 1000,
+      requests: 5,
+      tags: [rollup.tag],
+    };
+    expect(agents).toHaveLength(1);
+    expect(agents[0]).toMatchObject(expectedRollup);
+  });
+
+  it("should avoid a spurious unspecified client from floating-point cost sums", () => {
+    const agents = topAgents([
+      row("User-Agent: claude-cli", 0.3, 300, { requests: 2 }),
+      row("User-Agent: claude-cli/2.1.263 (external, claude-desktop-3p)", 0.1, 100),
+      row("User-Agent: claude-cli/2.1.264 (external, cli)", 0.2, 200),
+    ]);
+    expect(agents.map((agent) => agent.id).sort()).toEqual(["claude-code", "claude-desktop"]);
   });
 });
 
@@ -179,5 +306,36 @@ describe("agentDailyData", () => {
     expect(Object.keys(result.breakdown.models).sort()).toEqual(["Claude Code", "Codex"]);
     expect(result.breakdown.models["Claude Code"].metrics).toMatchObject({ spend: 10, total_tokens: 100 });
     expect(result.breakdown.models["Codex"].metrics).toMatchObject({ spend: 4, total_tokens: 40 });
+  });
+
+  it("should preserve Desktop attribution and unspecified residual in the daily chart", () => {
+    const day = {
+      date: "2026-10-01",
+      metrics: metric(10, 1000).metrics,
+      breakdown: {
+        models: {},
+        model_groups: {},
+        mcp_servers: {},
+        providers: {},
+        api_keys: {},
+        entities: {
+          "User-Agent: claude-cli": { metrics: { ...metric(10, 1000).metrics, api_requests: 2 } },
+          "User-Agent: claude-cli/2.1.263 (external, claude-desktop-3p)": metric(4, 400),
+        },
+      },
+    } as unknown as DailyData;
+    const [result] = agentDailyData([day]);
+    expect(result.metrics).toMatchObject({ spend: 10, total_tokens: 1000, api_requests: 2 });
+    expect(Object.keys(result.breakdown.models).sort()).toEqual(["Claude (unspecified)", "Claude Desktop"]);
+    expect(result.breakdown.models["Claude Desktop"].metrics).toMatchObject({
+      spend: 4,
+      total_tokens: 400,
+      api_requests: 1,
+    });
+    expect(result.breakdown.models["Claude (unspecified)"].metrics).toMatchObject({
+      spend: 6,
+      total_tokens: 600,
+      api_requests: 1,
+    });
   });
 });

@@ -104,6 +104,14 @@ class _HasServerId(Protocol):
     server_id: str
 
 
+class _TemporaryServerCacheWriter(Protocol):
+    async def async_set_cache(self, *, key: str, value: str, ttl: int) -> object: ...
+
+
+class _TemporaryServerCacheReader(Protocol):
+    async def async_get_cache(self, *, key: str) -> object: ...
+
+
 def _session_cookie_claims(claims: Mapping[str, object]) -> Mapping[str, object]:
     return claims
 
@@ -527,7 +535,7 @@ if MCP_AVAILABLE:
         """
         if litellm.cache is None or not hasattr(litellm.cache, "cache"):
             return
-        cache_backend: Final = getattr(litellm.cache, "cache", None)
+        cache_backend: Final[_TemporaryServerCacheWriter | None] = getattr(litellm.cache, "cache", None)
         if cache_backend is None or not hasattr(cache_backend, "async_set_cache"):
             return
 
@@ -566,7 +574,7 @@ if MCP_AVAILABLE:
         """
         if litellm.cache is None or not hasattr(litellm.cache, "cache"):
             return None
-        cache_backend: Final = getattr(litellm.cache, "cache", None)
+        cache_backend: Final[_TemporaryServerCacheReader | None] = getattr(litellm.cache, "cache", None)
         if cache_backend is None or not hasattr(cache_backend, "async_get_cache"):
             return None
 
@@ -2517,7 +2525,9 @@ if MCP_AVAILABLE:
             resolved_redirect_uri: Final = f"{get_request_base_url(request)}/callback" if sealed_code else redirect_uri
             caller_client_id: Final = sealed_code.client_id if sealed_code else client_id
             caller_client_secret: Final = sealed_code.client_secret if sealed_code else client_secret
-            resolved_client_id: Final = mcp_server.client_id or caller_client_id or ""
+            resolved_client_id: Final = (
+                caller_client_id if sealed_code else (mcp_server.client_id or caller_client_id or "")
+            )
             if not resolved_client_id:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -2541,6 +2551,7 @@ if MCP_AVAILABLE:
                 refresh_token=refresh_token,
                 scope=scope,
                 client_token_endpoint_auth_method=sealed_code.token_endpoint_auth_method if sealed_code else None,
+                sealed_client=sealed_code is not None,
             )
 
     @router.post(

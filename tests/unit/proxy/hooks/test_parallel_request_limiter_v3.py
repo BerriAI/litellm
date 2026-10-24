@@ -3,6 +3,7 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 """
 
 import asyncio
+import contextvars
 import logging
 import sys
 import time
@@ -48,11 +49,13 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_E
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.extraction import ExtractionResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.mcp import MCPPreCallRequestObject, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
+    CallTypes,
     EmbeddingResponse,
     ModelResponse,
     PromptTokensDetailsWrapper,
@@ -3939,6 +3942,126 @@ async def test_mcp_per_team_rate_limit_is_enforced_from_team_metadata_v3() -> No
 
 
 @pytest.mark.asyncio
+async def test_inherited_mcp_team_rate_limit_deduplicates_team_and_source_descriptors_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="math-a",
+        name="math_a",
+        server_name="math_a",
+        transport=MCPTransport.http,
+    )
+    inherited_auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-inherited"),
+        team_id="team-a",
+        team_metadata={"mcp_rpm_limit": {"math_a": 1}},
+    ).model_copy(update={"mcp_source_team_rpm_limits": {"team-a": {"math_a": 1}}})
+    descriptors: Final[list[RateLimitDescriptor]] = []
+    handler._add_mcp_per_key_rate_limit_descriptor(inherited_auth, "math_a", descriptors)
+
+    assert descriptors == []
+    team_descriptors: Final[list[RateLimitDescriptor]] = []
+    handler._add_mcp_per_team_rate_limit_descriptor(inherited_auth, "math_a", team_descriptors)
+    assert [(descriptor["key"], descriptor["value"]) for descriptor in team_descriptors] == [
+        ("mcp_per_team", "team-a:math_a")
+    ]
+    await handler.enforce_mcp_server_rate_limits(inherited_auth, server)
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_per_team"):
+        await handler.enforce_mcp_server_rate_limits(inherited_auth, server)
+
+
+def test_inherited_mcp_team_rate_limit_uses_source_limit_when_primary_metadata_is_missing() -> None:
+    handler, _ = _make_mcp_handler()
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-inherited-source-limit"),
+        team_id="team-a",
+    ).model_copy(update={"mcp_source_team_rpm_limits": {"team-a": {"math_a": 1}}})
+    descriptors: Final[list[RateLimitDescriptor]] = []
+
+    handler._add_mcp_per_team_rate_limit_descriptor(auth, "math_a", descriptors)
+
+    assert descriptors == [
+        {
+            "key": "mcp_per_team",
+            "value": "team-a:math_a",
+            "rate_limit": {
+                "requests_per_unit": 1,
+                "tokens_per_unit": None,
+                "window_size": handler.window_size,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_billed_personal_key_auth_produces_team_rpm_descriptors(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.models.budget import LiteLLM_BudgetTable
+    from litellm.models.team_membership import LiteLLM_TeamMembership
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
+
+    server: Final = MCPServer(
+        server_id="math_a",
+        name="math_a",
+        server_name="math_a",
+        transport=MCPTransport.http,
+    )
+    team: Final = LiteLLM_TeamTable(
+        team_id="team-a",
+        organization_id="org-team-a",
+        rpm_limit=7,
+        object_permission_id="perm-team-a",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-team-a",
+            mcp_servers=["math_a"],
+            mcp_tool_permissions={"math_a": ["add"]},
+        ),
+    )
+    membership: Final = LiteLLM_TeamMembership(
+        user_id="owner",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(rpm_limit=3),
+    )
+    user_api_key_auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-billed-personal"),
+        user_id="owner",
+    )
+
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _: False)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+    monkeypatch.setattr(auth_checks, "personal_key_owner_teams", AsyncMock(return_value=(team,)))
+    monkeypatch.setattr(auth_checks, "get_team_object", AsyncMock(return_value=team))
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=membership))
+    monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+
+    billed_auth: Final = await MCPRequestHandler.billing_auth_for_tool_call(user_api_key_auth, "math_a-add")
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+
+    descriptors: Final = handler.create_rate_limit_descriptors(
+        user_api_key_dict=billed_auth,
+        data={},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+
+    assert [
+        (descriptor["key"], descriptor["value"], descriptor["rate_limit"]["requests_per_unit"])
+        for descriptor in descriptors
+        if descriptor["key"] in ("team", "team_member")
+    ] == [("team", "team-a", 7), ("team_member", "team-a:owner", 3)]
+
+
+@pytest.mark.asyncio
 async def test_mcp_server_rpm_is_shared_across_keys_v3() -> None:
     handler, _ = _make_mcp_handler()
     server: Final = MCPServer(
@@ -4083,6 +4206,175 @@ async def test_completed_responses_post_call_releases_parallel_slot() -> None:
     assert handler._gauge_in_flight_from_cache_value(
         await local_cache.async_get_cache(key=parallel_key)
     ) == 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_call_inside_admitted_request_reuses_its_parallel_slot() -> None:
+    api_key: Final = hash_token("sk-mcp-auto-execute")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    parallel_key: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+    owner_call_id: Final = "mcp-auto-execute-owner"
+
+    async def in_flight() -> int:
+        return handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=parallel_key)
+        )
+
+    def mcp_tool_call() -> dict[str, object]:
+        return {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Tool: add"}],
+            "mcp_server_name": "math",
+        }
+
+    async def pre_call(data: dict[str, object], call_type: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type=call_type,
+        )
+
+    async def pre_call_from_another_request(
+        data: dict[str, object], call_type: str
+    ) -> None:
+        await contextvars.Context().run(asyncio.create_task, pre_call(data, call_type))
+
+    await pre_call(
+        {"model": "gpt-4o-mini", "input": "add 2 and 3", "litellm_call_id": owner_call_id},
+        CallTypes.aresponses.value,
+    )
+    await pre_call(mcp_tool_call(), CallTypes.call_mcp_tool.value)
+    await pre_call(mcp_tool_call(), CallTypes.call_mcp_tool.value)
+    assert await in_flight() == 1
+
+    with pytest.raises(HTTPException):
+        await pre_call_from_another_request(
+            mcp_tool_call(), CallTypes.call_mcp_tool.value
+        )
+
+    await handler.async_log_success_event(
+        kwargs={"litellm_call_id": owner_call_id},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert await in_flight() == 0
+    await pre_call_from_another_request(
+        {"model": "gpt-4o-mini", "input": "next request"},
+        CallTypes.aresponses.value,
+    )
+    assert await in_flight() == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream", "in_flight_after_first_round_logs"),
+    [(False, 1), (True, 0)],
+    ids=["non_stream_round_logged_late_keeps_slot", "stream_logged_at_its_end_releases_slot"],
+)
+async def test_first_round_logged_after_tool_call_reuse_releases_only_at_request_end(
+    stream: bool, in_flight_after_first_round_logs: int
+) -> None:
+    reused_at: Final = datetime(2026, 1, 5, 12, 0, 0)
+    api_key: Final = hash_token(f"sk-mcp-late-round-log-{stream}")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=lambda: reused_at,
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    parallel_key: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+    owner_call_id: Final = f"mcp-late-round-log-{stream}"
+
+    async def in_flight() -> int:
+        return handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=parallel_key)
+        )
+
+    async def pre_call(data: dict[str, object], call_type: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type=call_type,
+        )
+
+    async def round_logged(ended_at: datetime) -> None:
+        await handler.async_log_success_event(
+            kwargs={"litellm_call_id": owner_call_id, "stream": stream},
+            response_obj=None,
+            start_time=None,
+            end_time=ended_at,
+        )
+
+    await pre_call(
+        {
+            "model": "claude-haiku-5-5",
+            "messages": [{"role": "user", "content": "add 2 and 3"}],
+            "litellm_call_id": owner_call_id,
+        },
+        CallTypes.anthropic_messages.value,
+    )
+    await pre_call(
+        {"model": "MCP: add", "messages": [{"role": "user", "content": "Tool: add"}], "mcp_server_name": "math"},
+        CallTypes.call_mcp_tool.value,
+    )
+
+    await round_logged(reused_at - timedelta(seconds=1))
+    assert await in_flight() == in_flight_after_first_round_logs
+
+    await round_logged(reused_at + timedelta(seconds=1))
+    assert await in_flight() == 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_call_reusing_request_slot_keeps_request_max_parallel_headers() -> None:
+    api_key: Final = hash_token("sk-mcp-reuse-headers")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=2)
+    data: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "input": "add 2 and 3",
+        "litellm_call_id": "mcp-reuse-headers-owner",
+    }
+    for request_data, call_type in (
+        (data, CallTypes.aresponses.value),
+        (
+            {"model": "MCP: add", "messages": [{"role": "user", "content": "Tool: add"}], "mcp_server_name": "math"},
+            CallTypes.call_mcp_tool.value,
+        ),
+    ):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=request_data,
+            call_type=call_type,
+        )
+    response: Final = ModelResponse(
+        id="mcp-reuse-headers",
+        object="chat.completion",
+        created=0,
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        choices=[],
+    )
+    response._hidden_params = {}
+
+    await handler.async_post_call_success_hook(
+        data=data, user_api_key_dict=user_api_key_dict, response=response
+    )
+
+    headers: Final = response._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-api_key-limit-max_parallel_requests"] == 2
+    assert headers["x-ratelimit-api_key-remaining-max_parallel_requests"] == 1
 
 
 @pytest.mark.asyncio
@@ -8566,3 +8858,78 @@ async def test_a2a_url_target_owns_invocation_fee_and_request_limit(
         await _rpm_request(limiter, cache, auth, "a2a/cheap")
     assert denied.value.status_code == 429
     assert "expensive" in str(denied.value.detail)
+
+
+def _extraction_request(state: str, call_id: str) -> dict[str, object]:
+    return {
+        "model": "invoice-reader",
+        "state": state,
+        "fields": {"vendor": {"type": "text", "instructions": "Who sent the invoice"}},
+        "litellm_call_id": call_id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_extraction_request_passes_a_tpm_limited_key_without_an_injected_output_cap():
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-extraction-cap"), tpm_limit=2000)
+    data: Final = _extraction_request("Invoice from Acme Tools", "extraction-cap")
+    sent: Final = dict(data)
+
+    await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data=data, call_type="aextraction")
+
+    assert data == sent
+
+
+@pytest.mark.asyncio
+async def test_an_extraction_request_reserves_its_state_and_no_output_budget(monkeypatch):
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-extraction-estimate"), tpm_limit=1_000_000)
+    state_tokens: Final = 500
+
+    reserved: Final = await _reserved_tokens_for(
+        handler, cache, key, _extraction_request("word" * state_tokens, "extraction-estimate"), call_type="aextraction"
+    )
+
+    assert state_tokens <= reserved < 2 * state_tokens
+
+
+@pytest.mark.asyncio
+async def test_a_successful_extraction_counts_its_input_tokens_toward_the_key_tpm_limit(monkeypatch):
+    monkeypatch.setattr(_PROXY_MaxParallelRequestsHandler, "get_rate_limit_type", lambda self: "total")
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    api_key: Final = hash_token("sk-extraction-usage")
+    key: Final = UserAPIKeyAuth(api_key=api_key, tpm_limit=500)
+    await handler.async_pre_call_hook(
+        user_api_key_dict=key, cache=cache, data=_extraction_request("Invoice", "extraction-1"), call_type="aextraction"
+    )
+
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_call_id": "extraction-1",
+            "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+        },
+        response_obj=ExtractionResponse.model_validate(
+            {
+                "model": "invoice-reader",
+                "answers": {"vendor": {"type": "text", "value": "Acme Tools"}},
+                "truncated": False,
+                "usage": {"input_tokens": 480, "output_tokens": 0},
+            }
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key,
+            cache=cache,
+            data=_extraction_request("Invoice " * 40, "extraction-2"),
+            call_type="aextraction",
+        )
+    assert refused.value.status_code == 429

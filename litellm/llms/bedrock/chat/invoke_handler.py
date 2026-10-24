@@ -857,6 +857,9 @@ class AWSEventStreamDecoder:
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
+        stream_end_chunk: Final = self._stream_end_chunk()
+        if stream_end_chunk is not None:
+            yield stream_end_chunk
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes], *, response_headers: Mapping[str, str] | None = None
@@ -878,6 +881,12 @@ class AWSEventStreamDecoder:
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
+        stream_end_chunk: Final = self._stream_end_chunk()
+        if stream_end_chunk is not None:
+            yield stream_end_chunk
+
+    def _stream_end_chunk(self) -> ModelResponseStream | None:
+        return None
 
     def _response_stream_shape(self) -> "Shape":
         response_stream_shape: Final = get_bedrock_response_stream_shape()
@@ -955,6 +964,9 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
 
     def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
+
+    def _stream_end_chunk(self) -> ModelResponseStream | None:
+        return self.anthropic_model_response_iterator.cut_stream_chunk()
 
 
 class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):

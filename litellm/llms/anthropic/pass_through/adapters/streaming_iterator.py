@@ -16,6 +16,7 @@ from typing import (
     Protocol,
     cast,
     get_args,
+    runtime_checkable,
 )
 
 from pydantic import TypeAdapter
@@ -24,7 +25,7 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
@@ -63,6 +64,14 @@ class _ChunkStream(Protocol):
     def __iter__(self) -> "Iterator[ModelResponseStream]": ...
 
     def __aiter__(self) -> "AsyncIterator[ModelResponseStream]": ...
+
+
+@runtime_checkable
+class _FailureLoggingWaiter(Protocol):
+    @property
+    def has_dispatched_failure_logging(self) -> bool: ...
+
+    async def wait_for_failure_logging(self, timeout: float | None) -> None: ...
 
 
 def _optional_attr(obj: object, name: str) -> object:
@@ -188,6 +197,14 @@ class _CombinedChunkSplitter:
         self._buffer: deque[ModelResponseStream] = deque()
         self._held_calls: Mapping[int, tuple[ModelResponseStream, _ToolCallPart]] = MappingProxyType({})
         self._live_call_index: int | None = None
+
+    @property
+    def has_dispatched_failure_logging(self) -> bool:
+        return isinstance(self._stream, _FailureLoggingWaiter) and self._stream.has_dispatched_failure_logging is True
+
+    async def wait_for_failure_logging(self, timeout: float | None) -> None:
+        if isinstance(self._stream, _FailureLoggingWaiter):
+            await self._stream.wait_for_failure_logging(timeout=timeout)
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":
@@ -522,7 +539,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
         # _CombinedChunkSplitter.
-        super().__init__(_CombinedChunkSplitter(completion_stream))
+        combined_chunk_splitter: Final = _CombinedChunkSplitter(completion_stream)
+        super().__init__(combined_chunk_splitter)
+        self._combined_chunk_splitter: Final = combined_chunk_splitter
         self.model = model
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
@@ -1244,7 +1263,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if provider_error is e:
                     raise
                 raise provider_error from e
-            if logging_obj is not None:
+            stream_has_dispatched_failure_logging: Final = self._combined_chunk_splitter.has_dispatched_failure_logging
+            if stream_has_dispatched_failure_logging:
+                await self._combined_chunk_splitter.wait_for_failure_logging(timeout=None)
+            elif logging_obj is not None:
                 try:
                     await logging_obj.dispatch_failure_handlers(
                         exception=provider_error,
@@ -1345,9 +1367,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # open a block: the emitted {"type": "thinking", "thinking": ""} gets
         # replayed as history and Anthropic rejects it (LIT-6357). A signed
         # entry opens the block so the client receives the replay signature.
-        thinking_blocks: Final = getattr(delta, "thinking_blocks", None)
-        if thinking_blocks and any(
-            isinstance(b, dict) and not is_empty_unsigned_thinking_block(b) for b in thinking_blocks
+        if any(
+            isinstance(b, dict) and not is_empty_unsigned_thinking_block(b)
+            for b in attribute_items(delta, "thinking_blocks")
         ):
             return False
         return True

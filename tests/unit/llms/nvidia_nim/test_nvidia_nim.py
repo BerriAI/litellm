@@ -94,7 +94,7 @@ def test_chat_completion_nvidia_nim_with_tools():
     ]
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             completion(
@@ -116,7 +116,7 @@ def test_chat_completion_nvidia_nim_with_tools():
 
         # Add assertions to check the request
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         print("request_body: ", request_body)
 
@@ -208,7 +208,7 @@ def test_completion_nvidia_nim():
         api_key="fake-api-key",
     )
 
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             completion(
                 model=model_name,
@@ -226,7 +226,7 @@ def test_completion_nvidia_nim():
             print(e)
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         assert request_body["messages"] == [
             {

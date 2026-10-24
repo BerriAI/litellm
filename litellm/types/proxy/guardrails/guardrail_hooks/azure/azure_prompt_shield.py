@@ -1,5 +1,3 @@
-from typing import Any
-
 from pydantic import Field
 from typing_extensions import TypedDict
 
@@ -23,7 +21,7 @@ class AzurePromptShieldGuardrailResponse(TypedDict):
     """Configuration parameters for the Azure Prompt Shield guardrail"""
 
     userPromptAnalysis: UserPromptAnalysis
-    documentsAnalysis: list[dict[str, Any]]
+    documentsAnalysis: list[dict[str, object]]
 
 
 class AzurePromptShieldGuardrailConfigModel(
