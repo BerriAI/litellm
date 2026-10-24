@@ -13,7 +13,9 @@ use azure_identity::{
 use sha2::{Digest, Sha256};
 
 use litellm_auth_types::Error;
-use litellm_auth_types::{InputSource, ResolvedCredential, SecretValue, Sourced};
+use litellm_auth_types::{
+    CredentialBoundary, InputSource, ResolvedCredential, SecretValue, Sourced,
+};
 
 use super::credential_provider_cache::{
     AzureCredentialProviderCache, AzureCredentialProviderCacheKey,
@@ -286,22 +288,14 @@ fn validate_sources(request: &NativeAzureRequest) -> Result<InputSource, Error> 
                 client_id.source(),
                 client_secret.source(),
             ];
-            let request_identity = identity_sources.contains(&InputSource::Request);
-            if request_identity
-                && !identity_sources
-                    .iter()
-                    .all(|source| *source == InputSource::Request)
-            {
-                return mixed_sources();
-            }
-            if !request_identity && is_request_controlled(scope, authority.as_ref()) {
-                return mixed_sources();
-            }
-            Ok(if request_identity {
-                InputSource::Request
-            } else {
-                trusted_source(&identity_sources)
-            })
+            let boundary =
+                CredentialBoundary::new(&identity_sources).map_err(|_| mixed_sources())?;
+            boundary
+                .validate_resources(
+                    std::iter::once(scope.source()).chain(authority.as_ref().map(Sourced::source)),
+                )
+                .map_err(|_| mixed_sources())?;
+            Ok(boundary.source())
         }
         NativeAzureRequest::ClientAssertion {
             tenant_id,
@@ -355,30 +349,16 @@ fn validate_sources(request: &NativeAzureRequest) -> Result<InputSource, Error> 
     }
 }
 
-fn is_request_controlled<T>(value: &Sourced<T>, optional: Option<&Sourced<String>>) -> bool {
-    value.source() == InputSource::Request
-        || optional.is_some_and(|value| value.source() == InputSource::Request)
-}
-
 fn trusted_only(sources: &[InputSource]) -> Result<InputSource, Error> {
-    if sources.contains(&InputSource::Request) {
-        return mixed_sources();
-    }
-    Ok(trusted_source(sources))
+    CredentialBoundary::host_only(sources)
+        .map(|boundary| boundary.source())
+        .map_err(|_| mixed_sources())
 }
 
-fn trusted_source(sources: &[InputSource]) -> InputSource {
-    if sources.contains(&InputSource::Deployment) {
-        InputSource::Deployment
-    } else {
-        InputSource::Environment
-    }
-}
-
-fn mixed_sources<T>() -> Result<T, Error> {
-    Err(Error::InvalidConfiguration(
+fn mixed_sources() -> Error {
+    Error::InvalidConfiguration(
         "request-controlled Azure auth inputs cannot be combined with host credentials".into(),
-    ))
+    )
 }
 
 fn build_credential(
