@@ -41,7 +41,7 @@ export interface KeyResponse {
   max_budget: number | null;
   expires: string;
   models: string[];
-  aliases: Record<string, unknown>;
+  aliases: Record<string, string>;
   config: Record<string, unknown>;
   user_id: string;
   team_id: string | null;
