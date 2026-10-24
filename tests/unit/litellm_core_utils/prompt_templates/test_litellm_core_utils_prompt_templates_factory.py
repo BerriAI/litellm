@@ -240,12 +240,11 @@ def test_process_file_message_rejects_missing_file_data(message, expected_error)
 
 def _get_gemini_function_response_inline_data_parts(result):
     assert isinstance(result, list), "expected Gemini parts list"
-    assert len(result) == 1, "multimodal function responses should stay in one part"
-    function_response_part = result[0]
-    assert "inline_data" not in function_response_part, "inline_data should be nested under function_response.parts"
-    function_response = function_response_part["function_response"]
-    nested_parts = function_response["parts"]
-    return [part["inline_data"] for part in nested_parts if "inline_data" in part]
+    return [
+        part["inline_data"]
+        for part in (*result, *result[0]["function_response"].get("parts", ()))
+        if "inline_data" in part
+    ]
 
 
 def test_ollama_pt_simple_messages():

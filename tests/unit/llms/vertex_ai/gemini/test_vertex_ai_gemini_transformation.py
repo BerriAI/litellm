@@ -1625,7 +1625,7 @@ def test_convert_tool_response_with_base64_image():
 
     # Convert tool response with nested multimodal functionResponse.parts.
     result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
+        tool_message, last_message_with_tool_calls, forward_function_call_id=True
     )
 
     assert isinstance(result, list), "Should return a parts list when media is present"
@@ -1650,8 +1650,16 @@ def test_convert_tool_response_with_base64_image():
     assert inline_data["data"] == test_image_base64
 
 
-def test_gemini_history_nests_multimodal_tool_response_parts():
-    """Full history conversion should not emit sibling inline_data tool result parts."""
+@pytest.mark.parametrize(
+    "model,nests_media",
+    [
+        ("gemini-2.5-pro", False),
+        ("gemini-2.5-flash", False),
+        ("gemini-2.5-flash-lite", False),
+        ("gemini-3.8-flash", True),
+    ],
+)
+def test_gemini_history_preserves_tool_media_for_model_generation(model: str, nests_media: bool) -> None:
     test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
     messages = [
         {"role": "user", "content": "Get me an image"},
@@ -1683,19 +1691,16 @@ def test_gemini_history_nests_multimodal_tool_response_parts():
         },
     ]
 
-    contents = gemini_convert_messages_with_history(messages=messages)
-
-    tool_response_parts = contents[-1]["parts"]
-    assert len(tool_response_parts) == 1
-    assert "inline_data" not in tool_response_parts[0]
-    function_response = tool_response_parts[0]["function_response"]
-    assert function_response["parts"] == [
-        {
-            "inline_data": {
-                "data": test_image_base64,
-                "mime_type": "image/png",
-            }
-        }
+    contents: Final = gemini_convert_messages_with_history(messages=messages, model=model)
+    media: Final = {"inline_data": {"data": test_image_base64, "mime_type": "image/png"}}
+    expected_response: Final = {
+        "name": "get_image",
+        "response": {"image_ref": "inline"},
+        **({"id": "call_get_image", "parts": [media]} if nests_media else {}),
+    }
+    assert contents[-1]["parts"] == [
+        {"function_response": expected_response},
+        *(() if nests_media else (media,)),
     ]
 
 
@@ -2009,7 +2014,7 @@ def test_convert_tool_response_with_pdf_file():
 
     # Convert tool response with nested multimodal functionResponse.parts.
     result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
+        tool_message, last_message_with_tool_calls, forward_function_call_id=True
     )
 
     assert isinstance(result, list), "Should return a parts list when media is present"
@@ -2059,7 +2064,7 @@ def test_convert_tool_response_with_input_file_type():
 
     # Convert tool response
     result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
+        tool_message, last_message_with_tool_calls, forward_function_call_id=True
     )
 
     # Check inline_data is nested under functionResponse.parts.
@@ -2096,7 +2101,7 @@ def test_convert_tool_response_with_nested_file_object():
 
     # Convert tool response
     result = convert_to_gemini_tool_call_result(
-        tool_message, last_message_with_tool_calls
+        tool_message, last_message_with_tool_calls, forward_function_call_id=True
     )
 
     # Check inline_data is nested under functionResponse.parts.
@@ -2755,7 +2760,9 @@ def test_convert_tool_response_with_url_image(monkeypatch: pytest.MonkeyPatch) -
         ]
     }
 
-    result: Final = convert_to_gemini_tool_call_result(tool_message, last_message_with_tool_calls)
+    result: Final = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls, forward_function_call_id=True
+    )
 
     assert isinstance(result, list)
     assert len(result) == 1
