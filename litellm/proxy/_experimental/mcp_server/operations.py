@@ -174,6 +174,7 @@ from litellm.types.mcp import (
     DEFAULT_CREDENTIAL_HEADER,
     MCP_LEGACY_VERSIONS,
     MCPAuth,
+    MCPToolSearchSettings,
     MCPTransport,
     without_header,
 )
@@ -441,7 +442,7 @@ async def _dispatch_mcp_tool_search(
         proxy_logging_obj,
     )
 
-    settings: Final = mcp_tool_search_settings()
+    settings: Final[MCPToolSearchSettings | ValidationError] = mcp_tool_search_settings()
     if not isinstance(settings, ValidationError) and settings.embedding_model is not None:
         return await handle_mcp_tool_search(
             query=query,
@@ -466,7 +467,7 @@ async def _dispatch_mcp_tool_search(
         data={"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": request_data}
     )
     try:
-        pre_call_result: Final = await processor.common_processing_pre_call_logic(
+        _, logging_obj = await processor.common_processing_pre_call_logic(
             request=request,
             user_api_key_dict=user_api_key_auth,
             proxy_config=proxy_config,
@@ -474,7 +475,6 @@ async def _dispatch_mcp_tool_search(
             proxy_logging_obj=proxy_logging_obj,
             general_settings=general_settings,
         )
-        _, logging_candidate = TypeAdapter(tuple[dict[str, object], object]).validate_python(pre_call_result)
     except Exception as exc:
         await fire_mcp_tool_call_failure_logging(
             None,
@@ -484,9 +484,8 @@ async def _dispatch_mcp_tool_search(
             request_data,
         )
         raise
-    logging_obj: Final = logging_candidate if isinstance(logging_candidate, LiteLLMLoggingObj) else None
     try:
-        result: Final = await handle_mcp_tool_search(
+        result: Final[CallToolResult] = await handle_mcp_tool_search(
             query=query,
             top_k=top_k,
             user_api_key_dict=user_api_key_auth,
