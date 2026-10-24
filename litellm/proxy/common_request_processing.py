@@ -4821,10 +4821,15 @@ class ProxyBaseLLMRequestProcessing:
                         model_info = metadata.get("model_info") or {}
                         model_id = model_info.get("id", None)
 
-        # 3. Final fallback to self.data["litellm_metadata"] (for routes like /v1/responses that populate data before error)
+        # 3. Final fallback to the request metadata the router updates in place with the selected deployment
         if not model_id:
-            litellm_metadata: Final = self.data.get("litellm_metadata", {}) or {}
-            model_info = litellm_metadata.get("model_info", {}) or {}
-            model_id = model_info.get("id", None)
+            model_id = self._metadata_model_id("litellm_metadata") or self._metadata_model_id("metadata")
 
         return model_id
+
+    def _metadata_model_id(self, metadata_key: str) -> str | None:
+        match self.data.get(metadata_key):
+            case {"model_info": {"id": str() as request_model_id}}:
+                return request_model_id
+            case _:
+                return None

@@ -14316,6 +14316,30 @@ class Router:
         return cast(_RouteDeploymentsT, filtered_deployments)  # cast-ok: same list shape as the input candidates
 
     @staticmethod
+    def _without_declared_text_only_deployments(
+        healthy_deployments: _RouteDeploymentsT,
+        group: str,
+        messages: list[dict[str, str]] | None,  # mutable-ok: handed to _request_carries_image as-is
+        request_kwargs: Mapping[str, object] | None,
+    ) -> _RouteDeploymentsT:
+        if isinstance(healthy_deployments, Mapping) or not Router._request_carries_image(
+            messages, request_kwargs or {}
+        ):
+            return healthy_deployments
+
+        vision_capable_deployments: Final = [
+            deployment
+            for deployment in healthy_deployments
+            if not Router._deployment_declares_no_vision(
+                cast(DeploymentTypedDict, deployment),  # cast-ok: router candidates use the deployment shape
+                group,
+            )
+        ]
+        if not vision_capable_deployments:
+            return healthy_deployments
+        return cast(_RouteDeploymentsT, vision_capable_deployments)  # cast-ok: same list shape as the input candidates
+
+    @staticmethod
     def _request_carries_image(
         messages: list[dict[str, str]] | None,  # mutable-ok: handed to resolve_structured_messages as-is
         request_kwargs: Mapping[str, object],
@@ -14355,7 +14379,6 @@ class Router:
         - model context window < message length. For azure openai models, requires 'base_model' is set. - https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models
         - filter models above rpm limits
         - if region given, filter out models not in that region / unknown region
-        - request carries an image and the deployment declares supports_vision false, unless every candidate does
         - [TODO] function call and model doesn't support function calling
         """
 
@@ -14515,20 +14538,9 @@ class Router:
                     model=model,
                     llm_provider="",
                 )
-        remaining: Final = tuple(
-            (idx, deployment) for idx, deployment in param_candidates if idx not in excluded_indices
-        )
-        text_only_indices: Final[frozenset[int]] = (
-            frozenset(idx for idx, deployment in remaining if self._deployment_declares_no_vision(deployment, model))
-            if remaining and self._request_carries_image(messages, request_settings)
-            else frozenset()
-        )
-        dropped_indices: Final[frozenset[int]] = excluded_indices | (
-            text_only_indices if len(text_only_indices) < len(remaining) else frozenset()
-        )
-        if len(dropped_indices) > 0:
+        if len(excluded_indices) > 0:
             # Single-pass filter using set for O(1) lookups (avoids O(n^2) from repeated pops)
-            _returned_deployments = [d for i, d in enumerate(_returned_deployments) if i not in dropped_indices]
+            _returned_deployments = [d for i, d in enumerate(_returned_deployments) if i not in excluded_indices]
 
         return _returned_deployments
 
@@ -15051,8 +15063,11 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = cast(  # cast-ok: router deployments are plain dicts
-            list[dict[str, object]], healthy_deployments
+        batch_candidates: Final = self._without_declared_text_only_deployments(
+            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+            model,
+            messages,
+            cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
             batch_candidates,
@@ -16291,8 +16306,11 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = cast(  # cast-ok: router deployments are plain dicts
-            list[dict[str, object]], healthy_deployments
+        batch_candidates: Final = self._without_declared_text_only_deployments(
+            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+            model,
+            messages,
+            cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
             batch_candidates,
