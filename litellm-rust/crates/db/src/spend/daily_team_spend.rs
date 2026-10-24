@@ -36,6 +36,7 @@ pub async fn upsert_daily_team_spend(
         &column!(total_response_time_ms),
         &column!(timed_requests),
         &column!(spend),
+        &column!(mcp_namespaced_tool_name),
     )
     .execute(executor)
     .await?;
@@ -50,6 +51,82 @@ mod tests {
     use crate::{DailyTeamRow, test_support::database_pool};
     use rstest::rstest;
     use sqlx::{PgPool, types::chrono::NaiveDateTime};
+
+    #[rstest]
+    #[case::distinct_tools("server.fetch", "server.search")]
+    #[case::default_and_named_tool("", "server.search")]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn daily_team_spend_separates_tools_and_accumulates(
+        #[case] first_tool: &str,
+        #[case] second_tool: &str,
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        let first = DailySpend {
+            entity_id: "daily-team-tools".to_owned(),
+            date: "2026-01-15".to_owned(),
+            api_key: "daily-key-tools".to_owned(),
+            model: "daily-model".to_owned(),
+            custom_llm_provider: "daily-provider".to_owned(),
+            endpoint: "/mcp".to_owned(),
+            mcp_namespaced_tool_name: first_tool.to_owned(),
+            api_requests: 1,
+            spend: 0.125,
+            ..Default::default()
+        };
+        let second = DailySpend {
+            mcp_namespaced_tool_name: second_tool.to_owned(),
+            api_requests: 2,
+            spend: 0.25,
+            ..first.clone()
+        };
+        upsert_daily_team_spend(&mut *tx, &[second.clone(), first.clone()]).await?;
+        upsert_daily_team_spend(
+            &mut *tx,
+            &[
+                DailySpend {
+                    api_requests: 3,
+                    spend: 0.5,
+                    ..first
+                },
+                DailySpend {
+                    api_requests: 5,
+                    spend: 1.0,
+                    ..second
+                },
+            ],
+        )
+        .await?;
+
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "The integration test reads stored tool attribution and counters"
+        )]
+        let rows = sqlx::query_as::<_, DailyTeamRow>(
+            r#"SELECT * FROM "LiteLLM_DailyTeamSpend"
+               WHERE team_id = $1 AND date = $2
+               ORDER BY mcp_namespaced_tool_name"#,
+        )
+        .bind("daily-team-tools")
+        .bind("2026-01-15")
+        .fetch_all(&mut *tx)
+        .await?;
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].mcp_namespaced_tool_name.as_deref(),
+            Some(first_tool)
+        );
+        assert_eq!(
+            rows[1].mcp_namespaced_tool_name.as_deref(),
+            Some(second_tool)
+        );
+        assert_eq!((rows[0].api_requests, rows[0].spend), (4, 0.625));
+        assert_eq!((rows[1].api_requests, rows[1].spend), (7, 1.25));
+        Ok(())
+    }
 
     #[rstest]
     #[case::full_keys(
