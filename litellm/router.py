@@ -1238,6 +1238,7 @@ class Router:
         fallback_access_check: FallbackAccessCheck | None = None,
         fallback_budget_check: FallbackBudgetCheck | None = None,
         auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
+        session_affinity_repin_on_failover: bool = False,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -1274,6 +1275,8 @@ class Router:
             alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
+            session_affinity_repin_on_failover (bool): After a successful replacement response, move a session pin
+                whose deployment is in cooldown or removed. Async routes only. Defaults to False. Applied at startup.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
             enable_mid_stream_fallback_continuation (bool): When True, a chat-completions stream that breaks after plain assistant text has been delivered continues on a fallback deployment via assistant prefill instead of surfacing the error. Only deployments whose model supports assistant prefill are eligible, so the partial text is continued, not regenerated; if none is, the original error is surfaced. Streams that emitted tool calls, thinking blocks, audio/images, or constrained (JSON / forced tool_choice) output are never continued. Async-only. Defaults to False.
@@ -1458,6 +1461,7 @@ class Router:
         self._provider_unresolved_deployments: tuple[Callable[[], Deployment | None], ...] = ()
 
         self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
+        self.session_affinity_repin_on_failover = session_affinity_repin_on_failover
         self.model_group_affinity_config = model_group_affinity_config
         warn_on_unknown_model_group_affinity_flags(model_group_affinity_config)
 
@@ -9282,6 +9286,12 @@ class Router:
             if model_group is None or deployment_id is None or self.get_deployment(model_id=str(deployment_id)) is None:
                 return
 
+            if self.session_affinity_repin_on_failover:
+                await self._repin_session_after_success(
+                    _LITELLM_PARAMS_ADAPTER.validate_python(litellm_params),
+                    _OPAQUE_VALUE_ADAPTER.validate_python(completion_response),
+                )
+
             # Always track deployment successes for cooldown logic, regardless of TPM/RPM limits
             increment_deployment_successes_for_current_minute(
                 litellm_router_instance=self,
@@ -9304,6 +9314,34 @@ class Router:
             verbose_router_logger.debug(
                 "litellm.router.Router::deployment_callback_on_success(): Exception occured - %s", e
             )
+
+    async def _repin_session_after_success(self, litellm_params: Mapping[str, object], response: object) -> None:
+        if not self.session_affinity_repin_on_failover:
+            return
+        try:
+            from litellm.router_utils.pre_call_checks.deployment_affinity_check import completed_affinity_response
+
+            if not completed_affinity_response(response):
+                return
+            metadata: Final = TypeAdapter(Mapping[str, object]).validate_python(
+                litellm_params.get("litellm_metadata") or litellm_params.get("metadata") or {}
+            )
+            model_group: Final = metadata.get("deployment_model_name")
+            team_id: Final = metadata.get("user_api_key_team_id")
+            if not isinstance(model_group, str) or self._is_priority_routing_group(model_group):
+                return
+            registered_ids: Final = self.get_candidate_model_ids_for_route(
+                model=model_group, team_id=team_id if isinstance(team_id, str) else None
+            )
+            cooldown_ids: Final = frozenset(
+                await async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=None)
+            )
+            eligible_ids: Final = registered_ids - cooldown_ids
+            for callback in self._optional_loggers():
+                if isinstance(callback, DeploymentAffinityCheck):
+                    await callback.async_repin_session_after_success(litellm_params, model_group, eligible_ids)
+        except Exception as error:  # noqa: BLE001  # Optional pin updates must not interrupt success accounting
+            verbose_router_logger.debug("Session re-pinning failed: %s", error)
 
     async def increment_deployment_usage_for_response(
         self,

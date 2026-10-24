@@ -16,6 +16,7 @@ import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
@@ -36,6 +37,20 @@ from litellm.types.utils import CallTypes
 
 class DeploymentAffinityCacheValue(TypedDict, closed=True):
     model_id: ReadOnly[str]
+
+
+def completed_affinity_response(response: object) -> bool:
+    if response is None:
+        return False
+    fields: Final[Mapping[str, object]] = (
+        TypeAdapter(Mapping[str, object]).validate_python(response)
+        if isinstance(response, Mapping)
+        else {name: getattr(response, name, None) for name in ("response", "status", "error")}
+    )
+    nested: Final = fields.get("response")
+    if nested is not None:
+        return completed_affinity_response(nested)
+    return fields.get("error") is None and fields.get("status") in (None, "completed")
 
 
 VALID_MODEL_GROUP_AFFINITY_FLAGS: Final = frozenset(
@@ -297,7 +312,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return f"{cls.USER_ID_AFFINITY_PREFIX}{user_id}"
 
     @staticmethod
-    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _get_session_id_from_request_kwargs(request_kwargs: Mapping[str, object]) -> str | None:
         for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
             session_id = DeploymentAffinityCheck._get_session_id_from_metadata_dict(metadata=metadata)
             if session_id is not None:
@@ -305,7 +320,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return None
 
     @staticmethod
-    def _get_marker_session_affinity_ttl(request_kwargs: dict) -> int | None:
+    def _get_marker_session_affinity_ttl(request_kwargs: Mapping[str, object]) -> int | None:
         """TTL from the session-affinity marker the Router stamps at pre-routing time
         when an auto-router routed this request with session_affinity enabled.
         Marker presence enables session pinning for this request only; anything that
@@ -357,7 +372,7 @@ class DeploymentAffinityCheck(CustomLogger):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
@@ -481,6 +496,34 @@ class DeploymentAffinityCheck(CustomLogger):
             self._shorten_for_logs(self._hash_user_key(user_key)),
         )
         return [deployment]
+
+    async def async_repin_session_after_success(
+        self,
+        request_kwargs: Mapping[str, object],
+        model_group: str,
+        eligible_deployment_ids: frozenset[str],
+    ) -> None:
+        marker_ttl: Final = self._get_marker_session_affinity_ttl(request_kwargs)
+        if not self._get_effective_flags(model_group)[2] and marker_ttl is None:
+            return
+        session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs)
+        if session_id is None:
+            return
+        model_info: Final = TypeAdapter(Mapping[str, object]).validate_python(request_kwargs.get("model_info") or {})
+        model_id: Final = model_info.get("id")
+        if model_id is None or str(model_id) not in eligible_deployment_ids:
+            return
+        cache_key: Final = self.get_session_affinity_cache_key(
+            model_group, session_id, self.get_user_key_from_request_kwargs(request_kwargs)
+        )
+        await claim_affinity_pin(
+            self.cache,
+            cache_key,
+            DeploymentAffinityCacheValue(model_id=str(model_id)),
+            marker_ttl if marker_ttl is not None else self.ttl_seconds,
+            eligible_values=tuple(DeploymentAffinityCacheValue(model_id=value) for value in eligible_deployment_ids),
+            preserve_legacy_model_ids=True,
+        )
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
