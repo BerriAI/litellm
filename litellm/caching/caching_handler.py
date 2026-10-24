@@ -182,14 +182,19 @@ def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> boo
     spend and callback records. A plain (non-stream) replay logs here, since nothing
     else will.
     """
-    from litellm.llms.anthropic.pass_through.messages.response_cache import (
-        CachedAnthropicMessagesStreamIterator,
-    )
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 
-    return isinstance(
-        cached_result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator, CachedAnthropicMessagesStreamIterator)
-    )
+    base_replay_classes: Final = (CustomStreamWrapper, BaseResponsesAPIStreamingIterator)
+    try:
+        from litellm.llms.anthropic.pass_through.messages.response_cache import (
+            CachedAnthropicMessagesStreamIterator,
+        )
+    except ModuleNotFoundError:
+        # The Anthropic Messages replay is only reachable through proxy-only
+        # extras (fastapi). A base SDK install can never hold one, so the
+        # isinstance check can safely go ahead without it.
+        return isinstance(cached_result, base_replay_classes)
+    return isinstance(cached_result, (*base_replay_classes, CachedAnthropicMessagesStreamIterator))
 
 
 def _prompt_tokens_details_as_mapping(details: "PromptTokensDetailsWrapper") -> Mapping[str, object]:
