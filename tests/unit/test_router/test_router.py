@@ -29871,3 +29871,105 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
     wrapped.adopt_fallback_headers(fallback)
 
     assert wrapped.partial_response_on_disconnect().response.usage.output_tokens == primary_tokens + fallback_tokens
+
+
+_IMAGE_PART = {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
+_IMAGE_CHAT = [{"role": "user", "content": [{"type": "text", "text": "What is in this image?"}, _IMAGE_PART]}]
+_IMAGE_RESPONSES_INPUT = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "What is in this image?"},
+            {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo="},
+        ],
+    }
+]
+_VISION_LEG: Final[dict[str, object]] = {"litellm_params": {"model": "openai/gpt-5.6-terra"}, "model_info": {"id": "vision"}}
+_DECLARED_TEXT_LEG: Final[dict[str, object]] = {
+    "litellm_params": {"model": "bedrock/openai.gpt-oss-120b-1:0"},
+    "model_info": {"id": "declared-text", "supports_vision": False},
+}
+
+
+def _pre_call_router(*deployments: dict[str, object], routing_strategy: str = "latency-based-routing") -> litellm.Router:
+    return litellm.Router(
+        model_list=[{"model_name": "mixed", **deployment} for deployment in deployments],
+        routing_strategy=routing_strategy,
+        enable_pre_call_checks=True,
+    )
+
+
+def _pre_call_ids(router: litellm.Router, deployments: tuple[dict[str, object], ...], **request: object) -> list[str]:
+    return [d["model_info"]["id"] for d in router._pre_call_checks(model="mixed", healthy_deployments=list(deployments), **request)]
+
+
+def test_pre_call_checks_drop_declared_text_only_legs_for_image_requests():
+    router = _pre_call_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    assert _pre_call_ids(router, (_VISION_LEG, _DECLARED_TEXT_LEG), messages=_IMAGE_CHAT) == ["vision"]
+
+
+def test_pre_call_checks_keep_declared_text_only_legs_for_text_requests():
+    router = _pre_call_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    assert _pre_call_ids(router, (_VISION_LEG, _DECLARED_TEXT_LEG), messages=[{"role": "user", "content": "Say hi"}]) == [
+        "vision",
+        "declared-text",
+    ]
+
+
+def test_pre_call_checks_drop_declared_text_only_legs_for_responses_input_image():
+    router = _pre_call_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    assert _pre_call_ids(
+        router, (_VISION_LEG, _DECLARED_TEXT_LEG), messages=None, request_kwargs={"input": _IMAGE_RESPONSES_INPUT}
+    ) == ["vision"]
+
+
+def test_pre_call_checks_send_image_to_the_group_when_every_leg_is_declared_text_only():
+    other_text_leg = {**_DECLARED_TEXT_LEG, "model_info": {"id": "declared-text-2", "supports_vision": False}}
+    router = _pre_call_router(_DECLARED_TEXT_LEG, other_text_leg)
+    assert _pre_call_ids(router, (_DECLARED_TEXT_LEG, other_text_leg), messages=_IMAGE_CHAT) == [
+        "declared-text",
+        "declared-text-2",
+    ]
+
+
+def test_pre_call_checks_keep_undeclared_custom_legs_for_image_requests():
+    custom_leg = {
+        "litellm_params": {"model": "hosted_vllm/Qwen2.5-VL-7B-Instruct", "api_base": "http://localhost:8000"},
+        "model_info": {"id": "custom"},
+    }
+    router = _pre_call_router(_VISION_LEG, custom_leg)
+    assert _pre_call_ids(router, (_VISION_LEG, custom_leg), messages=_IMAGE_CHAT) == ["vision", "custom"]
+
+
+def test_pre_call_checks_resolve_vision_through_the_cost_map_and_base_model():
+    catalog_text_leg = {"litellm_params": {"model": "bedrock/deepseek.v3.2"}, "model_info": {"id": "catalog-text"}}
+    azure_text_leg = {
+        "litellm_params": {"model": "azure/my-audio-deployment", "api_base": "https://x.openai.azure.com"},
+        "model_info": {"id": "azure-text", "base_model": "azure/gpt-audio"},
+    }
+    router = _pre_call_router(_VISION_LEG, catalog_text_leg, azure_text_leg)
+    assert _pre_call_ids(router, (_VISION_LEG, catalog_text_leg, azure_text_leg), messages=_IMAGE_CHAT) == ["vision"]
+
+
+@pytest.mark.parametrize(
+    ("deployment", "expected"),
+    [
+        (_DECLARED_TEXT_LEG, True),
+        ({"litellm_params": {"model": "bedrock/openai.gpt-oss-120b-1:0"}, "model_info": {"supports_vision": True}}, False),
+        ({"litellm_params": {"model": "bedrock/deepseek.v3.2"}, "model_info": {}}, True),
+        ({"litellm_params": {"model": "azure/my-deploy"}, "model_info": {"base_model": "azure/gpt-audio"}}, True),
+        ({"litellm_params": {"model": "hosted_vllm/Qwen2.5-VL-7B-Instruct"}, "model_info": {}}, False),
+        ({"litellm_params": {"model": "no-such-model-anywhere"}, "model_info": {}}, False),
+        ({"litellm_params": {}, "model_info": {}}, False),
+    ],
+    ids=["override-false", "override-true", "cost-map-false", "base-model-false", "undeclared", "unresolvable", "no-params"],
+)
+def test_deployment_declares_no_vision_reads_the_override_then_the_cost_map(deployment: dict[str, object], expected: bool):
+    assert litellm.Router._deployment_declares_no_vision(deployment, "mixed") is expected
+
+
+def test_request_carries_image_sees_chat_parts_and_responses_input_items():
+    assert litellm.Router._request_carries_image(_IMAGE_CHAT, {}) is True
+    assert litellm.Router._request_carries_image(None, {"input": _IMAGE_RESPONSES_INPUT}) is True
+    assert litellm.Router._request_carries_image([{"role": "user", "content": "Say hi"}], {}) is False
+    assert litellm.Router._request_carries_image(None, {"input": "Say hi"}) is False
