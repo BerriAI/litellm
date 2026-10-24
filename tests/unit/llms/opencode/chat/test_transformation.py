@@ -202,3 +202,118 @@ def test_discovery_returns_qualified_ids_and_accepts_response_metadata(base: str
             "opencode_go/fixture-chat",
             "opencode_go/fixture-messages",
         ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ingress", ["chat", "responses", "messages"])
+async def test_gemini_streams_text_and_usage_through_all_routes(go_catalog: None, ingress: str) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/inference/go/google/v1beta/models/fixture-gemini:streamGenerateContent"
+        assert request.url.query == b"alt=sse"
+        assert "stream" not in json.loads(request.content)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="data: " + json.dumps(upstream_reply("gemini", "fixture-gemini")) + "\n\n",
+        )
+
+    with respx.mock(using="httpx") as transport:
+        transport.post().mock(side_effect=respond)
+        kwargs: Final = {"model": "opencode_go/fixture-gemini", "api_key": "fake-go-key", "stream": True}
+        if ingress == "chat":
+            stream: Final = await litellm.acompletion(
+                messages=[{"role": "user", "content": "hello"}], stream_options={"include_usage": True}, **kwargs
+            )
+            chunks: Final = [chunk async for chunk in stream]
+            assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "hello"
+            assert chunks[-1].usage.total_tokens == 15
+        elif ingress == "responses":
+            responses_stream: Final = await litellm.aresponses(input="hello", **kwargs)
+            events: Final = [event async for event in responses_stream]
+            assert "".join(event.delta for event in events if event.type == "response.output_text.delta") == "hello"
+            assert events[-1].response.usage.total_tokens == 15
+        else:
+            messages_stream: Final = await litellm.anthropic.messages.acreate(
+                messages=[{"role": "user", "content": "hello"}], max_tokens=128000, **kwargs
+            )
+            wire_events: Final = b"".join([event async for event in messages_stream]).decode()
+            message_events: Final = [
+                json.loads(line[6:]) for line in wire_events.splitlines() if line.startswith("data: ")
+            ]
+            assert (
+                "".join(
+                    event["delta"].get("text", "") for event in message_events if event["type"] == "content_block_delta"
+                )
+                == "hello"
+            )
+            assert (
+                next(event["usage"]["output_tokens"] for event in message_events if event["type"] == "message_delta")
+                == 5
+            )
+
+
+@pytest.mark.parametrize("suffix", ["", "/v1beta", "/v1beta/models", "/v1beta/models/"])
+def test_gemini_custom_base_normalizes_version_and_models(go_catalog: None, suffix: str) -> None:
+    with respx.mock(using="httpx") as transport:
+        transport.post("https://gateway.example/google/v1beta/models/fixture-gemini:generateContent").respond(
+            json=upstream_reply("gemini", "fixture-gemini")
+        )
+        response: Final = litellm.completion(
+            model="opencode_go/fixture-gemini",
+            api_key="fake-go-key",
+            api_base=f"https://gateway.example/google{suffix}",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        assert response.choices[0].message.content == "hello"
+
+
+def test_gemini_sync_stream_preserves_tool_calls_and_usage(go_catalog: None) -> None:
+    chunk: Final = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
+                            "thoughtSignature": "synthetic-signature",
+                        }
+                    ],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+    }
+    with respx.mock(using="httpx") as transport:
+        transport.post(
+            "https://opencode.ai/inference/go/google/v1beta/models/fixture-gemini:streamGenerateContent?alt=sse"
+        ).respond(headers={"content-type": "text/event-stream"}, text="data: " + json.dumps(chunk) + "\n\n")
+        stream: Final = litellm.completion(
+            model="opencode_go/fixture-gemini",
+            api_key="fake-go-key",
+            stream=True,
+            messages=[{"role": "user", "content": "Weather in Paris?"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"city": {"type": "string"}},
+                            "required": ["city"],
+                        },
+                    },
+                }
+            ],
+            stream_options={"include_usage": True},
+        )
+        chunks: Final = tuple(stream)
+        tool: Final = next(
+            c.choices[0].delta.tool_calls[0] for c in chunks if c.choices and c.choices[0].delta.tool_calls
+        )
+        assert tool.function.name == "get_weather"
+        assert json.loads(tool.function.arguments) == {"city": "Paris"}
+        assert any(c.choices[0].finish_reason == "tool_calls" for c in chunks if c.choices)
+        assert chunks[-1].usage.total_tokens == 15

@@ -1225,6 +1225,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/images/edits",
                             "/v1/batch",
                             "/v1beta/interactions",
+                            "/v1beta/models",
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",

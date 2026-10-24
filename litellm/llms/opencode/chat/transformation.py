@@ -1,5 +1,5 @@
-from collections.abc import Mapping, Sequence
-from typing import Final
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
 
@@ -11,6 +11,10 @@ from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.llms.opencode.common_utils import go_api_base, go_api_key, go_endpoint, go_headers, go_model_info
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
 
 class OpenCodeGoChatConfig(OpenAILikeChatConfig):
@@ -103,6 +107,29 @@ class OpenCodeGoMessagesChatConfig(AnthropicConfig):
 
 
 class OpenCodeGoGeminiChatConfig(GoogleAIStudioGeminiConfig):
+    def __init__(self, logging_obj: "Logging | None" = None) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # legacy Gemini config has untyped optional parameters
+        self.logging_obj = logging_obj
+
+    @property
+    def supports_stream_param_in_request_body(self) -> bool:
+        return False
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> object:
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+
+        if self.logging_obj is None:
+            raise ValueError("OpenCode Go Gemini streaming requires the request logging context")
+        iterator: Final = ModelResponseIterator(
+            streaming_response=streaming_response, sync_stream=sync_stream, logging_obj=self.logging_obj
+        )
+        return iter(iterator) if sync_stream else iterator
+
     @property
     def custom_llm_provider(self) -> str:
         return "opencode_go"
@@ -116,9 +143,11 @@ class OpenCodeGoGeminiChatConfig(GoogleAIStudioGeminiConfig):
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        base: Final = go_api_base(api_base, model).rstrip("/")
+        base: Final = ensure_api_route(
+            go_api_base(api_base, model).rstrip("/").removesuffix("/v1beta"), "v1beta/models"
+        )
         action: Final = "streamGenerateContent?alt=sse" if stream else "generateContent"
-        return f"{base}/models/{model}:{action}"
+        return f"{base}/{model}:{action}"
 
     def validate_environment(
         self,
@@ -158,11 +187,11 @@ class OpenCodeGoGeminiChatConfig(GoogleAIStudioGeminiConfig):
         return TypeAdapter(dict[str, object]).validate_python(body)
 
 
-def go_chat_config(model: str) -> BaseConfig:
+def go_chat_config(model: str, logging_obj: "Logging | None" = None) -> BaseConfig:
     match go_endpoint(model):
         case "/v1/messages":
             return OpenCodeGoMessagesChatConfig()
         case "/v1beta/models":
-            return OpenCodeGoGeminiChatConfig()
+            return OpenCodeGoGeminiChatConfig(logging_obj)
         case _:
             return OpenCodeGoChatConfig()
