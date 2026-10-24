@@ -239,3 +239,68 @@ async def test_a_relayed_text_completion_stream_without_a_usage_chunk_counts_eve
     assert payload["completion_tokens"] == sum(
         litellm.token_counter(model=MODEL, text=text, count_response_tokens=True) for text in ["Hello there", "Hey you"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "body", "tokens"),
+    [
+        (
+            "v1/score",
+            {
+                "id": "score-vllm-7",
+                "object": "list",
+                "created": 1,
+                "model": MODEL,
+                "data": [{"index": 0, "object": "score", "score": 0.91}],
+                "usage": {"prompt_tokens": 15, "total_tokens": 15, "completion_tokens": 0},
+            },
+            (15, 0),
+        ),
+        (
+            "classify",
+            {
+                "id": "classify-vllm-8",
+                "object": "list",
+                "created": 1,
+                "model": MODEL,
+                "data": [{"index": 0, "label": "positive", "probs": [0.1, 0.9], "num_classes": 2}],
+                "usage": {"prompt_tokens": 9, "total_tokens": 9},
+            },
+            (9, 0),
+        ),
+        (
+            "v1/systemone",
+            {
+                "model": MODEL,
+                "answers": {"urgent": {"type": "noul", "noul": 0.85}},
+                "usage": {"input_tokens": 209, "output_tokens": 0},
+            },
+            (209, 0),
+        ),
+    ],
+)
+async def test_a_relayed_body_without_an_openai_shape_is_logged_with_the_usage_it_reports(path, body, tokens):
+    logging_obj = _relay_logging_obj(path, {"model": MODEL})
+
+    await logging_obj.async_success_handler(result=_relayed_json(path, body))
+
+    payload = logging_obj.model_call_details["standard_logging_object"]
+    assert payload["custom_llm_provider"] == "hosted_vllm"
+    assert (payload["prompt_tokens"], payload["completion_tokens"]) == tokens
+    assert payload["total_tokens"] == sum(tokens)
+
+
+def test_a_relayed_body_without_an_openai_shape_or_a_usage_is_not_given_one():
+    body = {"count": 3, "max_model_len": 4096, "tokens": [1, 2, 3]}
+
+    logged = VLLMPassthroughConfig().logging_non_streaming_response(
+        model=MODEL,
+        custom_llm_provider="hosted_vllm",
+        httpx_response=_relayed_json("tokenize", body),
+        request_data={"model": MODEL, "prompt": PROMPT},
+        logging_obj=_relay_logging_obj("tokenize", {"model": MODEL, "prompt": PROMPT}),
+        endpoint="tokenize",
+    )
+
+    assert logged is None
