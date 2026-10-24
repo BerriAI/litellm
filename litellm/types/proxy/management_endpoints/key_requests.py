@@ -19,6 +19,10 @@ class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
 
 class KeyRequestBase(GenerateRequestBase):
     key: str | None = None
+    expires: datetime | None = Field(
+        default=None,
+        description="Absolute expiration with a timezone. Overrides duration and must respect the maximum key duration.",
+    )
     tpd_limit: int | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
