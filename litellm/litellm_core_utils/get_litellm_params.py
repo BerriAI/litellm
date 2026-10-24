@@ -82,6 +82,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "fireworks_forward_user_id",
             "responses_api_version",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+            "fireworks_shared_session_affinity",
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS

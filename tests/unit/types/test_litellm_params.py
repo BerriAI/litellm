@@ -94,6 +94,7 @@ CONNECTION_NAMES: Final = (
     "github_copilot_host",
     "configurable_clientside_auth_params",
     "use_xai_oauth",
+    "fireworks_shared_session_affinity",
     "fireworks_forward_user_id",
     "aws_batch_role_arn",
     "aws_bedrock_control_plane_endpoint",
