@@ -21,10 +21,16 @@ export const roundToPrecision = (value: number, precision: number): number => {
   return value < 0 ? -rounded : rounded;
 };
 
-export const buildRegenerateKeyPayload = (values: RegenerateKeyFormValues): RegenerateKeyFormValues => ({
-  ...values,
+export type RegenerateKeyPayload = Omit<RegenerateKeyFormValues, "duration"> & { duration?: string };
+
+export const buildRegenerateKeyPayload = (values: RegenerateKeyFormValues): RegenerateKeyPayload => ({
+  key_alias: values.key_alias,
   max_budget:
     typeof values.max_budget === "number"
       ? roundToPrecision(values.max_budget, MAX_BUDGET_PRECISION)
       : values.max_budget,
+  tpm_limit: values.tpm_limit,
+  rpm_limit: values.rpm_limit,
+  ...(values.duration === "" ? {} : { duration: values.duration }),
+  grace_period: values.grace_period,
 });
