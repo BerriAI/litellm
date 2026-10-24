@@ -706,6 +706,55 @@ def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
     assert result["tools"][0]["name"] == "litellm_unnamed_tool_0"
 
 
+def test_bedrock_invoke_messages_translates_enabled_thinking_for_opus_5_5(
+    local_model_cost_map,
+):
+    """Opus 5.5 rejects thinking.type=enabled. Claude Code still sends it, with no
+    clear_thinking edit, so the translation has to happen on the plain request."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 32000,
+        "stream": False,
+        "thinking": {"type": "enabled", "budget_tokens": 2048},
+    }
+    result = cfg.transform_anthropic_messages_request(
+        model="eu.anthropic.claude-opus-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["thinking"]["type"] == "adaptive"
+    assert "budget_tokens" not in result["thinking"]
+    assert result["output_config"]["effort"]
+    assert "output_config" in result
+
+
+def test_bedrock_invoke_messages_keeps_caller_output_config_effort_for_opus_5_5(
+    local_model_cost_map,
+):
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 32000,
+        "stream": False,
+        "thinking": {"type": "enabled", "budget_tokens": 2048},
+        "output_config": {"effort": "low"},
+    }
+    result = cfg.transform_anthropic_messages_request(
+        model="eu.anthropic.claude-opus-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["thinking"]["type"] == "adaptive"
+    assert result["output_config"]["effort"] == "low"
+
+
 def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled(
     local_model_cost_map,
 ):

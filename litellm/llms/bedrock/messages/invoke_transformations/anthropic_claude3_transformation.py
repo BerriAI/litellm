@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, MutableMapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -721,6 +721,23 @@ class AmazonAnthropicClaudeMessagesConfig(
         requested_thinking: Final = anthropic_messages_optional_request_params.get("thinking")
         requested_display_updates: Final = AnthropicModelInfo().is_thinking_display_updates_used(requested_thinking)
         drop_params: Final = getattr(litellm_params, "drop_params", None) is True
+        # Opus 5.5 and the other adaptive models that reject thinking.type=enabled
+        # still receive that shape from Claude Code. Translate it before the shared
+        # Messages transform copies it into the Bedrock body. Models that still
+        # accept the legacy shape (the 4.6 family) are left alone.
+        # The messages boundary still types this payload as a bare dict. Name the
+        # mapping the translator mutates so basedpyright does not count an unknown
+        # argument, without putting MutableMapping in an annotation.
+        typed_optional_params: Final = cast(  # cast-ok: [LIT006] untyped messages params dict at this boundary
+            MutableMapping[str, object],
+            anthropic_messages_optional_request_params,
+        )
+        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+            model=model,
+            optional_params=typed_optional_params,
+            custom_llm_provider="bedrock",
+            drop_params=drop_params,
+        )
         self._clamp_adaptive_reasoning_effort_for_bedrock(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
