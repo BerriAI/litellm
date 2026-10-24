@@ -1,15 +1,9 @@
-import json
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Final
 
 import pytest
 
 import litellm
-
-REPO_ROOT: Final = Path(__file__).parents[2]
-MAIN_PATH: Final = REPO_ROOT / "model_prices_and_context_window.json"
-BACKUP_PATH: Final = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
 FLASH_TTS_KEYS: Final = ("gemini-2.5-flash-preview-tts", "gemini/gemini-2.5-flash-preview-tts")
 PRO_TTS_KEYS: Final = ("gemini-2.5-pro-preview-tts", "gemini/gemini-2.5-pro-preview-tts")
@@ -52,7 +46,6 @@ PUBLISHED_RATES: Final = {
         for key in (*NATIVE_AUDIO_KEYS, *LIVE_NATIVE_AUDIO_KEYS)
     },
 }
-ALL_KEYS: Final = tuple(PUBLISHED_RATES)
 NATIVE_AUDIO_BILLING_CASES: Final = (
     *((key, "gemini") for key in NATIVE_AUDIO_KEYS),
     ("gemini-live-2.5-flash-preview-native-audio-09-2025", "vertex_ai"),
@@ -65,11 +58,6 @@ LONG_CONTEXT_TIER_FIELDS: Final = (
 )
 
 
-def _load(path: Path) -> dict[str, dict[str, object]]:
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-
 @pytest.fixture
 def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -77,8 +65,3 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
-
-
-@pytest.mark.parametrize("model", ALL_KEYS)
-def test_backup_matches_main(model: str):
-    assert _load(BACKUP_PATH)[model] == _load(MAIN_PATH)[model]

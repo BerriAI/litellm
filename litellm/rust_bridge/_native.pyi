@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import Mapping, Sequence
-from typing import Never, final
+from typing import Literal, Never, final
 
 import httpx
 from pydantic import JsonValue
@@ -15,6 +15,41 @@ class ProcessReservedForForking(RuntimeError): ...
 
 def trace_encode_error(message: str) -> bytes: ...
 
+RowErrorKind = Literal[
+    "json",
+    "empty",
+    "below_minimum",
+    "shrunk",
+    "not_an_object",
+    "invalid",
+    "unknown_block_key",
+    "missing_provider",
+    "unknown_timezone",
+    "alias_shadows_model",
+    "alias_taken",
+    "duplicate_price",
+    "suffix_inside_block",
+    "tier_range",
+    "tier_reversed",
+    "tier_gap",
+    "mixed_tier_basis",
+    "not_priced_by_results",
+    "bands_from_two_sources",
+    "not_an_off_peak_rate",
+    "no_off_peak_prices",
+    "no_off_peak_hours",
+    "empty_list",
+    "invalid_date",
+]
+
+@final
+class RowError:
+    key: str
+    field: str | None
+    kind: RowErrorKind
+    rejects: bool
+    message: str
+
 @final
 class NativeClickHouseSpendConfig:
     def __new__(cls, database: str, url: str, retention_days: int) -> NativeClickHouseSpendConfig: ...
@@ -24,6 +59,148 @@ class NativeClickHouseSpendStorage:
     def __new__(cls, config: NativeClickHouseSpendConfig) -> NativeClickHouseSpendStorage: ...
     def ensure_schema(self) -> Future[None]: ...
     def insert_rows(self, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
+
+@final
+class ModelRegistry:
+    @staticmethod
+    def parse(body: bytes) -> ModelRegistry: ...
+    @staticmethod
+    def bundled() -> ModelRegistry: ...
+    @staticmethod
+    def bundled_bytes() -> bytes: ...
+    def errors(self) -> list[RowError]: ...
+    def to_dict(self) -> dict[str, JsonValue]: ...
+    def served(self) -> dict[str, dict[str, JsonValue]]: ...
+    def fallback_rules(self) -> list[JsonValue] | None: ...
+    def without_rejected(self) -> tuple[ModelRegistry, list[RowError]]: ...
+    def check_size(
+        self, reference: int | None = None, minimum: int | None = None, ratio: float | None = None
+    ) -> bool: ...
+
+@final
+class ModelCostLayers:
+    def __new__(cls) -> ModelCostLayers: ...
+    def record_registration(
+        self,
+        key: str,
+        inherits_from: str | None,
+        fields: Mapping[str, object],
+    ) -> int: ...
+    def record_registration_with_options(
+        self,
+        key: str,
+        inherits_from: str | None,
+        fields: Mapping[str, object],
+        options: dict[str, object],
+    ) -> int: ...
+    def rebind_registration(
+        self,
+        handle: int,
+        key: str,
+        inherits_from: str | None,
+        fields: Mapping[str, object],
+        options: dict[str, object],
+    ) -> bool: ...
+    def record_direct(self, key: str, row: Mapping[str, JsonValue]) -> None: ...
+    def record_tombstone(self, key: str) -> None: ...
+    def set_owner(
+        self,
+        name: str,
+        precedence: Literal["override", "fallback"],
+        rows: Mapping[str, Mapping[str, JsonValue]],
+    ) -> None: ...
+    def drop_owner(self, name: str) -> None: ...
+    def forget_writes(self) -> None: ...
+    def snapshot(self) -> ModelCostLayers: ...
+    def restore(self, snapshot: ModelCostLayers) -> None: ...
+    def compose(
+        self,
+        base: ModelRegistry,
+    ) -> list[tuple[str, dict[str, JsonValue], frozenset[str]]]: ...
+    def compose_keys(
+        self,
+        base: ModelRegistry,
+        keys: frozenset[str],
+    ) -> list[tuple[str, dict[str, JsonValue] | None, frozenset[str]]]: ...
+    def compose_prefix(
+        self,
+        base: ModelRegistry,
+        handle: int,
+    ) -> list[tuple[str, dict[str, JsonValue], frozenset[str]]]: ...
+
+@final
+class FetchedRegistry:
+    registry: ModelRegistry
+    revision: str
+    etag: str | None
+
+@final
+class RegistryNotModified: ...
+
+@final
+class RegistryUnavailable:
+    reason: str
+    retry_after: float | None
+
+@final
+class FetchStep:
+    url: str
+    if_none_match: str | None
+    timeout_seconds: float
+
+@final
+class SleepStep:
+    seconds: float
+
+@final
+class AdoptStep:
+    registry: ModelRegistry
+    catalog: ModelRegistry
+    revision: str
+    etag: str | None
+    errors: list[RowError]
+
+@final
+class DoneStep:
+    reason: str | None
+
+@final
+class RevalidationState:
+    def perform(self, step: FetchStep) -> FetchStep | SleepStep | AdoptStep | DoneStep: ...
+    def slept(self) -> FetchStep | SleepStep | AdoptStep | DoneStep: ...
+    def reply(
+        self,
+        status: int,
+        etag: str | None,
+        retry_after: str | None,
+        body: bytes,
+    ) -> FetchStep | SleepStep | AdoptStep | DoneStep: ...
+    def transport_error(self, reason: str) -> FetchStep | SleepStep | AdoptStep | DoneStep: ...
+
+def Revalidation(
+    url: str,
+    installed_revision: str | None = None,
+    installed_etag: str | None = None,
+    seed: int | None = None,
+    max_attempts: int | None = None,
+    timeout_seconds: float = 5.0,
+    installed_url: str | None = None,
+) -> tuple[RevalidationState, FetchStep | SleepStep | AdoptStep | DoneStep]: ...
+def fetch_model_registry(
+    source: str | None = None,
+    *,
+    file: str | None = None,
+    if_none_match: str | None = None,
+    timeout_seconds: float = 5.0,
+) -> FetchedRegistry | RegistryNotModified | RegistryUnavailable: ...
+def fetch_model_registry_async(
+    source: str | None = None,
+    *,
+    file: str | None = None,
+    if_none_match: str | None = None,
+    timeout_seconds: float = 5.0,
+) -> Future[FetchedRegistry | RegistryNotModified | RegistryUnavailable]: ...
+def model_row_errors(key: str, row: object) -> list[RowError]: ...
 
 @final
 class NativeDiagnosticProcessor:
@@ -203,15 +380,28 @@ def process_state_started() -> bool: ...
 def reserve_process_for_forking() -> None: ...
 
 __all__ = [
+    "AdoptStep",
+    "DoneStep",
+    "FetchStep",
+    "FetchedRegistry",
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
+    "ModelCostLayers",
+    "ModelRegistry",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeDiagnosticProcessor",
     "ProcessReservedForForking",
+    "RegistryNotModified",
+    "RegistryUnavailable",
     "ResponsesWebSocketConnection",
+    "Revalidation",
+    "RevalidationState",
+    "RowError",
+    "RowErrorKind",
     "RustBridgeDeclined",
     "RustUpstreamError",
+    "SleepStep",
     "TokenCounter",
     "Tokenizer",
     "acompletion",
@@ -222,8 +412,11 @@ __all__ = [
     "atranscription",
     "completion",
     "embedding",
+    "fetch_model_registry",
+    "fetch_model_registry_async",
     "gil_stats",
     "messages",
+    "model_row_errors",
     "ocr",
     "ocr_health_check_document",
     "ocr_passthrough_response",

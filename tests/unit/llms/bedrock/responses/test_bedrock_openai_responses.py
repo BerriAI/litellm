@@ -4,14 +4,13 @@ Without this config the bedrock provider has no Responses config, so /v1/respons
 falls back to the Chat Completions bridge and rides Converse.
 """
 
-import json
 import logging
-from importlib.resources import files
 from unittest.mock import patch
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.bedrock.common_utils import bedrock_supports_openai_responses
 from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
 from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
@@ -210,10 +209,8 @@ class TestProviderResolution:
         [("gpt-5.6", ("sol", "terra", "luna")), ("gpt-6", ("astra", "sol", "luna"))],
     )
     def test_the_shipped_price_map_signals_the_openai_families(self, family: str, variants: tuple[str, ...]):
-        """Reads the bundled backup directly rather than the network-fetched global."""
-        shipped = json.loads(
-            files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text(encoding="utf-8")
-        )
+        """Reads the bundled map directly rather than the network-fetched global."""
+        shipped = GetModelCostMap.load_local_model_cost_map()
         for prefix in ("us", "global"):
             for variant in variants:
                 model = f"{prefix}.openai.{family}-{variant}"

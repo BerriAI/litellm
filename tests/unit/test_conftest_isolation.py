@@ -81,11 +81,11 @@ class _CanaryRouterHolder:
 
 def test_register_model_ledger_entry_is_scoped_to_this_test():
     litellm.register_model({CANARY_MODEL: {"litellm_provider": "openai", "input_cost_per_token": 0.001}})
-    assert CANARY_MODEL in litellm_utils_module._runtime_registered_model_cost
+    assert litellm_utils_module.runtime_model_cost_registrations(CANARY_MODEL, "openai")
 
 
 def test_register_model_ledger_entry_was_rolled_back():
-    assert CANARY_MODEL not in litellm_utils_module._runtime_registered_model_cost
+    assert not litellm_utils_module.runtime_model_cost_registrations(CANARY_MODEL, "openai")
 
 
 def test_register_model_catalog_writes_are_scoped_to_this_test():
@@ -159,8 +159,9 @@ def test_aws_cache_reset_sees_a_replaced_module(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.fixture(scope="module", autouse=True)
 def registered_collection_models() -> Iterator[None]:
-    original_registrations: Final = dict(litellm_utils_module._runtime_registered_model_cost)
+    original_layers: Final = litellm_utils_module._MODEL_COST_LAYERS.snapshot()
     original_routers: Final = frozenset(litellm_router_module._live_routers)
+    litellm_utils_module._MODEL_COST_LAYERS.forget_writes()
     litellm.register_model(
         {"collection-isolation-ledger": {"litellm_provider": "openai", "input_cost_per_token": 0.001}}
     )
@@ -173,8 +174,7 @@ def registered_collection_models() -> Iterator[None]:
         ]
     )
     yield
-    litellm_utils_module._runtime_registered_model_cost.clear()
-    litellm_utils_module._runtime_registered_model_cost.update(original_registrations)
+    litellm_utils_module._MODEL_COST_LAYERS.restore(original_layers)
     litellm_router_module._live_routers.discard(collection_router)
     litellm_router_module._live_routers.update(original_routers)
 

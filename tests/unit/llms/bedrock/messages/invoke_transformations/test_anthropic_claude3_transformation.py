@@ -2,7 +2,6 @@ import asyncio
 import base64
 import copy
 import json
-import os
 import struct
 import zlib
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -25,6 +24,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
@@ -2607,11 +2607,8 @@ def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_
     flag explicitly."""
     import re
 
-    import litellm
 
-    cost_map_path = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
-    with open(cost_map_path) as f:
-        cost_map = json.load(f)
+    cost_map = GetModelCostMap.load_local_model_cost_map()
     rules = cost_map["fallback_generalizations"]["rules"]
     pattern = re.compile(
         next(r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),

@@ -200,6 +200,12 @@ fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication
             eprintln!("SKIP: litellm package dependencies are not importable in this interpreter");
             return;
         }
+        py.import("sys")
+            .unwrap()
+            .getattr("modules")
+            .unwrap()
+            .set_item("litellm.rust_bridge._native", crate::native_module(py))
+            .unwrap();
         py.run(c"
 import asyncio
 import logging

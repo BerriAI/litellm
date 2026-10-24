@@ -1,19 +1,11 @@
-from pathlib import Path
 from typing import Final
 
 import pytest
-from pydantic import TypeAdapter
 
 from litellm import cost_per_token, get_model_info
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-REPO_ROOT: Final = Path(__file__).parents[2]
 MODEL: Final = "azure_ai/grok-4.6"
-COST_MAP_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
-
-
-def _cost_map_entry(path: Path) -> dict[str, object]:
-    return COST_MAP_ADAPTER.validate_json(path.read_bytes())[MODEL]
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
@@ -35,10 +27,3 @@ def test_azure_ai_grok_4_6_is_priced_and_routed() -> None:
     prompt_cost, completion_cost = cost_per_token(model=MODEL, prompt_tokens=1_000_000, completion_tokens=1_000_000)
     assert prompt_cost > 0
     assert completion_cost > 0
-
-
-def test_azure_ai_grok_4_6_entry_source_and_backup_match() -> None:
-    main_entry = _cost_map_entry(REPO_ROOT / "model_prices_and_context_window.json")
-    backup_entry = _cost_map_entry(REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json")
-
-    assert backup_entry == main_entry
