@@ -4,13 +4,12 @@ from unittest.mock import patch
 
 import pytest
 
-
 from litellm.integrations.datadog.datadog import DataDogLogger
-from litellm.integrations.datadog.datadog_handler import get_datadog_tags, normalize_datadog_tag_value
 from litellm.integrations.datadog.datadog_cost_management import (
     DatadogCostManagementLogger,
 )
-from litellm.types.utils import StandardLoggingPayload, StandardLoggingMetadata
+from litellm.integrations.datadog.datadog_handler import get_datadog_tags, normalize_datadog_tag_value
+from litellm.types.utils import StandardLoggingMetadata, StandardLoggingPayload
 
 
 class TestDatadogTagsRegression:
@@ -93,6 +92,22 @@ class TestDatadogTagsRegression:
         assert "request_tag:12345" in tags
         assert "request_tag:capability:p_t" in tags
         assert "team:67890" in tags
+
+    def test_dd_tags_are_exported_as_individual_tags_for_logs(self, mock_env_vars):
+        with patch.dict(os.environ, {"DD_TAGS": " team:platform , cost_center:engineering ,, "}):
+            tags = get_datadog_tags()
+            with patch("asyncio.create_task"):
+                logger = DataDogLogger()
+            log = logger.create_datadog_logging_payload(
+                kwargs={"standard_logging_object": StandardLoggingPayload(metadata=StandardLoggingMetadata())},
+                response_obj=None,
+                start_time=datetime.datetime(2026, 1, 1),
+                end_time=datetime.datetime(2026, 1, 1),
+            )
+
+        assert "env:test-env" in tags
+        assert tags[-2:] == ["team:platform", "cost_center:engineering"]
+        assert "cost_center:engineering" in log["ddtags"].split(",")
 
     @pytest.mark.asyncio
     async def test_non_string_request_tag_still_emits_the_datadog_payload(self, mock_env_vars):
