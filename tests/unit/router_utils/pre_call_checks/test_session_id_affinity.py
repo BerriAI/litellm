@@ -1,14 +1,14 @@
 import asyncio
 import json
 from typing import Final
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fakeredis import FakeRedis, FakeServer
 from fakeredis.aioredis import FakeConnection
-from redis.asyncio import BlockingConnectionPool
+from redis.asyncio import BlockingConnectionPool, Redis
 
 import litellm
 from litellm.caching.affinity_cache import claim_affinity_pin
@@ -198,6 +198,125 @@ async def test_session_selection_observes_another_workers_repin_only_when_enable
         router.discard()
         await pool.aclose()
         sync_client.close()
+
+
+@pytest.fixture
+async def shared_session_router() -> AsyncIterator[tuple[litellm.Router, FakeServer, RedisCache]]:
+    server: Final = FakeServer()
+    sync_client: Final = FakeRedis(server=server)
+    pool: Final = BlockingConnectionPool(connection_class=FakeConnection, server=server)
+    router: Final = _repinning_router()
+    try:
+        with (
+            patch("redis.Redis.from_url", return_value=sync_client),
+            patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
+        ):
+            redis: Final = RedisCache(url="redis://session-outage.example:6379/0")
+            router.cache.attach_redis_cache(redis)
+            yield router, server, redis
+    finally:
+        router.discard()
+        await pool.aclose()
+        sync_client.close()
+
+
+async def _selected_session_ids(router: litellm.Router) -> tuple[str, ...]:
+    callback: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
+    selected: Final = await callback.async_filter_deployments(
+        model="repin-group",
+        healthy_deployments=router.get_model_list(model_name="repin-group") or [],
+        messages=None,
+        request_kwargs=_repin_params("replacement"),
+    )
+    return tuple(deployment["model_info"]["id"] for deployment in selected)
+
+
+@pytest.mark.parametrize("has_pin", [False, True])
+async def test_redis_read_failures_and_open_breaker_preserve_session_routing(
+    shared_session_router: tuple[litellm.Router, FakeServer, RedisCache], has_pin: bool
+) -> None:
+    router, server, redis = shared_session_router
+    if has_pin:
+        await redis.async_set_cache(_repin_key(), {"model_id": "replacement"}, ttl=3600)
+        router.cache.in_memory_cache.set_cache(_repin_key(), {"model_id": "original"}, ttl=3600)
+        assert await _selected_session_ids(router) == ("replacement",)
+    server.connected = False
+    with patch("time.time", return_value=1790000000.0):
+        for _ in range(redis._circuit_breaker.failure_threshold + 1):
+            assert set(await _selected_session_ids(router)) == (
+                {"replacement"} if has_pin else {"original", "replacement", "other"}
+            )
+        assert redis._circuit_breaker.is_open()
+
+
+async def test_confirmed_redis_miss_does_not_revive_a_local_pin_during_outage(
+    shared_session_router: tuple[litellm.Router, FakeServer, RedisCache],
+) -> None:
+    router, server, _ = shared_session_router
+    router.cache.in_memory_cache.set_cache(_repin_key(), {"model_id": "original"}, ttl=3600)
+    assert set(await _selected_session_ids(router)) == {"original", "replacement", "other"}
+    server.connected = False
+    assert set(await _selected_session_ids(router)) == {"original", "replacement", "other"}
+
+
+async def test_shared_session_pin_resumes_after_a_transient_redis_failure(
+    shared_session_router: tuple[litellm.Router, FakeServer, RedisCache],
+) -> None:
+    router, server, redis = shared_session_router
+    await redis.async_set_cache(_repin_key(), {"model_id": "replacement"}, ttl=3600)
+    router.cache.in_memory_cache.set_cache(_repin_key(), {"model_id": "original"}, ttl=3600)
+    server.connected = False
+    assert await _selected_session_ids(router) == ("original",)
+    server.connected = True
+    assert await _selected_session_ids(router) == ("replacement",)
+
+
+@pytest.mark.parametrize("shared_value", [None, {"model_id": "original"}])
+async def test_delayed_shared_pin_read_preserves_a_newer_local_write(
+    shared_session_router: tuple[litellm.Router, FakeServer, RedisCache], shared_value: Mapping[str, str] | None
+) -> None:
+    router, server, redis = shared_session_router
+    if shared_value is not None:
+        await redis.async_set_cache(_repin_key(), shared_value, ttl=3600)
+    observed: Final = asyncio.Event()
+    resume: Final = asyncio.Event()
+    original_get: Final = Redis.get
+
+    async def delayed_get(client: Redis, name: str) -> object:
+        value: Final = await original_get(client, name)
+        observed.set()
+        await resume.wait()
+        return value
+
+    with patch("redis.asyncio.Redis.get", new=delayed_get):
+        pending: Final = asyncio.create_task(_selected_session_ids(router))
+        try:
+            await observed.wait()
+            router.cache.in_memory_cache.set_cache(_repin_key(), {"model_id": "replacement"}, ttl=3600)
+        finally:
+            resume.set()
+            await pending
+    server.connected = False
+    assert await _selected_session_ids(router) == ("replacement",)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"status": "failed", "response": {"status": "completed"}},
+        {"error": {"message": "test failure"}, "response": {"status": "completed"}},
+        {"response": {"response": {"status": "completed"}}},
+    ],
+)
+async def test_unsuccessful_or_nested_response_envelopes_never_repin(response: Mapping[str, object]) -> None:
+    router: Final = _repinning_router()
+    try:
+        await router.cache.async_set_cache(_repin_key(), {"model_id": "original"})
+        _cool_down_original(router)
+        await _record_replacement_success(router, response=response)
+        assert await router.cache.async_get_cache(_repin_key()) == {"model_id": "original"}
+    finally:
+        router.discard()
 
 
 class _ReadCountingCache(InMemoryCache):

@@ -39,18 +39,25 @@ class DeploymentAffinityCacheValue(TypedDict, closed=True):
     model_id: ReadOnly[str]
 
 
-def completed_affinity_response(response: object) -> bool:
-    if response is None:
-        return False
-    fields: Final[Mapping[str, object]] = (
+def _affinity_response_fields(response: object) -> Mapping[str, object]:
+    return (
         TypeAdapter(Mapping[str, object]).validate_python(response)
         if isinstance(response, Mapping)
         else {name: getattr(response, name, None) for name in ("response", "status", "error")}
     )
-    nested: Final = fields.get("response")
-    if nested is not None:
-        return completed_affinity_response(nested)
-    return fields.get("error") is None and fields.get("status") in (None, "completed")
+
+
+def completed_affinity_response(response: object) -> bool:
+    if response is None:
+        return False
+    envelope: Final = _affinity_response_fields(response)
+    if envelope.get("error") is not None or envelope.get("status") not in (None, "completed"):
+        return False
+    nested: Final = envelope.get("response")
+    fields: Final = _affinity_response_fields(nested) if nested is not None else envelope
+    return (
+        fields.get("response") is None and fields.get("error") is None and fields.get("status") in (None, "completed")
+    )
 
 
 VALID_MODEL_GROUP_AFFINITY_FLAGS: Final = frozenset(
@@ -436,8 +443,12 @@ class DeploymentAffinityCheck(CustomLogger):
                     model_group=stable_model_map_key, session_id=session_id, user_key=user_key
                 )
                 session_cache_result: Final = (
-                    await redis_cache.async_get_cache(key=session_cache_key, parent_otel_span=parent_otel_span)
-                    if self.session_affinity_repin_on_failover and (redis_cache := self.cache.redis_cache) is not None
+                    await self._read_shared_session_pin(
+                        session_cache_key,
+                        self._get_marker_session_affinity_ttl(request_kwargs) or self.ttl_seconds,
+                        parent_otel_span,
+                    )
+                    if self.session_affinity_repin_on_failover
                     else await self.cache.async_get_cache(key=session_cache_key)
                 )
 
@@ -502,6 +513,25 @@ class DeploymentAffinityCheck(CustomLogger):
             self._shorten_for_logs(self._hash_user_key(user_key)),
         )
         return [deployment]
+
+    async def _read_shared_session_pin(self, cache_key: str, ttl_seconds: int, parent_otel_span: Span | None) -> object:
+        redis_cache: Final = self.cache.redis_cache
+        if redis_cache is None:
+            return TypeAdapter(object).validate_python(await self.cache.async_get_cache(key=cache_key))
+        local_before: Final = TypeAdapter(object).validate_python(self.cache.in_memory_cache.get_cache(cache_key))
+        try:
+            shared: Final[object] = await redis_cache.async_get_cache(
+                key=cache_key, parent_otel_span=parent_otel_span, raise_on_error=True
+            )
+        except Exception:  # noqa: BLE001  # Optional affinity falls back locally on Redis admission or read failure
+            verbose_router_logger.debug("Session pin read failed, using pod-local affinity")
+            return TypeAdapter(object).validate_python(await self.cache.async_get_cache(key=cache_key, local_only=True))
+        if self.cache.in_memory_cache.get_cache(cache_key) is local_before:
+            if shared is None:
+                self.cache.in_memory_cache.delete_cache(cache_key)
+            else:
+                self._set_local_pin(cache_key, shared, ttl_seconds)
+        return shared
 
     def get_repin_model_group(self, request_kwargs: Mapping[str, object]) -> str | None:
         model_group: Final = next(
