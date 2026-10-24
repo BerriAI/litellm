@@ -5,10 +5,19 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+serde = ["dep:serde"]
+schema = ["serde", "dep:schemars"]
+
+[dependencies]
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+
 [dev-dependencies]
 criterion.workspace = true
 proptest.workspace = true
 rstest.workspace = true
+serde_json.workspace = true
 
 [[bench]]
 name = "calculate"
