@@ -8,7 +8,7 @@ use url::Url;
 use crate::{
     Error, ErrorDetail,
     base_llm::{
-        auth::{AuthScheme, Headers, ValidatedEnvironment},
+        auth::{AuthScheme, ValidatedEnvironment},
         tokenize::transformation::{
             BaseTokenizeConfig, TokenizeCapabilities, TokenizeContext, decode_params,
             validate_common_tokenize_input, validate_token_count,
@@ -53,11 +53,12 @@ impl BaseTokenizeConfig for HostedVllmTokenizeConfig {
 
     fn validate_environment(
         &self,
-        headers: Headers,
-        api_key: Option<&str>,
+        input: &TokenizeContext<'_>,
         _optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
+        let headers = input.string_headers()?;
+        let api_key = input.api_key.map(|key| key.value().expose());
         if litellm_http::request::has_header(&headers, "authorization") {
             return Ok(ValidatedEnvironment {
                 headers,
@@ -194,10 +195,12 @@ fn tokenize_url(base: &str) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
+    use litellm_auth::{InputSource, SecretValue, Sourced};
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
+    use crate::base_llm::tokenize::transformation::TokenizeMap;
 
     fn no_env(_: &str) -> Option<String> {
         None
@@ -315,8 +318,20 @@ mod tests {
         #[case] environment: Option<&str>,
         #[case] expected: Option<&str>,
     ) {
+        let api_key =
+            explicit.map(|value| Sourced::new(SecretValue::new(value), InputSource::Request));
+        let extra_headers = TokenizeMap::new();
+        let deployment_params = TokenizeMap::new();
+        let optional_params = TokenizeMap::new();
+        let input = TokenizeContext::new(
+            api_key.as_ref(),
+            None,
+            &extra_headers,
+            &deployment_params,
+            &optional_params,
+        );
         let validated = HostedVllmTokenizeConfig
-            .validate_environment(vec![], explicit, &Map::new(), &|name| {
+            .validate_environment(&input, &Map::new(), &|name| {
                 (name == "HOSTED_VLLM_API_KEY")
                     .then_some(environment)
                     .flatten()
@@ -335,8 +350,22 @@ mod tests {
     #[rstest]
     fn forwarded_authorization_is_preserved() {
         let headers = vec![("AUTHORIZATION".into(), "Bearer forwarded".into())];
+        let api_key = Sourced::new(SecretValue::new("configured"), InputSource::Request);
+        let extra_headers = TokenizeMap::from([(
+            "AUTHORIZATION".into(),
+            Sourced::new(json!("Bearer forwarded"), InputSource::Request),
+        )]);
+        let deployment_params = TokenizeMap::new();
+        let optional_params = TokenizeMap::new();
+        let input = TokenizeContext::new(
+            Some(&api_key),
+            None,
+            &extra_headers,
+            &deployment_params,
+            &optional_params,
+        );
         let validated = HostedVllmTokenizeConfig
-            .validate_environment(headers.clone(), Some("configured"), &Map::new(), &no_env)
+            .validate_environment(&input, &Map::new(), &no_env)
             .unwrap();
         assert!(matches!(validated.auth, AuthScheme::Forwarded));
         assert_eq!(validated.headers, headers);

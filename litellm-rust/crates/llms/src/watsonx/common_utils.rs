@@ -30,8 +30,10 @@ pub fn resolve_environment(
         .extra_headers
         .iter()
         .map(|(name, value)| {
-            let value = serde_json::from_value::<String>(value.value().clone())
-                .map_err(|source| Error::InvalidRequest(ErrorDetail::invalid("extra_headers", source)))?;
+            let value =
+                serde_json::from_value::<String>(value.value().clone()).map_err(|source| {
+                    Error::InvalidRequest(ErrorDetail::invalid("extra_headers", source))
+                })?;
             Ok((name.clone(), value))
         })
         .collect::<Result<_, Error>>()?;
@@ -41,12 +43,17 @@ pub fn resolve_environment(
         .into_iter()
         .map(Sourced::source)
         .chain(
-            input.extra_headers.iter()
+            input
+                .extra_headers
+                .iter()
                 .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
                 .map(|(_, value)| value.source()),
         )
         .chain(
-            input.deployment_params.iter().chain(input.optional_params)
+            input
+                .deployment_params
+                .iter()
+                .chain(input.optional_params)
                 .filter(|(name, _)| matches!(name.as_str(), "token" | "zen_api_key"))
                 .map(|(_, value)| value.source()),
         )
@@ -57,8 +64,16 @@ pub fn resolve_environment(
     boundary
         .validate_resources(
             input.api_base.into_iter().map(Sourced::source).chain(
-                input.deployment_params.iter().chain(input.optional_params)
-                    .filter(|(name, _)| matches!(name.as_str(), "project_id" | "watsonx_project" | "space_id" | "api_version"))
+                input
+                    .deployment_params
+                    .iter()
+                    .chain(input.optional_params)
+                    .filter(|(name, _)| {
+                        matches!(
+                            name.as_str(),
+                            "project_id" | "watsonx_project" | "space_id" | "api_version"
+                        )
+                    })
                     .map(|(_, value)| value.source()),
             ),
         )
@@ -72,50 +87,76 @@ fn select_auth(
 ) -> Result<(AuthScheme, InputSource), Error> {
     let token = credential_param(input, "token")?;
     let zen = credential_param(input, "zen_api_key")?;
-    if let Some((_, authorization)) = input.extra_headers.iter()
+    if let Some((_, authorization)) = input
+        .extra_headers
+        .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
     {
         return Ok((AuthScheme::Forwarded, authorization.source()));
     }
     if let Some(token) = resolve_credential(token.as_ref(), env_lookup, &["WATSONX_TOKEN"]) {
-        return Ok((AuthScheme::Credential {
-            placement: CredentialPlacement::Bearer,
-            secret: token.value().clone(),
-        }, token.source()));
+        return Ok((
+            AuthScheme::Credential {
+                placement: CredentialPlacement::Bearer,
+                secret: token.value().clone(),
+            },
+            token.source(),
+        ));
     }
     if let Some(key) = resolve_credential(zen.as_ref(), env_lookup, &["WATSONX_ZENAPIKEY"]) {
-        return Ok((AuthScheme::Credential {
-            placement: CredentialPlacement::Header("Authorization"),
-            secret: SecretValue::new(format!("ZenApiKey {}", key.value().expose())),
-        }, key.source()));
+        return Ok((
+            AuthScheme::Credential {
+                placement: CredentialPlacement::Header("Authorization"),
+                secret: SecretValue::new(format!("ZenApiKey {}", key.value().expose())),
+            },
+            key.source(),
+        ));
     }
-    let key = resolve_credential(input.api_key, env_lookup, API_KEY_ENV)
-        .ok_or(litellm_auth::Error::MissingApiKey {
+    let key = resolve_credential(input.api_key, env_lookup, API_KEY_ENV).ok_or(
+        litellm_auth::Error::MissingApiKey {
             provider: "watsonx",
             environment_variable: "WATSONX_API_KEY",
-        })?;
+        },
+    )?;
     let source = key.source();
     let config = match resolve_non_empty(None, env_lookup, &["WATSONX_IAM_URL"]) {
         Some(endpoint) => WatsonxIamConfig::with_endpoint(key.into_value(), endpoint),
         None => WatsonxIamConfig::new(key.into_value()),
     };
-    Ok((AuthScheme::WatsonxIam { config: Box::new(config) }, source))
+    Ok((
+        AuthScheme::WatsonxIam {
+            config: Box::new(config),
+        },
+        source,
+    ))
 }
 
 fn credential_param(
     input: &WatsonxContext<'_>,
     name: &'static str,
 ) -> Result<Option<Sourced<SecretValue>>, Error> {
-    let deployment = input.deployment_params.get(name).map(|value| {
-        serde_json::from_value::<Option<String>>(value.value().clone())
-            .map(|secret| secret.map(|secret| Sourced::new(SecretValue::new(secret), value.source())))
-            .map_err(|source| Error::InvalidRequest(ErrorDetail::invalid(name, source)))
-    }).transpose()?;
-    let optional = input.optional_params.get(name).map(|value| {
-        serde_json::from_value::<Option<String>>(value.value().clone())
-            .map(|secret| secret.map(|secret| Sourced::new(SecretValue::new(secret), value.source())))
-            .map_err(|source| Error::InvalidRequest(ErrorDetail::invalid(name, source)))
-    }).transpose()?;
+    let deployment = input
+        .deployment_params
+        .get(name)
+        .map(|value| {
+            serde_json::from_value::<Option<String>>(value.value().clone())
+                .map(|secret| {
+                    secret.map(|secret| Sourced::new(SecretValue::new(secret), value.source()))
+                })
+                .map_err(|source| Error::InvalidRequest(ErrorDetail::invalid(name, source)))
+        })
+        .transpose()?;
+    let optional = input
+        .optional_params
+        .get(name)
+        .map(|value| {
+            serde_json::from_value::<Option<String>>(value.value().clone())
+                .map(|secret| {
+                    secret.map(|secret| Sourced::new(SecretValue::new(secret), value.source()))
+                })
+                .map_err(|source| Error::InvalidRequest(ErrorDetail::invalid(name, source)))
+        })
+        .transpose()?;
     Ok(optional.or(deployment).flatten())
 }
 
@@ -125,11 +166,17 @@ fn resolve_credential(
     names: &[&str],
 ) -> Option<Sourced<SecretValue>> {
     let explicit = value.filter(|value| !value.value().expose().trim().is_empty());
-    resolve_non_empty(explicit.map(|value| value.value().expose()), env_lookup, names)
-        .map(|secret| Sourced::new(
+    resolve_non_empty(
+        explicit.map(|value| value.value().expose()),
+        env_lookup,
+        names,
+    )
+    .map(|secret| {
+        Sourced::new(
             SecretValue::new(secret),
             explicit.map_or(InputSource::Environment, Sourced::source),
-        ))
+        )
+    })
 }
 
 #[cfg(test)]
@@ -141,7 +188,12 @@ mod tests {
 
     #[rstest]
     #[case::bearer("token", "bearer", CredentialPlacement::Bearer, "bearer")]
-    #[case::zen("zen_api_key", "zen", CredentialPlacement::Header("Authorization"), "ZenApiKey zen")]
+    #[case::zen(
+        "zen_api_key",
+        "zen",
+        CredentialPlacement::Header("Authorization"),
+        "ZenApiKey zen"
+    )]
     fn static_credentials_precede_iam(
         #[case] name: &str,
         #[case] value: &str,
@@ -149,11 +201,26 @@ mod tests {
         #[case] expected: &str,
     ) {
         let key = Sourced::new(SecretValue::new("iam"), InputSource::Request);
-        let params = BTreeMap::from([(name.into(), Sourced::new(json!(value), InputSource::Request))]);
+        let params = BTreeMap::from([(
+            name.into(),
+            Sourced::new(json!(value), InputSource::Request),
+        )]);
         let empty = BTreeMap::new();
-        let input = WatsonxContext { api_key: Some(&key), api_base: None, extra_headers: &empty, deployment_params: &empty, optional_params: &params };
+        let input = WatsonxContext {
+            api_key: Some(&key),
+            api_base: None,
+            extra_headers: &empty,
+            deployment_params: &empty,
+            optional_params: &params,
+        };
         let environment = resolve_environment(&input, &|_| None).unwrap();
-        let AuthScheme::Credential { placement: actual, secret } = environment.auth else { panic!("expected static credential") };
+        let AuthScheme::Credential {
+            placement: actual,
+            secret,
+        } = environment.auth
+        else {
+            panic!("expected static credential")
+        };
         assert_eq!(actual, placement);
         assert_eq!(secret.expose(), expected);
     }
@@ -166,10 +233,19 @@ mod tests {
         let key = Sourced::new(SecretValue::new("iam"), source);
         let base = Sourced::new("https://request.test".into(), InputSource::Request);
         let empty = BTreeMap::new();
-        let input = WatsonxContext { api_key: Some(&key), api_base: Some(&base), extra_headers: &empty, deployment_params: &empty, optional_params: &empty };
+        let input = WatsonxContext {
+            api_key: Some(&key),
+            api_base: Some(&base),
+            extra_headers: &empty,
+            deployment_params: &empty,
+            optional_params: &empty,
+        };
         let result = resolve_environment(&input, &|_| None);
         if allowed {
-            assert!(matches!(result.unwrap().auth, AuthScheme::WatsonxIam { .. }));
+            assert!(matches!(
+                result.unwrap().auth,
+                AuthScheme::WatsonxIam { .. }
+            ));
         } else {
             assert!(matches!(result, Err(Error::InvalidRequest(_))));
         }
@@ -181,10 +257,23 @@ mod tests {
     #[case::space("space_id")]
     #[case::version("api_version")]
     fn environment_credentials_reject_request_resources(#[case] name: &str) {
-        let params = BTreeMap::from([(name.into(), Sourced::new(json!("request"), InputSource::Request))]);
+        let params = BTreeMap::from([(
+            name.into(),
+            Sourced::new(json!("request"), InputSource::Request),
+        )]);
         let empty = BTreeMap::new();
-        let input = WatsonxContext { api_key: None, api_base: None, extra_headers: &empty, deployment_params: &empty, optional_params: &params };
-        assert!(matches!(resolve_environment(&input, &|name| (name == "WATSONX_TOKEN").then(|| "host-token".into())), Err(Error::InvalidRequest(_))));
+        let input = WatsonxContext {
+            api_key: None,
+            api_base: None,
+            extra_headers: &empty,
+            deployment_params: &empty,
+            optional_params: &params,
+        };
+        assert!(matches!(
+            resolve_environment(&input, &|name| (name == "WATSONX_TOKEN")
+                .then(|| "host-token".into())),
+            Err(Error::InvalidRequest(_))
+        ));
     }
 
     #[rstest]
@@ -193,7 +282,17 @@ mod tests {
     fn request_credential_cannot_fall_back_to_environment(#[case] value: Value) {
         let params = BTreeMap::from([("token".into(), Sourced::new(value, InputSource::Request))]);
         let empty = BTreeMap::new();
-        let input = WatsonxContext { api_key: None, api_base: None, extra_headers: &empty, deployment_params: &empty, optional_params: &params };
-        assert!(matches!(resolve_environment(&input, &|name| (name == "WATSONX_TOKEN").then(|| "host-token".into())), Err(Error::InvalidRequest(_))));
+        let input = WatsonxContext {
+            api_key: None,
+            api_base: None,
+            extra_headers: &empty,
+            deployment_params: &empty,
+            optional_params: &params,
+        };
+        assert!(matches!(
+            resolve_environment(&input, &|name| (name == "WATSONX_TOKEN")
+                .then(|| "host-token".into())),
+            Err(Error::InvalidRequest(_))
+        ));
     }
 }

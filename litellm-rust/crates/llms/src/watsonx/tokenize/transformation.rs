@@ -1,6 +1,3 @@
-use litellm_auth::{
-    CredentialBoundary, CredentialPlacement, InputSource, SecretValue, watsonx::WatsonxIamConfig,
-};
 use litellm_core_utils::{settings::resolve_non_empty, url_utils::ApiUrl};
 use litellm_llms_types::formats::tokenize::TokenizeResponse;
 use serde::{Deserialize, Serialize};
@@ -10,18 +7,18 @@ use url::Url;
 use crate::{
     Error, ErrorDetail,
     base_llm::{
-        auth::{AuthScheme, Headers, ValidatedEnvironment},
+        auth::ValidatedEnvironment,
         tokenize::transformation::{
             BaseTokenizeConfig, TokenizeCapabilities, TokenizeContext, decode_params,
             validate_common_tokenize_input, validate_token_count,
         },
     },
+    watsonx::common_utils::{API_KEY_ENV, WatsonxContext, resolve_environment},
 };
 
 pub const WATSONX_DEFAULT_API_VERSION: &str = "2024-03-13";
 
 const API_BASE_ENV: &[&str] = &["WATSONX_API_BASE", "WATSONX_URL", "WX_URL", "WML_URL"];
-const API_KEY_ENV: &[&str] = &["WATSONX_APIKEY", "WATSONX_API_KEY", "WX_API_KEY"];
 const PROJECT_ENV: &[&str] = &["WATSONX_PROJECT_ID", "WX_PROJECT_ID", "PROJECT_ID"];
 const SPACE_ENV: &[&str] = &[
     "WATSONX_DEPLOYMENT_SPACE_ID",
@@ -37,8 +34,10 @@ struct WatsonxTokenizeParams {
     watsonx_project: Option<String>,
     space_id: Option<String>,
     api_version: Option<String>,
-    token: Option<String>,
-    zen_api_key: Option<String>,
+    #[serde(rename = "token")]
+    _token: Option<String>,
+    #[serde(rename = "zen_api_key")]
+    _zen_api_key: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -91,56 +90,26 @@ impl BaseTokenizeConfig for WatsonxTokenizeConfig {
 
     fn validate_environment(
         &self,
-        headers: Headers,
-        api_key: Option<&str>,
-        optional_params: &Map<String, Value>,
+        input: &TokenizeContext<'_>,
+        _optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        if litellm_http::request::has_header(&headers, "authorization") {
-            return Ok(ValidatedEnvironment {
-                headers,
-                auth: AuthScheme::Forwarded,
-            });
-        }
-        let params: WatsonxTokenizeParams = decode_params(optional_params)?;
-        let auth = if let Some(token) =
-            resolve_non_empty(params.token.as_deref(), env_lookup, &["WATSONX_TOKEN"])
-        {
-            AuthScheme::Credential {
-                placement: CredentialPlacement::Bearer,
-                secret: SecretValue::new(token),
-            }
-        } else if let Some(key) = resolve_non_empty(
-            params.zen_api_key.as_deref(),
+        resolve_environment(
+            &WatsonxContext {
+                api_key: input.api_key,
+                api_base: input.api_base,
+                extra_headers: input.extra_headers,
+                deployment_params: input.deployment_params,
+                optional_params: input.optional_params,
+            },
             env_lookup,
-            &["WATSONX_ZENAPIKEY"],
-        ) {
-            AuthScheme::Credential {
-                placement: CredentialPlacement::Header("Authorization"),
-                secret: SecretValue::new(format!("ZenApiKey {key}")),
-            }
-        } else {
-            let key = resolve_non_empty(api_key, env_lookup, API_KEY_ENV).ok_or(
-                litellm_auth::Error::MissingApiKey {
-                    provider: "watsonx",
-                    environment_variable: "WATSONX_API_KEY",
-                },
-            )?;
-            let config = match resolve_non_empty(None, env_lookup, &["WATSONX_IAM_URL"]) {
-                Some(endpoint) => WatsonxIamConfig::with_endpoint(SecretValue::new(key), endpoint),
-                None => WatsonxIamConfig::new(SecretValue::new(key)),
-            };
-            AuthScheme::WatsonxIam {
-                config: Box::new(config),
-            }
-        };
-        Ok(ValidatedEnvironment { headers, auth })
+        )
     }
 
     fn validate_tokenize_input(
         &self,
         input: &TokenizeContext<'_>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<(), Error> {
         validate_common_tokenize_input(input, self.get_supported_tokenize_params())?;
         input.string_headers()?;
@@ -151,92 +120,7 @@ impl BaseTokenizeConfig for WatsonxTokenizeConfig {
         let optional = filtered_params(input.optional_params, self.get_supported_tokenize_params());
         decode_params::<WatsonxTokenizeParams>(&deployment)?;
         decode_params::<WatsonxTokenizeParams>(&optional)?;
-        let mut supplied = deployment;
-        supplied.extend(optional);
-        let filtered: Map<String, Value> = supplied
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
-        let params: WatsonxTokenizeParams = decode_params(&filtered)?;
-
-        let authorization = input
-            .extra_headers
-            .iter()
-            .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-            .map(|(_, value)| value);
-        let mut credential_sources: Vec<InputSource> = input
-            .api_key
-            .into_iter()
-            .map(|value| value.source())
-            .chain(authorization.clone().map(|value| value.source()))
-            .chain(
-                input
-                    .deployment_params
-                    .iter()
-                    .chain(input.optional_params.iter())
-                    .filter(|(key, _)| matches!(key.as_str(), "token" | "zen_api_key"))
-                    .map(|(_, value)| value.source()),
-            )
-            .collect();
-        let token = resolve_non_empty(params.token.as_deref(), env_lookup, &["WATSONX_TOKEN"]);
-        let zen = resolve_non_empty(
-            params.zen_api_key.as_deref(),
-            env_lookup,
-            &["WATSONX_ZENAPIKEY"],
-        );
-        let api_key = resolve_non_empty(
-            input.api_key.map(|key| key.value().expose()),
-            env_lookup,
-            API_KEY_ENV,
-        );
-        let authorization_is_supplied = authorization.clone().next().is_some();
-        let token_is_empty = params
-            .token
-            .as_deref()
-            .is_none_or(|value| value.trim().is_empty());
-        let zen_is_empty = params
-            .zen_api_key
-            .as_deref()
-            .is_none_or(|value| value.trim().is_empty());
-        let environment_credential_selected = !authorization_is_supplied
-            && token_is_empty
-            && (token.is_some()
-                || (zen_is_empty
-                    && (zen.is_some()
-                        || (input
-                            .api_key
-                            .is_none_or(|key| key.value().expose().trim().is_empty())
-                            && api_key.is_some()))));
-        if environment_credential_selected {
-            credential_sources.push(InputSource::Environment);
-        }
-        let has_effective_credentials =
-            authorization_is_supplied || token.is_some() || zen.is_some() || api_key.is_some();
-        if !has_effective_credentials {
-            return Ok(());
-        }
-        let boundary = CredentialBoundary::new(&credential_sources)
-            .map_err(|error| Error::InvalidRequest(error.to_string().into()))?;
-        let resources = input
-            .api_base
-            .into_iter()
-            .map(|value| value.source())
-            .chain(
-                input
-                    .deployment_params
-                    .iter()
-                    .chain(input.optional_params.iter())
-                    .filter(|(key, _)| {
-                        matches!(
-                            key.as_str(),
-                            "project_id" | "watsonx_project" | "space_id" | "api_version"
-                        )
-                    })
-                    .map(|(_, value)| value.source()),
-            );
-        boundary
-            .validate_resources(resources)
-            .map_err(|error| Error::InvalidRequest(error.to_string().into()))
+        Ok(())
     }
 
     fn get_complete_url(
@@ -358,13 +242,37 @@ fn filtered_params(
 
 #[cfg(test)]
 mod tests {
+    use litellm_auth::{InputSource, SecretValue, Sourced};
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
+    use crate::base_llm::tokenize::transformation::TokenizeMap;
 
     fn no_env(_: &str) -> Option<String> {
         None
+    }
+
+    fn request_params(params: Map<String, Value>) -> TokenizeMap {
+        params
+            .into_iter()
+            .map(|(name, value)| (name, Sourced::new(value, InputSource::Request)))
+            .collect()
+    }
+
+    fn tokenize_input<'a>(
+        api_key: Option<&'a Sourced<SecretValue>>,
+        extra_headers: &'a TokenizeMap,
+        deployment_params: &'a TokenizeMap,
+        optional_params: &'a TokenizeMap,
+    ) -> TokenizeContext<'a> {
+        TokenizeContext::new(
+            api_key,
+            None,
+            extra_headers,
+            deployment_params,
+            optional_params,
+        )
     }
 
     fn params(value: Value) -> Map<String, Value> {
@@ -513,8 +421,18 @@ mod tests {
         #[case] expected: &str,
         #[case] expected_placement: CredentialPlacement,
     ) {
+        let api_key = Sourced::new(SecretValue::new("iam-key"), InputSource::Request);
+        let extra_headers = TokenizeMap::new();
+        let deployment_params = TokenizeMap::new();
+        let optional_params = request_params(params(options));
+        let input = tokenize_input(
+            Some(&api_key),
+            &extra_headers,
+            &deployment_params,
+            &optional_params,
+        );
         let environment = WatsonxTokenizeConfig
-            .validate_environment(vec![], Some("iam-key"), &params(options), &no_env)
+            .validate_environment(&input, &Map::new(), &no_env)
             .unwrap();
         let AuthScheme::Credential { placement, secret } = environment.auth else {
             panic!("expected a static credential");
@@ -526,13 +444,21 @@ mod tests {
     #[rstest]
     fn forwarded_authorization_wins_over_saved_credentials() {
         let headers = vec![("authorization".into(), "Bearer forwarded".into())];
+        let api_key = Sourced::new(SecretValue::new("key"), InputSource::Request);
+        let extra_headers = TokenizeMap::from([(
+            "authorization".into(),
+            Sourced::new(json!("Bearer forwarded"), InputSource::Request),
+        )]);
+        let deployment_params = TokenizeMap::new();
+        let optional_params = request_params(params(json!({"token": "token"})));
+        let input = tokenize_input(
+            Some(&api_key),
+            &extra_headers,
+            &deployment_params,
+            &optional_params,
+        );
         let environment = WatsonxTokenizeConfig
-            .validate_environment(
-                headers.clone(),
-                Some("key"),
-                &params(json!({"token": "token"})),
-                &no_env,
-            )
+            .validate_environment(&input, &Map::new(), &no_env)
             .unwrap();
         assert!(matches!(environment.auth, AuthScheme::Forwarded));
         assert_eq!(environment.headers, headers);
@@ -540,8 +466,13 @@ mod tests {
 
     #[rstest]
     fn bearer_credentials_can_come_from_environment() {
+        let extra_headers = TokenizeMap::new();
+        let deployment_params = TokenizeMap::new();
+        let optional_params = TokenizeMap::new();
+        let missing_key =
+            tokenize_input(None, &extra_headers, &deployment_params, &optional_params);
         let environment = WatsonxTokenizeConfig
-            .validate_environment(vec![], None, &Map::new(), &|name| {
+            .validate_environment(&input, &Map::new(), &|name| {
                 (name == "WATSONX_TOKEN").then(|| "environment-token".into())
             })
             .unwrap();
@@ -554,13 +485,24 @@ mod tests {
 
     #[rstest]
     fn api_key_uses_shared_iam_authentication() {
+        let api_key = Sourced::new(SecretValue::new("configured-key"), InputSource::Request);
+        let extra_headers = TokenizeMap::new();
+        let deployment_params = TokenizeMap::new();
+        let optional_params = TokenizeMap::new();
+        let input = input(
+            Some(&api_key),
+            &extra_headers,
+            &deployment_params,
+            &optional_params,
+        );
         let environment = WatsonxTokenizeConfig
-            .validate_environment(vec![], Some("configured-key"), &Map::new(), &no_env)
+            .validate_environment(&input, &Map::new(), &no_env)
             .unwrap();
         assert!(matches!(environment.auth, AuthScheme::WatsonxIam { .. }));
+        let missing_key = input(None, &extra_headers, &deployment_params, &optional_params);
         assert!(
             WatsonxTokenizeConfig
-                .validate_environment(vec![], None, &Map::new(), &no_env)
+                .validate_environment(&missing_key, &Map::new(), &no_env)
                 .is_err()
         );
     }

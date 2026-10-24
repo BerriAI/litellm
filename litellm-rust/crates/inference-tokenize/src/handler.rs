@@ -53,13 +53,7 @@ pub(crate) async fn execute(
         params.insert("add_special_tokens".into(), Value::Bool(value));
     }
     let params = config.map_tokenize_params(provider.model, &params)?;
-    let headers = input.string_headers()?;
-    let environment = config.validate_environment(
-        headers,
-        call.api_key.as_ref().map(|key| key.value().expose()),
-        &params,
-        &env_lookup,
-    )?;
+    let environment = config.validate_environment(&input, &params, &env_lookup)?;
     let url = config.get_complete_url(
         call.api_base.as_ref().map(|base| base.value().as_str()),
         provider.model,

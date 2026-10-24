@@ -106,8 +106,7 @@ pub trait BaseTokenizeConfig: Sync {
 
     fn validate_environment(
         &self,
-        headers: Headers,
-        api_key: Option<&str>,
+        input: &TokenizeContext<'_>,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error>;
