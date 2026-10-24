@@ -965,7 +965,7 @@ def _get_native_model_cost_map(
     return fallback_map
 
 
-def get_model_cost_map(
+def load_model_cost_map_at_import(
     url: str,
     timeout: int = 5,
     max_attempts: int = MODEL_COST_MAP_FETCH_MAX_ATTEMPTS,
@@ -986,3 +986,42 @@ def get_model_cost_map(
     """
     fetch_seed: Final = rng.getrandbits(64) if rng is not None else None
     return _get_native_model_cost_map(url, timeout, max_attempts, sleep, client, fetch_seed)
+
+
+def _mutable_model_cost_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        fields: Final = cast(Mapping[str, object], value)  # cast-ok: fetched model-cost JSON has string keys
+        return {key: _mutable_model_cost_value(item) for key, item in fields.items()}
+    if isinstance(value, tuple):
+        items: Final = cast(tuple[object, ...], value)  # cast-ok: frozen JSON lists are tuples
+        return [_mutable_model_cost_value(item) for item in items]
+    return value
+
+
+def _mutable_model_cost_map(entries: Mapping[str, Mapping[str, object]]) -> dict[str, dict[str, object]]:
+    return {
+        key: {field: _mutable_model_cost_value(value) for field, value in row.items()} for key, row in entries.items()
+    }
+
+
+def get_model_cost_map(
+    url: str,
+    timeout: int = 5,
+    max_attempts: int = MODEL_COST_MAP_FETCH_MAX_ATTEMPTS,
+    sleep: Callable[[float], None] = time.sleep,
+    rng: random.Random | None = None,
+    client: "_SyncGetClient | None" = None,
+) -> dict[str, dict[str, object]]:
+    """Read an independent mutable price map, falling back to bundled rows without installing either."""
+    from litellm.litellm_core_utils.model_cost_api import (
+        FetchedModelCostMap,
+        Remote,
+        bundled_model_cost_map,
+        fetch_model_cost_map,
+    )
+
+    if is_offline_mode() or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
+        return _mutable_model_cost_map(bundled_model_cost_map())
+    fetched: Final = fetch_model_cost_map(Remote(url), timeout=timeout, max_attempts=1)
+    entries: Final = fetched.entries if isinstance(fetched, FetchedModelCostMap) else bundled_model_cost_map()
+    return _mutable_model_cost_map(entries)
