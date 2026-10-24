@@ -9,6 +9,10 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: useAuthorizedMock,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: () => ({ data: undefined }),
+}));
+
 const fetchMock = vi.fn();
 
 const requestedUrls = () => fetchMock.mock.calls.map(([url]) => String(url));
