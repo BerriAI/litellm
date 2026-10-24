@@ -1,6 +1,8 @@
 import json
 import os
+from collections.abc import Iterator
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -179,6 +181,12 @@ def mock_auth():
     app.dependency_overrides[user_api_key_auth] = mock_user_api_key_auth
     yield
     app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.fixture(autouse=True)
+def isolated_environment() -> Iterator[None]:
+    with patch.dict(os.environ):
+        yield
 
 
 @pytest.fixture(autouse=True)
