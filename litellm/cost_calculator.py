@@ -466,6 +466,37 @@ def cost_per_token(
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
 
+    from litellm.llms.bedrock.claude_platform.common_utils import claude_platform_pricing_model
+
+    claude_platform_model: Final = claude_platform_pricing_model(model, custom_llm_provider)
+    if claude_platform_model is not None:
+        return cost_per_token(
+            model=claude_platform_model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            response_time_ms=response_time_ms,
+            custom_llm_provider="anthropic",
+            region_name=region_name,
+            prompt_characters=prompt_characters,
+            completion_characters=completion_characters,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+            custom_cost_per_token=custom_cost_per_token,
+            custom_cost_per_second=custom_cost_per_second,
+            number_of_queries=number_of_queries,
+            usage_object=usage_object,
+            rerank_billed_units=rerank_billed_units,
+            call_type=call_type,
+            audio_transcription_file_duration=audio_transcription_file_duration,
+            service_tier=service_tier,
+            data_residency=data_residency,
+            vertex_location=vertex_location,
+            response=response,
+            request_model=request_model,
+            custom_model_info=custom_model_info,
+            bedrock_model_info=bedrock_model_info,
+        )
+
     ## RECONSTRUCT USAGE BLOCK ##
     if usage_object is not None:
         usage_block = usage_object

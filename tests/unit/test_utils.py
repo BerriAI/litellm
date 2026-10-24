@@ -339,6 +339,19 @@ def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local
     assert info["key"] == "ft:gpt-4o-2024-08-06"
 
 
+def test_get_model_info_uses_anthropic_model_for_claude_platform(local_model_cost_map: None) -> None:
+    claude_platform_info: Final = litellm.get_model_info(
+        model="bedrock/claude_platform/claude-opus-5-5",
+        custom_llm_provider="bedrock",
+    )
+    anthropic_info: Final = litellm.get_model_info(
+        model="claude-opus-5-5",
+        custom_llm_provider="anthropic",
+    )
+
+    assert claude_platform_info["key"] == anthropic_info["key"]
+
+
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider", "expected_key"),
     [
