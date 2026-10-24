@@ -1454,6 +1454,150 @@ class TestContextCachingEndpoints:
         self._token_check_patcher.start()
 
     @pytest.mark.parametrize(
+        "error_message",
+        [
+            (
+                "Cached content is too small. Labeller: tokens_count=1722. "
+                "The minimum token count to start explicit caching is 4096."
+            ),
+            "INVALID_ARGUMENT: Cached content is too small.",
+        ],
+    )
+    def test_check_and_create_cache_falls_back_gracefully_on_400_cached_content_too_small(
+        self,
+        error_message: str,
+    ) -> None:
+        cached_messages: Final = [self.sample_messages[0]]
+        non_cached_messages: Final = [self.sample_messages[1]]
+
+        mock_response: Final = MagicMock()
+        mock_response.status_code = 400
+        mock_response.text = error_message
+        self.mock_client.post.side_effect = httpx.HTTPStatusError("Error", request=MagicMock(), response=mock_response)
+
+        optional_params: Final = {
+            **self.sample_optional_params,
+            "tool_choice": {"functionCallingConfig": {"mode": "AUTO"}},
+        }
+        expected_optional_params: Final = dict(optional_params)
+
+        with (
+            patch(
+                "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages",
+                return_value=(cached_messages, non_cached_messages),
+            ),
+            patch.object(ContextCachingEndpoints, "check_cache", return_value=None),
+            patch.object(
+                ContextCachingEndpoints,
+                "_get_token_and_url_context_caching",
+                return_value=("token", "https://test-url.com"),
+            ),
+        ):
+            assert self.context_caching.check_and_create_cache(
+                messages=self.sample_messages,
+                optional_params=optional_params,
+                api_key="test_key",
+                api_base=None,
+                model="gemini-3.5-flash",
+                client=self.mock_client,
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                custom_llm_provider="vertex_ai",
+                vertex_project="test_project",
+                vertex_location="us-central1",
+                vertex_auth_header="vertex_test_token",
+            ) == (self.sample_messages, expected_optional_params, None)
+
+    def test_check_and_create_cache_still_raises_on_other_400_errors(self) -> None:
+        cached_messages: Final = [self.sample_messages[0]]
+        non_cached_messages: Final = [self.sample_messages[1]]
+
+        mock_response: Final = MagicMock()
+        mock_response.status_code = 400
+        mock_response.text = "INVALID_ARGUMENT: Unsupported model for cachedContents."
+        self.mock_client.post.side_effect = httpx.HTTPStatusError("Error", request=MagicMock(), response=mock_response)
+
+        with (
+            patch(
+                "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages",
+                return_value=(cached_messages, non_cached_messages),
+            ),
+            patch.object(ContextCachingEndpoints, "check_cache", return_value=None),
+            patch.object(
+                ContextCachingEndpoints,
+                "_get_token_and_url_context_caching",
+                return_value=("token", "https://test-url.com"),
+            ),
+            pytest.raises(VertexAIError) as exc_info,
+        ):
+            self.context_caching.check_and_create_cache(
+                messages=self.sample_messages,
+                optional_params=dict(self.sample_optional_params),
+                api_key="test_key",
+                api_base=None,
+                model="gemini-3.5-flash",
+                client=self.mock_client,
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                custom_llm_provider="vertex_ai",
+                vertex_project="test_project",
+                vertex_location="us-central1",
+                vertex_auth_header="vertex_test_token",
+            )
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_async_check_and_create_cache_falls_back_gracefully_on_400_cached_content_too_small(
+        self,
+    ) -> None:
+        cached_messages: Final = [self.sample_messages[0]]
+        non_cached_messages: Final = [self.sample_messages[1]]
+
+        mock_response: Final = MagicMock()
+        mock_response.status_code = 400
+        mock_response.text = (
+            "Cached content is too small. Labeller: tokens_count=1722. "
+            "The minimum token count to start explicit caching is 4096."
+        )
+        self.mock_async_client.post.side_effect = httpx.HTTPStatusError(
+            "Error", request=MagicMock(), response=mock_response
+        )
+
+        optional_params: Final = {
+            **self.sample_optional_params,
+            "tool_choice": {"functionCallingConfig": {"mode": "AUTO"}},
+        }
+        expected_optional_params: Final = dict(optional_params)
+
+        with (
+            patch(
+                "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages",
+                return_value=(cached_messages, non_cached_messages),
+            ),
+            patch.object(ContextCachingEndpoints, "async_check_cache", return_value=None),
+            patch.object(
+                ContextCachingEndpoints,
+                "_get_token_and_url_context_caching",
+                return_value=("token", "https://test-url.com"),
+            ),
+        ):
+            assert await self.context_caching.async_check_and_create_cache(
+                messages=self.sample_messages,
+                optional_params=optional_params,
+                api_key="test_key",
+                api_base=None,
+                model="gemini-3.5-flash",
+                client=self.mock_async_client,
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                custom_llm_provider="vertex_ai",
+                vertex_project="test_project",
+                vertex_location="us-central1",
+                vertex_auth_header="vertex_test_token",
+            ) == (self.sample_messages, expected_optional_params, None)
+
+    @pytest.mark.parametrize(
         "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
     )
     @patch(
