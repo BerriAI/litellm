@@ -1704,3 +1704,57 @@ def test_per_request_custom_pricing_scopes_a_colliding_deployment_id_to_its_prov
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.open_ai_chat_completion_models.intersection_update(openai_models_before)
+
+
+def test_rerank_custom_pricing_registered_model():
+    """Verify that a registered rerank model calculates cost with custom_pricing enabled (closes #47798)."""
+    model_name = "test-custom-rerank-model"
+    original_entries = _snapshot_model_cost_entries([model_name])
+    original_custom_pricing = getattr(litellm, "custom_pricing", None)
+    try:
+        litellm.custom_pricing = True
+        litellm.register_model(
+            {
+                model_name: {
+                    "input_cost_per_query": 0.001,
+                    "litellm_provider": "openai",
+                    "mode": "rerank",
+                }
+            }
+        )
+        # 1. 默认无 billed_units 时，按单次请求默认 1 个 search unit 计费
+        cost, comp_cost = litellm.cost_calculator.rerank_cost(
+            model=model_name,
+            custom_llm_provider="openai",
+        )
+        assert cost == pytest.approx(0.001)
+        assert comp_cost == 0.0
+
+        # 2. 关键防御：真实 0 单元（search_units=0）绝不虚假计费，必须为 $0.0！
+        zero_cost, _ = litellm.cost_calculator.rerank_cost(
+            model=model_name,
+            custom_llm_provider="openai",
+            billed_units={"search_units": 0},
+        )
+        assert zero_cost == 0.0
+    finally:
+        _restore_model_cost_entries(original_entries)
+        if original_custom_pricing is None:
+            delattr(litellm, "custom_pricing")
+        else:
+            litellm.custom_pricing = original_custom_pricing
+
+
+def test_custom_pricing_global_flag_detection():
+    """Verify that use_custom_pricing_for_model honors the global litellm.custom_pricing flag (closes #47798)."""
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+    original_custom_pricing = getattr(litellm, "custom_pricing", None)
+    try:
+        litellm.custom_pricing = True
+        assert use_custom_pricing_for_model(None) is True
+        assert use_custom_pricing_for_model({}) is True
+    finally:
+        if original_custom_pricing is None:
+            delattr(litellm, "custom_pricing")
+        else:
+            litellm.custom_pricing = original_custom_pricing

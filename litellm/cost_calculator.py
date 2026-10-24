@@ -1871,12 +1871,12 @@ def completion_cost(
                         else:
                             billed_units = {}
 
+                        raw_units = billed_units.get("search_units")
+                        search_units = 1 if raw_units is None else raw_units  # cohere charges per request by default.
                         rerank_billed_units = RerankBilledUnits(
-                            search_units=billed_units.get("search_units"),
+                            search_units=search_units,
                             total_tokens=billed_units.get("total_tokens"),
                         )
-
-                        search_units = billed_units.get("search_units") or 1  # cohere charges per request by default.
                         completion_tokens = search_units
                 elif call_type in _SEARCH_CALL_TYPES:
                     from litellm.search import search_provider_cost_per_query
@@ -2673,31 +2673,42 @@ def rerank_cost(
 ) -> tuple[float, float]:
     """
     Returns
-    - float or None: cost of response OR none if error.
+    - tuple[float, float]: cost of response (prompt_cost, completion_cost)
     """
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
 
     try:
-        config: Final = ProviderConfigManager.get_provider_rerank_config(
-            model=model,
-            api_base=None,
-            present_version_params=[],
-            provider=LlmProviders(custom_llm_provider),
-        )
+        model_info: ModelInfo | None = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        model_info = None
 
+    if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
         try:
-            model_info: ModelInfo | None = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+            config: Final = ProviderConfigManager.get_provider_rerank_config(
+                model=model,
+                api_base=None,
+                present_version_params=[],
+                provider=LlmProviders(custom_llm_provider),
+            )
+            return config.calculate_rerank_cost(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                billed_units=billed_units,
+                model_info=model_info,
+            )
         except Exception:
-            model_info = None
+            pass
 
-        return config.calculate_rerank_cost(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            billed_units=billed_units,
-            model_info=model_info,
-        )
-    except Exception as e:
-        raise e
+    if (
+        model_info is not None
+        and "input_cost_per_query" in model_info
+        and model_info["input_cost_per_query"] is not None
+    ):
+        raw_units = billed_units.get("search_units") if billed_units is not None else None
+        search_units: Final = 1 if raw_units is None else raw_units
+        return model_info["input_cost_per_query"] * search_units, 0.0
+
+    return 0.0, 0.0
 
 
 def transcription_cost(model: str, custom_llm_provider: str | None, duration: float) -> tuple[float, float]:
