@@ -312,7 +312,7 @@ def _spend_tables_left_to_send(
     return cast(DBSpendUpdateTransactions, remaining) if any(remaining.values()) else None
 
 
-def _report_spend_update_step_failure(step_name: str, *, payload: SpendLogsPayload, exc: Exception) -> None:
+def _report_spend_update_step_failure(step_name: str, *, payload: Mapping[str, object], exc: Exception) -> None:
     spend_log_error(
         "Spend tracking - %s failed, this request is missing from that spend rollup. request_id=%s api_key=%s",
         step_name,
@@ -322,13 +322,16 @@ def _report_spend_update_step_failure(step_name: str, *, payload: SpendLogsPaylo
     )
 
 
-def _parse_spend_log_metadata(payload: dict | SpendLogsPayload) -> SpendLogsMetadata:
+_EMPTY_SPEND_LOG_METADATA: Final = cast(SpendLogsMetadata, MappingProxyType({}))  # cast-ok: empty read-only metadata
+
+
+def _parse_spend_log_metadata(payload: Mapping[str, object]) -> SpendLogsMetadata:
     """Malformed metadata costs the request its metadata-derived fields, never its daily rollup row."""
     raw: Final = payload.get("metadata")
-    if isinstance(raw, dict):
-        return cast(SpendLogsMetadata, raw)
+    if not isinstance(raw, str):
+        return _EMPTY_SPEND_LOG_METADATA
     try:
-        parsed: Final = json.loads(raw) if isinstance(raw, str) else {}
+        parsed: Final[SpendLogsMetadata] = json.loads(raw)
     except json.JSONDecodeError as e:
         spend_log_error(
             "Spend tracking - unreadable spend log metadata, rollups for this request are written without "
@@ -337,8 +340,8 @@ def _parse_spend_log_metadata(payload: dict | SpendLogsPayload) -> SpendLogsMeta
             payload.get("api_key"),
             exc=e,
         )
-        return cast(SpendLogsMetadata, {})
-    return cast(SpendLogsMetadata, parsed if isinstance(parsed, dict) else {})
+        return _EMPTY_SPEND_LOG_METADATA
+    return parsed
 
 
 def _is_billed_retry_attempt(metadata: SpendLogsMetadata) -> bool:

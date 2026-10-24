@@ -2206,7 +2206,7 @@ async def test_update_database_returns_only_after_every_rollup_is_enqueued():
         )
 
     spend: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
-    assert list(spend["key_list_transactions"].values()) == [0.1]
+    assert spend["key_list_transactions"] == {"test-token": 0.1}
     assert spend["team_list_transactions"] == {"test-team": 0.1}
     daily_user: Final = (
         await db_writer.daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
@@ -2214,6 +2214,7 @@ async def test_update_database_returns_only_after_every_rollup_is_enqueued():
     daily_team: Final = (
         await db_writer.daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
     )
+    assert daily_user is not None and daily_team is not None
     (user_row,) = daily_user.values()
     (team_row,) = daily_team.values()
     assert (user_row["api_requests"], user_row["spend"]) == (1, 0.1)
@@ -2302,7 +2303,9 @@ async def test_malformed_metadata_keeps_the_daily_rollup_row_and_is_reported(cap
     }
     caplog.set_level(logging.ERROR, logger=verbose_proxy_logger.name)
 
-    await writer.add_spend_log_transaction_to_daily_user_transaction(payload=payload, prisma_client=prisma)
+    await writer.add_spend_log_transaction_to_daily_user_transaction(  # pyright: ignore[reportUnknownMemberType]  # prisma_client param is untyped on the writer
+        payload=payload, prisma_client=prisma
+    )
 
     daily: Final = await writer.daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
     (row,) = daily.values()
