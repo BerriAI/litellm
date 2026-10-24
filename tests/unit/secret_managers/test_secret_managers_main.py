@@ -3,10 +3,12 @@ import json
 import logging
 import os
 import time
+import uuid
 from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
+import respx
 
 import litellm
 from litellm._logging import redact_internal_details_from_client_message
@@ -32,7 +34,7 @@ class MockHTTPHandler:
         self.text = "mocked_token"
         self.json_data = {"value": "mocked_token"}
 
-    def get(self, url, params=None, headers=None):
+    def get(self, url, params=None, headers=None, timeout=None):
         # Store params for audience verification
         self.last_params = params
         logger.debug(
@@ -223,6 +225,23 @@ def test_oidc_google_failure():
                 with pytest.raises(ValueError, match="Google OIDC provider failed"):
                     get_secret(secret_name)
 
+
+
+def test_oidc_google_fetches_the_token_from_the_metadata_host_gce_metadata_host_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GCE_METADATA_HOST", "127.0.0.1:8930")
+    audience: Final = f"https://vllm.example.test/{uuid.uuid4().hex}"
+
+    with respx.mock(assert_all_called=True) as metadata:
+        metadata.get(
+            "http://127.0.0.1:8930/computeMetadata/v1/instance/service-accounts/default/identity",
+            params={"audience": audience},
+            headers={"Metadata-Flavor": "Google"},
+        ).respond(200, text="metadata-host-token")
+        token: Final = get_secret(f"oidc/google/{audience}")
+
+    assert token == "metadata-host-token"
 
 def test_oidc_circleci_success(monkeypatch):
     monkeypatch.setenv("CIRCLE_OIDC_TOKEN", "circleci_token")

@@ -202,7 +202,7 @@ from litellm.types.utils import (
     is_server_derived_pricing_key,
     pricing_override_fields,
 )
-from litellm.utils import cost_map_omits_token_price, load_credentials_from_list, with_named_credential
+from litellm.utils import acredential_updates, cost_map_omits_token_price, with_named_credential
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -14661,10 +14661,10 @@ def _provider_count_outcome(
     return result
 
 
-def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
+async def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
     call_params: Final = _LITELLM_PARAMS_COPY.validate_python(litellm_params)
     try:
-        load_credentials_from_list(call_params)
+        return {**call_params, **(await acredential_updates(call_params))}
     except litellm.AuthenticationError as e:
         raise ProxyException(
             message=e.message,
@@ -14672,13 +14672,12 @@ def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
             param="model",
             code=401,
         ) from e
-    return call_params
 
 
-def _with_resolved_credentials(deployment: Mapping[str, object] | None) -> dict[str, object] | None:
+async def _with_resolved_credentials(deployment: Mapping[str, object] | None) -> dict[str, object] | None:
     if deployment is None:
         return None
-    return {**deployment, "litellm_params": _with_resolved_api_key(deployment.get("litellm_params", {}))}
+    return {**deployment, "litellm_params": await _with_resolved_api_key(deployment.get("litellm_params", {}))}
 
 
 _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
@@ -14741,7 +14740,7 @@ async def _try_provider_token_count(
             model_to_use=model_to_use or "",
             messages=messages,
             contents=contents,
-            deployment=_with_resolved_credentials(deployment_in_region),
+            deployment=await _with_resolved_credentials(deployment_in_region),
             request_model=request_model,
             tools=tools,
             system=system,
@@ -14775,7 +14774,7 @@ async def _try_native_responses_count(
             model_to_use=model_to_use,
             request=responses_request,
             policy=policy,
-            deployment=_with_resolved_credentials(deployment),
+            deployment=await _with_resolved_credentials(deployment),
             request_model=request_model,
         )
     )

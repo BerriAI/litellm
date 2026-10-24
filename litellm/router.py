@@ -440,6 +440,7 @@ from litellm.utils import (
     ModelResponse,
     Rules,
     TextCompletionResponse,
+    aresolve_api_key_secret_reference,
     function_setup,
     get_llm_provider,
     get_non_default_completion_params,
@@ -450,7 +451,6 @@ from litellm.utils import (
     lookup_model_info_for_registration,
     model_info_with_pricing_overrides,
     provider_rejectable_params,
-    resolve_api_key_secret_reference,
     set_live_deployment_replay,
 )
 
@@ -11753,7 +11753,7 @@ class Router:
             return
         if api_base is None or "*" in model or params.get("use_clientside_credentials"):
             return
-        api_key: Final = resolve_api_key_secret_reference(
+        api_key: Final = await aresolve_api_key_secret_reference(
             params.api_key or dynamic_api_key,
             model=model,
             llm_provider=provider,
