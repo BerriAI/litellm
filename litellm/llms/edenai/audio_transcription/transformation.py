@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
@@ -20,6 +21,8 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import EdenAIException, authorized_headers, endpoint_url, reported_cost
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 def _form_fields(model: str, optional_params: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: httpx form data
@@ -75,7 +78,7 @@ class EdenAIAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
     def transform_audio_transcription_response(self, raw_response: httpx.Response) -> TranscriptionResponse:
         if "application/json" not in raw_response.headers.get("content-type", ""):
             return TranscriptionResponse(text=raw_response.text)
-        body: Final = raw_response.json()
+        body: Final = _JSON_OBJECT.validate_python(raw_response.json())
         response: Final[TranscriptionResponse] = convert_to_model_response_object(
             response_object=body, model_response_object=TranscriptionResponse(), response_type="audio_transcription"
         )

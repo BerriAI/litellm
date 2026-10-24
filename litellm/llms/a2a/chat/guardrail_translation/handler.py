@@ -14,6 +14,7 @@ import json
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional
 
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -27,6 +28,8 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class _A2ATextPart(TypedDict, total=False):
@@ -333,7 +336,7 @@ class A2AGuardrailHandler(BaseTranslation):
                 obj = item
             elif isinstance(item, str):
                 try:
-                    obj = json.loads(item.strip())
+                    obj = _JSON_OBJECT.validate_python(json.loads(item.strip()))
                 except (json.JSONDecodeError, TypeError):
                     continue
             else:

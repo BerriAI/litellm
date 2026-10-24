@@ -5,6 +5,7 @@ from functools import partial
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
@@ -31,6 +32,7 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 # SPEND_LOGS_PAGINATION_COUNT_CAP, the bound ui_view_spend_logs puts on its count
 # query, so both reads of the same table stop at the same depth.
 SPEND_LOGS_FACET_SCAN_CAP: Final = 10000
+_FACET_ROWS: Final = TypeAdapter(list[dict[str, str | None]])
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -125,8 +127,8 @@ async def _list_spend_log_facet(
             f" ORDER BY {column_sql} ASC"
             f" LIMIT ${scan_idx + 1} OFFSET ${scan_idx + 2}"
         )
-        rows: Final = await prisma_client.db.query_raw(facet_sql, *params)
-        values: Final[list[str]] = [row[column] for row in rows if row.get(column)]
+        rows: Final = _FACET_ROWS.validate_python(await prisma_client.db.query_raw(facet_sql, *params), strict=True)
+        values: Final[list[str]] = [value for row in rows if (value := row.get(column))]
         has_more: Final = len(values) > page_size
 
         return FacetListResponse(

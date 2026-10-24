@@ -8,6 +8,7 @@ Docs: https://www.edenai.co/docs/v3/llms/image-generation
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -34,6 +35,8 @@ _SUPPORTED_PARAMS: Final[tuple[OpenAIImageGenerationOptionalParams, ...]] = (
     "style",
     "user",
 )
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
@@ -97,7 +100,7 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
-        body: Final = raw_response.json()
+        body: Final = _JSON_OBJECT.validate_python(raw_response.json())
         logging_obj.post_call(original_response=body)
         response: Final[ImageResponse] = convert_to_model_response_object(
             response_object=body, model_response_object=model_response, response_type="image_generation"

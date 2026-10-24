@@ -95,11 +95,11 @@ class RerankResponse(LiteLLMBaseModel):
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> object:
         return self.__dict__[key]
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None) -> object:
         return self.__dict__.get(key, default)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return key in self.__dict__

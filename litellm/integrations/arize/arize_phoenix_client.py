@@ -5,7 +5,18 @@ Arize Phoenix API client for fetching prompt versions from Arize Phoenix.
 import urllib.parse
 from typing import Final
 
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PromptVersionResponse(TypedDict):
+    data: ReadOnly[NotRequired[dict[str, object] | None]]
+
+
+_PROMPT_VERSION_RESPONSE: Final = TypeAdapter(_PromptVersionResponse)
 
 
 def _sanitize_id(identifier: str) -> str:
@@ -71,7 +82,7 @@ class ArizePhoenixClient:
             response: Final = self.http_handler.get(url, headers=self.headers)
             response.raise_for_status()
 
-            data: Final = response.json()
+            data: Final = _PROMPT_VERSION_RESPONSE.validate_python(response.json())
             return data.get("data")
 
         except Exception as e:
