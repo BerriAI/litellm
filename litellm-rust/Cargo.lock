@@ -3742,18 +3742,22 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "bytes",
  "envy",
  "futures-util",
  "http-body-util",
  "litellm-auth-types",
  "litellm-config",
+ "litellm-core-utils",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
+ "litellm-gateway-model-catalog",
  "litellm-gateway-ui",
  "litellm-http",
  "litellm-inference",
  "litellm-llms",
+ "litellm-model-catalog",
  "litellm-secrets",
  "litellm-tracing",
  "rstest",
@@ -3761,12 +3765,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.19",
+ "time",
  "tokio",
  "tokio-util",
  "tower",
  "tower-sessions-moka-store",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -3802,6 +3808,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-gateway-auth",
+ "litellm-gateway-model-catalog",
  "litellm-host",
  "litellm-host-http",
  "litellm-http",
@@ -3819,6 +3826,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.19",
+ "time",
  "tokio",
  "tower",
  "wiremock",
@@ -3861,6 +3869,30 @@ dependencies = [
  "tower",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "litellm-gateway-model-catalog"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures-util",
+ "http 1.4.2",
+ "litellm-auth-types",
+ "litellm-core-utils",
+ "litellm-gateway-auth",
+ "litellm-http",
+ "litellm-model-catalog",
+ "litellm-secrets",
+ "rstest",
+ "serde",
+ "serde_json",
+ "strum",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

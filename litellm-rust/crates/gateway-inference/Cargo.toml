@@ -12,6 +12,7 @@ base64.workspace = true
 bytes.workspace = true
 litellm-auth.workspace = true
 litellm-gateway-auth.workspace = true
+litellm-gateway-model-catalog.workspace = true
 litellm-inference.workspace = true
 litellm-inference-transcription.workspace = true
 litellm-inference-responses.workspace = true
@@ -36,3 +37,4 @@ tokio = { workspace = true, features = ["io-util"] }
 rstest.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
 wiremock.workspace = true
+time.workspace = true

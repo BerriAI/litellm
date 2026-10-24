@@ -229,6 +229,7 @@ pub struct LiteLlmSettings {
     pub failure_callback: Option<Vec<Value>>,
     pub json_logs: Option<bool>,
     pub set_verbose: Option<bool>,
+    pub model_cost_map_url: Option<String>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }

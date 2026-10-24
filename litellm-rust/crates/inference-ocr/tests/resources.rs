@@ -59,6 +59,7 @@ fn resources(loader: Arc<Loader>) -> CoreResources {
             ..AuthServices::default()
         }),
         pool: Arc::new(http_pool()),
+        catalog: (),
     }
 }
 
