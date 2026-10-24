@@ -5070,3 +5070,24 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
+
+
+@pytest.mark.asyncio
+async def test_get_session_iterator_does_not_hold_lock_while_session_is_in_use(
+    presidio_guardrail: OPTIONAL_PresidioPIIMasking,
+) -> None:
+    both_entered = asyncio.Event()
+    active_users = 0
+
+    async def use_session() -> None:
+        nonlocal active_users
+        async with presidio_guardrail._get_session_iterator():
+            active_users += 1
+            if active_users == 2:
+                both_entered.set()
+            await asyncio.wait_for(both_entered.wait(), timeout=1)
+
+    try:
+        await asyncio.gather(use_session(), use_session())
+    finally:
+        await presidio_guardrail._close_http_session()
