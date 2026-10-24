@@ -90,6 +90,17 @@ const savedConfig = () => {
   return payload?.litellm_params?.complexity_router_config;
 };
 
+const renderWithSettledAvailability = async (renderModal: () => unknown) => {
+  vi.useFakeTimers();
+  try {
+    renderModal();
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    await act(() => vi.runOnlyPendingTimersAsync());
+  } finally {
+    vi.useRealTimers();
+  }
+};
+
 describe("EditAutoRouterModal keyword matching", () => {
   beforeEach(() => {
     modelPatchUpdateCall.mockClear();
@@ -1447,7 +1458,7 @@ describe("EditAutoRouterModal prompt compression", () => {
     { auto_router_model_compression: "model-compressor" },
   ])("should preserve the exact stored compression fields through an untouched save: %j", async (stored) => {
     const user = userEvent.setup();
-    renderWithStoredCompression(stored);
+    await renderWithSettledAvailability(() => renderWithStoredCompression(stored));
 
     await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled());
     await user.click(await screen.findByRole("button", { name: /save changes/i }));
@@ -1524,7 +1535,7 @@ describe("EditAutoRouterModal classifier vision", () => {
 
   it("hydrates and keeps a stored vision setting through an untouched save", async () => {
     const user = userEvent.setup();
-    renderModal();
+    await renderWithSettledAvailability(renderModal);
 
     openAutoRouterAdvanced("Classification Method");
     expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeChecked();

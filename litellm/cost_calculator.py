@@ -2264,6 +2264,8 @@ def response_cost_calculator(
     ### VERTEX LOCATION ###
     vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
     region_name: str | None = None,
+    custom_cost_per_token: CostPerToken | None = None,
+    custom_cost_per_second: float | None = None,
 ) -> float:
     """
     Returns
@@ -2292,6 +2294,8 @@ def response_cost_calculator(
                 optional_params=optional_params,
                 custom_pricing=custom_pricing,
                 base_model=base_model,
+                custom_cost_per_token=custom_cost_per_token,
+                custom_cost_per_second=custom_cost_per_second,
                 prompt=prompt,
                 standard_built_in_tools_params=standard_built_in_tools_params,
                 litellm_model_name=litellm_model_name,
@@ -2875,6 +2879,7 @@ def _batch_rate(
     model_info: ModelInfo,
     key: Literal[
         "input_cost_per_audio_token_batches",
+        "cache_read_input_audio_token_cost_batches",
         "input_cost_per_image_token_batches",
         "input_cost_per_video_token_batches",
     ],
@@ -3008,6 +3013,7 @@ def _batch_prompt_cost(
 ) -> float:
     details: Final = parse_prompt_tokens_details(usage)
     cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
+    cached_audio_tokens: Final = details["cache_hit_audio_tokens"] if cache_read_rate is not None else 0
     written_tokens: Final = details["cache_creation_tokens"] if cache_creation_rate is not None else 0
     audio_tokens, image_tokens, video_tokens = (
         details["audio_tokens"],
@@ -3022,7 +3028,9 @@ def _batch_prompt_cost(
         + audio_tokens * _batch_rate(model_info, "input_cost_per_audio_token_batches", input_rate)
         + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
         + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
-        + cached_tokens * (cache_read_rate or 0.0)
+        + (cached_tokens - cached_audio_tokens) * (cache_read_rate or 0.0)
+        + cached_audio_tokens
+        * _batch_rate(model_info, "cache_read_input_audio_token_cost_batches", cache_read_rate or 0.0)
         + written_tokens * (cache_creation_rate or 0.0)
     )
 
