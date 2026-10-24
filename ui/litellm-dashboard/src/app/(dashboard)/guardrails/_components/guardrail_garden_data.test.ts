@@ -39,6 +39,7 @@ const EXPECTED_PARTNER_LOGO_FILES: Record<string, string> = {
   conduct: "conduct.png",
   wingback: "wingback.png",
   airia: "airia.svg",
+  highflame: "highflame.png",
 };
 
 describe("guardrail_garden_data logos", () => {

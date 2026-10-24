@@ -577,6 +577,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Security", "Prompt Injection", "PII", "Secrets", "Redaction"],
     providerKey: "Airia",
   },
+  {
+    id: "highflame",
+    name: "Highflame",
+    description:
+      "Runtime security for AI agents: Highflame Shield checks prompts, responses, tool calls, and MCP calls against your policies, then blocks or redacts.",
+    category: "partner",
+    logo: guardrailLogoMap["Highflame"],
+    tags: ["Agentic", "Prompt Injection", "PII", "MCP", "Policy"],
+    providerKey: "Highflame",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...DECISION_MODEL_CARDS, ...PARTNER_GUARDRAIL_CARDS];
