@@ -100,10 +100,10 @@ class AmazonMistralConfig(AmazonInvokeConfig, BaseConfig):
             A string with the response of the LLM
 
         """
-        if completion_response.get("choices"):
+        if "choices" in completion_response and completion_response["choices"] != []:
             outputText = completion_response["choices"][0]["message"]["content"]
             model_response.choices[0].finish_reason = completion_response["choices"][0]["finish_reason"]
-        elif completion_response.get("outputs"):
+        elif "outputs" in completion_response and completion_response["outputs"] != []:
             outputText = completion_response["outputs"][0]["text"]
             model_response.choices[0].finish_reason = completion_response["outputs"][0]["stop_reason"]
         else:
