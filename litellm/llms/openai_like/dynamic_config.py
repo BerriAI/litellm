@@ -99,6 +99,7 @@ def create_config_class(provider: SimpleProviderConfig):
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
             that don't support function calling."""
+            from litellm.exceptions import ModelNotMappedError
             from litellm.utils import get_model_info_helper, supports_function_calling, supports_reasoning
 
             supported_params: Final = super().get_supported_openai_params(model=model)
@@ -115,7 +116,7 @@ def create_config_class(provider: SimpleProviderConfig):
                     # If model is mapped in the catalog, respect its capability declaration
                     get_model_info_helper(model=model, custom_llm_provider=provider.slug)
                     _supports_fc = supports_function_calling(model=model, custom_llm_provider=provider.slug)
-                except Exception:
+                except (ModelNotMappedError, KeyError, ValueError):
                     # Unmapped models on OpenAI-compatible providers default to supporting tools
                     _supports_fc = True
 
