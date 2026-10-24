@@ -11102,7 +11102,7 @@ def should_run_mock_completion(
     mock_tool_calls: object | None,
     mock_timeout: object | None,
 ) -> bool:
-    if mock_response or mock_tool_calls or mock_timeout:
+    if mock_response is not None or mock_tool_calls or mock_timeout:
         return True
     return False
 
