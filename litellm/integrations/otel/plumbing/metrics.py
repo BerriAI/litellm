@@ -32,7 +32,7 @@ from litellm.integrations.otel.model.semconv import (
     resolve_operation,
     resolve_provider,
 )
-from litellm.integrations.otel.model.utils import to_seconds
+from litellm.integrations.otel.model.utils import as_str_mapping, to_seconds
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -196,6 +196,23 @@ def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
     return ERROR_TYPE_FALLBACK
 
 
+def _first_usable_str(*candidates: object) -> str | None:
+    """The first candidate that is a non-empty string, else ``None``."""
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return None
+
+
+def _resolve_custom_llm_provider(kwargs: Mapping[str, object], std_log: object) -> str | None:
+    """Prefer the span's finalized provider, then metric-specific fallback fields."""
+    std_log_map: Final = as_str_mapping(std_log)
+    std_log_provider: Final = std_log_map.get("custom_llm_provider") if std_log_map is not None else None
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    nested_provider: Final = litellm_params.get("custom_llm_provider") if litellm_params is not None else None
+    return _first_usable_str(std_log_provider, kwargs.get("custom_llm_provider"), nested_provider)
+
+
 class GenAIMetricRecorder:
     """Records the six GenAI histograms for one successful LLM call, and the
     duration histogram alone for one failed LLM call (see :meth:`record_failure`).
@@ -277,15 +294,14 @@ class GenAIMetricRecorder:
     # ------------------------------------------------------------------ #
 
     def _common_attributes(self, kwargs: Mapping[str, Any]) -> dict:
-        params: Final = kwargs.get("litellm_params") or {}
+        std_log: Final = kwargs.get("standard_logging_object")
         common_attrs: Final[dict] = {
             GenAI.OPERATION_NAME: resolve_operation(kwargs.get("call_type")).value,
-            **_provider_attributes(params.get("custom_llm_provider")),
+            **_provider_attributes(_resolve_custom_llm_provider(kwargs, std_log)),
             GenAI.REQUEST_MODEL: kwargs.get("model"),
             "gen_ai.framework": "litellm",
         }
 
-        std_log: Final = kwargs.get("standard_logging_object")
         md: Final = getattr(std_log, "metadata", None) or (std_log or {}).get("metadata", {})
         for key in METRIC_METADATA_KEYS:
             value = md.get(key)

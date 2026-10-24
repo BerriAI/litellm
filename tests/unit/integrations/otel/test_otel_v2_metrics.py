@@ -85,6 +85,10 @@ PROMPT_TOKENS = 137
 COMPLETION_TOKENS = 89
 RESPONSE_COST = 0.0023
 
+# Sentinel distinguishing "source absent from kwargs" from "source present but
+# None/empty" in the provider-precedence tests below.
+_OMIT = object()
+
 
 def _build_call(
     stream: bool = True,
@@ -456,6 +460,146 @@ def test_no_provider_attribute_when_provider_is_absent():
             assert PROVIDER_NAME_KEY not in keys
             assert SYSTEM_KEY not in keys
             assert "Unknown" not in set(dp.attributes.values())
+
+
+def _drive_success_with_provider_sources(
+    *,
+    standard_logging_provider: str | None | object = _OMIT,
+    top_level_provider: str | None | object = _OMIT,
+    nested_provider: str | None | object = _OMIT,
+):
+    """A success call with the three provider sources set independently of each
+    other and of the ``_build_call`` ``provider=`` fixture, which only ever
+    populates the nested ``litellm_params.custom_llm_provider`` spelling.
+
+    ``_OMIT`` leaves a source out of the kwargs entirely (as a real call that
+    never populated it would); ``None``/``""`` sets it present but unusable, so a
+    precedence test can tell "absent" from "present but empty" apart.
+    """
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, response_obj, start, end = _build_call(provider=None)
+    kwargs["litellm_params"] = (
+        {} if nested_provider is _OMIT else {"custom_llm_provider": nested_provider}
+    )
+    if top_level_provider is not _OMIT:
+        kwargs["custom_llm_provider"] = top_level_provider
+    if standard_logging_provider is not _OMIT:
+        kwargs["standard_logging_object"]["custom_llm_provider"] = standard_logging_provider
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+    return _metrics_by_name(reader)
+
+
+def test_top_level_resolved_provider_is_used_when_litellm_params_lacks_it():
+    """A pass-through call stamps the resolved provider on top-level
+    ``kwargs['custom_llm_provider']`` (e.g. the Vertex/Cohere passthrough
+    handlers) without ever nesting it under ``litellm_params``. Before this fix
+    ``_common_attributes`` read only the nested spelling, so every passthrough
+    call recorded with no provider label at all even though litellm resolved one.
+    """
+    metrics = _drive_success_with_provider_sources(top_level_provider="cohere")
+
+    for dp in metrics[OPERATION_DURATION]:
+        assert dp.attributes[PROVIDER_NAME_KEY] == "cohere"
+        assert dp.attributes[SYSTEM_KEY] == "cohere"
+
+
+def test_standard_logging_object_provider_is_used_when_nothing_else_has_it():
+    """The finalized ``standard_logging_object.custom_llm_provider`` is the
+    payload every other consumer (spend logs, the span) already reads attribution
+    from. A call that only populated it (neither the live top-level kwarg nor the
+    nested ``litellm_params`` spelling) must still be labelled rather than falling
+    back to no provider at all."""
+    metrics = _drive_success_with_provider_sources(standard_logging_provider="bedrock")
+
+    for dp in metrics[OPERATION_DURATION]:
+        assert dp.attributes[PROVIDER_NAME_KEY] == "aws.bedrock"
+        assert dp.attributes[SYSTEM_KEY] == "bedrock"
+
+
+def test_finalized_payload_provider_takes_precedence_over_live_kwargs():
+    """When sources disagree, the finalized ``standard_logging_object`` wins over
+    the live top-level kwarg and the nested ``litellm_params``. This is the value
+    every other consumer (spend logs, the trace span) already treats as
+    authoritative once a request has closed, so metrics now agree with them."""
+    metrics = _drive_success_with_provider_sources(
+        standard_logging_provider="anthropic",
+        top_level_provider="openai",
+        nested_provider="azure",
+    )
+
+    for dp in metrics[OPERATION_DURATION]:
+        assert dp.attributes[PROVIDER_NAME_KEY] == "anthropic"
+        assert dp.attributes[SYSTEM_KEY] == "anthropic"
+
+
+def test_live_top_level_kwarg_takes_precedence_over_nested_litellm_params():
+    """With no finalized payload opinion, the resolved top-level kwarg (the one
+    ``get_llm_provider`` actually dispatched to) outranks the nested
+    ``litellm_params`` spelling, which can still carry a caller's original,
+    unresolved request."""
+    metrics = _drive_success_with_provider_sources(
+        standard_logging_provider=None,
+        top_level_provider="groq",
+        nested_provider="openai",
+    )
+
+    for dp in metrics[OPERATION_DURATION]:
+        assert dp.attributes[PROVIDER_NAME_KEY] == "groq"
+        assert dp.attributes[SYSTEM_KEY] == "groq"
+
+
+@pytest.mark.parametrize("unusable", [None, "", 123], ids=["none", "empty_string", "non_string"])
+def test_unusable_higher_precedence_candidates_fall_through(unusable):
+    """A source that is present but ``None``/empty/non-string (e.g. a payload field
+    that exists on the TypedDict but was never populated, or was set to a value of
+    the wrong type) must not win over a lower-precedence source that actually has a
+    usable value -- it is skipped, not treated as a resolved-but-empty provider."""
+    metrics = _drive_success_with_provider_sources(
+        standard_logging_provider=unusable,
+        top_level_provider=unusable,
+        nested_provider="mistral",
+    )
+
+    for dp in metrics[OPERATION_DURATION]:
+        assert dp.attributes[PROVIDER_NAME_KEY] == "mistral_ai"
+        assert dp.attributes[SYSTEM_KEY] == "mistral"
+
+
+def test_all_sources_absent_or_unusable_still_yields_no_provider_label():
+    """The ceiling behavior is unchanged by the new precedence: when every
+    source is absent or unusable, the point still carries neither provider
+    label, matching ``test_no_provider_attribute_when_provider_is_absent``."""
+    metrics = _drive_success_with_provider_sources(
+        standard_logging_provider=None,
+        top_level_provider="",
+        nested_provider=None,
+    )
+
+    for dp in metrics[OPERATION_DURATION]:
+        assert PROVIDER_NAME_KEY not in dp.attributes
+        assert SYSTEM_KEY not in dp.attributes
+
+
+@pytest.mark.parametrize(
+    "payload_provider,nested_provider,expected_provider,expected_system",
+    [(None, None, "perplexity", "perplexity"), ("bedrock", "openai", "aws.bedrock", "bedrock")],
+)
+def test_failure_path_resolves_provider_from_the_same_precedence(
+    payload_provider, nested_provider, expected_provider, expected_system
+):
+    kwargs, start, end = _build_failure(error_information={"error_class": ERROR_CLASS})
+    kwargs["litellm_params"] = {"custom_llm_provider": nested_provider}
+    kwargs["custom_llm_provider"] = "perplexity"
+    kwargs["standard_logging_object"]["custom_llm_provider"] = payload_provider
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    asyncio.run(logger.async_log_failure_event(kwargs, None, start, end))
+
+    points = _metrics_by_name(reader)[OPERATION_DURATION]
+    assert len(points) == 1
+    assert points[0].attributes[PROVIDER_NAME_KEY] == expected_provider
+    assert points[0].attributes[SYSTEM_KEY] == expected_system
 
 
 def test_vector_store_search_is_not_labelled_as_chat():
