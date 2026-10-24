@@ -3695,6 +3695,7 @@ dependencies = [
 name = "litellm-db"
 version = "0.1.0"
 dependencies = [
+ "macro_rules_attribute",
  "rstest",
  "serde",
  "serde_json",

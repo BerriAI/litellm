@@ -1,35 +1,11 @@
 use std::error::Error as StdError;
 
-use litellm_db::{DailySpend, upsert_daily_user_spend};
+use litellm_db::{DailySpend, DailyUserRow, upsert_daily_user_spend};
 use rstest::rstest;
-use sqlx::PgPool;
+use sqlx::{PgPool, types::chrono::NaiveDateTime};
 
 mod common;
 use common::database_pool;
-
-#[derive(Debug, sqlx::FromRow)]
-struct DailyUserRow {
-    id: String,
-    user_id: Option<String>,
-    api_key: String,
-    model: Option<String>,
-    custom_llm_provider: Option<String>,
-    endpoint: Option<String>,
-    model_group: Option<String>,
-    mcp_namespaced_tool_name: Option<String>,
-    prompt_tokens: i64,
-    completion_tokens: i64,
-    api_requests: i64,
-    successful_requests: i64,
-    failed_requests: i64,
-    cache_read_input_tokens: i64,
-    cache_creation_input_tokens: i64,
-    total_response_time_ms: i64,
-    timed_requests: i64,
-    spend: f64,
-    updated_after_seed: bool,
-    updated_at_is_utc: bool,
-}
 
 #[rstest]
 #[case::full_keys(
@@ -156,8 +132,8 @@ async fn daily_user_spend_upsert_preserves_keys_and_accumulates(
         clippy::disallowed_methods,
         reason = "The integration test captures the inserted row identity before conflict handling"
     )]
-    let initial_id: String = sqlx::query_scalar(
-        r#"SELECT id
+    let (initial_id, initial_created_at): (String, NaiveDateTime) = sqlx::query_as(
+        r#"SELECT id, created_at
            FROM "LiteLLM_DailyUserSpend"
            WHERE user_id = $1 AND date = $2 AND api_key = $3 AND model = $4
              AND custom_llm_provider = $5 AND endpoint = $6"#,
@@ -176,13 +152,14 @@ async fn daily_user_spend_upsert_preserves_keys_and_accumulates(
         clippy::disallowed_methods,
         reason = "The integration test seeds updated_at before exercising the conflict update"
     )]
-    sqlx::query(
+    let seeded_updated_at: NaiveDateTime = sqlx::query_scalar(
         r#"UPDATE "LiteLLM_DailyUserSpend"
            SET updated_at = TIMESTAMP '2000-01-01'
-           WHERE id = $1"#,
+           WHERE id = $1
+           RETURNING updated_at"#,
     )
     .bind(&initial_id)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
 
     let increment = [DailySpend {
@@ -209,6 +186,15 @@ async fn daily_user_spend_upsert_preserves_keys_and_accumulates(
 
     #[expect(
         clippy::disallowed_methods,
+        reason = "The integration test captures the transaction timestamp for assertions"
+    )]
+    let expected_updated_at: NaiveDateTime =
+        sqlx::query_scalar("SELECT (NOW() AT TIME ZONE 'UTC')::timestamp(3)")
+            .fetch_one(&mut *tx)
+            .await?;
+
+    #[expect(
+        clippy::disallowed_methods,
         reason = "The integration test reads all rows to verify attribution and accumulation"
     )]
     let rows: Vec<DailyUserRow> = sqlx::query_as(
@@ -217,10 +203,7 @@ async fn daily_user_spend_upsert_preserves_keys_and_accumulates(
                   completion_tokens, api_requests, successful_requests,
                   failed_requests, cache_read_input_tokens,
                   cache_creation_input_tokens, total_response_time_ms,
-                  timed_requests, spend,
-                  updated_at > TIMESTAMP '2000-01-01' AS updated_after_seed,
-                  updated_at = (NOW() AT TIME ZONE 'UTC')::timestamp(3)
-                      AS updated_at_is_utc
+                  timed_requests, spend, date, created_at, updated_at
            FROM "LiteLLM_DailyUserSpend"
            WHERE date = $1 AND model = $2 AND custom_llm_provider = $3
              AND mcp_namespaced_tool_name = '' AND user_id = ANY($4)
@@ -272,8 +255,10 @@ async fn daily_user_spend_upsert_preserves_keys_and_accumulates(
         ),
         (11, 22, 33, 44, 55, 66, 77, 88, 99, 0.75)
     );
-    assert!(rows[0].updated_after_seed);
-    assert!(rows[0].updated_at_is_utc);
+    assert_eq!(rows[0].date, "2026-01-15");
+    assert_eq!(rows[0].created_at, initial_created_at);
+    assert!(rows[0].updated_at > seeded_updated_at);
+    assert_eq!(rows[0].updated_at, expected_updated_at);
 
     assert!(!rows[1].id.is_empty());
     assert_eq!(rows[1].user_id.as_deref(), Some(user_id));
@@ -304,8 +289,9 @@ async fn daily_user_spend_upsert_preserves_keys_and_accumulates(
         ),
         (101, 102, 103, 104, 105, 106, 107, 108, 109, 1.25)
     );
-    assert!(rows[1].updated_after_seed);
-    assert!(rows[1].updated_at_is_utc);
+    assert_eq!(rows[1].date, "2026-01-15");
+    assert!(rows[1].updated_at > seeded_updated_at);
+    assert_eq!(rows[1].updated_at, expected_updated_at);
 
     assert!(!rows[2].id.is_empty());
     assert_eq!(rows[2].user_id.as_deref(), Some(user_id));
@@ -333,8 +319,9 @@ async fn daily_user_spend_upsert_preserves_keys_and_accumulates(
         ),
         (201, 202, 203, 204, 205, 206, 207, 208, 209, 2.5)
     );
-    assert!(rows[2].updated_after_seed);
-    assert!(rows[2].updated_at_is_utc);
+    assert_eq!(rows[2].date, "2026-01-15");
+    assert!(rows[2].updated_at > seeded_updated_at);
+    assert_eq!(rows[2].updated_at, expected_updated_at);
 
     assert!(!rows[3].id.is_empty());
     assert_eq!(rows[3].user_id.as_deref(), Some("entity-sentinel"));
@@ -365,7 +352,8 @@ async fn daily_user_spend_upsert_preserves_keys_and_accumulates(
         ),
         (301, 302, 303, 304, 305, 306, 307, 308, 309, 3.75)
     );
-    assert!(rows[3].updated_after_seed);
-    assert!(rows[3].updated_at_is_utc);
+    assert_eq!(rows[3].date, "2026-01-15");
+    assert!(rows[3].updated_at > seeded_updated_at);
+    assert_eq!(rows[3].updated_at, expected_updated_at);
     Ok(())
 }
