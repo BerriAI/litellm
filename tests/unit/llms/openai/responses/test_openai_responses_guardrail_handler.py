@@ -3766,7 +3766,14 @@ class TestBuildBlockSseChunks:
     def _payloads(self, chunks):
         import json
 
-        return [json.loads(chunk.decode().removeprefix("data: ").strip()) for chunk in chunks]
+        payloads = [
+            json.loads(next(line[6:] for line in chunk.decode().splitlines() if line.startswith("data: ")))
+            for chunk in chunks
+        ]
+        assert [chunk.decode().splitlines()[0] for chunk in chunks] == [
+            f"event: {payload['type']}" for payload in payloads
+        ]
+        return payloads
 
     def test_standalone_block_emits_complete_synthetic_stream(self):
         handler = OpenAIResponsesHandler()
