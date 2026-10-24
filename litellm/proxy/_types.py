@@ -309,6 +309,7 @@ class LiteLLMRoutes(enum.Enum):
         # models
         "/models",
         "/v1/models",
+        "/claude_code_gateway/v1/models",
         # token counter
         "/utils/token_counter",
         "/utils/model_info",
@@ -579,6 +580,7 @@ class LiteLLMRoutes(enum.Enum):
         "/user/filter/ui",
         "/models",
         "/v1/models",
+        "/claude_code_gateway/v1/models",
         "/sso/get/ui_settings",
         "/get/user_banner",
         "/get/latest_release_info",
@@ -762,6 +764,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/key/info",
         "/models",
         "/v1/models",
+        "/claude_code_gateway/v1/models",
         "/global/spend",
         "/global/spend/logs",
         "/global/spend/keys",

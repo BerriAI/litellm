@@ -2692,8 +2692,9 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
             # /models should NOT raise - it's exempt
             EnterpriseRouteChecks.should_call_route("/models")
 
+    @pytest.mark.parametrize("route", ["/v1/models", "/claude_code_gateway/v1/models"])
     @patch("litellm.proxy.proxy_server.premium_user", True)
-    def test_should_v1_models_route_allowed_when_llm_api_disabled(self):
+    def test_should_v1_models_route_allowed_when_llm_api_disabled(self, route: str):
         """Test that /v1/models is allowed even when LLM API routes are disabled"""
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
@@ -2706,7 +2707,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
             ),
         ):
             # /v1/models should NOT raise - it's exempt
-            EnterpriseRouteChecks.should_call_route("/v1/models")
+            EnterpriseRouteChecks.should_call_route(route)
 
     @patch("litellm.proxy.proxy_server.premium_user", True)
     def test_should_chat_completions_still_blocked_when_llm_api_disabled(self):

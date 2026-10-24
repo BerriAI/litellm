@@ -50,6 +50,7 @@ def patched_models(monkeypatch):
     router.get_configured_display_name = MagicMock(return_value=None)
     router.get_configured_service_tiers = MagicMock(return_value=())
 
+    monkeypatch.setitem(proxy_server.general_settings, "enable_claude_code_gateway", True)
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
 
@@ -80,7 +81,7 @@ def patched_models(monkeypatch):
     return router
 
 
-@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("path", ["/v1/models", "/models", "/claude_code_gateway/v1/models"])
 def test_get_models_happy_path(client, auth_as, patched_models, path):
     """Pins: ``GET /v1/models``, ``GET /models``."""
     with auth_as():
@@ -105,7 +106,7 @@ def test_get_models_happy_path(client, auth_as, patched_models, path):
     }
 
 
-@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("path", ["/v1/models", "/models", "/claude_code_gateway/v1/models"])
 def test_get_models_anthropic_format_when_header_present(
     client, auth_as, patched_models, path
 ):
@@ -127,7 +128,7 @@ def test_get_models_anthropic_format_when_header_present(
         assert entry["created_at"].endswith("Z")
 
 
-@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("path", ["/v1/models", "/models", "/claude_code_gateway/v1/models"])
 def test_anthropic_format_exposes_token_limits(
     client, auth_as, patched_models, monkeypatch, path
 ):
@@ -161,7 +162,7 @@ def test_anthropic_format_exposes_token_limits(
     assert gpt_4["max_tokens"] is None
 
 
-@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("path", ["/v1/models", "/models", "/claude_code_gateway/v1/models"])
 def test_anthropic_format_carries_router_configured_token_limits(client, auth_as, patched_models, monkeypatch, path):
     """Pins the whole resolution chain, not just the formatter: a deployment's
     configured limits beat the cost map, and the configured output budget is what
@@ -194,7 +195,7 @@ def test_anthropic_format_carries_router_configured_token_limits(client, auth_as
     assert (claude["max_input_tokens"], claude["max_tokens"]) == (500000, 4096)
 
 
-@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("path", ["/v1/models", "/models", "/claude_code_gateway/v1/models"])
 def test_anthropic_format_uses_configured_display_name(client, auth_as, patched_models, path):
     """A deployment's ``model_info.display_name`` becomes the Anthropic-native
     ``display_name`` so Claude Code's picker shows a clean name while the id keeps
@@ -271,7 +272,7 @@ def test_anthropic_display_name_resolved_via_internal_team_key(
     assert (entry["id"], entry["display_name"]) == ("gpt-4-team", "Team GPT")
 
 
-@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("path", ["/v1/models", "/models", "/claude_code_gateway/v1/models"])
 def test_get_models_invalid_scope_returns_400(client, auth_as, patched_models, path):
     """Pins: ``GET /v1/models``, ``GET /models`` (error path: invalid scope)."""
     with auth_as():
@@ -351,7 +352,7 @@ def test_anthropic_format_returns_public_team_model_name(
     assert internal_name not in response.text
 
 
-@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("path", ["/v1/models", "/models", "/claude_code_gateway/v1/models"])
 @pytest.mark.parametrize(
     "caller_headers",
     [
@@ -391,7 +392,7 @@ def test_anthropic_format_lists_claude_code_view_ids_for_claude_code(
     assert [row["source_model"] for row in body["data"]] == ["gpt-4", "claude-sonnet"]
 
 
-@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("path", ["/v1/models", "/models", "/claude_code_gateway/v1/models"])
 def test_anthropic_format_keeps_served_ids_for_other_anthropic_clients(client, auth_as, patched_models, path):
     """An Anthropic SDK asking for the vendor shape gets the served ids: the view is Claude Code's alone."""
     with auth_as():
@@ -401,7 +402,7 @@ def test_anthropic_format_keeps_served_ids_for_other_anthropic_clients(client, a
     assert [m["id"] for m in response.json()["data"]] == ["gpt-4", "claude-sonnet"]
 
 
-@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("path", ["/v1/models", "/models", "/claude_code_gateway/v1/models"])
 @pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
 def test_codex_format_when_client_version_present(client, auth_as, patched_models, path, params):
     """Codex CLI fetches a provider's catalog as ``GET /v1/models?client_version=<its version>`` and
@@ -431,7 +432,7 @@ def test_codex_format_when_client_version_present(client, auth_as, patched_model
     }
 
 
-@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("path", ["/v1/models", "/models", "/claude_code_gateway/v1/models"])
 def test_codex_format_wins_over_the_anthropic_header(client, auth_as, patched_models, path):
     with auth_as():
         response = client.get(path, params={"client_version": "0.159.3"}, headers={"anthropic-version": "2023-06-01"})
@@ -440,7 +441,7 @@ def test_codex_format_wins_over_the_anthropic_header(client, auth_as, patched_mo
     assert list(response.json()) == ["models"]
 
 
-@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("path", ["/v1/models", "/models", "/claude_code_gateway/v1/models"])
 def test_codex_format_carries_configured_service_tiers(client, auth_as, patched_models, path):
     """A deployment's ``model_info.service_tiers`` becomes the entry's ``service_tiers``, which Codex
     offers as slash commands; a model without one offers none, and the OpenAI shape gains no field."""

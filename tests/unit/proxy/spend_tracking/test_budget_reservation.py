@@ -74,6 +74,12 @@ async def test_token_counting_routes_are_exempt_from_budget_reservation(route):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/models", "/models", "/claude_code_gateway/v1/models"])
+async def test_model_listing_does_not_reserve_budget(route: str) -> None:
+    assert await _reserve(route) is None
+
+
+@pytest.mark.asyncio
 async def test_non_exempt_llm_route_still_reserves_budget():
     reservation: Final = await _reserve("/v1/responses")
 

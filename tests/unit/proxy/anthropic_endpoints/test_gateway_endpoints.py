@@ -813,3 +813,9 @@ def test_messages_gated_by_enable_flag():
     with _gateway_env(enabled=False) as (client, _):
         resp = client.post("/claude_code_gateway/v1/messages", json={"model": "claude-sonnet-4-5", "messages": []})
     assert resp.status_code == 404
+
+
+def test_model_discovery_requires_gateway_enabled() -> None:
+    with _gateway_env(enabled=False) as (client, _):
+        response: Final = client.get("/claude_code_gateway/v1/models")
+    assert response.status_code == 404

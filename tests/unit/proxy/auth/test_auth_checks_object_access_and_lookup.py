@@ -6878,6 +6878,7 @@ async def test_cache_team_object_tolerates_cache_invalidation_failures():
 
 
 MODEL_DISCOVERY_ROUTES = [
+    "/claude_code_gateway/v1/models",
     "/v1/models",
     "/models",
     "/model/info",
