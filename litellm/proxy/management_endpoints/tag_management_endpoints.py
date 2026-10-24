@@ -12,9 +12,16 @@ All /tag management endpoints
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Protocol, TypedDict, overload
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Protocol,
+    TypedDict,
+    cast,  # noqa: TID251  # casts over dynamic prisma Json storage
+    overload,
+)
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import TypeAdapter
@@ -31,6 +38,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     DailyTagSpendRepository,
@@ -321,19 +329,41 @@ async def new_tag(
 
         # Update models with new tag
         if tag.models:
-            tasks: Final = []
+            tasks: Final[list[Awaitable[object]]] = []  # mutable-ok: local accumulator, awaited before return
+            task_deployments: Final[list[Deployment]] = []  # mutable-ok: parallel to tasks, read after gather
             for model in tag.models:
                 deployments = await get_deployments_by_model(model, llm_router)
-                tasks.extend(
-                    [
+                for deployment in deployments:
+                    task_deployments.append(deployment)
+                    tasks.append(
                         _add_tag_to_deployment(
                             deployment=deployment,
                             tag=tag.name,
                         )
-                        for deployment in deployments
-                    ]
+                    )
+            # return_exceptions so every deployment write settles before we look:
+            # with the default, one failure would leave sibling tasks running
+            # while we roll back underneath them.
+            tag_results: Final = await asyncio.gather(*tasks, return_exceptions=True)
+            tag_error: Final = next((r for r in tag_results if isinstance(r, BaseException)), None)
+            if tag_error is not None:
+                # Untag only the deployments this create actually appended to
+                # (add returned True). A deployment can already carry the tag
+                # name as a raw litellm_params string with no Tag row, and that
+                # pre-existing membership is not ours to remove. The fresh tag
+                # row still gets deleted, or a retry 400s on "already exists".
+                verbose_proxy_logger.exception("Rolling back tag %s after tagging failure: %s", tag.name, tag_error)
+                await _rollback_new_tag(
+                    prisma_client=prisma_client,
+                    tag_name=tag.name,
+                    tagged_deployments=[d for d, r in zip(task_deployments, tag_results) if r is True],
+                    # Only a budget this create minted is rolled back; a
+                    # caller-supplied budget_id names a pre-existing row.
+                    created_budget_id=budget_id if tag.budget_id is None else None,
                 )
-            await asyncio.gather(*tasks)
+                if isinstance(tag_error, HTTPException):
+                    raise tag_error
+                raise HTTPException(status_code=500, detail=str(tag_error))
 
         # Build response
         tag_config: Final = TagConfig(
@@ -350,13 +380,19 @@ async def new_tag(
             "message": f"Tag {tag.name} created successfully",
             "tag": tag_config,
         }
+    except HTTPException:
+        # Deliberate raises above (the 400 for an existing tag, the rollback
+        # path's re-raise) reach the caller with their own status and detail.
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error creating tag: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
-    """Helper function to add tag to deployment"""
+async def _add_tag_to_deployment(deployment: "Deployment", tag: str) -> bool:
+    """Add a tag to one deployment. Returns True only when this call appended
+    it - False means the deployment already carried the tag (e.g. from config),
+    which /tag/new's rollback must leave alone."""
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -383,8 +419,9 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
         # Add tag to tags array (preserve encryption of other fields)
         if "tags" not in existing_params:
             existing_params["tags"] = []
-        if tag not in existing_params["tags"]:
-            existing_params["tags"].append(tag)
+        if tag in existing_params["tags"]:
+            return False
+        existing_params["tags"].append(tag)
 
         # Update database with modified params (keeps encrypted fields encrypted)
         await ModelRepository(prisma_client).table.update(
@@ -394,6 +431,72 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
     except Exception as e:
         verbose_proxy_logger.exception("Error adding tag to deployment: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+    else:
+        return True
+
+
+async def _remove_tag_from_deployment(deployment: "Deployment", tag: str) -> None:
+    """Best-effort removal of a tag from a deployment's litellm_params.tags.
+
+    Used only to roll back a failed /tag/new: the tag is brand new then, so
+    removing it cannot touch a tag anyone else created. Preserves encryption of
+    the other fields exactly like _add_tag_to_deployment.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return
+
+    db_model: Final = await ModelRepository(prisma_client).table.find_unique(
+        where={"model_id": deployment.model_info.id}
+    )
+    if db_model is None:
+        return
+
+    raw_params: Final = db_model.litellm_params
+    existing_params: Final = cast(  # cast-ok: prisma stores litellm_params as untyped JSON
+        "dict[str, object]",
+        json.loads(raw_params) if isinstance(raw_params, str) else raw_params,  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json stub is str
+    )
+    if not isinstance(existing_params, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json stub
+        return
+
+    tags: Final = cast(  # cast-ok: prisma stores litellm_params as untyped JSON
+        "list[object]", existing_params.get("tags") or []
+    )
+    if tag not in tags:
+        return
+    existing_params["tags"] = [t for t in tags if t != tag]
+    await ModelRepository(prisma_client).table.update(
+        where={"model_id": deployment.model_info.id},
+        data={"litellm_params": json.dumps(existing_params)},
+    )
+
+
+async def _rollback_new_tag(
+    prisma_client: "PrismaClient",
+    tag_name: str,
+    tagged_deployments: Sequence["Deployment"],
+    created_budget_id: str | None = None,
+) -> None:
+    """Undo a failed /tag/new: untag only the deployments the create appended
+    the tag to (pre-existing raw-string membership stays), then delete the
+    orphaned tag row and any budget row the create minted.
+    Best-effort: the original tagging error is what the caller gets even if a
+    rollback step fails too."""
+    try:
+        await asyncio.gather(
+            *(_remove_tag_from_deployment(deployment=deployment, tag=tag_name) for deployment in tagged_deployments),
+            return_exceptions=True,
+        )
+        await _table(TagRepository(prisma_client)).delete(where={"tag_name": tag_name})
+        if created_budget_id is not None:
+            await BudgetRepository(prisma_client).table.delete(where={"budget_id": created_budget_id})
+        await _evict_tag_cache_keys((tag_cache_key(tag_name), tag_registry_cache_key()))
+    except Exception:  # noqa: BLE001 - rollback is best-effort; the caller keeps the original tagging error
+        # CodeQL log-injection: tag_name is user-provided; strip line breaks before logging
+        safe_tag_name: Final = tag_name.replace("\r", " ").replace("\n", " ")
+        verbose_proxy_logger.exception("Rollback of failed tag create %s itself failed", safe_tag_name)
 
 
 @router.post(
