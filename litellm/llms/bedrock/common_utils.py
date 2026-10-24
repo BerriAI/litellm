@@ -12,7 +12,7 @@ import re
 import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from types import MappingProxyType
+from types import MappingProxyType, NoneType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
@@ -28,6 +28,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
+from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
@@ -40,6 +41,8 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.utils import is_litellm_owned_kwarg
 
 if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -63,6 +66,7 @@ BedrockRoute = Literal[
     "openai",
     "mantle",
     "chat_completions",
+    "responses",
 ]
 
 
@@ -1185,7 +1189,8 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     written onto the Converse body,
     function tools (``tools`` or legacy ``functions``) on a model without
     ``supports_bedrock_runtime_chat_completions_tools_with_reasoning`` are rejected there unless
-    ``reasoning_effort`` is exactly ``"none"``, and a ``response_format`` goes native only as
+    ``reasoning_effort`` is exactly ``"none"`` (function-only ``tools`` on a model listing ``/v1/responses`` are
+    bridged to bedrock-runtime's native Responses API instead), and a ``response_format`` goes native only as
     ``{"type": "json_schema", "json_schema": ...}`` (a pydantic model is converted to that) on a model with
     ``supports_bedrock_runtime_chat_completions_response_format``: a schema on any other model is only
     honored by Converse, and every ``json_object`` form (``response_schema`` included) keeps Converse's
@@ -1203,6 +1208,12 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
         return True
     if _response_format_needs_converse(model, request_params.get("response_format")):
         return True
+    return _chat_completions_rejects_function_tools(model, request_params) and not _bridgeable_to_responses(
+        model, request_params
+    )
+
+
+def _chat_completions_rejects_function_tools(model: str, request_params: Mapping[str, object]) -> bool:
     if not (request_params.get("tools") or request_params.get("functions")):
         return False
     return (
@@ -1211,12 +1222,154 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     )
 
 
+class _NamedFunction(TypedDict):
+    name: ReadOnly[str]
+
+
+class _FunctionTool(TypedDict):
+    type: ReadOnly[Literal["function"]]
+    function: ReadOnly[_NamedFunction]
+
+
+_FUNCTION_TOOLS_ADAPTER: Final = TypeAdapter(tuple[_FunctionTool, ...])
+_OPENAI_FUNCTION_NAME: Final = re.compile(r"[a-zA-Z0-9_-]{1,64}")
+
+
+def _function_tools_only(tools: object) -> bool:
+    if not isinstance(tools, (list, tuple)):
+        return False
+    try:
+        validated: Final = _FUNCTION_TOOLS_ADAPTER.validate_python(tools)
+    except ValidationError:
+        return False
+    return all(_OPENAI_FUNCTION_NAME.fullmatch(tool["function"]["name"]) for tool in validated)
+
+
+_EXTRA_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+_RESPONSES_INPUTS_CHAT_HOOKS_NEVER_CHECK: Final = frozenset({"previous_response_id", "instructions", "prompt"})
+_EXTRA_BODY_KEYS_THE_RESPONSES_BRIDGE_CARRIES: Final = frozenset(
+    {*ResponsesAPIOptionalRequestParams.__annotations__, "reasoning_effort", "reasoningSummary", "reasoning_summary"}
+    - {"tools", *_RESPONSES_INPUTS_CHAT_HOOKS_NEVER_CHECK}
+)
+_CHAT_PARAMS_THE_RESPONSES_BRIDGE_DROPS: Final = MappingProxyType(
+    {
+        "n": 1,
+        "presence_penalty": 0,
+        "frequency_penalty": 0,
+        "logprobs": False,
+        "top_logprobs": None,
+        "logit_bias": None,
+        "seed": None,
+        "modalities": None,
+        "audio": None,
+        "prediction": None,
+        "web_search_options": None,
+        "function_call": None,
+        "include_server_side_tool_invocations": None,
+    }
+)
+_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
+_INCLUDE_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _extra_body_bridgeable(extra_body: object) -> bool:
+    if extra_body is None:
+        return True
+    if not isinstance(extra_body, dict):
+        return False
+    validated: Final = _EXTRA_BODY_ADAPTER.validate_python(extra_body)
+    return (
+        validated.keys() <= _EXTRA_BODY_KEYS_THE_RESPONSES_BRIDGE_CARRIES
+        and isinstance(validated.get("store", False), bool)
+        and isinstance(validated.get("include"), (list, tuple, NoneType))
+    )
+
+
+def _sets_a_chat_param_the_responses_bridge_drops(request_params: Mapping[str, object]) -> bool:
+    return any(
+        request_params.get(param) not in (None, no_op_value)
+        for param, no_op_value in _CHAT_PARAMS_THE_RESPONSES_BRIDGE_DROPS.items()
+    )
+
+
+_CHAT_PARAM_NAMES: Final = frozenset(
+    {*DEFAULT_CHAT_COMPLETION_PARAM_VALUES, *OPENAI_CHAT_COMPLETION_PARAMS, "extra_body"}
+)
+
+
+def _provider_specific_param(name: str) -> bool:
+    return not (
+        name in _CHAT_PARAM_NAMES
+        or name in _EXTRA_BODY_KEYS_THE_RESPONSES_BRIDGE_CARRIES
+        or name.startswith("aws_")
+        or is_litellm_owned_kwarg(name)
+    )
+
+
+def _passes_a_provider_specific_param(request_params: Mapping[str, object]) -> bool:
+    return any(value is not None and _provider_specific_param(name) for name, value in request_params.items())
+
+
+def _bridgeable_to_responses(model: str, request_params: Mapping[str, object]) -> bool:
+    return (
+        not request_params.get("functions")
+        and request_params.get("aws_bedrock_client") is None
+        and _function_tools_only(request_params.get("tools"))
+        and _extra_body_bridgeable(request_params.get("extra_body"))
+        and not _passes_a_provider_specific_param(request_params)
+        and not _sets_a_chat_param_the_responses_bridge_drops(request_params)
+        and isinstance(request_params.get("reasoning_effort"), (str, NoneType))
+        and isinstance(request_params.get("store"), (bool, NoneType))
+        and isinstance(request_params.get("include"), (list, tuple, NoneType))
+        and _bedrock_serves_responses(model)
+    )
+
+
+def _bedrock_serves_responses(model: str) -> bool:
+    region, model_id = split_bedrock_region_path(model)
+    return region is None and any(
+        _price_map_entry_lists_endpoint(_model_cost_entry(key), "/v1/responses")
+        for key in (model_id, f"bedrock/{model_id}")
+    )
+
+
+def bedrock_responses_bridge_optional_params(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    if optional_params.get("store") is not None:
+        return optional_params
+    extra_body: Final = optional_params.get("extra_body")
+    extra_body_params: Final = _EXTRA_BODY_ADAPTER.validate_python(extra_body) if isinstance(extra_body, dict) else {}
+    include: Final = extra_body_params.get("include", optional_params.get("include"))
+    requested: Final = _INCLUDE_ADAPTER.validate_python(include or ())
+    return {
+        **optional_params,
+        **(
+            {"extra_body": {key: value for key, value in extra_body_params.items() if key != "include"}}
+            if "include" in extra_body_params
+            else {}
+        ),
+        "store": False,
+        "include": [*requested, *(() if _ENCRYPTED_REASONING in requested else (_ENCRYPTED_REASONING,))],
+    }
+
+
+def bedrock_responses_bridge_api_base(api_base: str | None, aws_bedrock_runtime_endpoint: object) -> str | None:
+    return (
+        (aws_bedrock_runtime_endpoint if isinstance(aws_bedrock_runtime_endpoint, str) else None)
+        or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
+        or api_base
+    )
+
+
 def _chat_completions_unless_converse_needed(
     model: str, request_params: Mapping[str, object] | None
-) -> Literal["converse", "chat_completions"]:
-    if request_params is not None and bedrock_request_needs_converse(model, request_params):
+) -> Literal["converse", "chat_completions", "responses"]:
+    if request_params is None:
+        return "chat_completions"
+    if bedrock_request_needs_converse(model, request_params):
         return "converse"
-    return "chat_completions"
+    if not _chat_completions_rejects_function_tools(model, request_params):
+        return "chat_completions"
+    return "converse" if request_params.get("_litellm_responses_api_bridge_allowed") is False else "responses"
 
 
 def bedrock_route_for_request(
@@ -1697,8 +1850,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Grok and GPT 5.6 and newer go to bedrock-runtime's native OpenAI Chat Completions by
         default (``bedrock_runtime_chat_completions_is_default``) and ``chat_completions/`` opts any other model in;
         ``request_params`` (the caller's chat params) sends such a request to Converse when it needs a
-        feature only Converse serves, and ``converse/`` pins a model to Converse. Every other OpenAI-family
-        model stays on Converse without the prefix.
+        feature only Converse serves, to ``responses`` (the chat-to-Responses bridge onto bedrock-runtime's
+        native ``/openai/v1/responses``) when it carries function tools with reasoning on, and ``converse/``
+        pins a model to Converse. Every other OpenAI-family model stays on Converse without the prefix.
         """
         route_mappings: dict[
             str,

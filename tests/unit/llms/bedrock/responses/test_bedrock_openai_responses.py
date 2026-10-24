@@ -57,6 +57,19 @@ class TestCompleteURL:
         )
         assert url == "https://vpce.example.com/openai/v1/responses"
 
+    @pytest.mark.parametrize(
+        "runtime_endpoint_param, runtime_endpoint_env",
+        [("https://vpce.example.com", None), (None, "https://env-vpce.example.com")],
+    )
+    def test_api_base_wins_over_a_runtime_endpoint(self, monkeypatch, runtime_endpoint_param, runtime_endpoint_env):
+        if runtime_endpoint_env:
+            monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", runtime_endpoint_env)
+        url = _cfg().get_complete_url(
+            "https://proxy.example.com",
+            {"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": runtime_endpoint_param},
+        )
+        assert url == "https://proxy.example.com/openai/v1/responses"
+
 
 class TestAuth:
     def test_bearer_token_is_used_when_present(self):
