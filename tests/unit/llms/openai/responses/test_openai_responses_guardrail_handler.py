@@ -1786,7 +1786,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_rewrites_syncs_events_that_forward_their_fields(self):
-        handler = OpenAIResponsesHandler()
+        handler: Final = OpenAIResponsesHandler()
         plain_events: Final = self._ended_stream_events()
         forwarded_delta: Final = AttributeForwarder(plain_events[0])
         events: Final = [forwarded_delta, *plain_events[1:]]

@@ -1,6 +1,7 @@
 import os
 import sys
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -496,11 +497,11 @@ class TestExtractAllMessagesTimestamps:
             def timestamp(self) -> float:
                 return 1_000_000.0
 
-        kwargs = {**make_kwargs(messages=[{"role": "user", "content": "Hi"}]), "start_time": EpochSeconds()}
+        kwargs: Final = {**make_kwargs(messages=[{"role": "user", "content": "Hi"}]), "start_time": EpochSeconds()}
 
-        messages = self.logger._extract_all_messages(kwargs, make_response(), response_model="gpt-4", vendor="openai")
+        messages: Final = self.logger._extract_all_messages(kwargs, make_response(), response_model="gpt-4", vendor="openai")
 
-        input_msg = next(m for m in messages if not m.get("is_response"))
+        input_msg: Final = next(m for m in messages if not m.get("is_response"))
         assert input_msg["timestamp"] == int(1_000_000.0 * 1000.0)
 
     def test_output_messages_get_end_time_timestamp(self):

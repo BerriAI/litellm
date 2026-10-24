@@ -1240,7 +1240,7 @@ class TestFailClosed:
 class TestStreamingRehydration:
     @pytest.mark.asyncio
     async def test_held_text_behind_a_chunk_that_cannot_be_copied_fails_closed(self):
-        guardrail = _guardrail(event_hook="post_call")
+        guardrail: Final = _guardrail(event_hook="post_call")
         _mock_post(guardrail, {"text": "", "carry": "[EMAIL"}, {"text": "a@b.com", "carry": ""})
 
         async def stream():

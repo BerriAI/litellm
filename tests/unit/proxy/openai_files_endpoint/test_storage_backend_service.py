@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -154,11 +155,11 @@ async def test_upload_with_target_model_names_and_hook_stores_unified_id(monkeyp
 
 @pytest.mark.asyncio
 async def test_upload_stores_the_unified_id_through_a_hook_that_forwards_its_writer(monkeypatch):
-    backend = _RecordingStorageBackend()
+    backend: Final = _RecordingStorageBackend()
     monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name, prisma_client=None: backend)
-    writer = _FakeManagedFilesHook()
+    writer: Final = _FakeManagedFilesHook()
 
-    file_object = await StorageBackendFileService.upload_file_to_storage_backend(
+    file_object: Final = await StorageBackendFileService.upload_file_to_storage_backend(
         file_data=_file_data(),
         target_storage="azure_storage",
         target_model_names=["gpt-x"],

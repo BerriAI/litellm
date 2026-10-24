@@ -1,6 +1,7 @@
 """Tests for litellm/a2a_protocol/utils.py token/usage extraction."""
 
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -45,9 +46,9 @@ def test_calculate_usage_counts_input_tokens_from_request_object():
 
 
 def test_calculate_usage_counts_input_tokens_from_a_message_that_forwards_its_fields():
-    request = _request("count these input tokens please")
-    forwarded_request = SimpleNamespace(params=SimpleNamespace(message=AttributeForwarder(request.params.message)))
-    response_dict = {"result": {"kind": "message", "parts": [{"kind": "text", "text": "ok"}]}}
+    request: Final = _request("count these input tokens please")
+    forwarded_request: Final = SimpleNamespace(params=SimpleNamespace(message=AttributeForwarder(request.params.message)))
+    response_dict: Final = {"result": {"kind": "message", "parts": [{"kind": "text", "text": "ok"}]}}
 
     assert A2ARequestUtils.calculate_usage_from_request_response(
         request=forwarded_request, response_dict=response_dict

@@ -1,6 +1,7 @@
 import io
 import os
 import pathlib
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -608,7 +609,7 @@ def test_transform_response_wraps_malformed_words_with_the_raw_body(words: objec
     ],
 )
 def test_transform_response_wraps_the_error_of_the_failing_lookup_in_a_malformed_body(payload: object, error: str):
-    raw_response = httpx.Response(200, json=payload)
+    raw_response: Final = httpx.Response(200, json=payload)
 
     with pytest.raises(ValueError, match="Error transforming Deepgram response: ") as exc_info:
         DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)

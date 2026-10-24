@@ -1,6 +1,7 @@
 import json
 import sys
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -100,9 +101,9 @@ async def test_should_not_mutate_dict_container_response_when_recording_owner(
 
 @pytest.mark.asyncio
 async def test_should_store_the_full_container_of_a_response_that_forwards_its_fields(monkeypatch):
-    table = AsyncMock()
+    table: Final = AsyncMock()
     table.find_unique.return_value = None
-    prisma_client = SimpleNamespace(db=SimpleNamespace(litellm_managedobjecttable=table))
+    prisma_client: Final = SimpleNamespace(db=SimpleNamespace(litellm_managedobjecttable=table))
     monkeypatch.setattr(ownership, "_get_prisma_client", AsyncMock(return_value=prisma_client))
 
     await ownership.record_container_owner(
@@ -111,7 +112,7 @@ async def test_should_store_the_full_container_of_a_response_that_forwards_its_f
         custom_llm_provider="openai",
     )
 
-    file_obj = json.loads(table.create.await_args.kwargs["data"]["file_object"])
+    file_obj: Final = json.loads(table.create.await_args.kwargs["data"]["file_object"])
     assert file_obj["status"] == "active"
 
 

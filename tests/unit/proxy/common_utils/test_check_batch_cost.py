@@ -4266,7 +4266,7 @@ class TestCreatorTurnedOffMessageLogging:
         import litellm
 
         monkeypatch.setattr(litellm, "turn_off_message_logging", False)
-        instance = self._instance()
+        instance: Final = self._instance()
 
         assert await instance._creator_turned_off_message_logging(SimpleNamespace(id="job-1")) is False
 

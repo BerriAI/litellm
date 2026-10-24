@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 
 
+from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
@@ -683,17 +684,17 @@ def test_prompt_initializer_accepts_params_without_dotprompt_content():
     from litellm.integrations.dotprompt import prompt_initializer
     from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
 
-    litellm_params = SimpleNamespace(
+    litellm_params: Final = SimpleNamespace(
         prompt_data={"content": "AHOY {{name}}", "metadata": {"model": "gpt-4o-mini"}},
     )
-    prompt_spec = PromptSpec(
+    prompt_spec: Final = PromptSpec(
         prompt_id="agent-prompt",
         litellm_params=PromptLiteLLMParams(prompt_integration="dotprompt"),
     )
 
-    dotprompt_manager = prompt_initializer(litellm_params, prompt_spec)
+    dotprompt_manager: Final = prompt_initializer(litellm_params, prompt_spec)
 
-    template = dotprompt_manager.prompt_manager.get_prompt("agent-prompt")
+    template: Final = dotprompt_manager.prompt_manager.get_prompt("agent-prompt")
     assert template is not None
     assert template.content == "AHOY {{name}}"
 

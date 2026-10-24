@@ -212,9 +212,9 @@ def test_inject_websocket_stubs_into_openapi_schema_adds_stub():
 
 def test_inject_websocket_stubs_into_openapi_schema_documents_query_params_that_forward_their_fields():
     query_param: Final = AttributeForwarder(SimpleNamespace(name="session_id", required=True))
-    route = SimpleNamespace(path="/ws/chat", name="ws_chat", dependant=SimpleNamespace(query_params=[query_param]))
+    route: Final = SimpleNamespace(path="/ws/chat", name="ws_chat", dependant=SimpleNamespace(query_params=[query_param]))
 
-    result = _inject_websocket_stubs_into_openapi_schema({"paths": {}}, [route])
+    result: Final = _inject_websocket_stubs_into_openapi_schema({"paths": {}}, [route])
 
     assert result["paths"]["/ws/chat"]["get"]["parameters"] == [
         {"name": "session_id", "in": "query", "required": True, "schema": {"type": "string"}}
