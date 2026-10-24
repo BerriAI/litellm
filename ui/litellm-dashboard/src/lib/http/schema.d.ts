@@ -29835,6 +29835,11 @@ export interface components {
              */
             completion_model?: string | null;
             /**
+             * Configurable Clientside Auth Params
+             * @description Allow only these client-supplied credential or callback parameters for every model. Names allow any value. api_base mappings restrict values using the same matching rules as per-deployment configuration.
+             */
+            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth"])[] | null;
+            /**
              * Control Plane Url
              * @description Global Control Plane: URL of the control plane whose admin UI manages this instance. Enables /v3/login and /v3/login/exchange on this instance so that UI can authenticate against it cross-origin, and restricts the SSO return_to origin to that URL. No state is shared with the control plane
              */
@@ -30471,14 +30476,7 @@ export interface components {
             worker_registry?: components["schemas"]["WorkerRegistryEntry"][] | null;
         };
         /** ConfigurableClientsideParamsCustomAuth */
-        "ConfigurableClientsideParamsCustomAuth-Input": {
-            /** Api Base */
-            api_base: string;
-        } & {
-            [key: string]: unknown;
-        };
-        /** ConfigurableClientsideParamsCustomAuth */
-        "ConfigurableClientsideParamsCustomAuth-Output": {
+        ConfigurableClientsideParamsCustomAuth: {
             /** Api Base */
             api_base: string;
         };
@@ -35284,7 +35282,7 @@ export interface components {
             /** Complexity Router Default Model */
             complexity_router_default_model?: string | null;
             /** Configurable Clientside Auth Params */
-            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth"])[] | null;
             /** Cost Per Second */
             cost_per_second?: number | null;
             /** Custom Llm Provider */
@@ -38355,7 +38353,7 @@ export interface components {
         /** ModelGroupInfoProxy */
         ModelGroupInfoProxy: {
             /** Configurable Clientside Auth Params */
-            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Output"])[] | null;
+            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth"])[] | null;
             /** Custom Metadata */
             custom_metadata?: {
                 [key: string]: string | number | boolean;
@@ -50569,7 +50567,7 @@ export interface components {
             /** Complexity Router Default Model */
             complexity_router_default_model?: string | null;
             /** Configurable Clientside Auth Params */
-            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth"])[] | null;
             /** Cost Per Second */
             cost_per_second?: number | null;
             /** Custom Llm Provider */

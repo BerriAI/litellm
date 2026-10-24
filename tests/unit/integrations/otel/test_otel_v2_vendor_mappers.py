@@ -631,11 +631,27 @@ def test_langfuse_mapper_omits_unset_trace_controls():
 
 
 def test_langfuse_trace_attributes_match_between_root_and_generation():
-    controls = TraceControls(name="n", user_id="u", session_id="s", tags=("t",))
+    controls: Final = TraceControls(
+        name="n",
+        user_id="u",
+        session_id="s",
+        tags=("t",),
+        environment="test",
+        release="r1",
+        version="v1",
+    )
     generation = LangfuseMapper().map(_llm_call(trace=controls))
 
     root = LangfuseMapper.trace_attributes(controls)
-    assert root == {"langfuse.trace.name": "n", "user.id": "u", "session.id": "s", "langfuse.trace.tags": ("t",)}
+    assert root == {
+        "langfuse.trace.name": "n",
+        "user.id": "u",
+        "session.id": "s",
+        "langfuse.trace.tags": ("t",),
+        "langfuse.environment": "test",
+        "langfuse.release": "r1",
+        "langfuse.version": "v1",
+    }
     assert all(generation[key] == value for key, value in root.items())
 
 

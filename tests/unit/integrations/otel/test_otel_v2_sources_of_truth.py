@@ -1295,6 +1295,80 @@ def test_caller_trace_name_prefers_the_langfuse_header_over_body_metadata(reques
 
 
 @pytest.mark.parametrize(
+    "request_data,environment,release,version",
+    [
+        (
+            {"metadata": {"langfuse_environment": "body", "trace_release": "r1", "trace_version": "v1"}},
+            "body",
+            "r1",
+            "v1",
+        ),
+        (
+            {"litellm_metadata": {"langfuse_environment": "messages", "trace_release": "r2", "trace_version": "v2"}},
+            "messages",
+            "r2",
+            "v2",
+        ),
+        (
+            {
+                "proxy_server_request": {
+                    "headers": {
+                        "langfuse_environment": "header",
+                        "langfuse_release": "r3",
+                        "langfuse_version": "v3",
+                    }
+                },
+                "metadata": {"langfuse_environment": "body", "trace_release": "ignored", "trace_version": "ignored"},
+            },
+            "header",
+            "r3",
+            "v3",
+        ),
+        (
+            {
+                "proxy_server_request": {
+                    "headers": {
+                        "langfuse_environment": "",
+                        "langfuse_release": "",
+                        "langfuse_version": None,
+                    }
+                },
+                "metadata": {"langfuse_environment": "body", "trace_release": "r4", "trace_version": "v4"},
+            },
+            "body",
+            "r4",
+            "v4",
+        ),
+        ({"metadata": {"langfuse_environment": None, "trace_release": "", "trace_version": ""}}, "deployment", None, None),
+        ({}, "deployment", None, None),
+    ],
+)
+def test_langfuse_deployment_controls_preserve_header_body_and_environment_precedence(
+    request_data: Mapping[str, object],
+    environment: str,
+    release: str | None,
+    version: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "deployment")
+    expected: Final = TraceControls(environment=environment, release=release, version=version)
+    assert caller_trace_controls({"litellm_params": request_data}) == expected
+    assert LLMCallEvent.from_dict({"litellm_params": request_data}).trace == expected
+
+
+@pytest.mark.parametrize("environment", [None, "", "deployment"])
+def test_langfuse_deployment_environment_applies_without_request_params(
+    environment: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if environment is None:
+        monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
+    else:
+        monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", environment)
+    assert caller_trace_controls({}) == TraceControls(environment=environment or None)
+
+
+@pytest.mark.parametrize(
     ("request_data", "expected"),
     [
         (
