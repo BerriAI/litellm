@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
+from typing import Any, Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
@@ -317,6 +317,26 @@ def anthropic_tool_names(tool: object) -> tuple[str, ...]:
 def anthropic_tool_name(tool: object) -> str | None:
     names: Final = anthropic_tool_names(tool)
     return names[0] if names else None
+
+
+def extract_tool_from_addition_block(block: Mapping[str, Any] | Any) -> dict[str, Any] | None:
+    """Extract raw tool dict from an Anthropic tool_addition block."""
+    if not isinstance(block, Mapping):
+        return None
+    tool_data = block.get("tool")
+    if isinstance(tool_data, dict):
+        if (
+            tool_data.get("type") == "tool_definition"
+            and "definition" in tool_data
+            and isinstance(tool_data["definition"], dict)
+        ):
+            return tool_data["definition"]
+        return tool_data
+    if "definition" in block and isinstance(block["definition"], dict):
+        return block["definition"]
+    if isinstance(block.get("tool_definition"), dict):
+        return block["tool_definition"]
+    return None
 
 
 def merge_returned_tools_into_request_tools(

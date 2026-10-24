@@ -50,6 +50,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    extract_tool_from_addition_block,
     list_field,
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
@@ -659,6 +660,11 @@ class AnthropicMessagesHandler(BaseTranslation):
                         *anthropic_tools,
                     ]
                 )
+                if not scan_only_tool_results:
+                    retained_names: Final = frozenset(
+                        name for t in (data.get("tools") or []) for name in anthropic_tool_names(t)
+                    )
+                    self._strip_disallowed_tool_additions(data, retained_names)
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
             if (
@@ -932,8 +938,57 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract every tool name in an Anthropic messages request: tools[].name, plus
-        tools[].function.name for OpenAI-format tools the bridge forwards verbatim."""
-        return [name for tool in list_field(data, "tools") for name in anthropic_tool_names(tool)]
+        tools[].function.name for OpenAI-format tools the bridge forwards verbatim,
+        as well as mid-conversation tool additions in messages."""
+        names = [name for tool in list_field(data, "tools") for name in anthropic_tool_names(tool)]
+        messages = data.get("messages")
+        if isinstance(messages, Sequence):
+            for m in messages:
+                if isinstance(m, Mapping):
+                    content = m.get("content")
+                    if isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
+                        for block in content:
+                            if isinstance(block, Mapping) and block.get("type") == "tool_addition":
+                                tool = extract_tool_from_addition_block(block)
+                                if tool is not None:
+                                    for name in anthropic_tool_names(tool):
+                                        if name not in names:
+                                            names.append(name)
+        return names
+
+    @classmethod
+    def _strip_disallowed_tool_additions(cls, data: dict, retained_names: frozenset[str]) -> None:
+        messages = data.get("messages")
+        if not isinstance(messages, list):
+            return
+        cleaned_messages: list[object] = []
+        for m in messages:
+            if not isinstance(m, dict):
+                cleaned_messages.append(m)
+                continue
+            content = m.get("content")
+            if not isinstance(content, list):
+                cleaned_messages.append(m)
+                continue
+            had_disallowed_addition = False
+            remaining_blocks: list[object] = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_addition":
+                    tool = extract_tool_from_addition_block(block)
+                    tool_names = anthropic_tool_names(tool) if tool else ()
+                    if tool_names and all(name in retained_names for name in tool_names):
+                        remaining_blocks.append(block)
+                    else:
+                        had_disallowed_addition = True
+                else:
+                    remaining_blocks.append(block)
+            if remaining_blocks:
+                new_m = dict(m)
+                new_m["content"] = remaining_blocks
+                cleaned_messages.append(new_m)
+            elif not had_disallowed_addition:
+                cleaned_messages.append(m)
+        data["messages"] = cleaned_messages
 
     @classmethod
     def _extract_input_text_and_images(

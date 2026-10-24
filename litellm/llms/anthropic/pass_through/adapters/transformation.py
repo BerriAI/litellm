@@ -16,6 +16,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     json_copy_or_original,
     prompt_cache_key_from_user_id,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import extract_tool_from_addition_block
 from litellm.responses.utils import auto_reasoning_summary
 
 # OpenAI has a 64-character limit for function/tool names
@@ -1268,23 +1269,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 btype = block.get("type")
                 if btype == "tool_addition":
                     had_tool_changes = True
-                    tool_data = block.get("tool")
-                    if isinstance(tool_data, dict):
-                        if (
-                            tool_data.get("type") == "tool_definition"
-                            and "definition" in tool_data
-                            and isinstance(tool_data["definition"], dict)
-                        ):
-                            raw_tool = tool_data["definition"]
-                        else:
-                            raw_tool = tool_data
-                    elif "definition" in block and isinstance(block["definition"], dict):
-                        raw_tool = block["definition"]
-                    elif isinstance(block.get("tool_definition"), dict):
-                        raw_tool = block["tool_definition"]
-                    else:
-                        raw_tool = block
-
+                    raw_tool = extract_tool_from_addition_block(block)
                     if isinstance(raw_tool, dict) and raw_tool.get("name"):
                         tool_name = str(raw_tool["name"])
                         if not any(isinstance(t, dict) and t.get("name") == tool_name for t in active_tools):
@@ -1300,8 +1285,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     if rem_name:
                         rem_name_str = str(rem_name)
                         active_tools = [
-                            t for t in active_tools
-                            if not (isinstance(t, dict) and t.get("name") == rem_name_str)
+                            t for t in active_tools if not (isinstance(t, dict) and t.get("name") == rem_name_str)
                         ]
                 else:
                     remaining_blocks.append(block)
@@ -1316,7 +1300,9 @@ class LiteLLMAnthropicMessagesAdapter:
         if not had_tool_changes and initial_tools is None:
             return None, cleaned_messages
 
-        return active_tools if active_tools else ([] if initial_tools is not None or had_tool_changes else None), cleaned_messages
+        return active_tools if active_tools else (
+            [] if initial_tools is not None or had_tool_changes else None
+        ), cleaned_messages
 
     def translate_anthropic_to_openai(
         self,
