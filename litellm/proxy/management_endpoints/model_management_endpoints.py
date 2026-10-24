@@ -1467,6 +1467,7 @@ async def patch_model(
             still_desired=reload_outcome.still_desired,
             live_after=reload_outcome.live_after,
         )
+        raise_if_written_params_not_served(model_id=model_id, patch_data=patch_data)
 
         return _model_write_response(updated_model, member_write)
 
@@ -3042,6 +3043,7 @@ async def update_model(
                 still_desired=reload_outcome.still_desired,
                 live_after=reload_outcome.live_after,
             )
+            raise_if_written_params_not_served(model_id=_model_id, patch_data=model_params)
 
             return None if model_response is None else _model_write_response(model_response, member_write)
     except Exception as e:
@@ -3463,6 +3465,41 @@ def reload_serving_verdict(
     dropped: Final = before - now - written_ids
     collateral: Final = tuple(sorted(dropped if still_desired is None else dropped & still_desired))
     return (missing, collateral)
+
+
+def raise_if_written_params_not_served(model_id: str, patch_data: updateDeployment) -> None:
+    """Refuse a 200 when the reload restored the previous model, api_base, or api_key.
+
+    A rejected deployment is put back under the same id, so the id-liveness check still passes.
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    params: Final = patch_data.litellm_params
+    if llm_router is None or params is None:
+        return
+    deployment: Final = llm_router.get_deployment(model_id=model_id)
+    if not isinstance(deployment, Deployment):
+        return
+    requested: Final = tuple(
+        (field, incoming)
+        for field in ("model", "api_base", "api_key")
+        if (incoming := getattr(params, field)) is not None
+    )
+    unserved: Final = tuple(
+        field for field, incoming in requested if getattr(deployment.litellm_params, field, None) != incoming
+    )
+    if not unserved:
+        return
+    raise ProxyException(
+        message=(
+            "Model update was saved to the database, but this pod is still serving the previous "
+            f"{', '.join(unserved)}. The reload kept the last working deployment. "
+            "Check server logs for 'Error upserting deployment'."
+        ),
+        type=ProxyErrorTypes.internal_server_error,
+        code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        param=unserved[0],
+    )
 
 
 def raise_if_reload_degraded_serving(
