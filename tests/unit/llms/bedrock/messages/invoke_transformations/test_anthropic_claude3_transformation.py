@@ -3827,6 +3827,67 @@ def test_bedrock_messages_thinking_display_updates_beta(display: str | None, exp
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("budget_tokens", "extra_params", "expected_effort"),
+    (
+        (1024, {}, "low"),
+        (DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET - 1, {}, "low"),
+        (DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET, {}, "medium"),
+        (DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET - 1, {}, "medium"),
+        (DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET, {}, "high"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET - 1, {}, "high"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET, {}, "xhigh"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET, {"output_config": {"effort": "low"}}, "low"),
+        (2048, {"reasoning_effort": "high"}, "high"),
+    ),
+)
+def test_bedrock_messages_translates_legacy_thinking_budget_to_effort(
+    budget_tokens: int, extra_params: Mapping[str, object], expected_effort: str
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="eu.anthropic.claude-opus-5-5",
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 16384,
+            "thinking": {"type": "enabled", "budget_tokens": budget_tokens, "display": "summarized"},
+            **extra_params,
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
+    assert result.get("output_config") == {"effort": expected_effort}
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("supports_legacy_thinking", (False, True))
+def test_bedrock_messages_legacy_thinking_follows_exact_model_capability(
+    monkeypatch: pytest.MonkeyPatch, supports_legacy_thinking: bool
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    model: Final = "eu.anthropic.claude-opus-5-5"
+    thinking: Final = {"type": "enabled", "budget_tokens": 1024}
+    monkeypatch.setitem(litellm.model_cost[model], "supports_legacy_thinking", supports_legacy_thinking)
+    litellm.get_model_info.cache_clear()
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={"max_tokens": 16384, "thinking": thinking},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("thinking") == (
+        {"type": "enabled", "budget_tokens": 1024} if supports_legacy_thinking else {"type": "adaptive"}
+    )
+    assert result.get("output_config") == (None if supports_legacy_thinking else {"effort": "low"})
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
 def test_bedrock_messages_preserves_display_when_translating_legacy_thinking() -> None:
     from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
     from litellm.types.router import GenericLiteLLMParams
