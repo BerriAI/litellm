@@ -11,7 +11,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+
+DEFAULT_INTEGRATION_SOURCE: Final = "litellm"
+INTEGRATION_SOURCE_HEADER: Final = "X-Integration-Source"
 
 
 class SambanovaConfig(OpenAIGPTConfig):
@@ -59,9 +63,9 @@ class SambanovaConfig(OpenAIGPTConfig):
         Get the supported OpenAI params for the given model
 
         """
-        from litellm.utils import supports_function_calling
+        from litellm.utils import supports_function_calling, supports_reasoning
 
-        params: Final = [
+        params: Final = (
             "max_completion_tokens",
             "max_tokens",
             "response_format",
@@ -71,14 +75,24 @@ class SambanovaConfig(OpenAIGPTConfig):
             "temperature",
             "top_p",
             "top_k",
-        ]
+            "presence_penalty",
+            "frequency_penalty",
+            "logprobs",
+            "top_logprobs",
+            "n",
+            "logit_bias",
+            "seed",
+        )
+        tool_params: Final = (
+            ("tools", "tool_choice", "parallel_tool_calls")
+            if supports_function_calling(model, custom_llm_provider="sambanova")
+            else ()
+        )
+        reasoning_params: Final = (
+            ("reasoning_effort",) if supports_reasoning(model, custom_llm_provider="sambanova") else ()
+        )
 
-        if supports_function_calling(model, custom_llm_provider="sambanova"):
-            params.append("tools")
-            params.append("tool_choice")
-            params.append("parallel_tool_calls")
-
-        return params
+        return [*params, *tool_params, *reasoning_params]
 
     def map_openai_params(
         self,
@@ -97,6 +111,43 @@ class SambanovaConfig(OpenAIGPTConfig):
             elif param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """Send X-Integration-Source: caller header, then extra_body, then env var, then default"""
+        extra_headers: Final[dict[str, str]] = dict(optional_params.get("extra_headers") or {})
+        extra_body: Final[dict[str, object]] = dict(optional_params.get("extra_body") or {})
+        body_source: Final = extra_body.pop("integration_source", None)
+        header_source: Final = next(
+            (value for key, value in extra_headers.items() if key.lower() == INTEGRATION_SOURCE_HEADER.lower()),
+            None,
+        )
+        integration_source: Final = (
+            body_source or get_secret_str("SAMBANOVA_INTEGRATION_SOURCE") or DEFAULT_INTEGRATION_SOURCE
+        )
+        headers_with_source: Final = (
+            extra_headers if header_source else {**extra_headers, INTEGRATION_SOURCE_HEADER: integration_source}
+        )
+        other_params: Final[dict[str, object]] = {k: v for k, v in optional_params.items() if k != "extra_body"}
+        updated_params: Final[dict[str, object]] = {
+            **other_params,
+            "extra_headers": headers_with_source,
+            **({"extra_body": extra_body} if extra_body else {}),
+        }
+
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=updated_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     @overload
     def _transform_messages(
