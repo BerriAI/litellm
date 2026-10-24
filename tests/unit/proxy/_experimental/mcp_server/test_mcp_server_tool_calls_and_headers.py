@@ -8369,11 +8369,12 @@ async def test_exact_call_rechecks_description_of_tool_hidden_from_catalog(monke
     import litellm
     from litellm.caching.dual_cache import DualCache
     from litellm.exceptions import ModifyResponseException
+    from litellm.proxy._experimental.mcp_server import operations as mcp_operations
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
         ListedToolsCaller,
     )
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
     from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
         CustomCodeGuardrail,
     )
@@ -8404,7 +8405,15 @@ async def test_exact_call_rechecks_description_of_tool_hidden_from_catalog(monke
     )
     manager.registry = {server.server_id: server}
     manager.tool_name_to_mcp_server_name_mapping = {"poisoned": server.server_id}
-    auth = UserAPIKeyAuth(api_key="sk-test", user_id="caller")
+    auth = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="caller",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="poisoned-catalog",
+            mcp_servers=[server.server_id],
+            mcp_tool_search_enabled=True,
+        ),
+    )
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
     poisoned = MCPTool(
@@ -8437,6 +8446,20 @@ async def test_exact_call_rechecks_description_of_tool_hidden_from_catalog(monke
                 arguments={},
                 user_api_key_auth=auth,
                 proxy_logging_obj=proxy_logging,
+            )
+
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
+        monkeypatch.setattr(proxy_server, "general_settings", {})
+        monkeypatch.setattr(proxy_server, "proxy_config", {})
+        with pytest.raises(ModifyResponseException, match="content blocked"):
+            await mcp_operations._dispatch_virtual_mcp_tool(
+                name="mcp_tool_call",
+                arguments={"tool_name": poisoned.name, "arguments": {}},
+                user_api_key_auth=auth,
+                client_ip=None,
             )
 
     upstream.assert_not_awaited()
