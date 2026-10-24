@@ -26,6 +26,7 @@ _MANAGED_MODEL_ROUTES: Final = frozenset(
             "messages/count_tokens",
             "images/generations",
             "images/edits",
+            "images/variations",
             "audio/transcriptions",
             "audio/speech",
             "moderations",
@@ -54,6 +55,7 @@ _MANAGED_MODEL_PATHS: Final = (
     "/openai/deployments/{model:path}/embeddings",
     "/openai/deployments/{model:path}/images/generations",
     "/openai/deployments/{model:path}/images/edits",
+    "/openai/deployments/{model:path}/images/variations",
     "/v1beta/models/{model_name:path}:countTokens",
     "/v1beta/models/{model_name:path}:generateContent",
     "/v1beta/models/{model_name:path}:streamGenerateContent",
@@ -72,6 +74,7 @@ _MODEL_ROUTE_KINDS: Final[
     {
         "/images/generations": "image_generation",
         "/images/edits": "image_edit",
+        "/images/variations": "image_edit",
         "/moderations": "moderation",
         "/audio/transcriptions": "moderation",
         "/audio/speech": "speech",
