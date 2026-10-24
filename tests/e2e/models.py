@@ -1437,6 +1437,8 @@ class ModelInfoBody(BaseModel):
     allowed_fails: int | None = None
     allowed_fails_policy: dict[str, int] | None = None
     token_count_model: TokenCountModelBody | None = None
+    base_model: str | None = None
+    max_input_tokens: int | None = None
 
 
 class ModelNewBody(BaseModel):

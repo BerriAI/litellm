@@ -1110,7 +1110,7 @@ def as_output_cap(value: object) -> int | None:
     return cap if cap >= 0 else None
 
 
-def _exact_base_model_max_input_tokens(base_model: str) -> int | None:
+def exact_base_model_max_input_tokens(base_model: str) -> int | None:
     try:
         model_info: Final = litellm.get_model_info(model=base_model)
     except Exception:  # noqa: BLE001  # get_model_info raises ModelNotMappedError or a bare Exception for an unmapped model
@@ -1147,7 +1147,7 @@ def _base_model_widened_window(
         return MappingProxyType({})
     if not _names_route_model(base_model, route_model_info["key"], custom_llm_provider):
         return MappingProxyType({})
-    base_max_input_tokens: Final = _exact_base_model_max_input_tokens(base_model)
+    base_max_input_tokens: Final = exact_base_model_max_input_tokens(base_model)
     if base_max_input_tokens is None or base_max_input_tokens <= route_max_input_tokens:
         return MappingProxyType({})
     return MappingProxyType({"max_input_tokens": base_max_input_tokens})

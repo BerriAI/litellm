@@ -14354,6 +14354,24 @@ _CJK_TURNS = [
 ]
 
 
+_BEDROCK_PROFILE_ARN: Final = (
+    "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/abc123xyz"
+)
+_LLAMA_BASE_MODEL: Final = "meta.llama3-8b-instruct-v1:0"
+
+
+def _turns_past(window: int) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "user",
+            "content": "Here is everything discussed so far. "
+            + "The meeting notes were saved to the shared folder for later review this week. " * (window // 4),
+        },
+        {"role": "assistant", "content": "Noted, I have read all of it."},
+        {"role": "user", "content": "ok continue"},
+    ]
+
+
 def _tier_config(**overrides: object) -> dict[str, object]:
     return {
         "tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"},
@@ -14392,6 +14410,127 @@ class TestContextWindowEscalation:
         assert result.routing_decision["context_escalation_original_tier"] == "SIMPLE"
         assert result.routing_decision["tier"] == "COMPLEX"
         assert "context_escalation" in result.routing_decision["signals"]
+
+    @staticmethod
+    def _base_model_tier_router(
+        small: dict[str, object], base_window: int, **overrides: object
+    ) -> ComplexityRouter:
+        litellm_router: Final = Router(
+            model_list=[
+                {"model_name": "small-model", **small},
+                {
+                    "model_name": "big-model",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "mock_response": "ok"},
+                    "model_info": {"max_input_tokens": base_window * 16},
+                },
+            ]
+        )
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=litellm_router,
+            complexity_router_config=_tier_config(**overrides),
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("local_model_cost_map")
+    @pytest.mark.parametrize(
+        "overrides",
+        [{}, {"adaptive": True, "session_affinity": True, "deployment_affinity": True}],
+        ids=["fixed", "adaptive"],
+    )
+    @pytest.mark.parametrize("declared_in", ["model_info", "litellm_params"])
+    async def test_an_inference_profile_window_declared_only_through_base_model_escalates_too(
+        self, overrides: dict[str, object], declared_in: str
+    ):
+        base_window: Final = litellm.get_model_info(model=_LLAMA_BASE_MODEL)["max_input_tokens"]
+        assert base_window is not None
+        router: Final = self._base_model_tier_router(
+            {
+                "litellm_params": {
+                    "model": _BEDROCK_PROFILE_ARN,
+                    "mock_response": "ok",
+                    **({"base_model": _LLAMA_BASE_MODEL} if declared_in == "litellm_params" else {}),
+                },
+                "model_info": {"base_model": _LLAMA_BASE_MODEL} if declared_in == "model_info" else {},
+            },
+            base_window,
+            **overrides,
+        )
+
+        result: Final = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={"metadata": {"session_id": "long-session"}},
+            messages=_turns_past(base_window),
+        )
+
+        assert result is not None
+        assert result.model == "big-model"
+        assert result.routing_decision["context_escalation_original_tier"] == "SIMPLE"
+        assert "context_escalation" in result.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("local_model_cost_map")
+    @pytest.mark.parametrize(
+        ("own_window", "model"),
+        [
+            ("declared", _BEDROCK_PROFILE_ARN),
+            ("registered", _BEDROCK_PROFILE_ARN),
+            (None, "openai/a-model-the-cost-map-does-not-know"),
+            (None, "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:provisioned-model/abc123xyz"),
+            (None, "bedrock/llama/arn:aws:bedrock:us-west-2:000000000000:imported-model/abc123xyz"),
+        ],
+        ids=["declared", "registered", "not_a_bedrock_arn", "provisioned_model", "imported_model"],
+    )
+    async def test_base_model_never_overrides_an_own_window_or_reaches_a_non_profile_route(
+        self, own_window: str | None, model: str, monkeypatch: pytest.MonkeyPatch
+    ):
+        base_window: Final = litellm.get_model_info(model=_LLAMA_BASE_MODEL)["max_input_tokens"]
+        assert base_window is not None
+        if own_window == "registered":
+            monkeypatch.setitem(
+                litellm.model_cost,
+                _BEDROCK_PROFILE_ARN,
+                {"max_input_tokens": base_window * 8, "litellm_provider": "bedrock", "mode": "chat"},
+            )
+        router: Final = self._base_model_tier_router(
+            {
+                "litellm_params": {"model": model, "mock_response": "ok"},
+                "model_info": {
+                    "base_model": _LLAMA_BASE_MODEL,
+                    **({"max_input_tokens": base_window * 8} if own_window == "declared" else {}),
+                },
+            },
+            base_window,
+        )
+
+        result: Final = await router.async_pre_routing_hook(
+            model="test-router", request_kwargs={}, messages=_turns_past(base_window)
+        )
+
+        assert result is not None
+        assert result.model == "small-model"
+        assert "context_escalated" not in result.routing_decision
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("local_model_cost_map")
+    async def test_an_unmapped_base_model_leaves_a_bedrock_arn_tier_in_place(self):
+        base_window: Final = litellm.get_model_info(model=_LLAMA_BASE_MODEL)["max_input_tokens"]
+        assert base_window is not None
+        router: Final = self._base_model_tier_router(
+            {
+                "litellm_params": {"model": _BEDROCK_PROFILE_ARN, "mock_response": "ok"},
+                "model_info": {"base_model": "anthropic.claude-not-in-the-cost-map-v1:0"},
+            },
+            base_window,
+        )
+
+        result: Final = await router.async_pre_routing_hook(
+            model="test-router", request_kwargs={}, messages=_turns_past(base_window)
+        )
+
+        assert result is not None
+        assert result.model == "small-model"
+        assert "context_escalated" not in result.routing_decision
 
     @pytest.mark.asyncio
     async def test_a_prompt_that_fits_routes_exactly_as_before(self):
