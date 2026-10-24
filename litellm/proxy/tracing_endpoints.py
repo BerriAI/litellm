@@ -185,6 +185,7 @@ async def list_agent_traces(
             start_ms=request.start_ms if request.start_ms is not None else now_ms - MS_PER_DAY,
             end_ms=request.end_ms if request.end_ms is not None else now_ms,
             cursor=request.cursor,
+            agent=request.agent,
         )
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
         raise read_failure(error) from error
