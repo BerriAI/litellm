@@ -587,6 +587,132 @@ async def test_generic_api_callback_does_not_retry_4xx():
     mock_post.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_generic_api_batch_failure_requeues_events():
+    """
+    Test that a transiently failed batch send (transport error, max_retries=0) puts the
+    events back into the queue instead of dropping them.
+    """
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, max_retries=0, retry_delay=0)
+
+    mock_post = AsyncMock()
+    mock_post.side_effect = httpx.ConnectError("connection refused")
+    generic_logger.async_httpx_client.post = mock_post
+    generic_logger.log_queue = [{"event": "lost-on-failure"}]
+
+    await generic_logger.async_send_batch()
+
+    mock_post.assert_called_once()
+    assert generic_logger.log_queue == [{"event": "lost-on-failure"}]
+
+
+@pytest.mark.asyncio
+async def test_generic_api_5xx_response_is_retried_then_delivered():
+    """
+    Test that a real 5xx response (not just a raised exception) triggers the configured
+    retries and is delivered on the successful attempt.
+    """
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, max_retries=1, retry_delay=0)
+
+    request = httpx.Request("POST", test_endpoint)
+    mock_post = AsyncMock()
+    mock_post.side_effect = [httpx.Response(503, request=request), httpx.Response(200, request=request)]
+    generic_logger.async_httpx_client.post = mock_post
+    generic_logger.log_queue = [{"event": "5xx-response"}]
+
+    await generic_logger.async_send_batch()
+
+    assert mock_post.call_count == 2
+    assert generic_logger.log_queue == []
+
+
+@pytest.mark.asyncio
+async def test_generic_api_5xx_response_after_retries_requeues_events():
+    """
+    Test that events whose batch keeps failing with 5xx responses stay queued for the next flush.
+    """
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, max_retries=1, retry_delay=0)
+
+    request = httpx.Request("POST", test_endpoint)
+    mock_post = AsyncMock()
+    mock_post.side_effect = [httpx.Response(503, request=request), httpx.Response(503, request=request)]
+    generic_logger.async_httpx_client.post = mock_post
+    generic_logger.log_queue = [{"event": "x"}, {"event": "y"}]
+
+    await generic_logger.async_send_batch()
+
+    assert mock_post.call_count == 2
+    assert generic_logger.log_queue == [{"event": "x"}, {"event": "y"}]
+
+
+@pytest.mark.asyncio
+async def test_generic_api_4xx_response_drops_events():
+    """
+    Test that a permanent 4xx response still drops the events (re-queueing them would
+    grow the queue without bound on an auth/payload error).
+    """
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, max_retries=0, retry_delay=0)
+
+    request = httpx.Request("POST", test_endpoint)
+    mock_post = AsyncMock()
+    mock_post.side_effect = [httpx.Response(401, request=request)]
+    generic_logger.async_httpx_client.post = mock_post
+    generic_logger.log_queue = [{"event": "bad-auth"}]
+
+    await generic_logger.async_send_batch()
+
+    mock_post.assert_called_once()
+    assert generic_logger.log_queue == []
+
+
+@pytest.mark.asyncio
+async def test_generic_api_single_format_requeues_only_failed_events():
+    """
+    Test that in 'single' format only the entries whose send failed transiently are
+    re-queued, in order, while delivered entries are removed.
+    """
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, max_retries=0, retry_delay=0, log_format="single")
+
+    request = httpx.Request("POST", test_endpoint)
+    mock_post = AsyncMock()
+    mock_post.side_effect = [
+        httpx.Response(200, request=request),
+        httpx.ConnectError("connection refused"),
+        httpx.Response(200, request=request),
+    ]
+    generic_logger.async_httpx_client.post = mock_post
+    generic_logger.log_queue = [{"event": "a"}, {"event": "b"}, {"event": "c"}]
+
+    await generic_logger.async_send_batch()
+
+    assert mock_post.call_count == 3
+    assert generic_logger.log_queue == [{"event": "b"}]
+
+
+@pytest.mark.asyncio
+async def test_generic_api_requeue_respects_max_queue_size():
+    """
+    Test that re-queued events are bounded by max_queue_size: the oldest events
+    are dropped, mirroring `CustomBatchLogger.flush_queue`'s overflow guard.
+    """
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, max_retries=0, retry_delay=0, max_queue_size=3)
+
+    mock_post = AsyncMock()
+    mock_post.side_effect = [httpx.ConnectError("connection refused")]
+    generic_logger.async_httpx_client.post = mock_post
+    generic_logger.log_queue = [{"event": "a"}, {"event": "b"}, {"event": "c"}, {"event": "d"}, {"event": "e"}]
+
+    await generic_logger.async_send_batch()
+
+    assert generic_logger.log_queue == [{"event": "c"}, {"event": "d"}, {"event": "e"}]
+
+
 @pytest.fixture(autouse=True)
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
