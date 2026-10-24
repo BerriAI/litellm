@@ -352,7 +352,7 @@ class CustomGuardrail(CustomLogger):
         self,
         violation_message: str,
         request_data: dict[str, Any],
-        detection_info: dict[str, Any] | None = None,
+        detection_info: Mapping[str, object] | None = None,
         original_response: object = None,
     ) -> None:
         """

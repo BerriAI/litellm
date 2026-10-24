@@ -14,7 +14,9 @@ import asyncio
 import json
 import os
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
+
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -36,6 +38,11 @@ from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from litellm.router import Router
+
+
+_CACHE_RESPONSE_ADAPTER: Final[TypeAdapter[str | bytes | None]] = TypeAdapter(
+    str | bytes | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 class RedisSemanticCache(BaseCache):
@@ -380,7 +387,7 @@ class RedisSemanticCache(BaseCache):
             )
         return embedding_response["data"][0]["embedding"]
 
-    def _get_cache_logic(self, cached_response: Any) -> object:
+    def _get_cache_logic(self, cached_response: str | bytes | None) -> object:
         """
         Process the cached response to prepare it for use.
 
@@ -391,18 +398,19 @@ class RedisSemanticCache(BaseCache):
             The processed cache response, or None if input was None
         """
         if cached_response is None:
-            return cached_response
+            return None
 
         # Convert bytes to string if needed
-        if isinstance(cached_response, bytes):
-            cached_response = cached_response.decode("utf-8")
+        response_text: Final = (
+            cached_response.decode("utf-8") if isinstance(cached_response, bytes) else cached_response
+        )
 
         # Convert string representation to Python object
         try:
-            cached_response = json.loads(cached_response)
+            cached_response = json.loads(response_text)
         except json.JSONDecodeError:
             try:
-                cached_response = ast.literal_eval(cached_response)
+                cached_response = ast.literal_eval(response_text)
             except (ValueError, SyntaxError) as e:
                 print_verbose(f"Error parsing cached response: {e}")
                 return None
@@ -494,7 +502,7 @@ class RedisSemanticCache(BaseCache):
             similarity: Final = 1 - vector_distance
 
             cached_prompt: Final = cache_hit["prompt"]
-            cached_response: Final = cache_hit["response"]
+            cached_response: Final = _CACHE_RESPONSE_ADAPTER.validate_python(cache_hit["response"])
 
             # update kwargs["metadata"] with similarity, don't rewrite the original metadata
             kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
@@ -645,7 +653,7 @@ class RedisSemanticCache(BaseCache):
             similarity: Final = 1 - vector_distance
 
             cached_prompt: Final = cache_hit["prompt"]
-            cached_response: Final = cache_hit["response"]
+            cached_response: Final = _CACHE_RESPONSE_ADAPTER.validate_python(cache_hit["response"])
 
             # update kwargs["metadata"] with similarity, don't rewrite the original metadata
             kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity

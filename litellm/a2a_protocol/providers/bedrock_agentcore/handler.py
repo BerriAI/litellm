@@ -9,6 +9,8 @@ import json
 from collections.abc import AsyncIterator, Mapping
 from typing import Final
 
+from pydantic import ConfigDict, TypeAdapter
+
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
     BedrockAgentCoreA2ATransformation,
@@ -16,6 +18,8 @@ from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
 from litellm.llms.bedrock.base_aws_llm import run_aws_signing
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class BedrockAgentCoreA2AHandler:
@@ -66,7 +70,7 @@ class BedrockAgentCoreA2AHandler:
             data=body,
         )
         response.raise_for_status()
-        response_data: Final = response.json()
+        response_data: Final = _JSON_OBJECT.validate_python(response.json(), strict=True)
 
         if "error" in response_data:
             verbose_logger.warning("BedrockAgentCore A2A: Agent returned error: %s", response_data["error"])
@@ -125,7 +129,7 @@ class BedrockAgentCoreA2AHandler:
                 "BedrockAgentCore A2A streaming: received JSON instead of SSE, yielding as single event"
             )
             response_body: Final = await response.aread()
-            response_data: Final = json.loads(response_body)
+            response_data: Final = _JSON_OBJECT.validate_python(json.loads(response_body), strict=True)
             yield response_data
         else:
             # SSE stream — parse data: lines

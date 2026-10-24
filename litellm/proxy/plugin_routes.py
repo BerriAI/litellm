@@ -31,6 +31,8 @@ from typing import Final
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import PluginConfig, SpecialHeaders, UserAPIKeyAuth
@@ -38,6 +40,16 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 router: Final = APIRouter()
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PluginSessionClaim(TypedDict):
+    plugin: NotRequired[ReadOnly[object]]
+    exp: NotRequired[ReadOnly[int | float | str]]
+
+
+_PLUGIN_SESSION_CLAIM: Final = TypeAdapter(_PluginSessionClaim)
+
 
 # Hop-by-hop headers (RFC 7230) and the litellm session cookie — never forwarded
 # to a plugin backend.  Credential headers are added on top per-request from the
@@ -155,7 +167,7 @@ def issue_plugin_session_claim(plugin_name: str, user_id: str | None, user_role:
     return _plugin_fernet(plugin_name).encrypt(json.dumps(claim).encode()).decode()
 
 
-def verify_plugin_session_claim(plugin_name: str, ciphertext: str) -> dict:
+def verify_plugin_session_claim(plugin_name: str, ciphertext: str) -> _PluginSessionClaim:
     """Verify and decode a plugin session claim.
 
     Raises ValueError if the HMAC is invalid, the audience is wrong, or
@@ -163,7 +175,7 @@ def verify_plugin_session_claim(plugin_name: str, ciphertext: str) -> dict:
     """
     try:
         raw: Final = _plugin_fernet(plugin_name).decrypt(ciphertext.encode(), ttl=_CLAIM_TTL_SECONDS)
-        claim: Final = json.loads(raw)
+        claim: Final = _PLUGIN_SESSION_CLAIM.validate_python(json.loads(raw), strict=True)
     except (InvalidToken, Exception) as exc:
         raise ValueError("Invalid, tampered, or expired plugin session claim") from exc
 

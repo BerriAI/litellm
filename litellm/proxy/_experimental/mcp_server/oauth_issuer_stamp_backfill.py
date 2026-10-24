@@ -43,6 +43,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import canonicalize_url_identity
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import MCPServerRepository
 
 # The actor the removed discovery write-back stamped rows with.
 _DISCOVERY_ACTOR: Final = "mcp_oauth_discovery"
@@ -106,7 +107,7 @@ def _is_stamped_issuer_row(row: _MCPServerRow) -> bool:
 
 async def backfill_discovery_stamped_issuers(prisma_client: PrismaClient) -> int:
     """Clear gateway-written issuer stamps, returning the number of rows healed."""
-    candidate_rows: Final[list[_MCPServerRow]] = await prisma_client.db.litellm_mcpservertable.find_many(
+    candidate_rows: Final = await MCPServerRepository(prisma_client).table.find_many(
         where={
             "updated_by": _DISCOVERY_ACTOR,
             "auth_type": {"in": list(_AUTH_TYPES_WITH_ISSUER_ANCHORING)},
