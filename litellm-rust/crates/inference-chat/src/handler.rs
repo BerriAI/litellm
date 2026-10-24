@@ -64,7 +64,7 @@ pub(super) async fn execute(
         secret_fields: Vec::new(),
         api_key: call.api_key.map(litellm_auth::SecretValue::new),
     };
-    let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
+    let authenticated = resolve_auth(auth, http, environment, &|key| secrets.get(key)).await?;
     let identity = litellm_host::interceptors::ProviderIdentity {
         model: context.model.clone(),
         provider: context.custom_llm_provider.clone(),

@@ -45,7 +45,7 @@ pub(super) async fn execute(
     let body = config
         .transform_audio_transcription_request(provider.model, call.audio, filtered_params)?
         .body;
-    let authenticated = resolve_auth(auth, environment, &env_lookup).await?;
+    let authenticated = resolve_auth(auth, http, environment, &env_lookup).await?;
     let outbound = litellm_inference::outbound::outbound_request(
         authenticated,
         url,

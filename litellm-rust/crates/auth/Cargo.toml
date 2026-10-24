@@ -10,9 +10,11 @@ default = []
 aws = ["dep:litellm-auth-aws"]
 azure = ["dep:litellm-auth-azure"]
 gcp = ["dep:litellm-auth-gcp"]
+watsonx = ["dep:litellm-auth-watsonx"]
 
 [dependencies]
 litellm-auth-types.workspace = true
 litellm-auth-aws = { workspace = true, optional = true }
 litellm-auth-azure = { workspace = true, optional = true }
 litellm-auth-gcp = { workspace = true, optional = true }
+litellm-auth-watsonx = { workspace = true, optional = true }
