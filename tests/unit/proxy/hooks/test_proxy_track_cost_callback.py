@@ -14,7 +14,7 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
-from litellm.proxy._types import ProxyErrorTypes, ProxyException, SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
@@ -3564,35 +3564,41 @@ async def test_batch_accounting_does_not_retry_after_a_search_allowance_update(m
     assert outcome.retryable_failure is False
 
 
-_PRE_ROUTING_REJECTIONS: Final[tuple[Exception, ...]] = (
-    ProxyException(message="Invalid API key", type=ProxyErrorTypes.token_not_found_in_db, param="key", code=401),
-    ProxyException(message="expired", type=ProxyErrorTypes.expired_key, param="key", code=401),
-    ProxyException(message="no access", type=ProxyErrorTypes.key_model_access_denied, param="model", code=403),
-    ProxyException(message="Invalid JSON payload", type="invalid_request_error", param="request_body", code=400),
-    litellm.BudgetExceededError(current_cost=1.0, max_budget=0.5),
-    litellm.BudgetExceededError(current_cost=1.0, max_budget=0.5, llm_provider="anthropic"),
-    ProxyModelNotFoundError(route="/chat/completions", model_name="4.6"),
-    HTTPException(status_code=401, detail="unauthorized"),
+_PRE_ROUTING_REQUEST: Final[Mapping[str, object]] = {
+    "model": "anthropic-haiku-4-5",
+    "messages": [{"role": "user", "content": "hi"}],
+    "proxy_server_request": {"request_id": "req-1"},
+}
+_ROUTED_REQUEST: Final[Mapping[str, object]] = {**_PRE_ROUTING_REQUEST, "litellm_call_id": "call-1"}
+_INVALID_REQUEST_400: Final = ProxyException(
+    message="Violated guardrail policy", type="invalid_request_error", param=None, code=400
 )
-
-_LOGGED_FAILURES: Final[tuple[Exception, ...]] = (
-    litellm.AuthenticationError(message="bad provider key", llm_provider="anthropic", model="claude-haiku-4-5"),
-    litellm.RateLimitError(message="slow down", llm_provider="anthropic", model="claude-haiku-4-5"),
-    HTTPException(status_code=429, detail="Max parallel requests reached"),
-    HTTPException(status_code=400, detail={"error": "Violated guardrail policy"}),
-    ProxyException(message="db down", type=ProxyErrorTypes.internal_server_error, param=None, code=500),
-    Exception("Test exception"),
+_PROVIDER_AUTH_ERROR: Final = litellm.AuthenticationError(
+    message="bad key", llm_provider="anthropic", model="claude-haiku-4-5"
 )
 
 
-@pytest.mark.parametrize("exception", _PRE_ROUTING_REJECTIONS)
-def test_is_pre_routing_rejection_matches_proxy_rejections(exception: Exception) -> None:
-    assert is_pre_routing_rejection(exception) is True
-
-
-@pytest.mark.parametrize("exception", _LOGGED_FAILURES)
-def test_is_pre_routing_rejection_keeps_provider_guardrail_and_rate_limit_failures(exception: Exception) -> None:
-    assert is_pre_routing_rejection(exception) is False
+@pytest.mark.parametrize(
+    ("exception", "request_data", "expected"),
+    [
+        (_INVALID_REQUEST_400, _PRE_ROUTING_REQUEST, True),
+        (litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), _PRE_ROUTING_REQUEST, True),
+        (ProxyModelNotFoundError(route="/chat/completions", model_name="4.6"), _ROUTED_REQUEST, True),
+        (_INVALID_REQUEST_400, _ROUTED_REQUEST, False),
+        (_PROVIDER_AUTH_ERROR, _ROUTED_REQUEST, False),
+        (
+            litellm.RateLimitError(message="slow down", llm_provider="anthropic", model="claude-haiku-4-5"),
+            _ROUTED_REQUEST,
+            False,
+        ),
+        (HTTPException(status_code=429, detail="Max parallel request limit reached"), _ROUTED_REQUEST, False),
+    ],
+    ids=["bad-body", "budget", "unknown-model", "guardrail-block", "provider-auth", "provider-429", "proxy-429"],
+)
+def test_is_pre_routing_rejection_is_decided_by_pipeline_stage_not_exception_type(
+    exception: Exception, request_data: Mapping[str, object], expected: bool
+) -> None:
+    assert is_pre_routing_rejection(exception, request_data) is expected
 
 
 class _RecordingSpendWriter:
@@ -3605,44 +3611,37 @@ class _RecordingSpendWriter:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("flag_enabled", "exception", "rows_written"),
+    ("flag_enabled", "exception", "request_data", "rows_written"),
     [
-        (
-            True,
-            ProxyException(
-                message="Invalid API key", type=ProxyErrorTypes.token_not_found_in_db, param="key", code=401
-            ),
-            0,
-        ),
-        (True, litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), 0),
-        (True, ProxyModelNotFoundError(route="/chat/completions", model_name="4.6"), 0),
-        (True, litellm.AuthenticationError(message="bad key", llm_provider="anthropic", model="claude-haiku-4-5"), 1),
-        (
-            False,
-            ProxyException(
-                message="Invalid API key", type=ProxyErrorTypes.token_not_found_in_db, param="key", code=401
-            ),
-            1,
-        ),
-        (False, litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), 1),
+        (True, _INVALID_REQUEST_400, _PRE_ROUTING_REQUEST, 0),
+        (True, litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), _PRE_ROUTING_REQUEST, 0),
+        (True, ProxyModelNotFoundError(route="/chat/completions", model_name="4.6"), _ROUTED_REQUEST, 0),
+        (True, _INVALID_REQUEST_400, _ROUTED_REQUEST, 1),
+        (True, _PROVIDER_AUTH_ERROR, _ROUTED_REQUEST, 1),
+        (False, _INVALID_REQUEST_400, _PRE_ROUTING_REQUEST, 1),
+        (False, litellm.BudgetExceededError(current_cost=1.0, max_budget=0.0), _PRE_ROUTING_REQUEST, 1),
     ],
-    ids=["flag-bad-key", "flag-budget", "flag-unknown-model", "flag-provider-error-kept", "off-bad-key", "off-budget"],
+    ids=[
+        "flag-bad-body",
+        "flag-budget",
+        "flag-unknown-model",
+        "flag-guardrail-block-kept",
+        "flag-provider-error-kept",
+        "off-bad-body",
+        "off-budget",
+    ],
 )
 async def test_async_post_call_failure_hook_disable_pre_routing_error_logs(
-    flag_enabled: bool, exception: Exception, rows_written: int
+    flag_enabled: bool, exception: Exception, request_data: Mapping[str, object], rows_written: int
 ) -> None:
     writer: Final = _RecordingSpendWriter()
     user_api_key_dict: Final = UserAPIKeyAuth(
         api_key="test_api_key", user_id="u", team_id="t", request_route="/chat/completions"
     )
-    request_data: Final = {
-        "model": "anthropic-haiku-4-5",
-        "messages": [{"role": "user", "content": "hi"}],
-        "metadata": {},
-        "proxy_server_request": {"request_id": "req-1"},
-    }
     with patch("litellm.proxy.proxy_server.general_settings", {"disable_pre_routing_error_logs": flag_enabled}):
         await ProxyDBLogger(spend_writer=lambda: cast(DBSpendUpdateWriter, writer)).async_post_call_failure_hook(
-            request_data=request_data, original_exception=exception, user_api_key_dict=user_api_key_dict
+            request_data={**request_data, "metadata": dict[str, object]()},
+            original_exception=exception,
+            user_api_key_dict=user_api_key_dict,
         )
     assert len(writer.rows) == rows_written

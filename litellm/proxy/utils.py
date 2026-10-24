@@ -1476,6 +1476,10 @@ def _call_type_for_route(route: str | None) -> str | None:
     return call_types[0].value if len(operations) == 1 else None
 
 
+REJECTED_BEFORE_REQUEST_SETUP_KEY: Final = "litellm_rejected_before_request_setup"
+"""Set on ``request_data`` when the failure handler has to mint the ``litellm_call_id`` itself because the request
+died (auth, body parsing, model resolution) before the pipeline set up logging for it."""
+
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
@@ -3876,7 +3880,8 @@ class ProxyLogging:
         if litellm_logging_obj is None:
             from litellm._uuid import uuid
 
-            request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
+            if "litellm_call_id" not in request_data:
+                request_data.update({"litellm_call_id": str(uuid.uuid4()), REJECTED_BEFORE_REQUEST_SETUP_KEY: True})
             user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
                 user_api_key_dict=user_api_key_dict
             )

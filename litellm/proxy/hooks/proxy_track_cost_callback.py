@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
 
-from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
@@ -25,7 +24,7 @@ from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSet
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_team_object,
@@ -62,7 +61,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     sanitize_error_information_for_spend_logs,
     should_store_prompts_and_responses_in_spend_logs,
 )
-from litellm.proxy.utils import BilledFailedAttempt, ProxyUpdateSpend
+from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP_KEY, BilledFailedAttempt, ProxyUpdateSpend
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     CallTypes,
@@ -399,7 +398,7 @@ class _ProxyDBLogger(CustomLogger):
         if (
             ProxyDBLogger._should_track_errors_in_db() is False
             or ProxyDBLogger._skips_pre_routing_rejections()
-            and is_pre_routing_rejection(original_exception)
+            and is_pre_routing_rejection(original_exception, _REQUEST_DATA.validate_python(request_data))
             or request_route is not None
             and not (
                 RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
@@ -886,19 +885,20 @@ def _general_setting_enabled(name: str) -> bool:
 
 ProxyDBLogger: Final = _ProxyDBLogger
 
-_PRE_ROUTING_REJECTION_STATUS_CODES: Final = frozenset(("400", "401", "403", "404", "422"))
-_PRE_ROUTING_AUTH_STATUS_CODES: Final = frozenset((401, 403))
+
+_REQUEST_DATA: Final = TypeAdapter(dict[str, object])
 
 
-def is_pre_routing_rejection(exception: Exception) -> bool:
-    """True for a request the proxy rejected before any provider call: a bad, expired or over-budget key,
-    model access denied, an unknown model or an unparsable body. Provider errors, guardrail blocks and
-    proxy rate limits (429) are not pre-routing rejections."""
-    if isinstance(exception, (ProxyModelNotFoundError, litellm.BudgetExceededError)):
-        return True
-    if isinstance(exception, ProxyException):
-        return str(exception.code) in _PRE_ROUTING_REJECTION_STATUS_CODES
-    return isinstance(exception, HTTPException) and exception.status_code in _PRE_ROUTING_AUTH_STATUS_CODES
+def is_pre_routing_rejection(exception: Exception, request_data: Mapping[str, object]) -> bool:
+    """The pipeline stamps ``litellm_call_id`` only after auth, body parsing and model resolution succeed, and
+    before guardrails or routing run. A request that reaches the failure hook without one (or with one the
+    failure handler minted, see ``REJECTED_BEFORE_REQUEST_SETUP_KEY``) never had a provider considered. An unknown
+    model is the one later rejection that still never reached a provider."""
+    return (
+        REJECTED_BEFORE_REQUEST_SETUP_KEY in request_data
+        or "litellm_call_id" not in request_data
+        or isinstance(exception, ProxyModelNotFoundError)
+    )
 
 
 def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
