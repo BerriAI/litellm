@@ -411,6 +411,7 @@ async def count_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
+            litellm_call_id=litellm_call_id,
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:

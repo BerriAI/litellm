@@ -9,6 +9,7 @@ import sys
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
+from types import MappingProxyType
 from typing import Final, TextIO
 from urllib.parse import unquote
 
@@ -755,17 +756,20 @@ class JsonFormatter(Formatter):
         # fields, and a message that merely happens to parse as JSON/dict (e.g. a proxy
         # log line dumping raw request headers) must never be able to claim them, even on
         # a record the filter hasn't stamped yet (no correlation context active for it).
+        extras: Final = MappingProxyType(
+            {key: value for key, value in _record_attributes(record).items() if key not in _NON_EXTRA_RECORD_ATTRS}
+        )
         parsed = _try_parse_json_message(message_str)
         if parsed is None:
             parsed = _try_parse_embedded_python_dict(message_str)
         if parsed is not None:
             for key, value in parsed.items():
-                if key not in json_record and key not in _RESERVED_CORRELATION_FIELDS:
+                if key not in json_record and key not in _RESERVED_CORRELATION_FIELDS and key not in extras:
                     json_record[key] = value
 
         # Include extra attributes passed via logger.debug("msg", extra={...})
-        for key, value in _record_attributes(record).items():
-            if key not in _NON_EXTRA_RECORD_ATTRS and key not in json_record:
+        for key, value in extras.items():
+            if key not in json_record:
                 json_record[key] = value
 
         # trace_id/session_id are reserved: CorrelationContextFilter is the only

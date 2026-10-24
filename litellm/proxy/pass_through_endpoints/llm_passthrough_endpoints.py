@@ -87,6 +87,7 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     model_deployments_support_stream_options,
     open_sse_before_first_byte,
+    resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -99,10 +100,12 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_headers,
     safe_set_request_parsed_body,
 )
+from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
+from litellm.proxy.common_utils.token_count_log import deployment_model_id, logged_provider_token_count
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
     stream_usage_relay,
@@ -1272,33 +1275,34 @@ async def handle_bedrock_count_tokens(
         litellm_params: Final = {"user_api_key_dict": user_api_key_dict}
         resolved_model = model  # Default fallback
 
-        if llm_router:
-            deployments: Final = llm_router.get_model_list(model_name=model)
-            if deployments and len(deployments) > 0:
-                # Get the first matching deployment
-                deployment: Final = deployments[0]
-                model_litellm_params: Final = deployment.get("litellm_params", {})
+        deployments: Final = llm_router.get_model_list(model_name=model) if llm_router else None
+        deployment: Final = deployments[0] if deployments else None
+        if deployment is not None:
+            model_litellm_params: Final = deployment.get("litellm_params", {})
 
-                # Get the resolved model ID from the configuration
-                if "model" in model_litellm_params:
-                    resolved_model = model_litellm_params["model"]
+            # Get the resolved model ID from the configuration
+            if "model" in model_litellm_params:
+                resolved_model = model_litellm_params["model"]
 
-                # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
-                for key, value in model_litellm_params.items():
-                    if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
-                        litellm_params[key] = value
+            # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
+            for key, value in model_litellm_params.items():
+                if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
+                    litellm_params[key] = value
 
         verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)
         verbose_proxy_logger.debug("Resolved model: %s", resolved_model)
 
-        # Handle the count tokens request
-        result: Final = await handler.handle_count_tokens_request(
-            request_data=request_body,
-            litellm_params=litellm_params,
-            resolved_model=resolved_model,
+        return await logged_provider_token_count(
+            handler.handle_count_tokens_request(
+                request_data=request_body,
+                litellm_params=litellm_params,
+                resolved_model=resolved_model,
+            ),
+            litellm_call_id=resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER)),
+            request_model=model,
+            model_id=deployment_model_id(deployment),
+            model_used=handler.count_tokens_model_id(resolved_model),
         )
-
-        return result
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
