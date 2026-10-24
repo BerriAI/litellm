@@ -2,12 +2,10 @@ import copy
 import json
 import operator
 import pickle
-from collections.abc import Mapping, MutableMapping
-from pathlib import Path
+from collections.abc import Iterator, Mapping, MutableMapping
 from typing import Final, cast
 
 import pytest
-from pydantic import BaseModel, ConfigDict, JsonValue
 
 import litellm
 from litellm import ModelCostDict
@@ -137,61 +135,140 @@ def test_model_cost_dict_json_preserves_order_and_values() -> None:
     )
 
 
-class RegistrationCall(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    model_cost: dict[str, dict[str, JsonValue]]
-    custom_llm_provider: str | None = None
-    add_to_provider_model_sets: bool = True
-    persist_across_reloads: bool = True
+_BASE_INPUT_COST: Final = 1e-06
+_BASE_OUTPUT_COST: Final = 2e-06
+_REGISTERED_INPUT_COST: Final = 5e-06
 
 
-class ReplayCase(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    name: str
-    base: dict[str, dict[str, JsonValue]]
-    calls: tuple[RegistrationCall, ...]
-    reload: dict[str, dict[str, JsonValue]]
-    before_reload: dict[str, dict[str, JsonValue]]
-    after_reload: dict[str, dict[str, JsonValue]]
+def _catalog(**overrides: object) -> dict[str, dict[str, object]]:
+    return {
+        "parity-chat": {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "aliases": ["parity-alias"],
+            "max_input_tokens": 8192,
+            "input_cost_per_token": _BASE_INPUT_COST,
+            "output_cost_per_token": _BASE_OUTPUT_COST,
+            **overrides,
+        }
+    }
 
 
-class ReplayReference(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    reference_revision: str
-    cases: tuple[ReplayCase, ...]
-
-
-_REFERENCE: Final = ReplayReference.model_validate_json(
-    Path(__file__).with_name("registration_replay_reference.json").read_text()
-)
-
-
-@pytest.mark.parametrize("case", _REFERENCE.cases, ids=lambda case: case.name)
-def test_registration_replay_matches_pre_migration_python(case: ReplayCase) -> None:
+@pytest.fixture
+def parity_catalog() -> Iterator[None]:
     original: Final = GetModelCostMap._base_registry
     provenance: Final = get_model_cost_map_source_info()
-    _MODEL_COST_LAYERS.forget_writes()
-    try:
-        adopt_model_cost_map(copy.deepcopy(case.base))
-        for call in case.calls:
-            litellm.register_model(
-                copy.deepcopy(call.model_cost),
-                custom_llm_provider=call.custom_llm_provider,
-                add_to_provider_model_sets=call.add_to_provider_model_sets,
-                persist_across_reloads=call.persist_across_reloads,
-            )
-        assert list(litellm.model_cost) == list(case.before_reload)
-        assert litellm.model_cost == case.before_reload
+    adopt_model_cost_map(_catalog())
+    yield
+    install_loaded_catalog(
+        LoadedCatalog(original, provenance["source_revision"] or "", provenance["etag"]),
+        provenance=provenance,
+    )
 
-        adopt_model_cost_map(copy.deepcopy(case.reload))
 
-        assert list(litellm.model_cost) == list(case.after_reload)
-        assert litellm.model_cost == case.after_reload
-    finally:
-        install_loaded_catalog(
-            LoadedCatalog(original, provenance["source_revision"] or "", provenance["etag"]),
-            provenance=provenance,
-        )
+@pytest.mark.usefixtures("parity_catalog")
+def test_registered_price_is_billed_after_a_reload() -> None:
+    litellm.register_model({"parity-chat": {"input_cost_per_token": _REGISTERED_INPUT_COST}})
+
+    adopt_model_cost_map(_catalog())
+
+    prompt_cost, _ = litellm.cost_per_token(model="parity-chat", prompt_tokens=1000, completion_tokens=0)
+    assert prompt_cost == pytest.approx(1000 * _REGISTERED_INPUT_COST)
+
+
+@pytest.mark.usefixtures("parity_catalog")
+def test_request_scoped_registration_is_gone_after_a_reload() -> None:
+    litellm.register_model(
+        {"parity-chat": {"input_cost_per_token": _REGISTERED_INPUT_COST}}, persist_across_reloads=False
+    )
+    assert litellm.get_model_info("parity-chat")["input_cost_per_token"] == _REGISTERED_INPUT_COST
+
+    adopt_model_cost_map(_catalog())
+
+    assert litellm.get_model_info("parity-chat")["input_cost_per_token"] == _BASE_INPUT_COST
+
+
+@pytest.mark.usefixtures("parity_catalog")
+def test_reload_updates_the_fields_a_registration_did_not_set() -> None:
+    litellm.register_model({"parity-chat": {"input_cost_per_token": _REGISTERED_INPUT_COST}})
+
+    adopt_model_cost_map(_catalog(max_input_tokens=4242, output_cost_per_token=3e-06))
+
+    info: Final = litellm.get_model_info("parity-chat")
+    assert info["input_cost_per_token"] == _REGISTERED_INPUT_COST
+    assert info["output_cost_per_token"] == 3e-06
+    assert info["max_input_tokens"] == 4242
+
+
+@pytest.mark.usefixtures("parity_catalog")
+def test_later_registration_overrides_only_the_fields_it_names() -> None:
+    litellm.register_model({"parity-chat": {"input_cost_per_token": _REGISTERED_INPUT_COST}})
+    litellm.register_model({"parity-chat": {"output_cost_per_token": 7e-06}})
+
+    adopt_model_cost_map(_catalog())
+
+    info: Final = litellm.get_model_info("parity-chat")
+    assert info["input_cost_per_token"] == _REGISTERED_INPUT_COST
+    assert info["output_cost_per_token"] == 7e-06
+
+
+@pytest.mark.usefixtures("parity_catalog")
+def test_registering_an_alias_prices_its_canonical_row_across_a_reload() -> None:
+    litellm.register_model({"parity-alias": {"input_cost_per_token": _REGISTERED_INPUT_COST}})
+
+    adopt_model_cost_map(_catalog())
+
+    assert litellm.get_model_info("parity-chat")["input_cost_per_token"] == _REGISTERED_INPUT_COST
+    assert litellm.get_model_info("parity-alias")["input_cost_per_token"] == _REGISTERED_INPUT_COST
+
+
+@pytest.mark.usefixtures("parity_catalog")
+def test_custom_model_absent_from_the_catalog_survives_a_reload() -> None:
+    litellm.register_model(
+        {"parity-custom": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.5}}
+    )
+
+    adopt_model_cost_map(_catalog())
+
+    assert litellm.get_model_info("parity-custom")["input_cost_per_token"] == 0.5
+
+
+def _router_with_custom_priced_deployment() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "parity",
+                "litellm_params": {
+                    "model": "openai/parity-chat",
+                    "api_key": "fake-key",
+                    "input_cost_per_token": _REGISTERED_INPUT_COST,
+                },
+                "model_info": {"id": "parity-deployment"},
+            }
+        ]
+    )
+
+
+@pytest.mark.usefixtures("parity_catalog")
+def test_reload_keeps_a_deployments_price_out_of_the_shared_catalog_row() -> None:
+    router: Final = _router_with_custom_priced_deployment()
+
+    adopt_model_cost_map(_catalog())
+
+    assert litellm.get_model_info("parity-deployment")["input_cost_per_token"] == _REGISTERED_INPUT_COST
+    assert litellm.get_model_info("parity-chat")["input_cost_per_token"] == _BASE_INPUT_COST
+    assert router.get_deployment(model_id="parity-deployment") is not None
+
+
+@pytest.mark.usefixtures("parity_catalog")
+def test_deleted_deployment_does_not_come_back_after_a_reload() -> None:
+    router: Final = _router_with_custom_priced_deployment()
+    assert "parity-deployment" in litellm.model_cost
+
+    router.delete_deployment(id="parity-deployment")
+    adopt_model_cost_map(_catalog())
+
+    assert "parity-deployment" not in litellm.model_cost
 
 
 def test_replay_metadata_preserves_native_fields_aliases_and_missing_token_prices() -> None:
