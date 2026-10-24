@@ -174,12 +174,13 @@ class BedrockBatchesHandler:
         )
 
         def job_status() -> "LiteLLMBatch":
+            auth_kwargs: Final[Mapping[str, object]] = dict(auth_params.model_dump())
             return BedrockBatchesHandler.handle_model_invocation_job_status(
                 batch_id=batch_id,
                 aws_region_name=region,
                 logging_obj=logging_obj,
                 aws_bedrock_control_plane_endpoint=control_plane_endpoint,
-                **auth_params.model_dump(),
+                **auth_kwargs,
             )
 
         try:
