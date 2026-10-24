@@ -11981,6 +11981,32 @@ def test_get_model_cost_information_custom_pricing_uses_base_model():
     assert result["model_map_key"] != "invoke_test_claude"
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_get_model_cost_information_base_model_cross_provider():
+    """Regression test for #47908: a deployment whose transport provider differs from the priced
+    base_model's own registered provider must still populate model_map_value, not just completion_cost's
+    return value, since the two used to disagree (spend computed correctly, this field stayed None)."""
+    litellm.register_model(
+        model_cost={
+            "custom-provider/base-model-cross-provider-test": {
+                "input_cost_per_token": 1.5e-07,
+                "output_cost_per_token": 5e-07,
+                "litellm_provider": "custom-provider",
+                "mode": "chat",
+            }
+        }
+    )
+
+    result = StandardLoggingPayloadSetup.get_model_cost_information(
+        base_model="custom-provider/base-model-cross-provider-test",
+        custom_pricing=False,
+        custom_llm_provider="openai",
+        init_response_obj={},
+    )
+    assert result["model_map_value"] is not None
+    assert result["model_map_value"]["input_cost_per_token"] == 1.5e-07
+    assert result["model_map_value"]["litellm_provider"] == "custom-provider"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_standard_logging_payload_uses_deployment_when_no_base_model():
     """metadata["deployment"] is used for cost-map lookup when base_model is not set."""
     from datetime import datetime as datetime_standard_logging
