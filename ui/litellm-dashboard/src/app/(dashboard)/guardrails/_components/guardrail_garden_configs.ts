@@ -256,6 +256,14 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  neuraltrust: {
+    provider: "Neuraltrust",
+    guardrailNameSuggestion: "NeuralTrust TrustGuard",
+    // TrustGuard rewrites the request and masks the reply, so seeding pre_call alone
+    // would leave model output uninspected. Matches the hook README's example config.
+    mode: ["pre_call", "post_call"],
+    defaultOn: false,
+  },
   noma: {
     provider: "Noma",
     guardrailNameSuggestion: "Noma Security",
