@@ -209,6 +209,13 @@ class AnthropicMessagesTextParam(TypedDict, total=False):
     prompt_cache_breakpoint: ReadOnly[PromptCacheBreakpoint]
 
 
+class AnthropicSearchResultParam(TypedDict, total=False):
+    type: Required[ReadOnly[Literal["search_result"]]]
+    source: Required[ReadOnly[str]]
+    title: Required[ReadOnly[str]]
+    content: Required[ReadOnly[Iterable[AnthropicMessagesTextParam]]]
+
+
 class AnthropicMessagesToolUseParam(TypedDict, total=False):
     type: Required[Literal["tool_use"]]
     id: str

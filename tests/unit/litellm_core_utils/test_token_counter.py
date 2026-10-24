@@ -1578,6 +1578,26 @@ def test_token_counter_with_thinking_content():
     ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
 
 
+def test_token_counter_counts_anthropic_search_result_text() -> None:
+    search_result: Final = {
+        "type": "search_result",
+        "source": "https://example.com/paris",
+        "title": "Paris",
+        "content": [{"type": "text", "text": "Paris is the capital of France."}],
+        "citations": {"enabled": True},
+    }
+    as_text_blocks: Final = [
+        {"type": "text", "text": "https://example.com/paris"},
+        {"type": "text", "text": "Paris"},
+        {"type": "text", "text": "Paris is the capital of France."},
+    ]
+
+    def count(content: list[dict[str, object]]) -> int:
+        return token_counter(model="gpt-4o", messages=[{"role": "user", "content": content}])
+
+    assert count([search_result]) == count(as_text_blocks)
+
+
 def test_token_counter_with_redacted_thinking_content():
     """
     A replayed redacted_thinking block (Anthropic redacted reasoning, or the /v1/messages bridge's stand-in
