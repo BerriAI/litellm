@@ -4,9 +4,11 @@ over the wire and surface provider errors correctly. Expected JSON bodies are st
 in expected_responses_api_request/.
 """
 
+import asyncio
 import copy
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from importlib import import_module
 from typing import Final
@@ -1141,6 +1143,61 @@ async def test_a_native_responses_provider_places_every_point_itself():
     assert with_unmatchable_system == user_only
 
 
+_CLAUDE_COMPACTION_ITEM: Final = {
+    "type": "compaction",
+    "id": "cmp_claude",
+    "encrypted_content": json.dumps({"type": "compaction", "content": "The user's cat is named Biscuit."}),
+}
+_OPENAI_COMPACTION_ITEM: Final = {"type": "compaction", "id": "cmp_openai", "encrypted_content": "gAAAAABopaque"}
+_HISTORY: Final = (
+    {"role": "system", "content": "Answer briefly."},
+    {"role": "user", "content": "My cat is named Biscuit."},
+    {"role": "assistant", "content": "Noted."},
+)
+_NEXT_TURN: Final = {"role": "user", "content": "What is my cat's name?"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "upstream_url"),
+    [
+        pytest.param(litellm.aresponses, "https://api.openai.com/v1/responses", id="create"),
+        pytest.param(litellm.acompact_responses, "https://api.openai.com/v1/responses/compact", id="compact"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("compaction_item", "sent_input"),
+    [
+        (
+            _CLAUDE_COMPACTION_ITEM,
+            [
+                _HISTORY[0],
+                {"role": "user", "content": "The user's cat is named Biscuit.", "type": "message"},
+                _NEXT_TURN,
+            ],
+        ),
+        (_OPENAI_COMPACTION_ITEM, [*_HISTORY, _OPENAI_COMPACTION_ITEM, _NEXT_TURN]),
+    ],
+)
+async def test_aresponses_sends_a_claude_compaction_item_to_openai_as_its_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    call: Callable[..., Awaitable[object]],
+    upstream_url: str,
+    compaction_item: dict[str, str],
+    sent_input: list[dict[str, str]],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(upstream_url).mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_compacted", "gpt-5.6"))
+    )
+
+    await call(model="openai/gpt-5.6", api_key="fake-api-key", input=[*_HISTORY, compaction_item, _NEXT_TURN])
+
+    assert json.loads(upstream.calls[0].request.read())["input"] == sent_input
+
+
 def test_non_streamed_response_ignores_a_stream_timeout_it_never_uses() -> None:
     answer: Final = json.dumps(_minimal_responses_api_payload("resp_unstreamed", "gpt-5.6")).encode()
     client: Final = HTTPHandler(
@@ -1175,3 +1232,110 @@ def test_faked_stream_accepts_a_text_timeout(monkeypatch: pytest.MonkeyPatch) ->
     assert [event.response.output[0].content[0].text for event in response if event.type == "response.completed"] == [
         "Done."
     ]
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    ("api_base", "explicit_header", "expected_session"),
+    [
+        ("https://opencode.ai/inference/go/openai/v1", None, "conversation-123"),
+        ("https://opencode.ai/inference/go/openai/v1", "caller-override", "caller-override"),
+        ("https://other.example/v1", None, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_responses_opencode_session_header(
+    asynchronous: bool, stream: bool, api_base: str, explicit_header: str | None, expected_session: str | None
+) -> None:
+    received: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+    payload: Final = _minimal_responses_api_payload("resp_test", "gpt-6-luna")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        received.put_nowait(request)
+        return (
+            httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text="".join(
+                    f"event: {kind}\ndata: {json.dumps({'type': kind, 'response': payload})}\n\n"
+                    for kind in ("response.created", "response.completed")
+                ),
+            )
+            if stream
+            else httpx.Response(200, json=payload)
+        )
+
+    args: Final = {
+        "model": "openai/gpt-6-luna",
+        "input": "hello",
+        "api_base": api_base,
+        "api_key": "test-key",
+        "litellm_session_id": "conversation-123",
+        "stream": stream,
+        "extra_headers": {"X-OpenCode-Session": explicit_header} if explicit_header else {"x-existing": "unchanged"},
+    }
+    if asynchronous:
+        async_client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+        try:
+            response: Final = await litellm.aresponses(**args, client=async_client)
+            if stream:
+                events: Final = tuple([event.type async for event in response])
+                assert "response.completed" in events
+            else:
+                assert response.output[0].content[0].text == "Done."
+        finally:
+            await async_client.close()
+    else:
+        sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+        try:
+            result: Final = litellm.responses(**args, client=sync_client)
+            if stream:
+                assert "response.completed" in tuple(event.type for event in result)
+            else:
+                assert result.output[0].content[0].text == "Done."
+        finally:
+            sync_client.close()
+    sent: Final = received.get_nowait()
+    assert str(sent.url) == f"{api_base}/responses"
+    assert sent.headers.get("x-opencode-session") == expected_session
+    assert sent.headers["authorization"] == "Bearer test-key"
+    assert json.loads(sent.content) == {"model": "gpt-6-luna", "input": "hello", "stream": stream}
+    assert received.empty()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("source", ["OPENAI_BASE_URL", "OPENAI_API_BASE", "litellm.api_base"])
+@pytest.mark.parametrize("explicit_base", [None, "https://other.example/v1"])
+@pytest.mark.asyncio
+async def test_responses_opencode_session_uses_effective_destination(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    asynchronous: bool,
+    source: str,
+    explicit_base: str | None,
+) -> None:
+    default_base: Final = "https://opencode.ai/inference/go/openai/v1"
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", default_base if source == "litellm.api_base" else None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    if source != "litellm.api_base":
+        monkeypatch.setenv(source, default_base)
+    endpoint: Final = respx_mock.post(f"{explicit_base or default_base}/responses").respond(
+        json=_minimal_responses_api_payload("resp_test", "gpt-6-luna")
+    )
+    args: Final = {
+        "model": "openai/gpt-6-luna",
+        "input": "hello",
+        "api_base": explicit_base,
+        "api_key": "test-key",
+        "litellm_session_id": "conversation-123",
+    }
+    response: Final = await litellm.aresponses(**args) if asynchronous else litellm.responses(**args)
+    assert response.output[0].content[0].text == "Done."
+    assert endpoint.call_count == 1
+    sent: Final = endpoint.calls[0].request
+    assert sent.headers.get("x-opencode-session") == (None if explicit_base else "conversation-123")
+    assert sent.headers["authorization"] == "Bearer test-key"
+    assert json.loads(sent.content) == {"model": "gpt-6-luna", "input": "hello"}

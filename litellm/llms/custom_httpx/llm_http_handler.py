@@ -55,14 +55,17 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
+from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.realtime_errors import (
     close_after_upstream_handshake_refusal,
     realtime_error_event,
     websocket_close_reason,
 )
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -2438,13 +2441,13 @@ class BaseLLMHTTPHandler:
         # Also check for extra_headers in kwargs (from config or direct calls)
         extra_headers_from_kwargs: Final = kwargs.get("extra_headers", None)
         # Merge all header sources: forwarded < extra_headers < provider_specific
-        merged_headers: Final = {}
-        if forwarded_headers:
-            merged_headers.update(forwarded_headers)
-        if extra_headers_from_kwargs:
-            merged_headers.update(extra_headers_from_kwargs)
-        if provider_specific_headers:
-            merged_headers.update(provider_specific_headers)
+        merged_headers: Final[Mapping[str, object]] = MappingProxyType(
+            {
+                **(forwarded_headers or {}),
+                **(extra_headers_from_kwargs or {}),
+                **(provider_specific_headers or {}),
+            }
+        )
         request_params: Final = reduce(
             delete_nested_value,
             litellm_params.get("additional_drop_params") or (),
@@ -2455,11 +2458,19 @@ class BaseLLMHTTPHandler:
             and anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
         ):
             await aload_beta_headers_config()
+        affinity_api_base: Final = (
+            AnthropicModelInfo.get_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
+        )
+        default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
         (
             headers,
             api_base,
         ) = await anthropic_messages_provider_config.avalidate_anthropic_messages_environment(
-            headers=merged_headers or {},
+            headers=(
+                add_provider_affinity_header(merged_headers, litellm_params, default_affinity_header)
+                if default_affinity_header is not None
+                else dict(merged_headers)
+            ),
             model=model,
             messages=messages,
             optional_params=request_params,
@@ -6938,7 +6949,7 @@ class BaseLLMHTTPHandler:
                 headers={}, model=model or "", api_key=api_key
             )
         else:
-            url = f"{api_base.rstrip('/')}/v1/realtime/{endpoint}"
+            url = join_api_base(api_base, f"v1/realtime/{endpoint}")
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -7007,7 +7018,7 @@ class BaseLLMHTTPHandler:
             url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "", api_version=api_version)
             headers: dict[str, object] = provider_config.get_realtime_calls_headers(ephemeral_key=openai_ephemeral_key)
         else:
-            url = f"{api_base.rstrip('/')}/v1/realtime/calls"
+            url = join_api_base(api_base, "v1/realtime/calls")
             headers = {
                 "Authorization": f"Bearer {openai_ephemeral_key}",
             }

@@ -67,6 +67,7 @@ from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -1984,6 +1985,7 @@ class ProxyBaseLLMRequestProcessing:
         self.data = data
         self.served_model = served_model
         self._tags_before_guardrails: frozenset[str] | None = None
+        self.route_type: str | None = None
 
     @property
     def litellm_call_id(self) -> str | None:
@@ -2433,6 +2435,7 @@ class ProxyBaseLLMRequestProcessing:
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
         ## IMPORTANT Note: - initialize this before running pre-call checks. Ensures we log rejected requests to langfuse.
+        self.route_type = route_type
         logging_obj, self.data = litellm.utils.function_setup(
             original_function=route_type,
             rules_obj=litellm.utils.Rules(),
@@ -2799,6 +2802,7 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
                 original_exception=exc,
                 request_data=self.data,
+                dispatched_call_type=self.route_type,
             )
 
         return await open_sse_before_first_byte(
@@ -2863,6 +2867,7 @@ class ProxyBaseLLMRequestProcessing:
                     "skip_pre_call_logic=True requires litellm_logging_obj to be set in data. "
                     "Ensure common_processing_pre_call_logic was called before using this parameter."
                 )
+            self.route_type = route_type
         else:
             self.data, logging_obj = await self._pre_call_with_fallbacks(
                 request=request,
@@ -3472,6 +3477,7 @@ class ProxyBaseLLMRequestProcessing:
                     user_api_key_dict=user_api_key_dict,
                     original_exception=exc,
                     request_data=request_data,
+                    dispatched_call_type=self.route_type,
                 )
             except HTTPException:
                 return
@@ -3996,6 +4002,8 @@ class ProxyBaseLLMRequestProcessing:
 
         async def _on_deferred_native_stream_complete(*args: object) -> None:
             match args:
+                case (BilledRoundsDispatch(dispatch=logging_coroutine),):
+                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
                 case (logging_coroutine,) if asyncio.iscoroutine(logging_coroutine):
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
                 case (assembled_response, cache_hit):
@@ -4139,6 +4147,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=self.data,
+            dispatched_call_type=self.route_type,
         )
         # Use transformed exception if callback returned one, otherwise use original
         if transformed_exception is not None:

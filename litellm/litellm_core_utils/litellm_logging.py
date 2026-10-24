@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime as dt_object
 from functools import lru_cache
@@ -575,12 +575,37 @@ class UncachedPrice:
     cost_breakdown: CostBreakdown | None
 
 
+@dataclass(frozen=True, slots=True)
+class BilledRoundsSpend:
+    usage: Usage
+    cost: float
+    cost_breakdown: CostBreakdown | None
+
+
+@dataclass(frozen=True, slots=True)
+class BilledRoundsDispatch:
+    """A parked success log for a stream bridged through chat completions that billed several rounds, and the spend
+    its failure log bills when a post-call hook rejects the response, as it does for a rejected one-round bridged
+    stream."""
+
+    dispatch: Coroutine[object, object, None]
+    spend: BilledRoundsSpend
+
+
+def _fixed_margin(cost_breakdown: CostBreakdown | None) -> float:
+    return 0.0 if cost_breakdown is None else cost_breakdown.get("margin_fixed_amount", 0.0)
+
+
 def _timestamp_seconds(moment: object) -> float | None:
     if isinstance(moment, datetime.datetime):
         return moment.timestamp()
     if isinstance(moment, (int, float)):
         return float(moment)
     return None
+
+
+def same_attempt_marker(first: object, second: object) -> bool:
+    return first is second or first == second
 
 
 class Logging(LiteLLMLoggingBaseClass):
@@ -604,6 +629,7 @@ class Logging(LiteLLMLoggingBaseClass):
     classifier_input: Mapping[str, JsonValue] | None = None
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
+    _on_failure_payload_built: "Callable[[], None] | None" = None
 
     @property
     def _defer_async_logging(self) -> bool:
@@ -831,6 +857,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "litellm_call_id": litellm_call_id,
             "start_time": start_time,
             "first_api_call_start_time": None,
+            "current_attempt_api_call_start_time": None,
             "litellm_params": litellm_params,
         }
         new_call.streaming_chunks = []
@@ -1581,7 +1608,9 @@ class Logging(LiteLLMLoggingBaseClass):
             # A proxy-gate failure (auth, rate limit, client disconnect) fires pre_call for its callbacks
             # without any provider handoff, so it must not stamp the handoff instants.
             if LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL not in self.model_call_details:
-                self.model_call_details["api_call_start_time"] = datetime.datetime.now()
+                api_call_start_time: Final = datetime.datetime.now()
+                self.model_call_details["api_call_start_time"] = api_call_start_time
+                self.model_call_details["current_attempt_api_call_start_time"] = api_call_start_time
                 # Set-once first provider-handoff instant. api_call_start_time
                 # is overwritten on every retry, so it can't measure one-time
                 # preprocessing; pinning the first attempt excludes retry loops
@@ -1589,9 +1618,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 # litellm_params["metadata"] (caller request metadata, typed
                 # Dict[str, str], echoed downstream; a datetime breaks it).
                 if self.model_call_details.get("first_api_call_start_time") is None:
-                    self.model_call_details["first_api_call_start_time"] = self.model_call_details[
-                        "api_call_start_time"
-                    ]
+                    self.model_call_details["first_api_call_start_time"] = api_call_start_time
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks: Final = (
                 *self._without_replaced_global_callbacks(litellm.input_callback),
@@ -2421,6 +2448,31 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
+    def record_failure_after_earlier_rounds(
+        self, earlier: BilledRoundsSpend, failed_usage: Usage, failed_cost: float
+    ) -> None:
+        """Bill a failed round on the failure log after the rounds of its request before it were billed on the success
+        log.
+
+        The fixed margin is a per-request fee, so it is charged once: the failed round's margin is dropped when the
+        earlier rounds already paid one."""
+        from litellm.responses.mcp.round_billing import breakdown_less_repeated_fixed_margin
+
+        failed_breakdown: Final = None if self.cost_breakdown is earlier.cost_breakdown else self.cost_breakdown
+        repeated_fixed_margin: Final = (
+            0.0
+            if failed_breakdown is None
+            else min(_fixed_margin(earlier.cost_breakdown), _fixed_margin(failed_breakdown), earlier.cost, failed_cost)
+        )
+        self.model_call_details["combined_usage_object"] = failed_usage
+        self.model_call_details["response_cost"] = failed_cost - repeated_fixed_margin
+        self.cost_breakdown = breakdown_less_repeated_fixed_margin(failed_breakdown, repeated_fixed_margin)
+
+    def record_billed_rounds_for_failure(self, spend: BilledRoundsSpend) -> None:
+        """Bill every round of a fully streamed request on the failure log when a post-call hook rejects it."""
+        self.record_partial_usage_for_failure(spend.usage, spend.cost)
+        self.cost_breakdown = spend.cost_breakdown
+
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves
         the state the request's other attempts share untouched."""
@@ -2428,12 +2480,37 @@ class Logging(LiteLLMLoggingBaseClass):
         attempt.model_call_details = dict(self.model_call_details)
         return attempt
 
+    def dispatch_attempt_failure_handlers(
+        self, exception: Exception, traceback_exception: str
+    ) -> Coroutine[None, None, None]:
+        shared_payload: Final = self.model_call_details.get("standard_logging_object")
+        attempt_marker: Final = self.model_call_details.get("current_attempt_api_call_start_time")
+        attempt: Final = self.attempt_scoped_copy()
+
+        def publish() -> None:
+            attempt_payload: Final = attempt.model_call_details.get("standard_logging_object")
+            current_marker: Final = self.model_call_details.get("current_attempt_api_call_start_time")
+            if (
+                attempt_payload is not None
+                and self.model_call_details.get("standard_logging_object") is shared_payload
+                and same_attempt_marker(current_marker, attempt_marker)
+            ):
+                self.model_call_details["standard_logging_object"] = attempt_payload
+
+        attempt._on_failure_payload_built = publish
+
+        async def dispatch() -> None:
+            await attempt.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True)
+
+        return dispatch()
+
     def carry_failed_attempt_usage(self) -> None:
         """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its
         own usage while the request's failure log still bills every attempt."""
         usage: Final = self.model_call_details.pop("combined_usage_object", None)
         response_cost: Final = self.model_call_details.pop("response_cost", None)
         if isinstance(usage, Usage):
+            self.model_call_details["current_attempt_api_call_start_time"] = None
             self.model_call_details["failed_attempts_usage"] = (
                 *self.model_call_details.get("failed_attempts_usage", ()),
                 (usage, float(response_cost) if isinstance(response_cost, (int, float)) else 0.0),
@@ -2547,6 +2624,10 @@ class Logging(LiteLLMLoggingBaseClass):
             """
             return
         self.model_call_details[f"has_logged_{event_type}"] = True
+        if event_type == "async_failure":
+            self.model_call_details["async_failure_logged_attempt"] = self.model_call_details.get(
+                "current_attempt_api_call_start_time"
+            )
         return
 
     def has_run_logging(
@@ -4364,7 +4445,8 @@ class Logging(LiteLLMLoggingBaseClass):
             start_time=start_time,
             end_time=end_time,
         )
-
+        if self._on_failure_payload_built is not None:
+            self._on_failure_payload_built()
         callbacks: Final = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
             global_callbacks=litellm._async_failure_callback,
