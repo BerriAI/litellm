@@ -16,8 +16,10 @@ from pydantic import BaseModel
 import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
 from litellm._logging import verbose_logger
+from litellm.cost_calculator import batch_cost_calculator
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token, parse_prompt_tokens_details
 from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
@@ -30,8 +32,9 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     normalize_gemini_speech_config,
     reject_unknown_gemini_tts_voice_keys,
 )
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
-from litellm.types.utils import ChoiceLogprobs, Usage
+from litellm.types.utils import ChoiceLogprobs, ModelInfo, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.custom_logger import CustomLogger
@@ -1515,6 +1518,7 @@ def test_vertex_ai_usage_metadata_accumulates_duplicate_modalities():
     v = VertexGeminiConfig()
     usage_metadata = {
         "promptTokenCount": 210,
+        "cachedContentTokenCount": 54,
         "candidatesTokenCount": 50,
         "totalTokenCount": 260,
         "promptTokensDetails": [
@@ -1536,14 +1540,127 @@ def test_vertex_ai_usage_metadata_accumulates_duplicate_modalities():
     usage_metadata = UsageMetadata(**usage_metadata)
     result = v.calculate_usage(completion_response={"usageMetadata": usage_metadata})
 
-    # prompt details are total - cached per modality
-    assert result.prompt_tokens_details.text_tokens == 16  # 20 - 4
-    assert result.prompt_tokens_details.image_tokens == 140  # (90 + 100) - (40 + 10)
+    assert result.prompt_tokens_details.text_tokens == 20
+    assert result.prompt_tokens_details.image_tokens == 190
+    assert result.prompt_tokens_details.cached_tokens == 54
+    assert result.prompt_tokens_details.cached_tokens_details == CachedTokensDetails(text_tokens=4, image_tokens=50)
 
     # candidates details accumulate duplicate modalities
     assert result.completion_tokens_details.text_tokens == 20  # 15 + 5
     assert result.completion_tokens_details.image_tokens == 30
     assert result.completion_tokens == 50
+
+
+def _gemini_usage_with_cached_audio(cached_audio_tokens: int) -> Usage:
+    cache_tokens_details: Final = (
+        (
+            {"modality": "TEXT", "tokenCount": 5},
+            {"modality": "AUDIO", "tokenCount": cached_audio_tokens},
+        )
+        if cached_audio_tokens > 0
+        else ({"modality": "TEXT", "tokenCount": 5},)
+    )
+    completion_response: Final = {
+        "usageMetadata": {
+            "promptTokenCount": 40,
+            "cachedContentTokenCount": 5 + cached_audio_tokens,
+            "promptTokensDetails": (
+                {"modality": "TEXT", "tokenCount": 20},
+                {"modality": "AUDIO", "tokenCount": 20},
+            ),
+            "cacheTokensDetails": cache_tokens_details,
+            "candidatesTokenCount": 7,
+            "totalTokenCount": 47,
+        }
+    }
+    return VertexGeminiConfig.calculate_usage(completion_response=completion_response)
+
+
+def test_gemini_raw_usage_metadata_prices_cached_audio_at_its_batch_rate() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_token_batches": 1e-6,
+        "input_cost_per_audio_token": 6e-6,
+        "input_cost_per_audio_token_batches": 3e-6,
+        "cache_read_input_token_cost": 8e-7,
+        "cache_read_input_token_cost_batches": 4e-7,
+        "cache_read_input_audio_token_cost": 5e-7,
+        "cache_read_input_audio_token_cost_batches": 2e-7,
+    }
+    usage: Final = _gemini_usage_with_cached_audio(5)
+    expected_prompt_cost: Final = (
+        15 * model_info["input_cost_per_token_batches"]
+        + 15 * model_info["input_cost_per_audio_token_batches"]
+        + 5 * model_info["cache_read_input_token_cost_batches"]
+        + 5 * model_info["cache_read_input_audio_token_cost_batches"]
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage,
+        model="gemini-audio-batch-test-model",
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
+def test_gemini_raw_usage_metadata_prices_cached_audio_at_its_standard_rate() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_audio_token": 6e-6,
+        "cache_read_input_token_cost": 8e-7,
+        "cache_read_input_audio_token_cost": 5e-7,
+    }
+    usage: Final = _gemini_usage_with_cached_audio(5)
+    expected_prompt_cost: Final = (
+        15 * model_info["input_cost_per_token"]
+        + 15 * model_info["input_cost_per_audio_token"]
+        + 5 * model_info["cache_read_input_token_cost"]
+        + 5 * model_info["cache_read_input_audio_token_cost"]
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-audio-standard-test-model",
+        usage=usage,
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
+def test_gemini_usage_totals_are_subtracted_once_and_audio_cache_rate_matches_audio_rate() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_audio_token": 6e-6,
+        "cache_read_input_token_cost": 8e-7,
+        "cache_read_input_audio_token_cost": 6e-6,
+    }
+    cached_usage: Final = _gemini_usage_with_cached_audio(5)
+    uncached_usage: Final = _gemini_usage_with_cached_audio(0)
+    cached_details: Final = parse_prompt_tokens_details(cached_usage)
+    cached_prompt_cost, _ = generic_cost_per_token(
+        model="gemini-audio-standard-test-model",
+        usage=cached_usage,
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+    uncached_prompt_cost, _ = generic_cost_per_token(
+        model="gemini-audio-standard-test-model",
+        usage=uncached_usage,
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    assert cached_usage.prompt_tokens_details.text_tokens == 20
+    assert cached_usage.prompt_tokens_details.audio_tokens == 20
+    assert cached_usage.prompt_tokens_details.cached_tokens_details == CachedTokensDetails(
+        text_tokens=5, audio_tokens=5
+    )
+    assert cached_details["text_tokens"] == 15
+    assert cached_details["audio_tokens"] == 15
+    assert cached_prompt_cost == pytest.approx(uncached_prompt_cost)
 
 
 def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
@@ -6150,7 +6267,7 @@ def test_vertex_ai_usage_metadata_with_document_tokens_in_prompt():
 
 
 def test_vertex_ai_usage_metadata_with_document_tokens_cached():
-    """Test that cached DOCUMENT tokens are correctly subtracted from prompt text tokens."""
+    """Test cached DOCUMENT token details and unchanged prompt cost."""
     v = VertexGeminiConfig()
 
     usage_metadata_dict = {
@@ -6174,10 +6291,24 @@ def test_vertex_ai_usage_metadata_with_document_tokens_cached():
     completion_response = {"usageMetadata": usage_metadata_dict}
     result = v.calculate_usage(completion_response=completion_response)
 
-    # DOCUMENT cached tokens map to cached_text_tokens, so:
-    # text_tokens = (8 TEXT + 774 DOCUMENT) - 400 cached = 382
-    assert result.prompt_tokens_details.text_tokens == 382, "text_tokens should be (8 + 774) - 400 cached = 382"
+    assert result.prompt_tokens_details.text_tokens == 782
     assert result.prompt_tokens_details.cached_tokens == 400
+    assert result.prompt_tokens_details.cached_tokens_details.text_tokens == 400
+
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": 5e-7,
+    }
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-document-cache-test-model",
+        usage=result,
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(
+        382 * model_info["input_cost_per_token"] + 400 * model_info["cache_read_input_token_cost"]
+    )
 
 
 def test_async_streaming_uses_custom_client():
