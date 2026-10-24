@@ -104,7 +104,7 @@ class _RoutingRule:
 @dataclass(frozen=True, slots=True)
 class _CapabilityRule:
     pattern: re.Pattern
-    model_info: dict
+    model_info: Mapping[str, object]
     fill_missing_for_providers: frozenset[str]
 
 
@@ -206,7 +206,7 @@ class _FallbackGeneralizations:
             None,
         )
 
-    def match_capabilities(self, model: str) -> dict | None:
+    def match_capabilities(self, model: str) -> Mapping[str, object] | None:
         if not model:
             return None
         matched = tuple(rule.model_info for rule in self.capability_rules if rule.pattern.search(model) is not None)
@@ -257,7 +257,7 @@ def match_routing_generalization(model: str) -> str | None:
     return _registry.match_routing(model)
 
 
-def match_capability_generalizations(model: str) -> dict | None:
+def match_capability_generalizations(model: str) -> Mapping[str, object] | None:
     """Return the union of the ``model_info`` of every capability rule matching ``model``.
 
     Later rules override earlier ones on key conflicts. Returns ``None`` when no

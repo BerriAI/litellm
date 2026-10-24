@@ -1,0 +1,37 @@
+{
+  "reference_revision": "e80109c81ec4087404e9c0deabe9ceafac1709f9",
+  "key": "bedrock/ap-northeast-1.anthropic.parity-tiered-v1:0",
+  "inherits_from": "anthropic.parity-tiered-v1:0",
+  "lookup": "ModelInfoLookupMiss",
+  "names_the_row": false,
+  "base_and_reload": {
+    "anthropic.parity-tiered-v1:0": {
+      "litellm_provider": "bedrock",
+      "mode": "chat",
+      "tiered_pricing": [
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "range": [0, 256000]},
+        {"input_cost_per_token": 0.03, "output_cost_per_token": 0.04, "range": [256000, 1000000]}
+      ]
+    }
+  },
+  "caller_fields": {"litellm_provider": "bedrock", "input_cost_per_token": 0.5},
+  "expected_before_and_after_reload": {
+    "mode": "chat",
+    "tiered_pricing": [
+      {"output_cost_per_token": 0.02, "range": [0, 256000], "input_cost_per_token": 0.5},
+      {"output_cost_per_token": 0.04, "range": [256000, 1000000], "input_cost_per_token": 0.5}
+    ],
+    "litellm_provider": "bedrock",
+    "input_cost_per_token": 0.5
+  },
+  "observed_with_missing_inheritance": {"litellm_provider": "bedrock", "input_cost_per_token": 0.5},
+  "observed_with_inheritance_only": {
+    "litellm_provider": "bedrock",
+    "mode": "chat",
+    "tiered_pricing": [
+      {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "range": [0, 256000]},
+      {"input_cost_per_token": 0.03, "output_cost_per_token": 0.04, "range": [256000, 1000000]}
+    ],
+    "input_cost_per_token": 0.5
+  }
+}

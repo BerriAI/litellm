@@ -8,6 +8,7 @@ mod execution;
 mod http;
 mod logger;
 mod marshal;
+mod model_registry;
 mod preflight;
 mod python_settings;
 mod routes;
@@ -18,7 +19,10 @@ mod tokenizer;
 mod _native {
     #[pymodule_export]
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
-    use pyo3::{prelude::*, types::PyModule};
+    use pyo3::{
+        prelude::*,
+        types::{PyModule, PyTuple},
+    };
 
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
@@ -29,6 +33,12 @@ mod _native {
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
+    #[pymodule_export]
+    use crate::model_registry::{
+        AdoptStep, DoneStep, FetchStep, FetchedRegistry, ModelCostLayers, ModelRegistry,
+        RegistryNotModified, RegistryUnavailable, RevalidationState, RowError, SleepStep,
+        fetch_model_registry, fetch_model_registry_async, model_row_errors, revalidation,
+    };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -66,7 +76,18 @@ mod _native {
         dict.set_item(
             "_SecretManagerRuntime",
             py.get_type::<crate::secrets::runtime::NativeSecretManager>(),
-        )
+        )?;
+        let typing = py.import("typing")?;
+        let literal = typing.getattr("Literal")?;
+        let row_error_kinds = PyTuple::new(
+            py,
+            <crate::model_registry::RowErrorKind as strum::VariantArray>::VARIANTS
+                .iter()
+                .map(|kind| literal.get_item(<&'static str>::from(*kind)))
+                .collect::<PyResult<Vec<_>>>()?,
+        )?;
+        let row_error_kind = typing.getattr("Union")?.get_item(row_error_kinds)?;
+        module.add("RowErrorKind", row_error_kind)
     }
 }
 
@@ -80,6 +101,35 @@ pub(crate) fn native_module(py: Python<'_>) -> Bound<'_, PyModule> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn singleton_literal_values(py: Python<'_>, alias: &Bound<'_, PyAny>) -> (bool, Vec<String>) {
+        let typing = py.import("typing").unwrap();
+        let literal = typing.getattr("Literal").unwrap();
+        let components = typing.call_method1("get_args", (alias,)).unwrap();
+        let inspected = components
+            .try_iter()
+            .unwrap()
+            .map(|component| {
+                let component = component.unwrap();
+                let origin = typing.call_method1("get_origin", (&component,)).unwrap();
+                let arguments = typing.call_method1("get_args", (&component,)).unwrap();
+                let values = arguments.extract::<Vec<String>>().unwrap();
+                (
+                    origin.is(&literal) && values.len() == 1,
+                    values.first().cloned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        (
+            inspected
+                .iter()
+                .all(|(is_singleton_literal, _)| *is_singleton_literal),
+            inspected
+                .into_iter()
+                .filter_map(|(_, value)| value)
+                .collect(),
+        )
+    }
 
     #[rstest::rstest]
     fn module_registration_preserves_the_public_surface() {
@@ -107,6 +157,22 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "ModelCostLayers",
+                "ModelRegistry",
+                "RowError",
+                "RowErrorKind",
+                "model_row_errors",
+                "FetchedRegistry",
+                "RegistryNotModified",
+                "RegistryUnavailable",
+                "FetchStep",
+                "SleepStep",
+                "AdoptStep",
+                "DoneStep",
+                "RevalidationState",
+                "Revalidation",
+                "fetch_model_registry",
+                "fetch_model_registry_async",
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
                 "trace_encode_error",
@@ -130,6 +196,50 @@ mod tests {
                 .collect();
             public_names.sort_unstable();
             assert_eq!(public_names, expected);
+        });
+    }
+
+    #[rstest::rstest]
+    fn row_error_kind_is_a_union_of_singleton_literals() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = native_module(py);
+            let typing = py.import("typing").unwrap();
+            let union = typing.getattr("Union").unwrap();
+            let alias = module.getattr("RowErrorKind").unwrap();
+            let origin = typing.call_method1("get_origin", (alias.clone(),)).unwrap();
+            assert!(origin.is(&union));
+            let (all_singleton_literals, actual) = singleton_literal_values(py, &alias);
+            assert!(all_singleton_literals);
+            assert_eq!(
+                actual,
+                Vec::from([
+                    "json".to_owned(),
+                    "empty".to_owned(),
+                    "below_minimum".to_owned(),
+                    "shrunk".to_owned(),
+                    "not_an_object".to_owned(),
+                    "invalid".to_owned(),
+                    "unknown_block_key".to_owned(),
+                    "missing_provider".to_owned(),
+                    "unknown_timezone".to_owned(),
+                    "alias_shadows_model".to_owned(),
+                    "alias_taken".to_owned(),
+                    "duplicate_price".to_owned(),
+                    "suffix_inside_block".to_owned(),
+                    "tier_range".to_owned(),
+                    "tier_reversed".to_owned(),
+                    "tier_gap".to_owned(),
+                    "mixed_tier_basis".to_owned(),
+                    "not_priced_by_results".to_owned(),
+                    "bands_from_two_sources".to_owned(),
+                    "not_an_off_peak_rate".to_owned(),
+                    "no_off_peak_prices".to_owned(),
+                    "no_off_peak_hours".to_owned(),
+                    "empty_list".to_owned(),
+                    "invalid_date".to_owned(),
+                ])
+            );
         });
     }
 }
