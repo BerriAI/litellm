@@ -12,6 +12,7 @@ import respx
 import litellm
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.ollama.common_utils import OllamaError
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
     OllamaTextCompletionResponseIterator,
@@ -20,6 +21,34 @@ from litellm.types.utils import Message, ModelResponse, ModelResponseStream
 
 
 class TestOllamaConfig:
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {},
+            {"error": {"message": "upstream broke"}},
+            {"response": "", "error": {"message": "upstream broke"}},
+        ],
+    )
+    def test_transform_response_rejects_payload_without_completion(self, body):
+        raw_response = MagicMock()
+        raw_response.json.return_value = body
+        raw_response.text = json.dumps(body)
+        raw_response.status_code = 200
+        raw_response.headers = {}
+
+        with pytest.raises(OllamaError):
+            OllamaConfig().transform_response(
+                model="llama3",
+                raw_response=raw_response,
+                model_response=ModelResponse(choices=[{"message": Message(content="")}]),
+                logging_obj=MagicMock(),
+                request_data={},
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
     def test_transform_response_standard(self):
         # Initialize config
         config = OllamaConfig()
@@ -596,6 +625,28 @@ class TestOllamaConfig:
         assert result.choices[0]["finish_reason"] == "stop"
 
 
+@pytest.mark.parametrize(
+    "response_body",
+    [
+        pytest.param({}, id="missing-response"),
+        pytest.param({"response": "", "error": {"message": "upstream broke"}}, id="error"),
+    ],
+)
+def test_completion_with_invalid_success_reply_raises_api_connection_error(
+    respx_mock: respx.MockRouter, response_body: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post("http://ollama.test:11434/api/generate").respond(json=response_body)
+
+    with pytest.raises(litellm.APIConnectionError):
+        litellm.completion(
+            model="ollama/llama3",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="http://ollama.test:11434",
+        )
+
+    assert route.called
+
+
 class TestOllamaTextCompletionResponseIterator:
     def test_every_chunk_of_one_stream_carries_the_same_response_id(self):
         iterator: Final = OllamaTextCompletionResponseIterator(
@@ -682,7 +733,7 @@ class TestOllamaTextCompletionResponseIterator:
         # Updated to handle ModelResponseStream return type
         assert isinstance(result, ModelResponseStream)
         assert result.choices and result.choices[0].delta is not None
-        assert result.choices[0].delta.content == None
+        assert result.choices[0].delta.content is None
         assert getattr(result.choices[0].delta, "reasoning_content", None) == ""
 
     def test_chunk_parser_done_chunk(self):

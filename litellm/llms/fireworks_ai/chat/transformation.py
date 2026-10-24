@@ -92,6 +92,28 @@ def _extract_fireworks_hidden_params(payload: dict) -> dict:
     return {**top_level, **per_choice}
 
 
+def _has_fireworks_completion_payload(choice: object) -> bool:
+    if not isinstance(choice, dict):
+        return False
+    message: Final[object] = choice.get("message")
+    if not isinstance(message, dict):
+        return False
+    return any(
+        field in message
+        for field in (
+            "content",
+            "tool_calls",
+            "function_call",
+            "refusal",
+            "reasoning_content",
+            "reasoning",
+            "thinking",
+            "audio",
+            "annotations",
+        )
+    )
+
+
 def _json_schema_response_format(schema: object, name: str) -> Mapping[str, object]:
     return {"type": "json_schema", "json_schema": {"name": name, "schema": schema}}
 
@@ -761,6 +783,18 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         additional_headers: Final = get_response_headers(raw_response_headers)
 
         completion_fields: Final = _JSON_DICT.validate_python(completion_response)
+        choices: Final = completion_fields.get("choices")
+        valid_choices: Final = (
+            isinstance(choices, list)
+            and bool(choices)
+            and all(_has_fireworks_completion_payload(choice) for choice in choices)
+        )
+        if not valid_choices:
+            raise FireworksAIException(
+                message=f"Invalid Fireworks AI completion response: {raw_response.text}",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
         response: Final = ModelResponse(**completion_fields)
 
         if response.model is not None:
