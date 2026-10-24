@@ -44075,6 +44075,34 @@ export interface components {
             type: "tool_search_output";
         };
         /**
+         * ResponsesAPIModeration
+         * @description Configuration for running moderation on the input and output of a response.
+         */
+        ResponsesAPIModeration: {
+            /** Model */
+            model: string;
+            policy?: components["schemas"]["ResponsesAPIModerationPolicy"] | null;
+        };
+        /**
+         * ResponsesAPIModerationPolicy
+         * @description Policy applied to moderated response input and output.
+         */
+        ResponsesAPIModerationPolicy: {
+            input?: components["schemas"]["ResponsesAPIModerationPolicyEntry"] | null;
+            output?: components["schemas"]["ResponsesAPIModerationPolicyEntry"] | null;
+        };
+        /**
+         * ResponsesAPIModerationPolicyEntry
+         * @description Moderation policy for either the input or the output of a response.
+         */
+        ResponsesAPIModerationPolicyEntry: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "score" | "block";
+        };
+        /**
          * ResponsesAPIRequestParams
          * @description TypedDict for request parameters supported by the responses API.
          */
@@ -44099,6 +44127,7 @@ export interface components {
             } | null;
             /** Model */
             model: string;
+            moderation?: components["schemas"]["ResponsesAPIModeration"] | null;
             /** Parallel Tool Calls */
             parallel_tool_calls?: boolean | null;
             /** Partial Images */
@@ -66697,6 +66726,7 @@ export interface operations {
                     } | null;
                     /** Model */
                     model: string;
+                    moderation?: components["schemas"]["ResponsesAPIModeration"] | null;
                     /** Parallel Tool Calls */
                     parallel_tool_calls?: boolean | null;
                     /** Partial Images */
@@ -70161,6 +70191,7 @@ export interface operations {
                     } | null;
                     /** Model */
                     model: string;
+                    moderation?: components["schemas"]["ResponsesAPIModeration"] | null;
                     /** Parallel Tool Calls */
                     parallel_tool_calls?: boolean | null;
                     /** Partial Images */
@@ -80959,6 +80990,7 @@ export interface operations {
                     } | null;
                     /** Model */
                     model: string;
+                    moderation?: components["schemas"]["ResponsesAPIModeration"] | null;
                     /** Parallel Tool Calls */
                     parallel_tool_calls?: boolean | null;
                     /** Partial Images */
