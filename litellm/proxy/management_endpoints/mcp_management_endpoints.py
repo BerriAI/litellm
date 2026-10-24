@@ -1112,7 +1112,8 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
-        Get all available MCP access groups from the database AND config
+        Get available MCP access groups from the database AND config.
+        Admins receive the full catalog; non-admin callers are scoped to servers they have access to.
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -1121,22 +1122,30 @@ if MCP_AVAILABLE:
 
         access_groups: Final = set()
 
-        # Get from config-loaded servers
-        for server in global_mcp_server_manager.config_mcp_servers.values():
-            if server.access_groups:
-                access_groups.update(server.access_groups)
+        if user_api_key_has_admin_view(user_api_key_dict):
+            # Get from config-loaded servers
+            for server in global_mcp_server_manager.config_mcp_servers.values():
+                if server.access_groups:
+                    access_groups.update(server.access_groups)
 
-        # Get from DB
-        if prisma_client is not None:
-            try:
-                mcp_servers: Final[Sequence[prisma_models.LiteLLM_MCPServerTable]] = await MCPServerRepository(
-                    prisma_client
-                ).table.find_many()
-                for server in mcp_servers:
-                    if hasattr(server, "mcp_access_groups") and server.mcp_access_groups:
-                        access_groups.update(server.mcp_access_groups)
-            except Exception as e:
-                verbose_proxy_logger.debug("Error getting MCP access groups: %s", e)
+            # Get from DB
+            if prisma_client is not None:
+                try:
+                    mcp_servers: Final[Sequence[prisma_models.LiteLLM_MCPServerTable]] = await MCPServerRepository(
+                        prisma_client
+                    ).table.find_many()
+                    for server in mcp_servers:
+                        if hasattr(server, "mcp_access_groups") and server.mcp_access_groups:
+                            access_groups.update(server.mcp_access_groups)
+                except Exception as e:
+                    verbose_proxy_logger.debug("Error getting MCP access groups: %s", e)
+        else:
+            accessible_servers: Final = await _resolve_accessible_mcp_servers(user_api_key_dict)
+            for server in accessible_servers:
+                if hasattr(server, "mcp_access_groups") and server.mcp_access_groups:
+                    access_groups.update(server.mcp_access_groups)
+                if hasattr(server, "access_groups") and server.access_groups:
+                    access_groups.update(server.access_groups)
 
         # Convert to sorted list
         access_groups_list: Final = sorted(list(access_groups))
