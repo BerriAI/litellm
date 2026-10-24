@@ -131,6 +131,7 @@ class VertexAIGemmaModels(VertexBase):
                 timeout=timeout,
                 encoding=encoding,
                 custom_llm_provider="vertex_ai",
+                headers=headers,
             )
 
         except Exception as e:
