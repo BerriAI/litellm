@@ -20,6 +20,7 @@ from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
     FileTypes as FileTypes,
 )
+from openai.types.batch_usage import BatchUsage, InputTokensDetails, OutputTokensDetails
 from openai.types.chat.chat_completion import ChatCompletion as ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
@@ -44,6 +45,7 @@ from pydantic import (
     JsonValue,
     PrivateAttr,
     SkipValidation,
+    ValidationError,
     field_serializer,
     field_validator,
 )
@@ -4720,6 +4722,87 @@ class LiteLLMFineTuningJob(FineTuningJob):
         self._hidden_params = kwargs.get("_hidden_params", {})
 
 
+class _BatchInputTokensDetails(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    cached_tokens: int | None = None
+
+
+class _BatchOutputTokensDetails(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    reasoning_tokens: int | None = None
+
+
+class _BatchTokenCounts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int | None = None
+    input_tokens_details: _BatchInputTokensDetails | None = None
+    output_tokens_details: _BatchOutputTokensDetails | None = None
+
+
+def _parse_batch_token_counts(value: object) -> _BatchTokenCounts | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return _BatchTokenCounts.model_validate(value)
+    except ValidationError:
+        return None
+
+
+def _prompt_details_with_cached_tokens(
+    details: PromptTokensDetailsWrapper | None, cached_tokens: int | None
+) -> PromptTokensDetailsWrapper | None:
+    if not cached_tokens:
+        return details
+    return (details or PromptTokensDetailsWrapper()).model_copy(update={"cached_tokens": cached_tokens})
+
+
+def _completion_details_with_reasoning_tokens(
+    details: CompletionTokensDetailsWrapper | None, reasoning_tokens: int | None
+) -> CompletionTokensDetailsWrapper | None:
+    if not reasoning_tokens:
+        return details
+    return (details or CompletionTokensDetailsWrapper()).model_copy(update={"reasoning_tokens": reasoning_tokens})
+
+
+def _usage_with_batch_token_counts(usage: Usage, counts: _BatchTokenCounts) -> Usage:
+    return usage.model_copy(
+        update={
+            "prompt_tokens": counts.input_tokens,
+            "completion_tokens": counts.output_tokens,
+            "total_tokens": (
+                counts.input_tokens + counts.output_tokens if counts.total_tokens is None else counts.total_tokens
+            ),
+            "prompt_tokens_details": _prompt_details_with_cached_tokens(
+                usage.prompt_tokens_details,
+                counts.input_tokens_details.cached_tokens if counts.input_tokens_details else None,
+            ),
+            "completion_tokens_details": _completion_details_with_reasoning_tokens(
+                usage.completion_tokens_details,
+                counts.output_tokens_details.reasoning_tokens if counts.output_tokens_details else None,
+            ),
+        }
+    )
+
+
+def _batch_usage_from_chat_usage(usage: Usage) -> BatchUsage:
+    cached_tokens: Final = usage.prompt_tokens_details.cached_tokens if usage.prompt_tokens_details else None
+    reasoning_tokens: Final = (
+        usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else None
+    )
+    return BatchUsage(
+        input_tokens=usage.prompt_tokens,
+        input_tokens_details=InputTokensDetails(cached_tokens=cached_tokens or 0),
+        output_tokens=usage.completion_tokens,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=reasoning_tokens or 0),
+        total_tokens=usage.total_tokens,
+    )
+
+
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
 
@@ -4732,6 +4815,23 @@ class LiteLLMBatch(Batch):
         self._hidden_params = hidden_params
 
     usage: Usage | None = None
+
+    @field_validator("usage", mode="before")
+    @classmethod
+    def _usage_from_batch_token_counts(cls, value: object) -> object:
+        counts: Final = _parse_batch_token_counts(value)
+        return value if counts is None else _usage_with_batch_token_counts(Usage.model_validate(value), counts)
+
+    @field_serializer("usage")
+    def _serialize_usage_with_batch_fields(
+        self, usage: Usage | None, info: FieldSerializationInfo
+    ) -> Mapping[str, object] | None:
+        if not isinstance(usage, Usage):
+            return usage
+        return {
+            **usage.model_dump(mode=info.mode, exclude_none=info.exclude_none),
+            **_batch_usage_from_chat_usage(usage).model_dump(mode=info.mode),
+        }
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
