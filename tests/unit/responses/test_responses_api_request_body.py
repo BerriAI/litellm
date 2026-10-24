@@ -1253,7 +1253,7 @@ async def test_responses_bills_per_call_custom_pricing_from_usage(
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    model_cost: dict[str, object] = getattr(litellm, "model_cost")
+    model_cost: Final[dict[str, object]] = getattr(litellm, "model_cost")
     monkeypatch.setattr(litellm, "model_cost", dict(model_cost))
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post("https://api.openai.com/v1/responses").mock(
@@ -1268,5 +1268,5 @@ async def test_responses_bills_per_call_custom_pricing_from_usage(
         response.usage.input_tokens * pricing["input_cost_per_token"]
         + response.usage.output_tokens * pricing["output_cost_per_token"]
     )
-    hidden_params: dict[str, float] = getattr(response, "_hidden_params")
+    hidden_params: Final[dict[str, float]] = getattr(response, "_hidden_params")
     assert math.isclose(hidden_params["response_cost"], expected)
