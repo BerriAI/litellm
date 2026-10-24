@@ -466,13 +466,6 @@ def cost_per_token(
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
 
-    from litellm.llms.bedrock.claude_platform.common_utils import claude_platform_pricing_model
-
-    claude_platform_model: Final = claude_platform_pricing_model(model, custom_llm_provider)
-    if claude_platform_model is not None:
-        model = claude_platform_model  # rebind-ok: resolve Claude Platform through the Anthropic cost map
-        custom_llm_provider = "anthropic"  # rebind-ok: resolve Claude Platform through the Anthropic cost map
-
     ## RECONSTRUCT USAGE BLOCK ##
     if usage_object is not None:
         usage_block = usage_object

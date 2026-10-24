@@ -139,34 +139,6 @@ def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
     assert prompt_usd + completion_usd > 0
 
 
-@pytest.mark.parametrize("model_prefix", ["bedrock/claude_platform/", "claude_platform/"])
-@pytest.mark.parametrize("model_id", ["claude-opus-5-5", "claude-haiku-4-5"])
-def test_cost_per_token_uses_anthropic_pricing_for_claude_platform_models(
-    _local_model_cost_map: None, model_prefix: str, model_id: str
-) -> None:
-    usage: Final = Usage(
-        prompt_tokens=1_000,
-        completion_tokens=200,
-        cache_read_input_tokens=300,
-        cache_creation_input_tokens=250,
-    )
-    usage.inference_geo = "us"
-
-    bedrock_cost: Final = cost_per_token(
-        model=f"{model_prefix}{model_id}",
-        custom_llm_provider="bedrock",
-        usage_object=usage,
-    )
-    anthropic_cost: Final = cost_per_token(
-        model=model_id,
-        custom_llm_provider="anthropic",
-        usage_object=usage,
-    )
-
-    assert bedrock_cost == anthropic_cost
-    assert sum(bedrock_cost) > 0
-
-
 def test_cost_per_token_non_string_model_does_not_hang():
     """
     The provider-prefix dedup loop must not spin forever when `model` is a
