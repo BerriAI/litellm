@@ -30,6 +30,10 @@ on:
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
+      - ".github/actions/pytest-report/**"
+      - ".github/scripts/render_pytest_report.py"
+      - "scripts/pytest_ci_report.py"
+      - "tests/wheel/**"
       - "tests/unit/rust_bridge/native_route_wheel_test.py"
       - ".github/workflows/test-rust.yml"
   pull_request:
@@ -64,6 +68,10 @@ on:
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
+      - ".github/actions/pytest-report/**"
+      - ".github/scripts/render_pytest_report.py"
+      - "scripts/pytest_ci_report.py"
+      - "tests/wheel/**"
       - "tests/unit/rust_bridge/native_route_wheel_test.py"
       - ".github/workflows/test-rust.yml"
 
@@ -189,14 +197,34 @@ jobs:
 
       - run: uv build --wheel --out-dir dist
 
-      - run: python .github/scripts/verify_linux_native_wheel.py dist/*.whl
+      - name: Check native wheel
+        run: |
+          set -- dist/*.whl
+          [ "$#" -eq 1 ]
+          uv run --no-project --with pytest==9.0.3 python -m pytest tests/wheel --wheel "$1" -p pytest_ci_report --ci-report=wheel-report.json
         env:
           RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Report native wheel outcomes
+        if: always()
+        uses: ./.github/actions/pytest-report
+        with:
+          report: wheel-report.json
+          title: Native wheel
+          artifact-name: wheel-report-${{ github.run_id }}-${{ github.run_attempt }}
 
       - run: python tests/unit/rust_bridge/native_route_wheel_test.py dist/*.whl
 
       - name: Run pytest tests/test_litellm_rust with the compiled extension
-        run: make test-rust-extension
+        run: make test-rust-extension PYTEST_REPORT_ARGS="-p pytest_ci_report --ci-report=rust-extension-report.json"
+
+      - name: Report Rust extension outcomes
+        if: always()
+        uses: ./.github/actions/pytest-report
+        with:
+          report: rust-extension-report.json
+          title: Rust extension
+          artifact-name: rust-extension-report-${{ github.run_id }}-${{ github.run_attempt }}
 
       - run: >-
           uv build --wheel --out-dir panic-dist

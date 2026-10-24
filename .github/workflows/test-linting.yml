@@ -549,6 +549,9 @@ jobs:
           export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)"
           uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_metadata.py tests/code_coverage_tests/test_e2e_junit_report.py
 
+      - name: test_pytest_ci_report
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_pytest_ci_report.py
+
       - name: Check merge smoke harness
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_merge_smoke.py
 
