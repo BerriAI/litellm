@@ -951,6 +951,37 @@ def _reported_cost_value(value: object) -> float | None:
     return _cost_number(value)
 
 
+def response_cost_in_hidden_params(response: _CarriesHiddenParams) -> float | None:
+    additional_headers: Final[object] = response.hidden_params.get("additional_headers")
+    if not isinstance(additional_headers, Mapping):
+        return None
+    return _cost_number(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
+
+
+def override_stamped_response_cost(response: _CarriesHiddenParams, cost: float) -> None:
+    """Replace the cost an earlier builder stamped so every reader of the hidden params agrees with the header."""
+    set_response_cost_in_hidden_params(response, cost)
+    hidden_params: Final = response.hidden_params
+    hidden_params["response_cost"] = cost
+
+
+def chunk_usage(chunk: object) -> object:
+    """Stream chunks reach the builders both as mappings and as ModelResponseStream objects."""
+    if isinstance(chunk, Mapping):
+        return _USAGE_BLOCK_ADAPTER.validate_python(chunk).get("usage")
+    return getattr(chunk, "usage", None)
+
+
+_MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
+
+
+def native_messages_reported_cost(usage: object, custom_llm_provider: object) -> float | None:
+    """Only a Messages upstream known to price its own responses is trusted, every other one keeps the price map."""
+    if not isinstance(custom_llm_provider, str) or custom_llm_provider not in _MESSAGES_REPORTED_COST_PROVIDERS:
+        return None
+    return provider_reported_usage_cost(usage, custom_llm_provider)
+
+
 def provider_reported_usage_cost(usage: object, custom_llm_provider: str | None) -> float | None:
     """The request cost a provider states on its usage block, as a number or a breakdown with ``total_cost``.
 

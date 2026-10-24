@@ -77,6 +77,7 @@ from litellm.litellm_core_utils.classifier_logging import (
 from litellm.litellm_core_utils.core_helpers import (
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
+    native_messages_reported_cost,
     provider_reported_usage_cost,
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
@@ -4828,10 +4829,11 @@ class Logging(LiteLLMLoggingBaseClass):
         bridge is replaced by the ModelResponse its spend row is built from, anything else is
         priced as is."""
         served: Final[object] = result
+        call_type: Final[object] = getattr(self, "call_type", None)
         if not isinstance(result, dict):
-            return result
-        if self.bridged_model_response is None and self.call_type != CallTypes.anthropic_messages.value:
-            return result
+            return served
+        if self.bridged_model_response is None and call_type != CallTypes.anthropic_messages.value:
+            return served
         return self._anthropic_messages_logged_response(result=served)
 
     def _anthropic_messages_logged_response(self, result: object) -> ModelResponse:
@@ -4874,11 +4876,13 @@ class Logging(LiteLLMLoggingBaseClass):
         if isinstance(result, ResponsesAPIResponse):
             return self._translate_responses_api_response_to_model_response(result)
 
-        reported_cost: Final = provider_reported_usage_cost(
-            result.get("usage") if isinstance(result, dict) else None,
+        raw_body: Final[object] = result
+        served_body: Final = _LITELLM_PARAMS.validate_python(raw_body) if isinstance(result, dict) else None
+        reported_cost: Final = native_messages_reported_cost(
+            served_body.get("usage") if served_body is not None else None,
             self.model_call_details.get("custom_llm_provider"),
         )
-        provider_response_id: Final = _provider_response_id(result)
+        provider_response_id: Final = _provider_response_id(raw_body)
         bridged: Final = self.bridged_model_response
         if bridged is not None and isinstance(result, dict):
             return bridged if provider_response_id is None else bridged.model_copy(update={"id": provider_response_id})
@@ -4903,7 +4907,7 @@ class Logging(LiteLLMLoggingBaseClass):
         else:
             from litellm.types.llms.anthropic import AnthropicResponse
 
-            pydantic_result: Final = AnthropicResponse.model_validate(result)
+            pydantic_result: Final = AnthropicResponse.model_validate({"stop_sequence": None, **(served_body or {})})
             import httpx
 
             result = litellm.AnthropicConfig().transform_parsed_response(
@@ -4916,8 +4920,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=None,
                 speed=self.optional_params.get("speed") if self.optional_params else None,
             )
-        if isinstance(result, ModelResponse):
-            set_response_cost_in_hidden_params(result, reported_cost)
+        set_response_cost_in_hidden_params(result, reported_cost)
         return result
 
     def _translate_responses_api_response_to_model_response(self, result: ResponsesAPIResponse) -> ModelResponse:

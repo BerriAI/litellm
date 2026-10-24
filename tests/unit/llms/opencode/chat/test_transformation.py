@@ -552,3 +552,31 @@ async def test_responses_stream_bills_the_completed_events_list_cost(
     assert events[-1].type == "response.completed"
     assert events[-1].response._hidden_params["additional_headers"][RESPONSE_COST_HEADER] == pytest.approx(0.00412)
     assert await logged_cost(cost_recorder) == pytest.approx(0.00412)
+
+
+def test_stream_chunk_builder_reads_list_cost_from_dict_chunks():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="opencode_go/glm-5.3",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="dict-chunks",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "opencode_go"
+    chunk = {
+        "id": "chatcmpl-go",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "glm-5.3",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    }
+    final_usage = {**chunk, "choices": [], "usage": dict(GO_REPORTED_USAGE)}
+
+    assembled = litellm.stream_chunk_builder(chunks=[chunk, final_usage], logging_obj=logging_obj)
+
+    assert assembled is not None
+    assert assembled._hidden_params["response_cost"] == GO_REPORTED_USAGE["opencode"]["list_cost"]

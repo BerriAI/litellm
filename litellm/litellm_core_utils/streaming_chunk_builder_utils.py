@@ -12,7 +12,7 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import provider_reported_usage_cost
+from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
@@ -1370,7 +1370,7 @@ def _stream_builder_response_cost(
     if _logged_provider(logging_obj) == LlmProviders.OPENCODE_GO.value:
         # usage.opencode only survives on the chunks, the assembled Usage keeps declared fields
         reported: Final = (
-            provider_reported_usage_cost(getattr(chunk, "usage", None), LlmProviders.OPENCODE_GO.value)
+            provider_reported_usage_cost(chunk_usage(chunk), LlmProviders.OPENCODE_GO.value)
             for chunk in reversed(chunks)
         )
         return next((cost for cost in reported if cost is not None), None)

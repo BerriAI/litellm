@@ -24,7 +24,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import provider_reported_usage_cost
+from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR,
     get_hidden_params,
@@ -1963,7 +1963,7 @@ class CustomStreamWrapper:
             return
         usages: Final = (
             getattr(response, "usage", None),
-            *(getattr(chunk, "usage", None) for chunk in reversed(chunks)),
+            *(chunk_usage(chunk) for chunk in reversed(chunks)),
         )
         costs: Final = (provider_reported_usage_cost(usage, custom_llm_provider) for usage in usages)
         _cost: Final = next((cost for cost in costs if cost is not None), None)
