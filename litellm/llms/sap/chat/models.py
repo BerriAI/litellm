@@ -74,7 +74,7 @@ class ImageContent(LiteLLMBaseModel):
 
 class FunctionObj(LiteLLMBaseModel):
     name: str
-    arguments: str
+    arguments: str = ""
 
 
 class FunctionTool(LiteLLMBaseModel):
