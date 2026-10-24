@@ -2,6 +2,7 @@
 Tests for JSON-based provider configuration system.
 """
 
+import json
 import os
 import sys
 from unittest.mock import patch
@@ -309,3 +310,139 @@ class TestDarkbloom:
 
         assert config is not None
         assert config.custom_llm_provider == "darkbloom"
+
+
+class TestRuninfra:
+    def test_runinfra_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        runinfra = JSONProviderRegistry.get("runinfra")
+        assert runinfra is not None
+        assert runinfra.base_url == "https://api.runinfra.ai/v1"
+        assert runinfra.api_key_env == "RUNINFRA_API_KEY"
+        assert runinfra.api_base_env == "RUNINFRA_API_BASE"
+        assert runinfra.param_mappings.get("max_completion_tokens") == "max_tokens"
+
+    def test_runinfra_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="runinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+        assert provider == "runinfra"
+        assert api_key is None
+        assert api_base == "https://api.runinfra.ai/v1"
+
+    def test_runinfra_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("runinfra")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://api.runinfra.ai/v1"
+
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            "https://custom.runinfra.ai/v1", "test-key"
+        )
+        assert api_base == "https://custom.runinfra.ai/v1"
+        assert api_key == "test-key"
+
+    def test_runinfra_complete_url_appends_endpoint(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("runinfra")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        url = config.get_complete_url(
+            api_base="https://api.runinfra.ai/v1",
+            api_key="test-key",
+            model="runinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+            optional_params={},
+            litellm_params={},
+            stream=True,
+        )
+
+        assert url == "https://api.runinfra.ai/v1/chat/completions"
+
+    def test_runinfra_provider_config_manager(self):
+        from litellm import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="deepseek-ai/DeepSeek-V4.1-Flash-1017", provider=LlmProviders.RUNINFRA
+        )
+
+        assert config is not None
+        assert config.custom_llm_provider == "runinfra"
+
+    def test_runinfra_model_cost_map(self):
+        with open(
+            os.path.join(workspace_path, "model_prices_and_context_window.json")
+        ) as f:
+            model_cost = json.load(f)
+
+        expected_models = {
+            "runinfra/deepseek-ai/DeepSeek-V4.1-Flash": (1.4e-07, 5.8e-07, 3e-08),
+            "runinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017": (1.5e-07, 6e-07, 1e-08),
+            "runinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16": (
+                5e-08,
+                1.5e-07,
+                1e-08,
+            ),
+            "runinfra/Qwen/Qwen3.8-27B": (1e-07, 4e-07, 1e-08),
+            "runinfra/ornith-ai/Ornith-1.5-35B-A3B": (1e-07, 4e-07, 1e-08),
+            "runinfra/zai-org/GLM-5.3-Flash": (1.1e-07, 4.5e-07, 3e-08),
+            "runinfra/zai-org/GLM-5.3": (1.3e-06, 4.2e-06, 1.3e-07),
+        }
+        # Every RunInfra entry is pinned here, so a retired model left in the
+        # cost map, or a new one added without its prices, reddens this test.
+        assert {
+            k for k, v in model_cost.items() if v.get("litellm_provider") == "runinfra"
+        } == set(expected_models)
+        for model, (input_cost, output_cost, cache_read_cost) in expected_models.items():
+            assert model in model_cost
+            assert model_cost[model]["litellm_provider"] == "runinfra"
+            assert model_cost[model]["max_output_tokens"] == 32768
+            assert model_cost[model]["supports_function_calling"] is True
+            assert model_cost[model]["supports_tool_choice"] is True
+            assert model_cost[model]["supports_reasoning"] is True
+            assert model_cost[model]["input_cost_per_token"] == input_cost
+            assert model_cost[model]["output_cost_per_token"] == output_cost
+            if cache_read_cost is None:
+                assert "cache_read_input_token_cost" not in model_cost[model]
+                assert "supports_prompt_caching" not in model_cost[model]
+            else:
+                assert model_cost[model]["cache_read_input_token_cost"] == cache_read_cost
+                assert model_cost[model]["supports_prompt_caching"] is True
+
+        assert model_cost["runinfra/deepseek-ai/DeepSeek-V4.1-Flash"]["max_input_tokens"] == 1048576
+        assert model_cost["runinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017"]["max_input_tokens"] == 1048576
+        assert model_cost["runinfra/zai-org/GLM-5.3"]["max_input_tokens"] == 1048576
+        assert model_cost["runinfra/Qwen/Qwen3.8-27B"]["max_input_tokens"] == 262144
+        assert model_cost["runinfra/zai-org/GLM-5.3"]["supports_response_schema"] is True
+        assert model_cost["runinfra/Qwen/Qwen3.8-27B"]["supports_response_schema"] is True
+        assert model_cost["runinfra/ornith-ai/Ornith-1.5-35B-A3B"]["max_input_tokens"] == 262144
+        # Image input is declared on exactly the four models that RunInfra's
+        # provider feed lists with an image input modality (Qwen3.8-27B,
+        # Ornith-1.5-35B-A3B, GLM-5.3-Flash and DeepSeek-V4.1-Flash-1017) and
+        # on no other, so a copied flag on a text-only model reddens here.
+        for model, expected_vision in (
+            ("runinfra/Qwen/Qwen3.8-27B", True),
+            ("runinfra/ornith-ai/Ornith-1.5-35B-A3B", True),
+            ("runinfra/zai-org/GLM-5.3-Flash", True),
+            ("runinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017", True),
+            ("runinfra/deepseek-ai/DeepSeek-V4.1-Flash", False),
+            ("runinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16", False),
+            ("runinfra/zai-org/GLM-5.3", False),
+        ):
+            assert model_cost[model].get("supports_vision", False) is expected_vision
