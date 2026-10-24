@@ -1,12 +1,15 @@
 import json
 import os
+from collections.abc import Iterator
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 
 from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles
+from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.proxy_server import app
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -179,6 +182,14 @@ def mock_auth():
     app.dependency_overrides[user_api_key_auth] = mock_user_api_key_auth
     yield
     app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.fixture(autouse=True)
+def isolated_sso_environment() -> Iterator[None]:
+    with patch.dict(os.environ):
+        for name in SSO_FIELD_ENV_VARS.values():
+            os.environ.pop(name, None)
+        yield
 
 
 @pytest.fixture(autouse=True)
