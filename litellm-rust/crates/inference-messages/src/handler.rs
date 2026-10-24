@@ -316,6 +316,7 @@ fn decode_response(
     config
         .transform_anthropic_messages_response(model, response)
         .map_err(Error::from)
+        .map_err(Error::after_send)
 }
 
 fn streaming_response(

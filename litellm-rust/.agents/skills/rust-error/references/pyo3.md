@@ -30,7 +30,7 @@ The bridge builds with pyo3's `abi3-py310` feature. Under abi3, `#[pyclass(exten
 
 ## Mapping order
 
-A Python exception raised inside the call, such as a secret manager callback's, is returned first as it is. Then the provider's answer passes through as `RustUpstreamError`. On `/v1/messages` a request the route rejected becomes a `ValueError` flagged with `messages_request_error`. Everything else is split by `is_request()` into `ValueError` or `RuntimeError`, with the message rendered by `litellm_error::Report`. A missing API key is a `RuntimeError` because `is_request()` answers false for it, and `missing_api_key_stays_a_runtime_error_while_other_auth_failures_are_value_errors` pins that
+A core decline is returned first, as `RustBridgeDeclined` with the decline's reason as its only arg, without calling the route's public mapping. Then a Python exception raised inside the call, such as a secret manager callback's, is returned as it is. Then the provider's answer passes through as `RustUpstreamError`. On `/v1/messages` a request the route rejected becomes a `ValueError` flagged with `messages_request_error`. Everything else is split by `is_request()` into `ValueError` or `RuntimeError`, with the message rendered by `litellm_error::Report`. A missing API key is a `RuntimeError` because `is_request()` answers false for it, and `missing_api_key_stays_a_runtime_error_while_other_auth_failures_are_value_errors` pins that
 
 OCR puts Python parity arms in front of that order, each matching a top-level variant of its own public enum
 
@@ -47,7 +47,9 @@ Use the standard class whose Python meaning matches. `PyFileNotFoundError` for a
 
 ## Declining
 
-`RustBridgeDeclined` means no provider call was made and the host may retry on its own path. It is raised before dispatch, by the tokenizer, embeddings and token counter routes. Never raise it for a failure after the request went out, the host would repeat a billed call. `route_failures_are_terminal` in `errors.rs` pins that for the inference routes
+`RustBridgeDeclined` means no provider call was made and the host may run its own path for the same call. The tokenizer, embeddings and token counter routes raise it from their own pre-checks, and `route_failure` raises it for a route error whose `declined()` answers, so a decline from deep inside a transformation reaches Python the same way. Never raise it for a failure after the request went out, the host would repeat a billed call. `a_core_decline_hands_the_call_back_to_python_before_the_public_mapping` and `route_failures_are_terminal` in `errors.rs` pin both sides
+
+Route hosts pass a terminal failure through the Python route module's `map_failure`, which runs `litellm.exception_type` and returns the public exception a Python caller expects. A decline must skip that step. Once wrapped it looks like a provider failure to the dispatcher and the host no longer falls back, so `route_failure` returns it before it calls `public`
 
 ## Rules
 

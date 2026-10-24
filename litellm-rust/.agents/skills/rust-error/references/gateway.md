@@ -21,7 +21,7 @@ Each hop is one `From` that nests the lower error in one variant, see [conversio
 
 | Answer | Status |
 |---|---|
-| `is_unsupported()` | 501, the gateway matched and parsed the request but core cannot serve it, nothing reached the provider |
+| `declined()` | 501, for a route error, the gateway matched and parsed the request but core cannot serve it, nothing reached the provider |
 | `upstream_response()` | the provider's own status, 502 when it is not a valid code |
 | `is_missing_credential()` | 401 |
 | `is_request()` | 400, for a route error |

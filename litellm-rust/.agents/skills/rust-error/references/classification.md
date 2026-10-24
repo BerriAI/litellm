@@ -13,9 +13,9 @@ Downstream crates ask a lower error questions instead of matching its nested var
 | `status()` | an HTTP status to report |
 | `is_connect()` | the connection was never made, for a host's own connect-error mapping |
 | `tls_source()` | which TLS setting to blame in a config error |
-| `is_computed_header()` | the caller forwarded a header the signer owns, which `litellm_inference::Error` turns into `Unsupported` |
+| `is_computed_header()` | the caller forwarded a header the signer owns, which `litellm_inference::Error` turns into a decline |
 
-Upper types add the questions their callers ask. `litellm_inference::Error` and the OCR error answer `is_missing_credential()` and `is_unsupported()`, which the gateway asks instead of reaching into `Auth` or `Unsupported`
+Upper types add the questions their callers ask. `litellm_inference::Error` and the OCR error answer `is_missing_credential()`, and `litellm_llms::Error` and `litellm_inference::Error` answer `declined()`, which the boundaries ask first instead of reaching into `Auth` or `Declined`, see [boundaries](boundaries.md)
 
 ```rust
 // reaches through two crates' variants and breaks when either changes
@@ -39,7 +39,7 @@ pub fn is_request(&self) -> bool {
 
 Add a predicate when a real caller needs a new distinction, and name it after the fact the caller needs, in the caller's words, not after the variant's spelling. An upper type's predicates call through to the nested error, as in `Self::Http(error) => error.is_request()` and `Self::Auth(error) => error.is_missing_credential()`
 
-A public enum may be matched one level down by the type that owns the variant, such as the gateway matching its own `Unsupported` or the OCR bridge matching `FileRead`. Going a second level down, into a variant of a variant, is what to avoid, the gateway used to do that for `MissingApiKey` and `Unsupported`
+A public enum may be matched one level down by the type that owns the variant, such as the gateway matching its own `Unsupported` or the OCR bridge matching `FileRead`. Going a second level down, into a variant of a variant, is what to avoid, the gateway used to do that for `MissingApiKey` and the old `Unsupported` route variant
 
 ## Facts, not policy
 

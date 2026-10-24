@@ -1,3 +1,4 @@
+use litellm_core_utils::decline::Decline;
 use std::convert::Infallible;
 
 use crate::routes::inference::InferenceHost;
@@ -118,9 +119,9 @@ impl PythonBinding for ResponsesPythonHost {
             .get("stream")
             .is_some_and(|value| value == &serde_json::Value::Bool(true))
         {
-            return Err(InvokeError::Native(Error::Unsupported(
+            return Err(InvokeError::Native(Error::Declined(Decline::new(
                 "native Python responses streaming",
-            )));
+            ))));
         }
         Ok(call)
     }
@@ -141,9 +142,11 @@ impl PythonBinding for ResponsesPythonHost {
         head: <Responses as litellm_host::protocol::Protocol>::StreamHead,
     ) -> PyResult<Py<PyAny>> {
         let _ = head;
-        Err(crate::errors::route_error_to_pyerr(Error::Unsupported(
-            "native Python responses streaming",
-        )))
+        Err(crate::errors::route_error_to_pyerr(
+            Error::invalid_response(litellm_llms::ErrorDetail::Unhandled(
+                "native Python responses streaming",
+            )),
+        ))
     }
 
     fn encode_chunk(
@@ -152,9 +155,11 @@ impl PythonBinding for ResponsesPythonHost {
         chunk: <Responses as litellm_host::protocol::Protocol>::Chunk,
     ) -> PyResult<Py<PyAny>> {
         let _ = chunk;
-        Err(crate::errors::route_error_to_pyerr(Error::Unsupported(
-            "native Python responses streaming",
-        )))
+        Err(crate::errors::route_error_to_pyerr(
+            Error::invalid_response(litellm_llms::ErrorDetail::Unhandled(
+                "native Python responses streaming",
+            )),
+        ))
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
