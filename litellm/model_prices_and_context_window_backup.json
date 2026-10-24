@@ -27872,6 +27872,18 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
+    "fireworks_ai/accounts/fireworks/routers/spot-deepseek-v4-flash": {
+        "cache_read_input_token_cost": 2.1e-08,
+        "input_cost_per_token": 1.05e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2.1e-07,
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_vision": false
+    },
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro-0813": {
         "cache_read_input_token_cost": 4.4e-08,
         "cache_read_input_token_cost_priority": 5.5e-08,
@@ -48863,13 +48875,13 @@
         "supports_reasoning": true
     },
     "together_ai/Qwen/Qwen3.7-Max": {
-        "cache_read_input_token_cost": 3e-07,
-        "input_cost_per_token": 1.5e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 2.5e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1000000,
         "max_tokens": 1000000,
         "mode": "chat",
-        "output_cost_per_token": 4.5e-06,
+        "output_cost_per_token": 7.5e-06,
         "source": "https://www.together.ai/pricing",
         "supports_prompt_caching": true
     },
@@ -64193,6 +64205,18 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-spot": {
+        "cache_read_input_token_cost": 4.2e-09,
+        "input_cost_per_token": 2.1e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 8.4e-07,
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_vision": true
+    },
     "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-us": {
         "cache_read_input_token_cost": 9e-09,
         "cache_read_input_token_cost_priority": 1.125e-08,
@@ -64253,6 +64277,18 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/routers/kimi-k3-spot": {
+        "cache_read_input_token_cost": 2.1e-07,
+        "input_cost_per_token": 2.1e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.05e-05,
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_vision": true
     },
     "fireworks_ai/deepseek-v4-flash-0731": {
@@ -67539,6 +67575,18 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "fireworks_ai/accounts/fireworks/routers/glm-5p3-spot": {
+        "cache_read_input_token_cost": 1.82e-07,
+        "input_cost_per_token": 9.8e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.08e-06,
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_vision": false
     },
     "fireworks_ai/accounts/fireworks/routers/glm-5p3-us": {
@@ -77146,6 +77194,18 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/routers/deepseek-v4p1-flash-1017-spot": {
+        "cache_read_input_token_cost": 4.2e-09,
+        "input_cost_per_token": 2.1e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 8.4e-07,
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_vision": true
     },
     "github_copilot/claude-sonnet-4.6": {
