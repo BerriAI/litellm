@@ -1641,3 +1641,137 @@ async def test_generate_content_sends_response_schema_and_tool_parameters_to_the
     }
     assert response["candidates"][0]["content"]["parts"] == [{"text": '{"park_name": "EPCOT"}'}]
     assert "text" not in response
+
+
+@pytest.mark.parametrize(
+    "part, expected",
+    [
+        pytest.param(
+            {"fileData": {"fileUri": "https://www.youtube.com/watch?v=abc123"}},
+            {"type": "video_url", "video_url": {"url": "https://www.youtube.com/watch?v=abc123"}},
+            id="youtube-link-without-mime-type",
+        ),
+        pytest.param(
+            {"fileData": {"fileUri": "https://youtu.be/abc123"}},
+            {"type": "video_url", "video_url": {"url": "https://youtu.be/abc123"}},
+            id="short-youtube-link",
+        ),
+        pytest.param(
+            {"file_data": {"file_uri": "gs://bucket/clip.mp4", "mime_type": "video/mp4"}},
+            {"type": "video_url", "video_url": {"url": "gs://bucket/clip.mp4"}},
+            id="snake-case-video-uri",
+        ),
+        pytest.param(
+            {"fileData": {"fileUri": "https://example.com/cat.png", "mimeType": "image/png"}},
+            {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+            id="image-uri",
+        ),
+        pytest.param(
+            {"fileData": {"fileUri": "https://example.com/report.pdf", "mimeType": "application/pdf"}},
+            {"type": "file", "file": {"file_id": "https://example.com/report.pdf", "format": "application/pdf"}},
+            id="pdf-uri-keeps-mime-type",
+        ),
+        pytest.param(
+            {"fileData": {"fileUri": "https://example.com/docs/Report.PDF?v=2"}},
+            {"type": "file", "file": {"file_id": "https://example.com/docs/Report.PDF?v=2"}},
+            id="pdf-url-without-mime-type",
+        ),
+        pytest.param(
+            {"fileData": {"fileUri": "https://generativelanguage.googleapis.com/v1beta/files/abc"}},
+            {"type": "file", "file": {"file_id": "https://generativelanguage.googleapis.com/v1beta/files/abc"}},
+            id="files-api-uri-without-mime-type",
+        ),
+    ],
+)
+def test_file_data_part_is_forwarded_instead_of_dropped(part, expected):
+    """A Gemini fileData part must reach the completion request next to the prompt text
+
+    Before this was handled, the adapter silently dropped fileData, so models routed through the
+    completion adapter (e.g. OpenRouter) answered the prompt without ever seeing the video or file
+    """
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    completion_request = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="openrouter/google/gemini-3.8-flash",
+        contents=[{"role": "user", "parts": [part, {"text": "Summarize this"}]}],
+    )
+
+    assert completion_request["messages"] == [
+        {"role": "user", "content": [expected, {"type": "text", "text": "Summarize this"}]}
+    ]
+
+
+def test_file_data_part_without_uri_is_skipped():
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    completion_request = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="openrouter/google/gemini-3.8-flash",
+        contents=[{"role": "user", "parts": [{"fileData": {"mimeType": "video/mp4"}}, {"text": "hi"}]}],
+    )
+
+    assert completion_request["messages"] == [{"role": "user", "content": "hi"}]
+
+
+def test_pdf_file_data_reaches_openai_transform_as_a_fetchable_url():
+    """The OpenAI chat transform only downloads and base64-encodes PDF URLs passed as file_id"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+    completion_request = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="openrouter/google/gemini-3.8-flash",
+        contents=[
+            {
+                "role": "user",
+                "parts": [{"fileData": {"fileUri": "https://example.com/report.pdf", "mimeType": "application/pdf"}}],
+            }
+        ],
+    )
+
+    file_part = completion_request["messages"][0]["content"][0]
+    assert OpenAIGPTConfig().contains_pdf_url(file_part["file"])
+
+
+@pytest.mark.parametrize(
+    "file_data",
+    [
+        pytest.param("https://www.youtube.com/watch?v=abc123", id="string-instead-of-object"),
+        pytest.param({"fileUri": "https://example.com/a.pdf", "mimeType": 7}, id="non-string-mime-type"),
+    ],
+)
+def test_malformed_file_data_is_rejected_as_bad_request(file_data):
+    from litellm.exceptions import BadRequestError
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    with pytest.raises(BadRequestError, match="fileData must be an object"):
+        GoogleGenAIAdapter().translate_generate_content_to_completion(
+            model="openrouter/google/gemini-3.8-flash",
+            contents=[{"role": "user", "parts": [{"fileData": file_data}, {"text": "hi"}]}],
+        )
+
+
+@pytest.mark.parametrize(
+    "file_data",
+    [
+        pytest.param(
+            {"fileUri": "https://example.com/notes.docx", "mimeType": "application/msword"},
+            id="non-pdf-document-would-be-labelled-pdf",
+        ),
+        pytest.param({"fileUri": "https://example.com/notes.txt"}, id="non-pdf-url-without-mime-type"),
+        pytest.param(
+            {"fileUri": "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCxhYmM", "mimeType": "application/pdf"},
+            id="opaque-managed-file-id",
+        ),
+        pytest.param({"fileUri": "file-abc123"}, id="opaque-provider-file-id"),
+    ],
+)
+def test_file_data_that_downstream_would_mishandle_is_rejected(file_data):
+    """Non-PDF documents would be downloaded and renamed my_file.pdf downstream, and opaque IDs would be
+    resolved as managed files without the proxy's ownership check, so neither may become a file_id"""
+    from litellm.exceptions import BadRequestError
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    with pytest.raises(BadRequestError, match="fileData on this model supports"):
+        GoogleGenAIAdapter().translate_generate_content_to_completion(
+            model="openrouter/google/gemini-3.8-flash",
+            contents=[{"role": "user", "parts": [{"fileData": file_data}, {"text": "hi"}]}],
+        )
