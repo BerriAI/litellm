@@ -5,8 +5,12 @@ Shared by provider cost calculators (e.g. Dashscope) and the proxy budget
 reservation logic so neither has to depend on the other.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, SupportsFloat
+
+from pydantic import TypeAdapter, ValidationError
+
+_TIER_RANGE: Final = TypeAdapter(tuple[float, float])
 
 
 def _coerce_cost_per_token(value: object) -> float:
@@ -26,10 +30,17 @@ def _coerce_cost_per_token(value: object) -> float:
     return 0.0
 
 
+def _tier_range(tier: Mapping[str, object]) -> tuple[float, float] | None:
+    try:
+        return _TIER_RANGE.validate_python(tier.get("range"))
+    except ValidationError:
+        return None
+
+
 def select_tier_for_input(
-    tiered_pricing: list[dict],
+    tiered_pricing: Sequence[Mapping[str, object]],
     input_tokens: int,
-) -> dict | None:
+) -> Mapping[str, object] | None:
     """
     Select the pricing tier for a request based on its total input token count.
 
@@ -45,15 +56,17 @@ def select_tier_for_input(
     if not tiered_pricing or input_tokens <= 0:
         return None
 
-    sorted_tiers: Final = sorted(tiered_pricing, key=lambda t: t.get("range", [0, 0])[0])
-    valid_tiers: Final = [tier for tier in sorted_tiers if len(tier.get("range", [])) == 2]
-    if not valid_tiers:
+    ranged_tiers: Final = sorted(
+        ((bounds, tier) for tier in tiered_pricing if (bounds := _tier_range(tier)) is not None),
+        key=lambda ranged: ranged[0][0],
+    )
+    if not ranged_tiers:
         return None
 
-    matching: Final = [tier for tier in valid_tiers if tier["range"][0] < input_tokens <= tier["range"][1]]
+    matching: Final = tuple(tier for (start, end), tier in ranged_tiers if start < input_tokens <= end)
     if matching:
         return matching[0]
-    return valid_tiers[-1]
+    return ranged_tiers[-1][1]
 
 
 def tier_rate(
