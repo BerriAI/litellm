@@ -10,7 +10,8 @@ use axum::{
     response::Response,
 };
 use futures_util::future::BoxFuture;
-use litellm_gateway_inference::{Deployment, Gateway, router};
+use litellm_gateway_inference::{Deployment, Gateway, router, router_with_tokenize_hooks};
+use litellm_host::{interceptors::Interceptors, observation::ObservationSender};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
 use litellm_secrets::{SecretValue, source::SecretSource};
@@ -38,6 +39,30 @@ pub fn app_with_permissions(
     permissions: litellm_gateway_auth::Permissions,
 ) -> Router {
     configured_app(model, api_base, permissions, None, None)
+}
+
+pub fn app_with_deployment(deployment: Deployment) -> Router {
+    app_with_deployment_permissions(deployment, litellm_gateway_auth::Permissions::All)
+}
+
+pub fn app_with_deployment_permissions(
+    deployment: Deployment,
+    permissions: litellm_gateway_auth::Permissions,
+) -> Router {
+    configured_router(gateway_with_deployment(deployment), permissions, None)
+}
+
+pub fn app_with_tokenize_hooks<H>(
+    deployment: Deployment,
+    permissions: litellm_gateway_auth::Permissions,
+    interceptors: H,
+    observers: Option<ObservationSender>,
+) -> Router
+where
+    H: Interceptors<litellm_inference::Error> + Clone + 'static,
+{
+    let gateway = gateway_with_deployment(deployment);
+    configured_router_with_hooks(gateway, permissions, interceptors, observers)
 }
 
 pub fn app_with_cache(
@@ -76,36 +101,61 @@ fn configured_app(
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     principal: Option<litellm_gateway_auth::Principal>,
 ) -> Router {
-    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
-    let http = Resolution::from(&HttpSettings::default()).config;
-    let secrets = Arc::new(NoSecrets);
-    let resources = CoreResources::new(pool);
-    let gateway = Gateway::new(
-        resources,
-        http,
-        secrets,
-        [(
-            "public/model".into(),
-            Deployment {
-                model: model.into(),
-                api_base: Some(api_base.into()),
-                api_key: Some("test-key".into()),
-                timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
-        )]
-        .into_iter()
-        .collect(),
-    )
-    .unwrap();
+    let gateway = build_gateway(Deployment {
+        model: model.into(),
+        api_base: Some(api_base.into()),
+        api_key: Some("test-key".into()),
+        timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
+    });
     let gateway = match cache {
         Some(cache) => gateway.with_cache(cache),
         None => gateway,
     };
-    router(Arc::new(gateway)).layer(axum::middleware::from_fn_with_state(
+    configured_router(Arc::new(gateway), permissions, principal)
+}
+
+pub fn gateway_with_deployment(deployment: Deployment) -> Arc<Gateway> {
+    Arc::new(build_gateway(deployment))
+}
+
+fn build_gateway(deployment: Deployment) -> Gateway {
+    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
+    let http = Resolution::from(&HttpSettings::default()).config;
+    let secrets = Arc::new(NoSecrets);
+    let resources = CoreResources::new(pool);
+    Gateway::new(
+        resources,
+        http,
+        secrets,
+        [("public/model".into(), deployment)].into_iter().collect(),
+    )
+    .unwrap()
+}
+
+fn configured_router(
+    gateway: Arc<Gateway>,
+    permissions: litellm_gateway_auth::Permissions,
+    principal: Option<litellm_gateway_auth::Principal>,
+) -> Router {
+    router(gateway).layer(axum::middleware::from_fn_with_state(
         (permissions, principal),
         test_identity,
     ))
+}
+
+fn configured_router_with_hooks<H>(
+    gateway: Arc<Gateway>,
+    permissions: litellm_gateway_auth::Permissions,
+    interceptors: H,
+    observers: Option<ObservationSender>,
+) -> Router
+where
+    H: Interceptors<litellm_inference::Error> + Clone + 'static,
+{
+    router_with_tokenize_hooks(gateway, interceptors, observers).layer(
+        axum::middleware::from_fn_with_state((permissions, None), test_identity),
+    )
 }
 
 async fn test_identity(

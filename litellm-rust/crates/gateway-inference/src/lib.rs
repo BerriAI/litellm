@@ -11,16 +11,19 @@ pub mod messages;
 mod ocr;
 mod request;
 mod responses;
+mod tokenize;
 
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
+use litellm_host::{interceptors::Interceptors, observation::ObservationSender};
 use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
 use litellm_inference::resources::CoreResources;
 use litellm_inference_chat::ChatCompletionsRoute;
 use litellm_inference_messages::MessagesRoute;
 use litellm_inference_ocr::OcrRoute;
 use litellm_inference_responses::ResponsesRoute;
+use litellm_inference_tokenize::TokenizeRoute;
 use litellm_inference_transcription::AudioTranscriptionRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
@@ -36,6 +39,7 @@ pub struct Gateway {
     pub messages: MessagesRoute,
     pub ocr: OcrRoute,
     pub responses: ResponsesRoute,
+    pub tokenize: TokenizeRoute,
     pub models: ModelRouter,
     pub secrets: Arc<dyn SecretSource>,
     pub resources: CoreResources,
@@ -71,6 +75,7 @@ impl Gateway {
                 secrets.clone(),
             ),
             messages: MessagesRoute::new(provider.clone(), auth.clone(), secrets.clone()),
+            tokenize: TokenizeRoute::new(provider.clone(), auth.clone(), secrets.clone()),
             responses: ResponsesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
                 &resources.pool,
@@ -89,6 +94,17 @@ impl Gateway {
 }
 
 pub fn router(gateway: Arc<Gateway>) -> Router {
+    router_with_tokenize_hooks(gateway, (), None)
+}
+
+pub fn router_with_tokenize_hooks<H>(
+    gateway: Arc<Gateway>,
+    interceptors: H,
+    observers: Option<ObservationSender>,
+) -> Router
+where
+    H: Interceptors<litellm_inference::Error> + Clone + 'static,
+{
     Router::new()
         .route("/v1/messages", post(messages::create))
         .route("/ocr", post(ocr::create))
@@ -108,10 +124,11 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .route("/v1/embeddings", post(request::unsupported))
         .route("/completions", post(request::unsupported))
         .route("/v1/completions", post(request::unsupported))
+        .with_state(gateway.clone())
+        .merge(tokenize::router(gateway, interceptors, observers))
         .layer(axum::extract::DefaultBodyLimit::max(
             request::MAX_BODY_BYTES,
         ))
-        .with_state(gateway)
 }
 
 fn model_routes() -> Router<Arc<Gateway>> {

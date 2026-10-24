@@ -18,6 +18,8 @@ litellm-inference-responses.workspace = true
 litellm-inference-messages.workspace = true
 litellm-inference-chat.workspace = true
 litellm-inference-ocr.workspace = true
+litellm-inference-tokenize.workspace = true
+litellm-token-counter = { path = "../token-counter", default-features = false, features = ["huggingface", "tiktoken"] }
 litellm-host-http.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
@@ -36,3 +38,4 @@ tokio = { workspace = true, features = ["io-util"] }
 rstest.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
 wiremock.workspace = true
+sha2.workspace = true
