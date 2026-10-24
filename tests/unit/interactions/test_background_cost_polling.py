@@ -484,11 +484,12 @@ async def test_schedule_registers_an_agent_only_create_that_names_no_model():
 
 
 @pytest.mark.asyncio
-async def test_schedule_registers_a_create_whose_tags_are_a_string_and_keeps_them_as_sent():
+async def test_schedule_registers_a_create_whose_tags_are_a_string_and_stores_them_as_a_list():
     """
     The regression: storing the create's context read string tags as a list
     and raised, so a create sent with a tags string answered with an error
-    after the provider had already started the interaction.
+    after the provider had already started the interaction. A string is now
+    read as a single tag.
     """
     logging_obj = _logging_obj(litellm_params={"metadata": _create_metadata(tags="team-a,nightly-batch")})
     store = InMemoryBackgroundSettlementStore()
@@ -507,7 +508,7 @@ async def test_schedule_registers_a_create_whose_tags_are_a_string_and_keeps_the
     pending = await store.pending("interactions/bg-abc")
     assert pending is not None
     rebuilt = _rebuild_logging_obj(pending.create_context)
-    assert get_litellm_metadata_from_kwargs(kwargs=rebuilt.model_call_details)["tags"] == "team-a,nightly-batch"
+    assert get_litellm_metadata_from_kwargs(kwargs=rebuilt.model_call_details)["tags"] == ["team-a,nightly-batch"]
 
 
 @pytest.mark.asyncio
