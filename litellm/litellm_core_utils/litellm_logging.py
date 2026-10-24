@@ -2767,16 +2767,23 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
-        elif "response_cost" in hidden_params:
+        elif "response_cost" in hidden_params and not use_custom_pricing_for_model(self):
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
             self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
-        elif (existing_cost := self.model_call_details.get("response_cost")) is not None and existing_cost != 0:
+        elif (
+            (existing_cost := self.model_call_details.get("response_cost")) is not None
+            and existing_cost != 0
+            and not use_custom_pricing_for_model(self)
+        ):
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly).
             # Do not preserve 0 from failure_handler on intermediate router retries.
             pass
         else:
             self.model_call_details["response_cost"] = self.response_cost_calculator(result=logging_result)
+
+        if isinstance(hidden_params, dict) and self.model_call_details.get("response_cost") is not None:
+            hidden_params["response_cost"] = self.model_call_details["response_cost"]
 
         if not build_logging_payload:
             return None
@@ -6310,7 +6317,7 @@ def _deployment_model_info(litellm_params: dict | None) -> Mapping[str, object]:
     return MappingProxyType({})
 
 
-def use_custom_pricing_for_model(litellm_params: dict | None) -> bool:
+def use_custom_pricing_for_model(litellm_params: Any) -> bool:
     """
     Check if the model uses custom pricing
 
@@ -6318,7 +6325,18 @@ def use_custom_pricing_for_model(litellm_params: dict | None) -> bool:
     any custom pricing or deployment-scoped pricing field (such as
     ``off_peak_pricing``) is present in the metadata ``model_info``
     """
+    if getattr(litellm, "custom_pricing", False) is True:
+        return True
+
     if litellm_params is None:
+        return False
+
+    if hasattr(litellm_params, "litellm_params"):
+        litellm_params = getattr(litellm_params, "litellm_params", None)
+        if litellm_params is None:
+            return False
+
+    if not isinstance(litellm_params, Mapping):
         return False
 
     # Check litellm_params using set intersection (only check keys that exist in both)

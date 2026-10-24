@@ -5726,6 +5726,7 @@ def completion(
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if (
             (input_cost_per_token is not None and output_cost_per_token is not None)
+            or kwargs.get("input_cost_per_query") is not None
             or input_cost_per_second is not None
             or output_cost_per_second is not None
             or cost_per_second is not None
@@ -6729,6 +6730,7 @@ def embedding(
     ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
     if (
         (input_cost_per_token is not None and output_cost_per_token is not None)
+        or kwargs.get("input_cost_per_query") is not None
         or input_cost_per_second is not None
         or output_cost_per_second is not None
         or cost_per_second is not None
