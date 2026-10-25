@@ -2,6 +2,7 @@ import asyncio
 import http.server
 import threading
 import time
+from collections.abc import AsyncIterator
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -953,7 +954,7 @@ def test_async_for_gets_the_same_guards_as_for():
     assert async_unpack & {"_agetiter_", "_aiter_unpack_sequence_"}
 
 
-async def _arange(*values):
+async def _arange(*values: object) -> AsyncIterator[object]:
     for v in values:
         yield v
 
@@ -974,7 +975,7 @@ async def _arange(*values):
         ),
     ],
 )
-async def test_async_for_still_executes(source, arg, expected):
+async def test_async_for_still_executes(source: str, arg: tuple[object, ...], expected: int):
     """Guarding `async for` must not break it, in either target shape."""
     from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
         build_sandbox_globals,
