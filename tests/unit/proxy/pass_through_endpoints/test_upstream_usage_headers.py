@@ -1,6 +1,7 @@
 import httpx
 import pytest
 
+from litellm.constants import MAX_SPEND_LOG_MODEL_NAME_LENGTH
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.upstream_usage_headers import (
     UpstreamReportedUsage,
@@ -144,6 +145,25 @@ def test_parse_reads_reported_model_and_treats_blank_as_absent(raw_model: str, e
 
 def test_parse_returns_no_model_when_upstream_sends_none():
     assert parse_upstream_reported_model(_headers(**{"x-litellm-response-cost": "0.5"})) is None
+
+
+def test_parse_uses_the_first_value_of_a_repeated_model_header():
+    headers = httpx.Headers([("x-litellm-upstream-model", "support-summarizer"), ("x-litellm-upstream-model", "other")])
+
+    assert parse_upstream_reported_model(headers) == "support-summarizer"
+
+
+@pytest.mark.parametrize(
+    ("raw_model", "expected"),
+    [
+        ("m" * 5000, "m" * MAX_SPEND_LOG_MODEL_NAME_LENGTH),
+        ("m" * MAX_SPEND_LOG_MODEL_NAME_LENGTH, "m" * MAX_SPEND_LOG_MODEL_NAME_LENGTH),
+        ("m" * (MAX_SPEND_LOG_MODEL_NAME_LENGTH - 1) + " tail", "m" * (MAX_SPEND_LOG_MODEL_NAME_LENGTH - 1)),
+    ],
+    ids=["over_limit", "at_limit", "cut_lands_on_a_space"],
+)
+def test_parse_cuts_a_long_model_name_to_the_spend_log_limit(raw_model: str, expected: str):
+    assert parse_upstream_reported_model(_headers(**{"x-litellm-upstream-model": raw_model})) == expected
 
 
 def _logging_obj_for_model(model: str) -> LiteLLMLoggingObj:

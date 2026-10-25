@@ -15,6 +15,7 @@ from typing import Final
 import httpx
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAX_SPEND_LOG_MODEL_NAME_LENGTH
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import Usage
 
@@ -135,11 +136,15 @@ def apply_upstream_reported_usage(
 def parse_upstream_reported_model(headers: httpx.Headers) -> str | None:
     """Read the model name an upstream reported, or ``None`` when it sent none.
 
-    An empty or whitespace-only value counts as absent.
+    An empty or whitespace-only value counts as absent. A repeated header reads
+    as one comma-separated list (RFC 9110 field combining, which is how httpx
+    joins it), so only its first element is used. The name is cut to the spend
+    log's model-name limit, since it becomes a spend row, rollup key and metric
+    label.
     """
     raw_model: Final[str | None] = headers.get(UPSTREAM_MODEL_HEADER)
-    model: Final = raw_model.strip() if raw_model is not None else ""
-    return model or None
+    model: Final = raw_model.split(",", 1)[0].strip() if raw_model is not None else ""
+    return model[:MAX_SPEND_LOG_MODEL_NAME_LENGTH].rstrip() or None
 
 
 def apply_upstream_reported_model(
