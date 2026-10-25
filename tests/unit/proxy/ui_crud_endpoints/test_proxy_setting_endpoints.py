@@ -1630,6 +1630,35 @@ class TestProxySettingEndpoints:
         stored_settings = json.loads(create_data["ui_settings"])
         assert stored_settings["disable_model_add_for_internal_users"] is True
 
+    def test_update_ui_settings_works_without_store_model_in_db(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="test-user-123", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+        mock_prisma: Final = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        payload: Final = {
+            "enabled_ui_pages_internal_users": ["api-keys"],
+            "team_admin_editable_team_fields": ["max_budget"],
+        }
+
+        try:
+            response: Final = client.patch("/update/ui_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200, response.text
+        assert response.json()["settings"] == payload
+        upsert_data: Final = mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]
+        assert json.loads(upsert_data["create"]["ui_settings"]) == payload
+
     def test_update_ui_settings_ignores_non_allowlisted_value(
         self, mock_auth, monkeypatch
     ):
