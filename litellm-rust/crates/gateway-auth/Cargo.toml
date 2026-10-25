@@ -12,15 +12,17 @@ fancy-regex.workspace = true
 litellm-auth-types.workspace = true
 litellm-config.workspace = true
 litellm-secrets.workspace = true
+moka.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 tower-sessions.workspace = true
+tokio.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true
 rstest.workspace = true
-tokio.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
