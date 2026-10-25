@@ -795,3 +795,18 @@ async def test_store_spend_logs_in_redis_is_off_unless_transaction_buffering_is_
 
     assert await buffer.store_spend_logs_in_redis([{"request_id": "a"}]) is False
     assert redis.rows == []
+
+
+@pytest.mark.asyncio
+async def test_tool_discoveries_go_back_on_the_queue_when_the_redis_push_fails():
+    from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import ToolDiscoveryQueue
+
+    redis_cache = MagicMock()
+    redis_cache.async_rpush_pipeline = AsyncMock(side_effect=ConnectionError("redis down"))
+    queue = ToolDiscoveryQueue()
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+
+    await RedisUpdateBuffer(redis_cache=redis_cache).store_tool_discoveries_in_redis(queue)
+
+    assert queue.flush() == [{"tool_name": "get_weather", "origin": "user_defined", "call_count": 2}]

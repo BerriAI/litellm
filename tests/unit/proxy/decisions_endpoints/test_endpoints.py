@@ -126,6 +126,51 @@ def test_proxy_decisions_route_returns_answers_and_cost(
     assert upstream.calls[0].request.headers["authorization"] == "Bearer test-key"
 
 
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/systemone"))
+@pytest.mark.parametrize("question_count", (128, 129, 154))
+def test_proxy_systemone_preserves_large_question_batches(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    question_count: int,
+) -> None:
+    questions: Final = {
+        f"q{index}": {"type": "noul", "instructions": f"Question {index}?"} for index in range(question_count)
+    }
+    answers: Final = {f"q{index}": {"type": "noul", "noul": index / question_count} for index in range(question_count)}
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(
+        json={**_RESPONSE, "answers": answers}
+    )
+
+    response: Final = client.post(endpoint, json={**_REQUEST, "questions": questions})
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        **_REQUEST,
+        "model": "pplx-decider-v1-27b",
+        "questions": questions,
+    }
+    assert response.json()["answers"] == answers
+
+
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/systemone"))
+@pytest.mark.parametrize(
+    "questions",
+    ({}, {"": {"type": "noul", "instructions": "Is this a defect?"}}, {"is_defect": {"type": "noul"}}),
+    ids=("empty", "empty_name", "missing_instructions_or_criteria"),
+)
+def test_proxy_systemone_rejects_invalid_questions_before_http(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    questions: Mapping[str, object],
+) -> None:
+    response: Final = client.post(endpoint, json={**_REQUEST, "questions": questions})
+
+    assert response.status_code == 400, response.text
+    assert len(respx_mock.calls) == 0
+
+
 def test_proxy_decisions_dispatches_typesafe_deployment(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
