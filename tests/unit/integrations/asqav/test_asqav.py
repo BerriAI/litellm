@@ -108,6 +108,14 @@ def test_record_carries_usage_latency_and_call_metadata(tmp_path: Path) -> None:
     assert record["finish_reason"] == "stop"
 
 
+def test_latency_is_null_when_times_are_not_datetimes(tmp_path: Path) -> None:
+    path = tmp_path / "audit.jsonl"
+    _logger(path).log_success_event(_kwargs(), _response(), None, None)
+
+    [record] = _records(path)
+    assert record["latency_ms"] is None
+
+
 def test_verify_detects_an_edited_field(tmp_path: Path) -> None:
     path = tmp_path / "audit.jsonl"
     logger = _logger(path)
@@ -154,6 +162,29 @@ def test_verify_reports_a_missing_file(tmp_path: Path) -> None:
     assert _logger(tmp_path / "audit.jsonl").verify_chain(str(missing)) == (False, f"log file not found: {missing}")
 
 
+def test_verify_skips_blank_lines(tmp_path: Path) -> None:
+    path = tmp_path / "audit.jsonl"
+    logger = _logger(path)
+    _append(logger, 2)
+    first, second = path.read_text(encoding="utf-8").splitlines()
+    path.write_text(f"{first}\n\n{second}\n", encoding="utf-8")
+
+    assert logger.verify_chain() == (True, "ok")
+
+
+def test_verify_reports_a_line_that_is_not_json(tmp_path: Path) -> None:
+    path = tmp_path / "audit.jsonl"
+    logger = _logger(path)
+    _append(logger, 1)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("not json\n")
+
+    ok, reason = logger.verify_chain()
+
+    assert ok is False
+    assert reason.startswith("verification error:")
+
+
 def test_chain_and_seq_resume_after_restart(tmp_path: Path) -> None:
     path = tmp_path / "audit.jsonl"
     _append(_logger(path), 5, prefix="first")
@@ -182,6 +213,35 @@ def test_restart_resumes_when_last_record_exceeds_tail_window(tmp_path: Path) ->
     records = _records(path)
     assert [r["seq"] for r in records] == [0, 1, 2]
     assert restarted.verify_chain() == (True, "ok")
+
+
+def test_restart_on_a_blank_file_starts_a_new_chain(tmp_path: Path) -> None:
+    path = tmp_path / "audit.jsonl"
+    path.write_text("\n\n", encoding="utf-8")
+
+    restarted = _logger(path)
+    _append(restarted, 1)
+
+    [record] = _records(path)
+    assert (record["seq"], record["prev_hash"]) == (0, GENESIS_HASH)
+    assert restarted.verify_chain() == (True, "ok")
+
+
+def test_restart_after_a_corrupt_last_line_keeps_logging_and_verify_flags_it(tmp_path: Path) -> None:
+    path = tmp_path / "audit.jsonl"
+    _append(_logger(path), 1)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("{truncated\n")
+
+    restarted = _logger(path)
+    _append(restarted, 1, prefix="after")
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3
+    assert json.loads(lines[2])["messages_digest"] is not None
+    ok, reason = restarted.verify_chain()
+    assert ok is False
+    assert reason.startswith("verification error:")
 
 
 def test_failure_event_is_logged(tmp_path: Path) -> None:
@@ -216,6 +276,24 @@ def test_failed_write_does_not_raise_or_advance_the_chain(tmp_path: Path) -> Non
     assert record["call_id"] == "call-kept"
     assert record["seq"] == 0
     assert record["prev_hash"] == GENESIS_HASH
+
+
+def test_unexpected_error_while_building_does_not_raise_or_advance_the_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "audit.jsonl"
+    logger = _logger(path)
+
+    def _explode(_record: Mapping[str, object]) -> bool:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(logger, "_write_record", _explode)
+    logger.log_success_event(_kwargs(call_id="call-dropped"), _response(), START, END)
+    monkeypatch.undo()
+    logger.log_success_event(_kwargs(call_id="call-kept"), _response(), START, END)
+
+    [record] = _records(path)
+    assert (record["call_id"], record["seq"], record["prev_hash"]) == ("call-kept", 0, GENESIS_HASH)
 
 
 def test_content_is_digested_by_default(tmp_path: Path) -> None:
