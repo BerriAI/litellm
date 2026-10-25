@@ -5931,6 +5931,11 @@ class MCPServerManager:
         ).get(identity)
         return blocked.get(name) if blocked is not None else None
 
+    def _has_cached_catalog_tool(self, server: MCPServer, name: str) -> bool:
+        return any(name in tools for tools in self._listed_tools_by_server_id.get(server.server_id, {}).values()) or any(
+            name in tools for tools in self._blocked_tools_by_server_id.get(server.server_id, {}).values()
+        )
+
     def _create_prefixed_prompts(
         self, prompts: Sequence[Prompt], server: MCPServer, add_prefix: bool = True
     ) -> list[Prompt]:
@@ -6844,6 +6849,7 @@ class MCPServerManager:
         mcp_server = self.get_mcp_server_from_tool_name(  # rebind-ok: pre-existing rebinding on a rename-only line
             prefixed_tool_name
         )
+        resolved_by_server_name_only = False
         normalized_server_name: Final = normalize_server_name(server_name)
 
         def _candidate_matches_server_name(candidate: MCPServer) -> bool:
@@ -6860,6 +6866,7 @@ class MCPServerManager:
             for candidate in self.get_registry().values():
                 if _candidate_matches_server_name(candidate):
                     mcp_server = candidate
+                    resolved_by_server_name_only = True
                     break
         if mcp_server is None:
             fallback: Final = self.get_mcp_server_from_tool_name(name)
@@ -6869,6 +6876,13 @@ class MCPServerManager:
             raise ValueError(f"Tool {name} not found")
         if is_mcp_stdio_blocked(mcp_server.transport):
             raise HTTPException(status_code=403, detail=MCP_STDIO_DISABLED_MESSAGE)
+
+        if (
+            resolved_by_server_name_only
+            and not self.server_exposes_tool(mcp_server, name)
+            and not self._has_cached_catalog_tool(mcp_server, name)
+        ):
+            raise ValueError(f"Tool {name} not found")
 
         return mcp_server
 
@@ -7069,7 +7083,7 @@ class MCPServerManager:
             CallToolResult from the MCP server
         """
         start_time: Final = datetime.datetime.now()
-        mcp_server: Final = self._resolve_mcp_server_for_tool_call(server_name, name)
+        mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
         effective_guardrail_auth: Final = await MCPRequestHandler.guardrail_auth_for_call(
             guardrail_auth=guardrail_auth,
             user_api_key_auth=user_api_key_auth,
@@ -7092,7 +7106,7 @@ class MCPServerManager:
         guardrail_tool: Final[MCPTool | None] = (
             listed_tool if listed_tool is not ... else self.get_guardrail_tool(mcp_server, name, listed_caller)
         )
-        if guardrail_tool is None and not self.server_exposes_tool(mcp_server, name):
+        if guardrail_tool is None and self._has_cached_catalog_tool(mcp_server, name):
             raise ValueError(f"Tool {name} not found")
 
         #########################################################
