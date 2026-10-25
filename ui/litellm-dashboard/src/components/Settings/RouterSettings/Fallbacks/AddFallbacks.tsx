@@ -14,13 +14,16 @@ import { AddFallbacksModal } from "./AddFallbacksModal";
 import { FallbackGroup } from "./FallbackGroupConfig";
 import { FallbackSelectionForm } from "./FallbackSelectionForm";
 
+export type FallbackTarget = string | { model: string; [parameter: string]: unknown };
+export type ConfiguredFallbackEntry = { [modelName: string]: FallbackTarget[] };
+export type ConfiguredFallbacks = ConfiguredFallbackEntry[];
 export type FallbackEntry = { [modelName: string]: string[] };
 export type Fallbacks = FallbackEntry[];
 
 interface AddFallbacksProps {
   accessToken: string;
-  value?: Fallbacks; // Current fallbacks value from form
-  onChange?: (fallbacks: Fallbacks) => Promise<void>; // Callback to update form value
+  value?: ConfiguredFallbacks; // Current fallbacks value from form
+  onChange?: (fallbacks: ConfiguredFallbacks) => Promise<void>; // Callback to update form value
   disabledReason?: string; // When set, the button is disabled and this explains why
 }
 

@@ -12,6 +12,7 @@ import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { toast } from "@/lib/toast";
 import { AddFallbacksModal } from "./AddFallbacksModal";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
+import type { ConfiguredFallbacks } from "./AddFallbacks";
 
 export type FallbackEntry = { [modelName: string]: string[] };
 export type Fallbacks = FallbackEntry[];
@@ -19,8 +20,8 @@ export type Fallbacks = FallbackEntry[];
 interface EditFallbacksProps {
   accessToken: string;
   fallbackEntry: FallbackEntry;
-  value: Fallbacks;
-  onChange: (fallbacks: Fallbacks) => Promise<void>;
+  value: ConfiguredFallbacks;
+  onChange: (fallbacks: ConfiguredFallbacks) => Promise<void>;
   onClose: () => void;
   maxFallbacks?: number;
 }
