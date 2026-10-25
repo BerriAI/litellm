@@ -16,6 +16,7 @@ from litellm.constants import PTU_ROLLUP_JOB_ID, PTU_ROLLUP_LOCK_TTL_SECONDS
 from litellm.proxy._types import ScheduledJobStaggerSettings
 from litellm.proxy.common_utils.scheduled_job_stagger import (
     _OffsetTrigger,
+    _shift_datetime,
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
     offset_seconds,
@@ -331,3 +332,9 @@ def test_offset_trigger_handles_dst_fall_back_without_looping():
             count += 1
             nrt = trigger.get_next_fire_time(nrt, now)
         assert count == 2, f"Failed for {label}: count={count}"
+
+
+def test_shift_datetime_handles_naive_and_timezone_aware():
+    naive = datetime(2026, 1, 1, 12, 0, 0)
+    assert _shift_datetime(naive, timedelta(seconds=10)) == datetime(2026, 1, 1, 12, 0, 10)
+    assert _shift_datetime(naive, -timedelta(seconds=10)) == datetime(2026, 1, 1, 11, 59, 50)
