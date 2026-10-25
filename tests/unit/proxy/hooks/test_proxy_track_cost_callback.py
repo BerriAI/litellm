@@ -15,6 +15,8 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import ProxyException, SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import mark_invalid_virtual_key_error
+from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
@@ -39,6 +41,73 @@ from litellm.proxy.utils import (
 )
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/models", "/v1/chat/completions"])
+@pytest.mark.parametrize(
+    ("error", "expected_rows"),
+    [
+        pytest.param(KeyNotFoundError("unrecognized-key"), 0, id="unknown-key"),
+        pytest.param(
+            mark_invalid_virtual_key_error(
+                ProxyException(message="Malformed virtual key", type="auth_error", param="key", code=401), True
+            ),
+            0,
+            id="malformed-key",
+        ),
+        pytest.param(HTTPException(status_code=401, detail="Expired Key"), 1, id="expired-key"),
+        pytest.param(HTTPException(status_code=401, detail="Malformed virtual key"), 1, id="unmarked-auth-message"),
+        pytest.param(
+            litellm.AuthenticationError(message="Invalid upstream key", llm_provider="openai", model="unit-model"),
+            1,
+            id="provider-auth",
+        ),
+        pytest.param(litellm.BudgetExceededError(current_cost=2.0, max_budget=1.0), 1, id="exhausted-budget"),
+        pytest.param(HTTPException(status_code=403, detail="Model access denied"), 1, id="model-permission"),
+    ],
+)
+async def test_unrecognized_keys_write_no_spend_rows_but_recognized_key_failures_remain(
+    monkeypatch: pytest.MonkeyPatch, route: str, error: Exception, expected_rows: int
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+    key_cache: Final = UserApiKeyCache()
+    logging: Final = ProxyLogging(user_api_key_cache=key_cache)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/unit-tests")
+    client: Final = PrismaClient(database_url="postgresql://localhost/unit-tests", proxy_logging_obj=logging)
+    writer: Final = DBSpendUpdateWriter()
+    identity: Final = UserAPIKeyAuth(api_key="sk-unit-test-key", key_alias="unit-test-key", request_route=route)
+    monkeypatch.setattr(client, "spend_log_transactions", [])
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", key_cache)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    before: Final = frozenset(asyncio.all_tasks())
+
+    await ProxyDBLogger(spend_writer=lambda: writer).async_post_call_failure_hook(
+        request_data={
+            "model": "unit-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "start_time": datetime(2026, 1, 1, 12, tzinfo=timezone.utc),
+        },
+        original_exception=error,
+        user_api_key_dict=identity,
+    )
+    await asyncio.gather(*(asyncio.all_tasks() - before))
+
+    assert [(row["api_key"], row["status"], row["spend"]) for row in client.spend_log_transactions] == [
+        (identity.api_key, "failure", 0.0)
+    ] * expected_rows
+    for queue in (writer.daily_spend_update_queue, writer.daily_team_spend_update_queue):
+        daily: Final = await queue.flush_and_get_aggregated_daily_spend_update_transactions()
+        assert [(row["api_key"], row["failed_requests"], row["spend"]) for row in daily.values()] == [
+            (identity.api_key, 1, 0.0)
+        ] * expected_rows
 
 
 @pytest.mark.asyncio

@@ -125,3 +125,46 @@ def test_an_expired_dashboard_session_key_still_logs_a_failed_llm_call(owned: Ow
         ).count("acompletion")
         == 1
     )
+
+
+@pytest.mark.parametrize("key_prefix", ["sk-", "wordlist-"])
+def test_unrecognized_keys_do_not_fill_spend_tables(gateway: Gateway, key_prefix: str) -> None:
+    attempts: Final = tuple(
+        (route, key_prefix + uuid.uuid4().hex)
+        for route in ("/v1/models", "/v1/chat/completions", "/v1/responses", "/v1/messages")
+    )
+    for route, key in attempts:
+        response: Final = gateway.request(
+            "GET" if route == "/v1/models" else "POST",
+            route,
+            {
+                "model": "integration-unrouted",
+                "messages": [{"role": "user", "content": "invalid key"}],
+                "input": "invalid key",
+                "max_tokens": 10,
+            },
+            key=key,
+        )
+        assert response.status_code == 401, response.text
+
+    with gateway.scenario() as scenario:
+        known_key: Final = scenario.key(duration="1s")
+        _rejected_as_expired(gateway, known_key, "/v1/models")
+        assert len(eventually(lambda: _failure_rows(known_key), lambda rows: len(rows) == 1, seconds=70)) == 1
+
+        keys: Final = [key for _, key in attempts] + [hash_token(key) for _, key in attempts]
+        empty: Final = [{"spend_logs": 0, "daily_user": 0, "daily_team": 0}]
+        assert (
+            held(
+                lambda: read_rows(
+                    'SELECT (SELECT count(*)::int FROM "LiteLLM_SpendLogs" WHERE api_key = ANY(%s)) AS spend_logs, '
+                    '(SELECT count(*)::int FROM "LiteLLM_DailyUserSpend" WHERE api_key = ANY(%s)) AS daily_user, '
+                    '(SELECT count(*)::int FROM "LiteLLM_DailyTeamSpend" WHERE api_key = ANY(%s)) AS daily_team',
+                    (keys, keys, keys),
+                ),
+                lambda rows: rows == empty,
+                holding=SPEND_LOG_FLUSH_SECONDS,
+                seconds=SPEND_LOG_FLUSH_SECONDS + 5,
+            )
+            == empty
+        )
