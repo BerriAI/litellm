@@ -163,58 +163,35 @@ def coerce_numeric_form_fields(
 
 _ORJSON_INT_MIN: Final = -(2**63)
 _ORJSON_INT_MAX: Final = 2**64 - 1
+_JSON_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+# Consume unterminated strings through EOF to avoid rescanning every escaped quote in malformed bodies.
+_JSON_STRING_OR_NUMBER: Final = re.compile(
+    rb'"[^"\\]*(?:\\.[^"\\]*)*(?:"|\\?$)|(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)', re.DOTALL
+)
 
 
 def _has_int_outside_orjson_range(body: bytes) -> bool:
-    in_string = False
-    escaped = False
-    index = 0
-    while index < len(body):
-        byte = body[index]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif byte == 0x5C:
-                escaped = True
-            elif byte == 0x22:
-                in_string = False
-            index += 1
+    for token in _JSON_STRING_OR_NUMBER.finditer(body):
+        if (
+            (number := token.group(1)) is None
+            or len(number) < 19
+            or any(marker in number for marker in (b".", b"e", b"E"))
+        ):
             continue
-        if byte == 0x22:
-            in_string = True
-            index += 1
-            continue
-        if byte == 0x2D or 0x30 <= byte <= 0x39:
-            start = index
-            if byte == 0x2D:
-                index += 1
-            digits_start = index
-            while index < len(body) and 0x30 <= body[index] <= 0x39:
-                index += 1
-            if index == digits_start:
-                continue
-            if index < len(body) and body[index] in b".eE":
-                while index < len(body) and body[index] in b"+-.eE0123456789":
-                    index += 1
-                continue
-            if index - digits_start >= 19:
-                value = int(body[start:index])
-                if value < _ORJSON_INT_MIN or value > _ORJSON_INT_MAX:
-                    return True
-            continue
-        index += 1
+        if len(number) > 20 or not _ORJSON_INT_MIN <= int(number) <= _ORJSON_INT_MAX:
+            return True
     return False
 
 
-def _loads_json_body(body: bytes) -> object:
+def _loads_json_body(body: bytes) -> Mapping[str, object]:
     if not _has_int_outside_orjson_range(body):
-        return orjson.loads(body)
+        return _JSON_REQUEST_BODY.validate_python(orjson.loads(body))
     try:
-        parsed: Final = json.loads(body)
-        json.dumps(parsed, ensure_ascii=False).encode("utf-8")
-        return parsed
-    except (json.JSONDecodeError, UnicodeEncodeError):
-        return orjson.loads(body)
+        parsed: Final = _JSON_REQUEST_BODY.validate_python(json.loads(body))
+        json.dumps(parsed, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except ValueError:
+        return _JSON_REQUEST_BODY.validate_python(orjson.loads(body))
+    return parsed
 
 
 def _parse_binary_body(body: bytes) -> dict:
@@ -328,7 +305,7 @@ async def read_request_body(request: Request | None) -> dict:
                 parsed_body = {}
             else:
                 try:
-                    parsed_body = _loads_json_body(body)
+                    parsed_body = dict(_loads_json_body(body))
                 except orjson.JSONDecodeError as e:
                     # The surrogate-repair fallback below runs two full-body re.sub
                     # passes, which block the event loop on multi-MB malformed bodies.

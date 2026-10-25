@@ -112,24 +112,31 @@ async def test_read_request_body_marks_body_received_for_binary_and_form_bodies(
         b'{"minimum": -9223372036854775809}',
         b'{"maximum": 18446744073709551616}',
         b'{"maximum": 18446744073709551615}',
+        b'{"minimum": -9223372036854775808}',
         b'{"const": 9007199254740993}',
         b'{"nested": {"list": [12345678901234567890123, {"deep": -9223372036854775809}]}}',
+        b'{"maximum": ' + b"9" * 300 + b"}",
+        b'{"maximum": ' + b"9" * 400 + b"}",
+        rb'{"text": "escaped \"quote\" and backslash \\", "maximum": 18446744073709551616}',
     ],
 )
-async def test_read_request_body_keeps_large_integers_exact(body: bytes):
-    parsed = await read_request_body(_starlette_request(body, "application/json"))
+@pytest.mark.parametrize("content_type", ["application/json", "application/x-protobuf"])
+async def test_read_request_body_keeps_large_integers_exact(body: bytes, content_type: str) -> None:
+    request: Final = _starlette_request(body, content_type)
+    parsed: Final = await read_request_body(request)
 
     assert parsed == json.loads(body)
     assert json.dumps(parsed).encode() == json.dumps(json.loads(body)).encode()
+    assert await read_request_body(request) == parsed
 
 
 @pytest.mark.asyncio
-async def test_read_request_body_does_not_turn_floats_or_digit_strings_into_integers():
-    body = (
+async def test_read_request_body_does_not_turn_floats_or_digit_strings_into_integers() -> None:
+    body: Final = (
         b'{"model": "glm-5.3", "content": "id 12345678901234567890123", '
         b'"score": 1.234567890123456789, "rate": 12345678901234567890e0, "count": 42}'
     )
-    parsed = await read_request_body(_starlette_request(body, "application/json"))
+    parsed: Final = await read_request_body(_starlette_request(body, "application/json"))
 
     assert parsed == {
         "model": "glm-5.3",
@@ -140,6 +147,31 @@ async def test_read_request_body_does_not_turn_floats_or_digit_strings_into_inte
     }
     assert isinstance(parsed["score"], float)
     assert isinstance(parsed["rate"], float)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"maximum": 18446744073709551616,}',
+        b'{"maximum": 18446744073709551616, "text": "\\ud800"}',
+        b'{"maximum": 18446744073709551616, "text": "\\udc00"}',
+        b'{"text": "' + b'\\"' * 100 + b"18446744073709551616\\",
+    ],
+)
+async def test_large_integer_does_not_bypass_invalid_json_rejection(body: bytes) -> None:
+    with pytest.raises(ProxyException) as error:
+        await read_request_body(_starlette_request(body, "application/json"))
+
+    assert error.value.code == "400"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("number", [b"NaN", b"Infinity", b"-Infinity", b"1e400"])
+async def test_large_integer_does_not_make_nonfinite_binary_json_valid(number: bytes) -> None:
+    body: Final = b'{"maximum": 18446744073709551616, "other": ' + number + b"}"
+
+    assert await read_request_body(_starlette_request(body, "application/x-protobuf")) == {}
 
 
 @pytest.mark.asyncio
