@@ -12,7 +12,7 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -123,6 +123,28 @@ class _SsePreface:
 
 
 _SSE_FRAME_END: Final = re.compile(rb"\r\n\r\n|\n\n|\r\r")
+_PLACEHOLDER_TOKEN_PATTERN: Final = re.compile(r"<([A-Za-z0-9_]+)_(\d+)>")
+
+
+def _scan_user_placeholders(text: str, request_data: Mapping[str, object] | None) -> frozenset[str]:
+    """Collect placeholder patterns already present in the prompt to prevent collisions."""
+    fragments: Final[list[str]] = [text]  # mutable-ok: accumulating text fragments
+    if request_data:
+        raw_messages: Final = request_data.get("messages")
+        if isinstance(raw_messages, Sequence) and not isinstance(raw_messages, (str, bytes)):
+            for msg in raw_messages:
+                if isinstance(msg, Mapping):
+                    content: Final = msg.get("content")
+                    if isinstance(content, str):
+                        fragments.append(content)
+                    elif isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
+                        for item in content:
+                            if isinstance(item, Mapping):
+                                item_text: Final = item.get("text")
+                                if isinstance(item_text, str):
+                                    fragments.append(item_text)
+    combined: Final = "\n".join(fragments)
+    return frozenset(m.group(0) for m in _PLACEHOLDER_TOKEN_PATTERN.finditer(combined))
 
 
 def _split_sse_preface(complete_frames: bytes) -> tuple[bytes, bytes]:
@@ -880,19 +902,37 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         pii_tokens: Final = cast("dict[str, str]", request_data["metadata"]["pii_tokens"])  # cast-ok: this hook's map
 
         runs: Final = _resolve_overlapping_spans(analyze_results)
-        # Every message and content part numbers its runs from 1 into this one map, so a
-        # token another part already holds for a different value takes a spare number.
-        # No token in the map is numbered above its size, so spares start above both.
-        spare_numbers: Final = count(max(len(pii_tokens), len(runs)) + 1)
+        user_placeholders: Final[frozenset[str]] = (
+            request_data.setdefault(  # pyright: ignore[reportArgumentType] # runtime cache on request data
+                "_existing_user_placeholders", _scan_user_placeholders(text, request_data)
+            )
+            if request_data
+            else _scan_user_placeholders(text, None)
+        )
 
-        for seq, run in reversed(tuple(enumerate(runs, start=1))):
+        existing_indices: Final[list[int]] = []  # mutable-ok: local accumulation of placeholder indices
+        for tok in user_placeholders:
+            m: Final = _PLACEHOLDER_TOKEN_PATTERN.search(tok)
+            if m is not None:
+                existing_indices.append(int(m.group(2)))
+        offset: Final = max(existing_indices, default=0)
+        start_counter: Final = 1 + offset
+
+        spare_start: Final = max(len(pii_tokens) + offset, len(runs) + offset, offset) + 1
+        spare_numbers: Final = count(spare_start)
+
+        for seq, run in reversed(tuple(enumerate(runs, start=start_counter))):
             original = text[run.start : run.end]
             numbered = f"<{run.entity_type}_{seq}>"
-            replacement = (
-                numbered
-                if pii_tokens.get(numbered, original) == original
-                else f"<{run.entity_type}_{next(spare_numbers)}>"
-            )
+            if numbered not in user_placeholders and pii_tokens.get(numbered, original) == original:
+                replacement = numbered
+            else:
+                next_spare = next(spare_numbers)
+                spare_cand = f"<{run.entity_type}_{next_spare}>"
+                while spare_cand in user_placeholders or pii_tokens.get(spare_cand, original) != original:
+                    next_spare = next(spare_numbers)
+                    spare_cand = f"<{run.entity_type}_{next_spare}>"
+                replacement = spare_cand
             pii_tokens[replacement] = original
             new_text = new_text[: run.start] + replacement + new_text[run.end :]
             masked_entity_count[run.entity_type] = masked_entity_count.get(run.entity_type, 0) + 1

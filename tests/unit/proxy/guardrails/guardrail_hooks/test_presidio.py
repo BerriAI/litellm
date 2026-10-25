@@ -5070,3 +5070,114 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
+
+
+def test_presidio_avoids_placeholder_collision_with_existing_tokens():
+    """
+    Issue #48029: When user input contains <PERSON_1>, a new person entity
+    must be assigned <PERSON_2>, and on output parsing, the original <PERSON_1>
+    must not be overwritten with the new person's name.
+    """
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    request_data = {"metadata": {}}
+
+    text = "Hello <PERSON_1>, my name is John Smith."
+    name = "John Smith"
+    start = text.index(name)
+    end = start + len(name)
+    analyze_results = [
+        {"entity_type": "PERSON", "start": start, "end": end, "score": 0.85}
+    ]
+
+    masked = guardrail._finalize_presidio_anonymize_numbered_tokens(
+        text=text,
+        analyze_results=analyze_results,
+        request_data=request_data,
+        masked_entity_count={},
+    )
+
+    assert masked == "Hello <PERSON_1>, my name is <PERSON_2>."
+    assert request_data["metadata"]["pii_tokens"] == {"<PERSON_2>": "John Smith"}
+
+    # On output parsing, the original <PERSON_1> is not overwritten
+    response_text = "Greetings <PERSON_1>, welcome <PERSON_2>!"
+    unmasked = OPTIONAL_PresidioPIIMasking._unmask_pii_text(
+        response_text, request_data["metadata"]["pii_tokens"]
+    )
+    assert unmasked == "Greetings <PERSON_1>, welcome John Smith!"
+
+
+@pytest.mark.asyncio
+async def test_presidio_placeholder_collision_e2e_hooks():
+    """
+    Verify end-to-end async_pre_call_hook and async_post_call_success_hook:
+    When user input contains <PERSON_1>, newly masked entity is assigned <PERSON_2>,
+    and on output parsing, <PERSON_1> remains untouched while <PERSON_2> is unmasked.
+    """
+    guardrail = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Please tell <PERSON_1> that Jane Doe has arrived.",
+            }
+        ],
+        "metadata": {},
+    }
+
+    async def mock_analyze_text(text, presidio_config=None, request_data=None):
+        return [
+            PresidioAnalyzeResponseItem(
+                entity_type="PERSON",
+                start=text.index("Jane Doe"),
+                end=text.index("Jane Doe") + len("Jane Doe"),
+                score=0.9,
+            )
+        ]
+
+    async def mock_post_anonymize(text, analyze_results):
+        return {"text": text, "items": []}
+
+    guardrail.analyze_text = mock_analyze_text
+    guardrail._post_presidio_anonymize = mock_post_anonymize
+
+    # Run pre-call hook
+    processed_data = await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        cache=DualCache(),
+        data=request_data,
+        call_type="completion",
+    )
+
+    assert processed_data["messages"][0]["content"] == (
+        "Please tell <PERSON_1> that <PERSON_2> has arrived."
+    )
+    assert request_data["metadata"]["pii_tokens"] == {"<PERSON_2>": "Jane Doe"}
+
+    # Run post-call hook (output parsing)
+    response = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content="Noted, informing <PERSON_1> about <PERSON_2>.",
+                )
+            )
+        ]
+    )
+
+    post_call_result = await guardrail.async_post_call_success_hook(
+        data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=response,
+    )
+
+    assert (
+        post_call_result.choices[0].message.content
+        == "Noted, informing <PERSON_1> about Jane Doe."
+    )
