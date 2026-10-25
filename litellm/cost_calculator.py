@@ -916,7 +916,7 @@ def _declares_rates(model_info: ModelInfo | None) -> bool:
     return model_info is not None and cost_map_key_prices_anything(model_info["key"])
 
 
-def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | None) -> str | None:
+def base_model_pricing_provider(base_model: str, custom_llm_provider: str | None) -> str | None:
     """The provider to price an explicit base_model under, when the deployment's own provider has
     no rates for it (e.g. chatgpt/ subscription rows) but the base model's own row does"""
     if custom_llm_provider is None or _declares_rates(_cost_map_model_info(base_model, custom_llm_provider)):
@@ -1622,7 +1622,7 @@ def completion_cost(
             _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
         )
         base_model_provider: Final = (
-            _base_model_pricing_provider(
+            base_model_pricing_provider(
                 base_model,
                 _get_provider_for_cost_calc(
                     model=model,

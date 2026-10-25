@@ -51,7 +51,7 @@ from litellm.constants import (
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
-    _base_model_pricing_provider,
+    base_model_pricing_provider,
     get_usage_object,
     pricing_entry_for_cost_calc,
     select_model_name_for_cost_calc,
@@ -6700,7 +6700,7 @@ class StandardLoggingPayloadSetup:
             # rejects the match on provider mismatch and this diagnostic field stays None even though spend is
             # computed correctly.
             pricing_provider: Final = (
-                _base_model_pricing_provider(base_model, custom_llm_provider)
+                base_model_pricing_provider(base_model, custom_llm_provider)
                 if base_model is not None and custom_pricing is not True
                 else None
             )
