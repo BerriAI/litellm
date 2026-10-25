@@ -11,8 +11,10 @@ import { PluginModeProvider } from "@/contexts/PluginModeContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { isProxyAdminRole } from "@/utils/roles";
 import { uiHref } from "@/utils/uiHref";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 function MoyaiPageContent() {
+  const { t } = useLanguage();
   const { accessToken, userRole } = useAuthorized();
   const { data: uiSettings, isLoading, refetch } = useUISettings();
 
@@ -67,9 +69,9 @@ function MoyaiPageContent() {
     } else if (moyaiUrl) {
       content = (
         <div className="flex min-h-[calc(100vh-3.5rem)] flex-col items-center justify-center gap-3 bg-[#04060c] px-6 text-center text-[#e3e3e3]">
-          <p className="m-0 text-lg font-medium text-white">Opening Moyai</p>
+          <p className="m-0 text-lg font-medium text-white">{t("Opening Moyai")}</p>
           <a href={moyaiUrl} className="text-sm text-[#8b9bff] underline underline-offset-4">
-            Continue to {moyaiUrl}
+            {t("Continue to {url}", { url: moyaiUrl })}
           </a>
         </div>
       );

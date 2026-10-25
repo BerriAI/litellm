@@ -1,3 +1,9 @@
+import { englishTranslate, type Translate } from "@/i18n/language";
+export {
+  getHeuristicV2SuccessThresholdError,
+  getReminderMarkersError,
+  getClassifierPluginTimeoutError,
+} from "./auto_router_validation_errors";
 import {
   isForecastClassifier,
   withoutForecastPromptOverrides,
@@ -238,8 +244,12 @@ export interface BuildComplexityRouterConfigParams {
  * message is missing or blank through to the write and back as a raw 400. A transport failure fails
  * open as `{valid: true}`, which this passes, leaving the write gate authoritative.
  */
-export const dryRunRejection = (verdict: { valid: boolean; error?: string | null }): string | null =>
-  verdict.valid ? null : verdict.error?.trim() || "The proxy rejected this auto-router configuration";
+export const dryRunRejection = (
+  verdict: { valid: boolean; error?: string | null },
+  t: Translate = englishTranslate,
+): string | null =>
+  // 仅翻译本地回退，服务端诊断原样保留。
+  verdict.valid ? null : verdict.error?.trim() || t("The proxy rejected this auto-router configuration");
 
 export interface TierDefinitionPayload {
   name: string;
@@ -332,18 +342,21 @@ export const hydrateTierLabels = (stored: unknown): ComplexityTierLabels | undef
   return Object.fromEntries(entries);
 };
 
-export const getTierLabelsError = (tierLabels: ComplexityTierLabels | undefined): string | null => {
+export const getTierLabelsError = (
+  tierLabels: ComplexityTierLabels | undefined,
+  t: Translate = englishTranslate,
+): string | null => {
   const shadowing = TIER_KEYS.filter((tier) => {
     const label = tierLabels?.[tier]?.trim().toUpperCase() ?? "";
     return label !== "" && label !== tier && (TIER_KEYS as string[]).includes(label);
   });
   if (shadowing.length > 0) {
-    return `A tier's display name can't be another tier's name: ${shadowing.join(", ")}`;
+    return t("A tier's display name can't be another tier's name: {tiers}", { tiers: shadowing.join(", ") });
   }
   const labels = TIER_KEYS.map((tier) => effectiveTierLabel(tier, tierLabels).toLowerCase());
   const duplicates = Array.from(new Set(labels.filter((label, index) => labels.indexOf(label) !== index)));
   if (duplicates.length > 0) {
-    return `Tier display names must be unique. Repeated: ${duplicates.join(", ")}`;
+    return t("Tier display names must be unique. Repeated: {names}", { names: duplicates.join(", ") });
   }
   return null;
 };
@@ -351,17 +364,23 @@ export const getTierLabelsError = (tierLabels: ComplexityTierLabels | undefined)
 // Requires every active tier non-empty, so the create form can never reach the
 // resolveComplexityDefaultModel === undefined case. The edit modal allows a partially filled
 // built-in set, which is why it keeps its own !defaultModel guard after deriving.
-export const getMissingTiersError = (rows: readonly TierRow[]): string | null => {
+export const getMissingTiersError = (rows: readonly TierRow[], t: Translate = englishTranslate): string | null => {
   const missing = rows.filter((row) => row.models.length === 0).map(activeTierName);
   if (missing.length === 0) return null;
-  return `Select a model for the following tier(s): ${missing.join(", ")}`;
+  return t("Select a model for the following tier(s): {tiers}", { tiers: missing.join(", ") });
 };
 
-export const getPlanModeTierError = (planModeMinTier: string | undefined, rows: readonly TierRow[]): string | null => {
+export const getPlanModeTierError = (
+  planModeMinTier: string | undefined,
+  rows: readonly TierRow[],
+  t: Translate = englishTranslate,
+): string | null => {
   if (!planModeMinTier) return null;
   const floor = tierRowById(rows, planModeMinTier);
   if (floor && floor.models.length > 0) return null;
-  return `The plan-mode minimum tier (${floor ? activeTierName(floor) : planModeMinTier}) has no models. Add one or turn the override off.`;
+  return t("The plan-mode minimum tier ({tier}) has no models. Add one or turn the override off.", {
+    tier: floor ? activeTierName(floor) : planModeMinTier,
+  });
 };
 
 // The orphan check compares exactly, not casefold: _validate_keyword_rule_tiers is exact
@@ -370,40 +389,17 @@ export const getPlanModeTierError = (planModeMinTier: string | undefined, rows: 
 export const getKeywordTierRulesError = (
   keywordTierRules: KeywordTierRule[],
   rows: readonly TierRow[],
+  t: Translate = englishTranslate,
 ): string | null => {
   const emptyRows = emptyKeywordTierRuleIndexes(keywordTierRules);
   if (emptyRows.length > 0)
-    return `Add at least one keyword to keyword rule(s): ${emptyRows.map((index) => index + 1).join(", ")}`;
+    return t("Add at least one keyword to keyword rule(s): {rules}", {
+      rules: emptyRows.map((index) => index + 1).join(", "),
+    });
   const names = rows.map(activeTierName);
   const orphaned = keywordTierRules.flatMap((rule, index) => (names.includes(rule.tier) ? [] : [index + 1]));
   if (orphaned.length === 0) return null;
-  return `Keyword rule(s) ${orphaned.join(", ")} route to a tier this router no longer has`;
-};
-
-export const getHeuristicV2SuccessThresholdError = (threshold: number | undefined): string | null => {
-  if (threshold === undefined) return null;
-  const validProbability = Number.isFinite(threshold) && threshold >= 0 && threshold <= 1;
-  return validProbability ? null : "Success threshold must be a number between 0 and 1";
-};
-
-export const getReminderMarkersError = (pairs: ReminderMarkerPair[] | undefined): string | null => {
-  for (const [index, pair] of (pairs ?? []).entries()) {
-    const open = pair.open.trim().toLowerCase();
-    const close = pair.close.trim().toLowerCase();
-    if (!open || !close) return `Tag pair ${index + 1} needs both an opening and a closing tag`;
-    if (open === close) return `Tag pair ${index + 1} must use different opening and closing tags`;
-  }
-  return null;
-};
-
-export const getClassifierPluginTimeoutError = (
-  classifierType: ClassifierType,
-  timeoutMs: number | undefined,
-): string | null => {
-  if (classifierType !== "custom" || timeoutMs === undefined) return null;
-  return Number.isInteger(timeoutMs) && timeoutMs > 0
-    ? null
-    : "Classifier plugin timeout must be a whole number of milliseconds greater than 0";
+  return t("Keyword rule(s) {rules} route to a tier this router no longer has", { rules: orphaned.join(", ") });
 };
 
 export const getClassifierModelError = (
@@ -411,22 +407,24 @@ export const getClassifierModelError = (
     ComplexityRouterConfigValue,
     "custom_tier_set" | "classifier_type" | "classifier_llm_config" | "jev_classifier_config"
   >,
+  t: Translate = englishTranslate,
 ): string | null => {
   if (effectiveClassifierType(config) === "jev") {
     const parsed = jevClassifierConfigSchema.safeParse(config.jev_classifier_config ?? {});
     return parsed.success
       ? null
-      : "Enter a valid classifier model, a positive whole-number timeout and a positive cooldown";
+      : t("Enter a valid classifier model, a positive whole-number timeout and a positive cooldown");
   }
   if (!usesLlmClassifier(effectiveClassifierType(config)) || config.classifier_llm_config?.model) return null;
   return config.custom_tier_set
-    ? "Please select a classifier model: an edited tier set routes with the LLM classifier"
-    : "Please select a classifier model, or switch back to Heuristic";
+    ? t("Please select a classifier model: an edited tier set routes with the LLM classifier")
+    : t("Please select a classifier model, or switch back to Heuristic");
 };
 
 export const getClassifierReasoningEffortError = (
   config: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type" | "classifier_llm_config">,
   modelInfo: readonly ModelGroup[],
+  t: Translate = englishTranslate,
 ): string | null => {
   if (!usesLlmClassifier(effectiveClassifierType(config))) return null;
   const classifierConfig = config.classifier_llm_config;
@@ -435,19 +433,23 @@ export const getClassifierReasoningEffortError = (
     (model) => model.model_group === classifierConfig.model,
   )?.supported_reasoning_efforts;
   if (!Array.isArray(supported) || supported.includes(classifierConfig.reasoning_effort)) return null;
-  return `${classifierConfig.reasoning_effort} reasoning effort is not supported by every deployment in ${classifierConfig.model}. Choose Default or a supported value.`;
+  return t(
+    "{effort} reasoning effort is not supported by every deployment in {model}. Choose Default or a supported value.",
+    { effort: classifierConfig.reasoning_effort, model: classifierConfig.model },
+  );
 };
 
-export const getSemanticConfigError = ({
-  semanticMatchingEnabled,
-  embeddingModel,
-  keywordTierRules,
-}: Pick<BuildComplexityRouterConfigParams, "semanticMatchingEnabled" | "embeddingModel" | "keywordTierRules">):
-  | string
-  | null => {
+export const getSemanticConfigError = (
+  {
+    semanticMatchingEnabled,
+    embeddingModel,
+    keywordTierRules,
+  }: Pick<BuildComplexityRouterConfigParams, "semanticMatchingEnabled" | "embeddingModel" | "keywordTierRules">,
+  t: Translate = englishTranslate,
+): string | null => {
   if (!semanticMatchingEnabled) return null;
-  if (!embeddingModel) return "Select an embedding model to use semantic keyword matching";
-  if (keywordTierRules.length === 0) return "Add at least one keyword tier rule to use semantic keyword matching";
+  if (!embeddingModel) return t("Select an embedding model to use semantic keyword matching");
+  if (keywordTierRules.length === 0) return t("Add at least one keyword tier rule to use semantic keyword matching");
   return null;
 };
 

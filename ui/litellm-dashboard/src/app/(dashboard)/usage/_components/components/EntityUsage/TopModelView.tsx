@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
@@ -50,35 +51,36 @@ function ModelName({ name }: { name: string | undefined }) {
 }
 
 export default function TopModelView({ topModels, topModelsLimit, setTopModelsLimit }: TopModelViewProps) {
+  const { t } = useLanguage();
   const [modelViewMode, setModelViewMode] = useState<ViewMode>("table");
 
   const columns = [
     {
-      header: "Model",
+      header: t("Model"),
       accessorKey: "key",
       meta: QUIET_HEADER,
       cell: (info: any) => <ModelName name={info.getValue()} />,
     },
     {
-      header: "Spend (USD)",
+      header: t("Spend (USD)"),
       accessorKey: "spend",
       meta: { numeric: true, ...QUIET_HEADER },
       cell: (info: any) => <MoneyCell value={info.getValue()} decimals={2} />,
     },
     {
-      header: "Successful",
+      header: t("Successful"),
       accessorKey: "successful_requests",
       meta: { numeric: true, ...QUIET_HEADER },
       cell: (info: any) => <span className="text-success">{info.getValue()?.toLocaleString() || 0}</span>,
     },
     {
-      header: "Failed",
+      header: t("Failed"),
       accessorKey: "failed_requests",
       meta: { numeric: true, ...QUIET_HEADER },
       cell: (info: any) => <span className="text-destructive">{info.getValue()?.toLocaleString() || 0}</span>,
     },
     {
-      header: "Tokens",
+      header: t("Tokens"),
       accessorKey: "tokens",
       meta: { numeric: true, ...QUIET_HEADER },
       cell: (info: any) => info.getValue()?.toLocaleString() || 0,
@@ -90,15 +92,15 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
     <>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <Segmented
-          label="Number of models to show"
+          label={t("Number of models to show")}
           value={String(topModelsLimit)}
           options={LIMIT_OPTIONS}
           onChange={(limit) => setTopModelsLimit(Number(limit))}
         />
         <Segmented
-          label="Top model view mode"
+          label={t("Top model view mode")}
           value={modelViewMode}
-          options={VIEW_OPTIONS}
+          options={VIEW_OPTIONS.map((item) => ({ ...item, label: t(item.label) }))}
           onChange={setModelViewMode}
         />
       </div>

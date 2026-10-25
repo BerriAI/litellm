@@ -1,4 +1,5 @@
 import React from "react";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 import { describe, it, expect } from "vitest";
 import BedrockGuardrailDetails, {
   BedrockGuardrailResponse,
@@ -12,6 +13,27 @@ import {
 } from "@/components/logs/detail/sections/GuardrailViewer/__tests__/fixtures";
 
 describe("BedrockGuardrailDetails", () => {
+  it("汉化检测计数与固定动作，保留匹配内容和技术用量字段", () => {
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="bedrock-test" storageScope="bedrock-test">
+        <BedrockGuardrailDetails
+          response={makeBedrockResponse({
+            guardrailCoverage: makeBedrockCoverage(),
+            usage: makeBedrockUsage({ contentPolicyUnits: 7 }),
+            assessments: [makeAssessment()],
+          })}
+        />
+      </LanguageProvider>,
+    );
+    expect(screen.getByText("受保护文本 27/100")).toBeInTheDocument();
+    expect(screen.getByText("受保护图片 1/3")).toBeInTheDocument();
+    expect(screen.getAllByText("已拦截").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("已检测到").length).toBeGreaterThan(0);
+    expect(screen.getByText("badword")).toBeInTheDocument();
+    expect(screen.getByText("weapons")).toBeInTheDocument();
+    expect(screen.getByText("contentPolicyUnits: 7")).toBeInTheDocument();
+  });
+
   it("returns null when response is falsy", () => {
     // @ts-expect-error testing nullish handling
     const { container } = renderWithProviders(<BedrockGuardrailDetails response={undefined} />);

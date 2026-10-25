@@ -18,6 +18,7 @@ import AddModelForm from "./AddModelForm";
 import { EMPTY_DECISION_CATALOG } from "@/lib/decisionModels";
 import { handleAddModelSubmit } from "./handle_add_model_submit";
 import { toast } from "@/lib/toast";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("../molecules/models/ProviderLogo", () => ({
   ProviderLogo: ({ provider, className }: { provider: string; className?: string }) => (
@@ -289,6 +290,21 @@ const fillApiKey = (label: string) =>
   fireEvent.change(screen.getByLabelText(new RegExp(label)), { target: { value: "sk-test" } });
 
 describe("AddModelForm", () => {
+  it("健康检查模式的选中项使用中文，提交值仍为原API模式", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+    const props = createTestProps();
+    props.form.setValue("mode", "chat");
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="model-mode" storageScope="model-mode-language">
+        <AddModelForm {...props} />
+      </LanguageProvider>,
+    );
+    const mode = await screen.findByRole("combobox", { name: "模式" });
+    expect(mode).toHaveTextContent("对话 - /chat/completions");
+    expect(props.form.getValues("mode")).toBe("chat");
+  });
+
   it("should render", async () => {
     const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
     mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));

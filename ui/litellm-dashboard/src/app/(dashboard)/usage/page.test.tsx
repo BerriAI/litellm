@@ -2,6 +2,7 @@ import { screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import UsagePage from "./page";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 const settings = vi.hoisted(() => vi.fn());
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({}) }));
@@ -15,6 +16,16 @@ vi.mock("./_components/components/UsagePageView", () => ({
 }));
 
 describe("Usage settings readiness", () => {
+  it("设置加载状态随语言变化，不提前挂载用量消费者", () => {
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="usage-loading" storageScope="usage-loading">
+        <UsagePage />
+      </LanguageProvider>,
+    );
+    expect(screen.getByRole("status", { name: "正在加载用量设置" })).toBeVisible();
+    expect(screen.queryByText(/Usage range/)).not.toBeInTheDocument();
+  });
+
   beforeEach(() => settings.mockReturnValue({ isLoading: true }));
 
   it("waits for the configured range before mounting the usage data consumers", () => {

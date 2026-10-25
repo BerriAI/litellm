@@ -87,7 +87,11 @@ describe("RoutingGroups delete confirmation", () => {
     const dialog = await openDeleteConfirm(user);
 
     expect(within(dialog).getByText("Delete routing group?")).toBeInTheDocument();
-    expect(within(dialog).getByText("prod-group")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        "Models in prod-group will fall back to the proxy's top-level routing strategy. This cannot be undone.",
+      ),
+    ).toBeInTheDocument();
     expect(within(dialog).getByText(/This cannot be undone/)).toBeInTheDocument();
   });
 

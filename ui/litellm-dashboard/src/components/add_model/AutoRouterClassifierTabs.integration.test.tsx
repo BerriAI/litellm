@@ -114,7 +114,7 @@ describe("Auto-router classifier selection", () => {
   );
 
   it.each([
-    ["capability", "Capability"],
+    ["capability", "Capability classifier"],
     ["llm_v2", "Fuse v2"],
   ] as const)(
     "opens saved %s and retains the LLM family when switching to Complexity",
@@ -169,7 +169,7 @@ describe("Auto-router classifier selection", () => {
 
   it.each([
     ["heuristic", "Heuristic", "Heuristic v2"],
-    ["llm", "Routing approach", "Capability"],
+    ["llm", "Routing approach", "Capability classifier"],
     ["llm", "Routing approach", "Fuse v2"],
   ] as const)("blocks exhausted %s options: %s / %s", (classifier_type, field, option) => {
     renderWithProviders(<Form initialValue={{ ...initial, classifier_type }} remaining={0} />);
@@ -182,7 +182,7 @@ describe("Auto-router classifier selection", () => {
 
   it.each([
     ["heuristic_v2", "heuristic", "Heuristic", "Heuristic v2"],
-    ["capability", "llm", "Routing approach", "Capability"],
+    ["capability", "llm", "Routing approach", "Capability classifier"],
     ["llm_v2", "llm", "Routing approach", "Fuse v2"],
   ] as const)("lets a saved router reselect its own %s allowance", async (feature, classifier_type, field, option) => {
     renderWithProviders(<Form initialValue={{ ...initial, classifier_type }} remaining={0} ownedFeature={feature} />);
@@ -216,7 +216,7 @@ describe("Auto-router classifier selection", () => {
     );
     expect(screen.getByRole("radio", { name: /^Heuristics$/ })).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(screen.getByRole("button", { name: "Routing approach" }));
-    for (const name of ["Capability", "Fuse v2"]) {
+    for (const name of ["Capability classifier", "Fuse v2"]) {
       expect(screen.getByRole("menuitemradio", { name: new RegExp(`^${name}`) })).toHaveAttribute(
         "aria-disabled",
         "true",
@@ -240,7 +240,7 @@ describe("Gated routing contact action", () => {
 
   it.each([
     ["heuristic", "Heuristic", "Heuristic v2"],
-    ["llm", "Routing approach", "Capability"],
+    ["llm", "Routing approach", "Capability classifier"],
   ] as const)(
     "keeps the contact action available beside the disabled %s choice",
     async (classifier_type, field, option) => {

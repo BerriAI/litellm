@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useCallback, useEffect, useState } from "react";
 import { CircleHelp } from "lucide-react";
 import { z } from "zod";
@@ -15,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
 import {
   buildCompressionGuardrailPayload,
   compressionGuardrailsOf,
@@ -26,6 +28,7 @@ interface PromptCompressionTabProps {
   accessToken: string | null;
 }
 
+// 表单只保存固定校验键，错误在渲染时跟随当前语言。
 const compressionSchema = z.object({
   name: z.string().min(1, "Name is required"),
   apiBase: z.string().min(1, "API base is required"),
@@ -50,7 +53,16 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
   </>
 );
 
+// 通知在展示时读取语言，加载 effect 不跟随语言变化重跑。
+const showLoadError = (error: unknown) => {
+  console.error("Failed to load compression guardrails:", error);
+  toast.fromError("Failed to load compression guardrails", {
+    description: <TranslatedMessage message="Failed to load compression guardrails" />,
+  });
+};
+
 const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken }) => {
+  const { t } = useLanguage();
   const form = useZodForm(compressionSchema, { defaultValues: EMPTY_VALUES });
   const [guardrails, setGuardrails] = useState<GuardrailListItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -58,19 +70,15 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
 
   const loadGuardrails = useCallback(() => {
     if (!accessToken) {
-      return;
+      return Promise.resolve();
     }
-    getGuardrailsList(accessToken)
+    return getGuardrailsList(accessToken)
       .then((response) => setGuardrails(compressionGuardrailsOf(response as GuardrailListResponse)))
-      .catch((error) => {
-        console.error("Failed to load compression guardrails:", error);
-        toast.fromError("Failed to load compression guardrails");
-      })
       .finally(() => setIsLoading(false));
   }, [accessToken]);
 
   useEffect(() => {
-    loadGuardrails();
+    void loadGuardrails().catch(showLoadError);
   }, [loadGuardrails]);
 
   const handleAdd = async (values: CompressionFormValues) => {
@@ -87,12 +95,14 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
           defaultOn: values.defaultOn ?? true,
         }),
       );
-      toast.success("Compression guardrail created");
+      toast.success(<TranslatedMessage message="Compression guardrail created" />);
       form.reset(EMPTY_VALUES);
-      await loadGuardrails();
+      await loadGuardrails().catch(showLoadError);
     } catch (error) {
       console.error("Failed to create compression guardrail:", error);
-      toast.fromError("Failed to create compression guardrail");
+      toast.fromError("Failed to create compression guardrail", {
+        description: <TranslatedMessage message="Failed to create compression guardrail" />,
+      });
     } finally {
       setIsSaving(false);
     }
@@ -102,25 +112,26 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
     <div className="w-full space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Headroom prompt compression</CardTitle>
+          <CardTitle>{t("Headroom prompt compression")}</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="mb-4 text-sm text-muted-foreground">
-            Headroom is a native LiteLLM guardrail that compresses your prompts before they reach the model, so you pay
-            for fewer input tokens. The tokens it removes are priced and shown on the Usage tab as compression savings.{" "}
+            {t(
+              "Headroom is a native LiteLLM guardrail that compresses your prompts before they reach the model, so you pay for fewer input tokens. The tokens it removes are priced and shown on the Usage tab as compression savings.",
+            )}{" "}
             <a
               href="https://docs.litellm.ai/docs/proxy/headroom"
               target="_blank"
               rel="noopener noreferrer"
               className="text-info underline"
             >
-              Headroom setup docs
+              {t("Headroom setup docs")}
             </a>
           </p>
-          {isLoading && <p className="text-sm text-muted-foreground">Loading...</p>}
+          {isLoading && <p className="text-sm text-muted-foreground">{t("Loading...")}</p>}
           {!isLoading && guardrails.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              No prompt compression guardrails configured yet. Add one below to start saving on input tokens
+              {t("No prompt compression guardrails configured yet. Add one below to start saving on input tokens")}
             </p>
           )}
           {!isLoading && guardrails.length > 0 && (
@@ -138,7 +149,7 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
                         : "bg-muted text-muted-foreground"
                     }`}
                   >
-                    {guardrail.litellm_params?.default_on ? "Always on" : "Opt-in"}
+                    {guardrail.litellm_params?.default_on ? t("Always on") : t("Opt-in")}
                   </span>
                 </li>
               ))}
@@ -149,27 +160,33 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
 
       <Card>
         <CardHeader>
-          <CardTitle>Add Headroom compression guardrail</CardTitle>
+          <CardTitle>{t("Add Headroom compression guardrail")}</CardTitle>
         </CardHeader>
         <CardContent>
           <TooltipProvider>
             <form onSubmit={form.handleSubmit(handleAdd)} noValidate>
               <FieldGroup>
-                <FormField control={form.control} name="name" label="Name">
+                <FormField
+                  control={form.control}
+                  name="name"
+                  label={t("Name")}
+                  renderError={(error) => error.message && t(error.message)}
+                >
                   {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="headroom-compression" />}
                 </FormField>
                 <FormField
                   control={form.control}
                   name="apiBase"
+                  renderError={(error) => error.message && t(error.message)}
                   label={labelWithHint(
-                    "Headroom API base",
-                    "Base URL of your Headroom compression service (LiteLLM calls its /v1/compress endpoint)",
+                    t("Headroom API base"),
+                    t("Base URL of your Headroom compression service (LiteLLM calls its /v1/compress endpoint)"),
                   )}
-                  description="The URL where your Headroom compression service is hosted"
+                  description={t("The URL where your Headroom compression service is hosted")}
                 >
                   {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="https://your-headroom-endpoint" />}
                 </FormField>
-                <FormField control={form.control} name="defaultOn" label="Apply to all requests">
+                <FormField control={form.control} name="defaultOn" label={t("Apply to all requests")}>
                   {({ value, onChange, ref: _ref, ...field }) => (
                     <Switch
                       {...field}
@@ -198,7 +215,7 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
               <div className="flex justify-end">
                 <Button type="submit" disabled={isSaving}>
                   {isSaving && <UiLoadingSpinner className="size-4" />}
-                  Add guardrail
+                  {t("Add guardrail")}
                 </Button>
               </div>
             </form>

@@ -1,6 +1,8 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ColumnDef } from "@tanstack/react-table";
+import { englishTranslate, type Translate } from "@/i18n/language";
 import { Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 
 import { CredentialItem } from "@/components/networking";
@@ -25,6 +27,7 @@ import { copyToClipboard } from "@/utils/dataUtils";
 import { inferAuthMethod } from "./credential_federation";
 
 function CredentialProviderCell({ provider, federated }: { provider: string | undefined; federated: boolean }) {
+  const { t } = useLanguage();
   if (!provider) {
     return <span className="text-sm text-muted-foreground">-</span>;
   }
@@ -42,7 +45,7 @@ function CredentialProviderCell({ provider, federated }: { provider: string | un
         />
       ) : null}
       <span className="truncate text-sm">{displayName || provider}</span>
-      {federated && <Badge variant="secondary">Workload identity federation</Badge>}
+      {federated && <Badge variant="secondary">{t("Workload identity federation")}</Badge>}
     </div>
   );
 }
@@ -54,11 +57,12 @@ interface CredentialRowActionsProps {
 }
 
 function CredentialRowActions({ credential, onEdit, onDelete }: CredentialRowActionsProps) {
+  const { t } = useLanguage();
   const configOwned = credential.source === "config";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open credential actions"
+        aria-label={t("Open credential actions")}
         data-testid={`credential-actions-${credential.credential_name}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -69,7 +73,7 @@ function CredentialRowActions({ credential, onEdit, onDelete }: CredentialRowAct
           <>
             <DropdownMenuGroup>
               <DropdownMenuLabel data-testid="credential-config-owned-hint">
-                Defined in config.yaml. Edit the file to change or delete it.
+                {t("Defined in config.yaml. Edit the file to change or delete it.")}
               </DropdownMenuLabel>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
@@ -81,14 +85,14 @@ function CredentialRowActions({ credential, onEdit, onDelete }: CredentialRowAct
           onClick={() => onEdit(credential)}
         >
           <Pencil />
-          Edit
+          {t("Edit")}
         </DropdownMenuItem>
         <DropdownMenuItem
           data-testid="credential-action-copy"
           onClick={() => void copyToClipboard(credential.credential_name, "Credential name copied")}
         >
           <Copy />
-          Copy credential name
+          {t("Copy credential name")}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -98,7 +102,7 @@ function CredentialRowActions({ credential, onEdit, onDelete }: CredentialRowAct
           onClick={() => onDelete(credential)}
         >
           <Trash2 />
-          Delete
+          {t("Delete")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -106,12 +110,14 @@ function CredentialRowActions({ credential, onEdit, onDelete }: CredentialRowAct
 }
 
 interface CredentialsTableColumnsDeps {
+  t?: Translate;
   canModifyCredentials: boolean;
   onEdit: (credential: CredentialItem) => void;
   onDelete: (credential: CredentialItem) => void;
 }
 
 export const getCredentialsTableColumns = ({
+  t = englishTranslate,
   canModifyCredentials,
   onEdit,
   onDelete,
@@ -120,8 +126,8 @@ export const getCredentialsTableColumns = ({
     {
       id: "credential_name",
       accessorFn: credentialLabel,
-      meta: { title: "Credential Name" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Credential Name" />,
+      meta: { title: t("Credential Name") },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Credential Name")} />,
       size: 260,
       enableSorting: true,
       cell: ({ row }) => (
@@ -136,8 +142,8 @@ export const getCredentialsTableColumns = ({
     {
       id: "provider",
       accessorKey: "credential_info.custom_llm_provider",
-      meta: { title: "Provider" },
-      header: "Provider",
+      meta: { title: t("Provider") },
+      header: t("Provider"),
       size: 320,
       enableSorting: false,
       cell: ({ row }) => (
@@ -150,15 +156,15 @@ export const getCredentialsTableColumns = ({
     {
       id: "source",
       accessorFn: (row) => row.source ?? "db",
-      meta: { title: "Source" },
-      header: "Source",
+      meta: { title: t("Source") },
+      header: t("Source"),
       size: 140,
       enableSorting: false,
       cell: ({ row }) =>
         row.original.source === "config" ? (
-          <StatusBadge tone="neutral" label="Config" />
+          <StatusBadge tone="neutral" label={t("Config")} />
         ) : (
-          <StatusBadge tone="info" label="DB" />
+          <StatusBadge tone="info" label={t("DB")} />
         ),
     },
   ];
@@ -172,7 +178,7 @@ export const getCredentialsTableColumns = ({
     {
       id: "actions",
       meta: { className: "text-right", headerClassName: "text-right" },
-      header: () => <span className="sr-only">Actions</span>,
+      header: () => <span className="sr-only">{t("Actions")}</span>,
       size: 64,
       enableSorting: false,
       enableHiding: false,

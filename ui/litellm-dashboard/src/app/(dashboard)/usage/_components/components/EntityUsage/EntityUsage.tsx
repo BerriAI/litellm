@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { StackedUsageChart, type StackedUsageScale } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
@@ -143,6 +144,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   selectedEntities: selectedTags,
   onSelectedEntitiesChange: setSelectedTags,
 }) => {
+  const { t } = useLanguage();
   const { teams } = useTeams();
   const teamList = useMemo(() => teams ?? [], [teams]);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
@@ -247,8 +249,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         ? Promise.resolve(undefined)
         : api
             .aggregated({ ...request, apiKey, apiKeyLimit: 1 })
-            .then((response) => keyDetailFromResponse(response, apiKey, teamList)),
-    [api, request, teamList],
+            .then((response) => keyDetailFromResponse(response, apiKey, teamList, t)),
+    [api, request, teamList, t],
   );
 
   const modelBreakdownKey = modelViewType === "groups" ? "model_groups" : "models";
@@ -333,15 +335,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const { series: dailySeries, ranking } = useBreakdown(
     spendData.results,
     { metric: breakdown.metric, dimension: breakdownDimension },
-    8,
+    { top: 8, otherLabel: t("Other") },
   );
 
-  const getFilterLabel = (entityType: string) => {
-    return `Filter by ${entityType}`;
+  const getFilterLabel = (entityType: EntityType) => {
+    return t("Filter by {entity}", { entity: t(entityType) });
   };
 
-  const getFilterPlaceholder = (entityType: string) => {
-    return `Select ${entityType} to filter...`;
+  const getFilterPlaceholder = (entityType: EntityType) => {
+    return t("Select {entity} to filter...", { entity: t(entityType) });
   };
 
   const entityFilterSlots: Partial<Record<EntityType, ReactNode>> = {
@@ -355,7 +357,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
   const filterSlot = entityFilterSlots[entityType];
 
-  const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
+  const capitalizedEntityLabel = t(entityType.charAt(0).toUpperCase() + entityType.slice(1));
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
   const showPtuHours = entityType === "team" && hasPtuHours(spendData.metadata);
   const userSpendTeamIds = useMemo(
@@ -383,37 +385,37 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         cell: ({ row }) => <span className="font-medium text-foreground">{row.original.metadata.alias}</span>,
       },
       {
-        header: "Share",
+        header: t("Share"),
         id: "share",
         meta: { ...QUIET_HEADER, className: "w-40" },
         cell: ({ row }) => <ShareBar value={row.original.metrics.spend} max={maxEntitySpend} />,
       },
       {
-        header: "Spend",
+        header: t("Spend"),
         accessorKey: "metrics.spend",
         meta: { numeric: true, ...QUIET_HEADER },
         cell: ({ row }) => <MoneyCell value={row.original.metrics.spend} decimals={4} />,
       },
       {
-        header: "Successful",
+        header: t("Successful"),
         accessorKey: "metrics.successful_requests",
         meta: { numeric: true, className: "text-success", ...QUIET_HEADER },
         cell: ({ row }) => row.original.metrics.successful_requests.toLocaleString(),
       },
       {
-        header: "Failed",
+        header: t("Failed"),
         accessorKey: "metrics.failed_requests",
         meta: { numeric: true, className: "text-destructive", ...QUIET_HEADER },
         cell: ({ row }) => row.original.metrics.failed_requests.toLocaleString(),
       },
       {
-        header: "Tokens",
+        header: t("Tokens"),
         accessorKey: "metrics.total_tokens",
         meta: { numeric: true, ...QUIET_HEADER },
         cell: ({ row }) => row.original.metrics.total_tokens.toLocaleString(),
       },
     ],
-    [capitalizedEntityLabel, maxEntitySpend],
+    [capitalizedEntityLabel, maxEntitySpend, t],
   );
 
   const chev = "size-3 text-muted-foreground";
@@ -421,11 +423,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const tileLabel = ({ title, tooltip, expandable }: SummaryTile) => (
     <>
-      <span>{title}</span>
+      <span>{t(title)}</span>
       {tooltip ? (
         <Tooltip>
           <TooltipTrigger render={<Info className="size-3.5 text-muted-foreground hover:text-foreground" />} />
-          <TooltipContent>{tooltip}</TooltipContent>
+          <TooltipContent>{t(tooltip)}</TooltipContent>
         </Tooltip>
       ) : null}
       {expandable ? expandIcon : null}
@@ -469,7 +471,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const breakdownTiles = showFlatCost && showCostBreakdown ? buildCostBreakdownTiles(spendData.metadata) : [];
   const summaryTiles = buildSummaryTiles(spendData.metadata, showFlatCost, showPtuHours);
 
-  const modelViewTitle = modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models";
+  const modelViewTitle = modelViewType === "groups" ? t("Top Public Model Names") : t("Top Litellm Models");
   const chartFormat = (value: number) => formatMetricValue(value, breakdown.metric);
 
   const costPanel = loading ? (
@@ -477,7 +479,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   ) : (
     <div className="grid gap-3">
       <section className="grid gap-2">
-        <h2 className="text-sm font-medium text-foreground">{capitalizedEntityLabel} Spend Overview</h2>
+        <h2 className="text-sm font-medium text-foreground">
+          {capitalizedEntityLabel} {t("Spend Overview")}
+        </h2>
         <div
           className={cn(
             "grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border",
@@ -501,29 +505,40 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         <header className="flex flex-wrap items-start justify-between gap-3 px-5 pt-4">
           <div>
             <h3 className="text-sm font-medium text-foreground">
-              {METRIC_TITLE[breakdown.metric]} by {modelViewType === "groups" ? "model" : "deployment"}
+              {t("{metric} by {dimension}", {
+                metric: t(METRIC_TITLE[breakdown.metric]),
+                dimension: modelViewType === "groups" ? t("model") : t("deployment"),
+              })}
             </h3>
             <p className="text-xs text-muted-foreground">
-              {granularity === "day" ? "Daily" : "Weekly"} {breakdown.metric}, top 8 stacked
-              {stackFlatCost ? ", flat cost on top" : ""}
+              {granularity === "day" ? t("Daily") : t("Weekly")} {t(METRIC_TITLE[breakdown.metric])}
+              {t(", top 8 stacked")}
+              {stackFlatCost ? t(", flat cost on top") : ""}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <BreakdownControls state={breakdown} onChange={setBreakdown} showDimension={false} />
             <Segmented
-              label="Bucket size"
+              label={t("Bucket size")}
               value={granularity}
-              options={GRANULARITY_OPTIONS}
+              options={GRANULARITY_OPTIONS.map((item) => ({ ...item, label: t(item.label) }))}
               onChange={setGranularity}
             />
-            <Segmented label="Scale" value={scale} options={SCALE_OPTIONS} onChange={setScale} />
+            <Segmented
+              label={t("Scale")}
+              value={scale}
+              options={SCALE_OPTIONS.map((item) => ({ ...item, label: t(item.label) }))}
+              onChange={setScale}
+            />
           </div>
         </header>
         <div className="px-3 pt-4 pb-2">
           <StackedUsageChart
             data={chartSeries.data}
             series={chartSeries.keys}
-            labels={chartSeries.labels}
+            labels={chartSeries.labels.map((label, index) =>
+              chartSeries.keys[index] === FLAT_COST_KEY ? t(FLAT_COST_SERIES) : label,
+            )}
             colors={chartSeries.colors}
             xKey="date"
             xLabel={(date) => labelForDate(chartSeries, date)}
@@ -547,13 +562,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
       <Panel
         icon={Layers}
-        title={`Spend Per ${capitalizedEntityLabel}`}
+        title={t("Spend Per {value1}", { value1: String(capitalizedEntityLabel) })}
         action={
           <a
             href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking"
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
           >
-            Track cost per {entityType}
+            {t("Track cost per")} {entityType}
             <ExternalLink aria-hidden="true" className="size-3" />
           </a>
         }
@@ -563,7 +578,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           data={entityRows}
           getRowId={(row) => row.metadata.id}
           maxBodyHeight={280}
-          noDataMessage={`No ${entityType} spend data`}
+          noDataMessage={t("No {value1} spend data", { value1: String(entityType) })}
           size="compact"
         />
       </Panel>
@@ -578,7 +593,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       )}
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <Panel icon={KeyRound} title="Top Virtual Keys">
+        <Panel icon={KeyRound} title={t("Top Virtual Keys")}>
           <TopKeyView
             topKeys={getTopAPIKeys(spendData.results, topKeysLimit)}
             teams={null}
@@ -589,7 +604,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         </Panel>
         <Panel
           icon={Boxes}
-          title={entityType === "agent" ? "Top Agents" : modelViewTitle}
+          title={entityType === "agent" ? t("Top Agents") : modelViewTitle}
           action={<ModelViewToggle value={modelViewType} onChange={setModelViewType} />}
         >
           <TopModelView
@@ -601,7 +616,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       </div>
 
       {showAgentBreakdown && (
-        <Panel icon={Bot} title="Top Agents Driving Spend">
+        <Panel icon={Bot} title={t("Top Agents Driving Spend")}>
           {agentLoading ? (
             <ChartLoader />
           ) : (
@@ -614,17 +629,17 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         </Panel>
       )}
 
-      <Panel icon={Server} title="Provider Usage">
+      <Panel icon={Server} title={t("Provider Usage")}>
         <ProviderSpendBreakdown rows={providerSpend} />
       </Panel>
     </div>
   );
 
   const tabs: readonly { key: string; label: string; content: ReactNode }[] = [
-    { key: "cost", label: "Cost", content: costPanel },
+    { key: "cost", label: t("Cost"), content: costPanel },
     {
       key: "models",
-      label: entityType === "agent" ? "Request / Token Consumption" : "Model Activity",
+      label: entityType === "agent" ? t("Request / Token Consumption") : t("Model Activity"),
       content: (
         <>
           <div className="mb-3 flex justify-end">
@@ -642,14 +657,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       ? [
           {
             key: "agents",
-            label: "Agent Activity",
+            label: t("Agent Activity"),
             content: <ActivityMetrics modelMetrics={agentMetrics} />,
           },
         ]
       : []),
     {
       key: "keys",
-      label: "Key Activity",
+      label: t("Key Activity"),
       content: (
         <KeyActivityPanel
           summary={summaryMetrics}
@@ -662,14 +677,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         />
       ),
     },
-    { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
+    { key: "endpoints", label: t("Endpoint Activity"), content: <EndpointUsage userSpendData={spendData} /> },
   ];
 
   return (
     <div className="relative grid w-full gap-3">
-      {failed && <ErrorState title="Failed to load spend data" message={errorMessage} onRetry={reload} />}
+      {failed && <ErrorState title={t("Failed to load spend data")} message={errorMessage} onRetry={reload} />}
       {showAgentBreakdown && agentFailed && (
-        <ErrorState title="Failed to load agent data" message={agentErrorMessage} onRetry={reloadAgent} />
+        <ErrorState title={t("Failed to load agent data")} message={agentErrorMessage} onRetry={reloadAgent} />
       )}
       <div className="max-w-full [&>div:first-child]:mb-0 [&>div:first-child_label]:sr-only">
         <UsageExportHeader

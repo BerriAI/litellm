@@ -1,5 +1,7 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
+import type { Translate } from "@/i18n/language";
 import { Save } from "lucide-react";
 import { useState } from "react";
 import { useWatch } from "react-hook-form";
@@ -81,9 +83,9 @@ const MAX_BUDGET_KEEP_OR_LOWER_HINT = "You can keep or lower this budget. Ask a 
 const MAX_BUDGET_RAISE_HINT =
   "You can raise this budget. Raises are capped by your organization's budget when the team belongs to one.";
 
-const fieldHint = (name: TeamAdminSettingsField, mayRaiseMaxBudget: boolean): string | undefined => {
+const fieldHint = (name: TeamAdminSettingsField, mayRaiseMaxBudget: boolean, t: Translate): string | undefined => {
   if (name !== "max_budget") return undefined;
-  return mayRaiseMaxBudget ? MAX_BUDGET_RAISE_HINT : MAX_BUDGET_KEEP_OR_LOWER_HINT;
+  return t(mayRaiseMaxBudget ? MAX_BUDGET_RAISE_HINT : MAX_BUDGET_KEEP_OR_LOWER_HINT);
 };
 
 const durationSelectValue = (value: string | number | null | undefined): string | undefined => {
@@ -123,6 +125,7 @@ function TeamAdminSettingsFormFields({
   onCancel,
   onSave,
 }: TeamAdminSettingsFormProps) {
+  const { t } = useLanguage();
   const editsMetadata = metadata !== undefined && editableFields.has(TEAM_ADMIN_METADATA_FIELD);
   const [schema] = useState(() => teamAdminSettingsSchemaFor(editsMetadata ? metadata.context : undefined));
   const form = useZodForm(schema, { defaultValues: { ...initialValues, metadata: [...(metadata?.pairs ?? [])] } });
@@ -138,22 +141,22 @@ function TeamAdminSettingsFormFields({
     <form onSubmit={(event) => void submit(event)}>
       <FieldGroup>
         <p className="text-sm text-muted-foreground">
-          A proxy admin chose which settings team admins can change. Ask a proxy admin to change anything else.
+          {t("A proxy admin chose which settings team admins can change. Ask a proxy admin to change anything else.")}
         </p>
         {TEAM_ADMIN_SETTINGS_FIELDS.filter((name) => editableFields.has(name)).map((name) => (
           <FormField
             key={name}
             control={form.control}
             name={name}
-            label={teamAdminFieldLabel(name)}
-            description={fieldHint(name, mayRaiseMaxBudget)}
+            label={t(teamAdminFieldLabel(name))}
+            description={fieldHint(name, mayRaiseMaxBudget, t)}
           >
             {({ ref, id, value, onChange, ...field }) =>
               isTeamAdminDurationSettingsField(name) ? (
                 <BudgetDurationDropdown
                   id={id}
                   showNeverResets
-                  placeholder="Inherit team reset period"
+                  placeholder={t("Inherit team reset period")}
                   value={durationSelectValue(value)}
                   onChange={(next) => onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next ?? undefined)}
                 />
@@ -172,7 +175,7 @@ function TeamAdminSettingsFormFields({
         ))}
         {editsMetadata && (
           <Field>
-            <FieldLabel>{teamAdminFieldLabel(TEAM_ADMIN_METADATA_FIELD)}</FieldLabel>
+            <FieldLabel>{t(teamAdminFieldLabel(TEAM_ADMIN_METADATA_FIELD))}</FieldLabel>
             <MetadataKeyValueFields
               control={form.control}
               getValues={form.getValues}
@@ -181,9 +184,9 @@ function TeamAdminSettingsFormFields({
               schemaLoading={metadata.schemaLoading}
             />
             <FieldDescription>
-              {
-                'A value that is valid JSON, like 3, true or {"region": "us"}, is saved as that type, anything else as text. Keys the proxy reads as settings stay with proxy admins and are kept as they are.'
-              }
+              {t(
+                'A value that is valid JSON, like 3, true or {"region": "us"}, is saved as that type, anything else as text. Keys the proxy reads as settings stay with proxy admins and are kept as they are.',
+              )}
             </FieldDescription>
           </Field>
         )}
@@ -191,11 +194,11 @@ function TeamAdminSettingsFormFields({
 
       <div className="mt-6 flex items-center justify-end gap-2">
         <Button type="button" variant="outline" onClick={onCancel} disabled={isSaving}>
-          Cancel
+          {t("Cancel")}
         </Button>
         <Button type="submit" disabled={isSaving || !hasChanges}>
           {isSaving ? <UiLoadingSpinner className="size-4" /> : <Save className="size-4" />}
-          Save Changes
+          {t("Save Changes")}
         </Button>
       </div>
     </form>

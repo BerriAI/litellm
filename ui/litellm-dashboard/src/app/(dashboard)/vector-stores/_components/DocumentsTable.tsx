@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Inbox } from "lucide-react";
 import React, { useMemo } from "react";
 
@@ -14,19 +15,21 @@ interface DocumentsTableProps {
 }
 
 function EmptyState() {
+  const { t } = useLanguage();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <Inbox className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">No documents uploaded yet</div>
-      <div className="text-sm text-muted-foreground">Upload documents above to get started.</div>
+      <div className="text-sm font-medium text-foreground">{t("No documents uploaded yet")}</div>
+      <div className="text-sm text-muted-foreground">{t("Upload documents above to get started.")}</div>
     </div>
   );
 }
 
 const DocumentsTable: React.FC<DocumentsTableProps> = ({ documents, onRemove }) => {
-  const columns = useMemo(() => getDocumentsTableColumns({ onRemove }), [onRemove]);
+  const { t } = useLanguage();
+  const columns = useMemo(() => getDocumentsTableColumns({ ...{ onRemove }, t }), [onRemove, t]);
 
   return (
     <DataTable

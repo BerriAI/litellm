@@ -4,6 +4,12 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import MCPToolArgumentsForm, { MCPToolArgumentsFormRef } from "./MCPToolArgumentsForm";
 import { MCPTool, InputSchema } from "./types";
+import { LanguageProvider, useLanguage } from "@/contexts/LanguageContext";
+
+function ToolLanguageSwitch() {
+  const { setPreference } = useLanguage();
+  return <button onClick={() => setPreference("en")}>English</button>;
+}
 
 const toolWith = (schema: InputSchema | string): MCPTool =>
   ({ name: "demo_tool", description: "", inputSchema: schema, mcp_info: {} }) as unknown as MCPTool;
@@ -26,6 +32,62 @@ const submitError = async (ref: React.RefObject<MCPToolArgumentsFormRef | null>)
 };
 
 describe("MCPToolArgumentsForm", () => {
+  it("中文字符串输入及必填错误可切回英文", async () => {
+    const user = userEvent.setup();
+    const ref = React.createRef<MCPToolArgumentsFormRef>();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="mcp-string-language" storageScope="mcp-form-language">
+        <ToolLanguageSwitch />
+        <MCPToolArgumentsForm ref={ref} tool={toolWith("string")} />
+      </LanguageProvider>,
+    );
+    expect(screen.getByPlaceholderText("请输入此工具的输入内容")).toBeInTheDocument();
+    expect(await submitError(ref)).toEqual({
+      errorFields: [{ name: ["input"], errors: ["请输入此工具的输入内容"] }],
+    });
+    expect(await screen.findByText("请输入此工具的输入内容")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "English" }));
+    expect(screen.getByPlaceholderText("Enter input for this tool")).toBeInTheDocument();
+    expect(await submitError(ref)).toEqual({
+      errorFields: [{ name: ["input"], errors: ["Please enter input for this tool"] }],
+    });
+  });
+
+  it("中文校验保留工具参数名、描述、枚举与输入的原值", async () => {
+    const user = userEvent.setup();
+    const ref = React.createRef<MCPToolArgumentsFormRef>();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="mcp-json-language" storageScope="mcp-form-language">
+        <MCPToolArgumentsForm
+          ref={ref}
+          tool={toolWith({
+            type: "object",
+            properties: {
+              Home: { type: "string", description: "Language", enum: ["Settings", "Home"] },
+              payload: { type: "object" },
+              enabled: { type: "boolean" },
+            },
+            required: ["Home"],
+          })}
+        />
+      </LanguageProvider>,
+    );
+    const payload = screen.getByRole("textbox", { name: "payload" });
+    fireEvent.change(payload, { target: { value: "invalid" } });
+    expect(await submitError(ref)).toEqual({
+      errorFields: [
+        { name: ["Home"], errors: ["请输入 Home"] },
+        { name: ["payload"], errors: ["JSON 格式无效"] },
+      ],
+    });
+    await user.click(screen.getByRole("combobox", { name: "Home *" }));
+    await user.click(await screen.findByRole("option", { name: "Settings" }));
+    await user.click(screen.getByRole("combobox", { name: "enabled" }));
+    await user.click(await screen.findByRole("option", { name: "是" }));
+    fireEvent.change(payload, { target: { value: '{"Language":"Home"}' } });
+    await expect(submit(ref)).resolves.toEqual({ Home: "Settings", payload: { Language: "Home" }, enabled: true });
+  });
+
   it("keeps dotted arguments separate from a same-prefix object and converts their values", async () => {
     const ref = renderForm({
       type: "object",

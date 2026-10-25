@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatMessageContent } from "./ChatMessages";
 import type { ChatMessage } from "./types";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("@/components/networking", () => ({ getGatewayBaseUrl: () => "https://gateway.example/v1" }));
 vi.mock("@/components/chat_ui/ReasoningContent", () => ({ default: () => null }));
@@ -19,6 +20,24 @@ const message: ChatMessage = {
 };
 
 describe("ChatMessageContent images", () => {
+  it("翻译停止标记但保留模型回答和原始停止哨兵", () => {
+    const stoppedMessage = { ...message, role: "assistant" as const, content: "Settings[stopped]", attachments: [] };
+    const { rerender } = render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="stopped-message" storageScope="test">
+        <ChatMessageContent message={stoppedMessage} />
+      </LanguageProvider>,
+    );
+    expect(screen.getByText("[已停止]")).toBeVisible();
+    expect(screen.getByText("Settings")).toBeVisible();
+    expect(stoppedMessage.content).toBe("Settings[stopped]");
+    rerender(
+      <LanguageProvider defaultLanguage="en" userId="stopped-message" storageScope="test">
+        <ChatMessageContent message={stoppedMessage} />
+      </LanguageProvider>,
+    );
+    expect(screen.getByText("[stopped]")).toBeVisible();
+  });
+
   it("should render a user message and its image attachment", () => {
     render(<ChatMessageContent message={message} />);
     expect(screen.getByText("Describe this design")).toBeInTheDocument();

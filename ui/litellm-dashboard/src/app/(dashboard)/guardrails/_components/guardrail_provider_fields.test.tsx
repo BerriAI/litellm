@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import { populateGuardrailProviderMap } from "./guardrail_info_helpers";
 import type { GuardrailFormValues } from "./GuardrailFormField";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/lib/toast", () => ({ toast: { error: vi.fn() } }));
 
@@ -46,6 +48,24 @@ const renderHarness = () => {
 describe("GuardrailProviderFields object field", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("中文校验保留原始字段名和无效草稿，阻止提交", async () => {
+    populateGuardrailProviderMap(HIDE_SECRETS_PARAMS);
+    const onValid = vi.fn();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="guardrail-json" storageScope="provider-validation">
+        <Harness onValid={onValid} />
+      </LanguageProvider>,
+    );
+    const textarea = screen.getByLabelText(/detect_secrets_config/);
+    fireEvent.change(textarea, { target: { value: "Home" } });
+    fireEvent.blur(textarea);
+    fireEvent.click(screen.getByRole("button", { name: "save" }));
+    expect(await screen.findByText("detect_secrets_config 必须是有效的 JSON 对象")).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledWith("请为此配置输入有效的 JSON 对象");
+    expect(onValid).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue("Home");
   });
 
   it("commits a valid JSON object as a parsed dict", async () => {

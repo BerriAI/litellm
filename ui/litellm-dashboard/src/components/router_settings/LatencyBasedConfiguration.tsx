@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { CONFIG_OWNED_HINT, ConfigOwnedBadge } from "./ConfigOwned";
 import { Input } from "@/components/ui/input";
@@ -21,6 +22,7 @@ const LatencyBasedConfiguration: React.FC<LatencyBasedConfigurationProps> = ({
   routingStrategyArgs,
   ownedByConfig = false,
 }) => {
+  const { t } = useLanguage();
   const paramExplanation: { [key: string]: string } = {
     ttl: "Sliding window to look back over when calculating the average latency of a deployment. Default - 1 hour (in seconds).",
     lowest_latency_buffer:
@@ -32,10 +34,10 @@ const LatencyBasedConfiguration: React.FC<LatencyBasedConfigurationProps> = ({
       <div className="space-y-6">
         <div className="max-w-3xl">
           <h3 className="text-sm font-medium text-foreground">
-            Latency-Based Configuration
+            {t("Latency-Based Configuration")}
             {ownedByConfig && <ConfigOwnedBadge />}
           </h3>
-          <p className="text-xs text-muted-foreground mt-1">Fine-tune latency-based routing behavior</p>
+          <p className="text-xs text-muted-foreground mt-1">{t("Fine-tune latency-based routing behavior")}</p>
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
@@ -50,7 +52,7 @@ const LatencyBasedConfiguration: React.FC<LatencyBasedConfigurationProps> = ({
                   name={param}
                   defaultValue={typeof value === "object" ? JSON.stringify(value, null, 2) : value?.toString()}
                   disabled={ownedByConfig}
-                  title={ownedByConfig ? CONFIG_OWNED_HINT : undefined}
+                  title={ownedByConfig ? t(CONFIG_OWNED_HINT) : undefined}
                   className="font-mono text-sm w-full"
                 />
               </label>

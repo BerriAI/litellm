@@ -13,6 +13,7 @@ import {
 import { toast } from "@/lib/toast";
 import AddGuardrailForm from "./add_guardrail_form";
 import { GUARDRAIL_PRESETS } from "./guardrail_garden_configs";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("@/lib/toast", () => ({
   toast: {
@@ -61,6 +62,25 @@ describe("AddGuardrailForm decision model questions", () => {
     await user.click(await screen.findByText("Decision Model"));
     await user.click(screen.getByRole("button", { name: "Next" }));
   };
+
+  it("切换语言不重载防护规则配置且保留未保存名称", async () => {
+    const onClose = vi.fn();
+    const onSuccess = vi.fn();
+    const tree = (language: string) => (
+      <LanguageProvider defaultLanguage={language} userId="guardrail-test" storageScope="language-effects">
+        <AddGuardrailForm visible onClose={onClose} onSuccess={onSuccess} accessToken="test-token" />
+      </LanguageProvider>
+    );
+    const view = renderWithProviders(tree("en"));
+    const name = await screen.findByLabelText("Guardrail Name");
+    await waitFor(() => expect(modelHubCall).toHaveBeenCalledTimes(1));
+    fireEvent.change(name, { target: { value: "unsaved-draft" } });
+    view.rerender(tree("zh-CN"));
+    expect(await screen.findByDisplayValue("unsaved-draft")).toBeInTheDocument();
+    expect(getGuardrailUISettings).toHaveBeenCalledTimes(1);
+    expect(modelHubCall).toHaveBeenCalledTimes(1);
+    expect(createGuardrailCall).not.toHaveBeenCalled();
+  });
 
   const pickTypesafeModel = async (user: ReturnType<typeof userEvent.setup>) => {
     await user.click(await screen.findByLabelText("Decision Model"));

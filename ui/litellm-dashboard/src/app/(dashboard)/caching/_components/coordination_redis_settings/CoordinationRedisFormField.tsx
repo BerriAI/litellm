@@ -1,4 +1,5 @@
 import React from "react";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useFormContext } from "react-hook-form";
 import { FormField } from "@/components/shared/form/FormField";
 import { PasswordInput } from "@/components/shared/PasswordInput";
@@ -16,11 +17,19 @@ interface CoordinationRedisFormFieldProps {
 }
 
 const CoordinationRedisFormField: React.FC<CoordinationRedisFormFieldProps> = ({ field, isSecretConfigured }) => {
+  const { t } = useLanguage();
   const form = useFormContext<CoordinationFormValues>();
-  const placeholder = isSecretConfigured ? SECRET_ALREADY_SET_PLACEHOLDER : field.helpText;
+  const placeholder = t(isSecretConfigured ? SECRET_ALREADY_SET_PLACEHOLDER : field.helpText);
 
   return (
-    <FormField control={form.control} name={field.name} label={field.label} description={field.helpText}>
+    <FormField
+      control={form.control}
+      name={field.name}
+      label={t(field.label)}
+      description={t(field.helpText)}
+      // 仅翻译本地规则产生的错误，服务端同名文案也保持原样。
+      renderError={(error) => (error.type === "local-validation" && error.message ? t(error.message) : error.message)}
+    >
       {({ ref, value, onChange, ...rest }) => {
         if (field.type === "boolean") {
           return <Switch {...rest} checked={value === true} onCheckedChange={(checked) => onChange(checked)} />;

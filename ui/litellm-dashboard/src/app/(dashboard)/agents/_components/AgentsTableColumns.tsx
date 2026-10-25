@@ -1,5 +1,7 @@
 "use client";
 
+import { englishTranslate, type Translate } from "@/i18n/language";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ColumnDef } from "@tanstack/react-table";
 import { MoreHorizontal, Trash2 } from "lucide-react";
 
@@ -22,10 +24,11 @@ interface AgentRowActionsProps {
 }
 
 function AgentRowActions({ agent, onDeleteClick }: AgentRowActionsProps) {
+  const { t } = useLanguage();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open agent actions"
+        aria-label={t("Open agent actions")}
         data-testid={`agent-actions-${agent.agent_id}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -38,7 +41,7 @@ function AgentRowActions({ agent, onDeleteClick }: AgentRowActionsProps) {
           onClick={() => onDeleteClick(agent.agent_id, agent.agent_name)}
         >
           <Trash2 />
-          Delete
+          {t("Delete")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -46,12 +49,14 @@ function AgentRowActions({ agent, onDeleteClick }: AgentRowActionsProps) {
 }
 
 interface AgentsTableColumnsDeps {
+  t?: Translate;
   isAdmin: boolean;
   onAgentClick: (agentId: string) => void;
   onDeleteClick: (agentId: string, agentName: string) => void;
 }
 
 export const getAgentsTableColumns = ({
+  t = englishTranslate,
   isAdmin,
   onAgentClick,
   onDeleteClick,
@@ -59,8 +64,8 @@ export const getAgentsTableColumns = ({
   {
     id: "agent_name",
     accessorKey: "agent_name",
-    meta: { title: "Agent Name" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Agent Name" />,
+    meta: { title: t("Agent Name") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Agent Name")} />,
     size: 200,
     enableSorting: true,
     cell: ({ row }) => {
@@ -75,8 +80,8 @@ export const getAgentsTableColumns = ({
   {
     id: "agent_id",
     accessorKey: "agent_id",
-    meta: { title: "Agent ID" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Agent ID" />,
+    meta: { title: t("Agent ID") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Agent ID")} />,
     size: 200,
     enableSorting: true,
     cell: ({ row }) => (
@@ -90,16 +95,16 @@ export const getAgentsTableColumns = ({
   {
     id: "spend",
     accessorKey: "spend",
-    meta: { title: "Spend (USD)", numeric: true },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" />,
+    meta: { title: t("Spend (USD)"), numeric: true },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Spend (USD)")} />,
     size: 130,
     enableSorting: true,
     cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={4} />,
   },
   {
     id: "model",
-    meta: { title: "Model" },
-    header: "Model",
+    meta: { title: t("Model") },
+    header: t("Model"),
     size: 170,
     enableSorting: false,
     cell: ({ row }) => {
@@ -122,25 +127,25 @@ export const getAgentsTableColumns = ({
       const timestamp = agent.created_at ? new Date(agent.created_at).getTime() : 0;
       return Number.isNaN(timestamp) ? 0 : timestamp;
     },
-    meta: { title: "Created" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Created" />,
+    meta: { title: t("Created") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Created")} />,
     size: 150,
     enableSorting: true,
     cell: ({ row }) => <DateCell value={row.original.created_at} precision="date" />,
   },
   {
     id: "status",
-    meta: { title: "Status" },
-    header: "Status",
+    meta: { title: t("Status") },
+    header: t("Status"),
     size: 130,
     enableSorting: false,
     cell: ({ row }) => {
       const hasKeys = (row.original.keys?.length ?? 0) > 0;
-      if (row.original.jwt_auth_configured) return <StatusBadge tone="success" label="JWT configured" />;
+      if (row.original.jwt_auth_configured) return <StatusBadge tone="success" label={t("JWT configured")} />;
       return hasKeys ? (
-        <StatusBadge tone="success" label="Active" />
+        <StatusBadge tone="success" label={t("Active")} />
       ) : (
-        <StatusBadge tone="warning" label="Needs Setup" />
+        <StatusBadge tone="warning" label={t("Needs Setup")} />
       );
     },
   },
@@ -149,7 +154,7 @@ export const getAgentsTableColumns = ({
         {
           id: "actions",
           meta: { className: "text-right", headerClassName: "text-right" },
-          header: () => <span className="sr-only">Actions</span>,
+          header: () => <span className="sr-only">{t("Actions")}</span>,
           size: 64,
           enableSorting: false,
           enableHiding: false,

@@ -1,10 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import PublicModelHub from "./public_model_hub";
 import { getPublicMCPHubColumns, MCPServerData, ModelGroupInfo } from "./PublicModelHubTableColumns";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import type { Language } from "@/i18n/language";
 
 const { apiGetMock } = vi.hoisted(() => ({ apiGetMock: vi.fn() }));
 
@@ -99,11 +101,13 @@ const facetPaths = (): string[] =>
 const modelQueries = (): QueryRecord[] => modelCalls().map((call) => (call[1] as { query: QueryRecord }).query);
 const lastModelQuery = (): QueryRecord => modelQueries()[modelQueries().length - 1];
 
-const renderHub = (props: React.ComponentProps<typeof PublicModelHub> = {}) => {
+const renderHub = (props: React.ComponentProps<typeof PublicModelHub> = {}, language: Language = "en") => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
     <QueryClientProvider client={client}>
-      <PublicModelHub {...props} />
+      <LanguageProvider defaultLanguage={language} userId="public-hub-review" storageScope="hub-review">
+        <PublicModelHub {...props} />
+      </LanguageProvider>
     </QueryClientProvider>,
   );
 };
@@ -126,6 +130,10 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async () => Response.json({ values: {} })),
+  );
   respondWith(DEFAULT_MODELS);
   Storage.prototype.getItem = vi.fn(() => "false");
   Storage.prototype.setItem = vi.fn();
@@ -139,7 +147,48 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("PublicModelHub", () => {
+  it.each(["dashboard", "chat"] as const)("%s 中文表格与详情保留扩展模式和能力", async (variant) => {
+    respondWith([
+      model({ model_group: "custom-model", mode: "Home", supports_settings: true }),
+      model({ model_group: "known-model", mode: "chat", supports_vision: true }),
+    ]);
+    renderHub({ variant }, "zh-CN");
+
+    const row = await screen.findByRole("row", { name: /custom-model/ });
+    expect(await within(row).findByText("Home")).toBeVisible();
+    expect(within(row).getByText("Settings")).toBeVisible();
+    expect(screen.getByRole("row", { name: /known-model/ })).toHaveTextContent("视觉");
+    fireEvent.click(within(row).getByRole("button", { name: /^custom-model/ }));
+    const detail = await screen.findByRole("dialog");
+    expect(within(detail).getByText("Home", { exact: true })).toBeVisible();
+    expect(within(detail).getByText("Settings", { exact: true })).toBeVisible();
+  });
+
+  it.each(["dashboard", "chat"] as const)("%s 中文筛选保留扩展值并提交原始值", async (variant) => {
+    const user = userEvent.setup();
+    respondWith(DEFAULT_MODELS, 2, 50, {
+      ...FACET_VALUES,
+      [`${MODEL_HUB_PATH}/modes`]: ["chat", "Home", "Vision"],
+      [`${MODEL_HUB_PATH}/features`]: ["vision", "settings"],
+    });
+    renderHub({ variant }, "zh-CN");
+    await screen.findByText("gpt-4");
+    await user.click(screen.getByPlaceholderText(variant === "chat" ? "模型类型" : "选择模式"));
+    expect(await screen.findByRole("option", { name: "对话" })).toBeVisible();
+    expect(screen.getByRole("option", { name: "Vision" })).toBeVisible();
+    await user.click(screen.getByRole("option", { name: "Home" }));
+    await waitFor(() => expect(lastModelQuery()["filter[mode][in]"]).toBe("Home"));
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByPlaceholderText(variant === "chat" ? "模型能力" : "选择功能"));
+    expect(await screen.findByRole("option", { name: "视觉" })).toBeVisible();
+    await user.click(screen.getByRole("option", { name: "Settings" }));
+    await waitFor(() => expect(lastModelQuery()["filter[features][in]"]).toBe("settings"));
+    expect(lastModelQuery()["filter[mode][in]"]).toBe("Home");
+  });
+
   it("renders", () => {
     const { container } = renderHub();
     expect(container).toBeInTheDocument();

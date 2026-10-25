@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import EditMembership from "./EditMembership";
+import { LanguageProvider, useLanguage } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
 
 const onSubmit = vi.fn();
 
@@ -41,6 +43,24 @@ const tempBudgetConfig = {
 
 const TEMP_BUDGET_PAIR_MESSAGE = "Set both a temporary budget increase and its expiry, or neither";
 
+function TranslatedMembershipEditor() {
+  const { t } = useLanguage();
+  return (
+    <EditMembership
+      visible
+      onCancel={vi.fn()}
+      onSubmit={onSubmit}
+      mode="edit"
+      initialData={cappedMember}
+      config={{
+        ...teamMemberConfig,
+        title: t("Edit Member"),
+        roleOptions: roleOptions.map((role) => ({ ...role, label: t(role.label) })),
+      }}
+    />
+  );
+}
+
 const cappedMember = { user_id: "u1", user_email: "a@b.com", role: "user", max_budget_in_team: 10 };
 
 const tempBudgetMember = {
@@ -74,6 +94,75 @@ const submitted = (): Record<string, unknown> => onSubmit.mock.calls[0][0] as Re
 describe("EditMembership submit payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  // 父页面的已翻译配置会变更引用，不能因此清空成员编辑草稿。
+  it("切换语言更新弹窗标题但保留成员预算草稿", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="membership-test" storageScope="test">
+        <LanguageSelector />
+        <TranslatedMembershipEditor />
+      </LanguageProvider>,
+    );
+    fireEvent.change(screen.getByLabelText("Team Member Budget (USD)"), { target: { value: "25" } });
+    // 弹窗将外部控件标为隐藏，原生 change 模拟同一上下文里的导航语言选择。
+    fireEvent.change(screen.getByRole("combobox", { name: "Interface language", hidden: true }), {
+      target: { value: "zh-CN" },
+    });
+    expect(screen.getByRole("heading", { name: "编辑成员" })).toBeVisible();
+    expect(screen.getByLabelText("Team Member Budget (USD)")).toHaveValue(25);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  // 已有校验错误只更新显示语言，不能重新初始化字段或触发提交。
+  it.each([
+    { label: "Email", value: "bad-email", message: "Please enter a valid email!", zh: "请输入有效的邮箱地址" },
+    { label: null, value: "", message: "Please select a role!", zh: "请选择角色" },
+    {
+      label: "Temporary Budget Increase (USD)",
+      value: "25",
+      message: TEMP_BUDGET_PAIR_MESSAGE,
+      zh: "请同时填写临时增加预算和到期时间，或将两项都留空",
+    },
+    {
+      label: "Temporary Budget Expiry (UTC)",
+      value: "2030-01-02T03:04",
+      message: TEMP_BUDGET_PAIR_MESSAGE,
+      zh: "请同时填写临时增加预算和到期时间，或将两项都留空",
+    },
+  ])("已有 $message 错误随语言切换且保留草稿（$label）", async ({ label, value, message, zh }) => {
+    localStorage.clear();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="membership-validation" storageScope="test">
+        <LanguageSelector />
+        <EditMembership
+          visible
+          onCancel={vi.fn()}
+          onSubmit={onSubmit}
+          mode="edit"
+          config={tempBudgetConfig}
+          initialData={{ ...cappedMember, role: label === null ? "" : "user" }}
+        />
+      </LanguageProvider>,
+    );
+    fireEvent.change(screen.getByLabelText("Team Member Budget (USD)"), { target: { value: "42" } });
+    if (label !== null) fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    save();
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Interface language", hidden: true }), {
+      target: { value: "zh-CN" },
+    });
+    expect(screen.getByText(zh)).toBeInTheDocument();
+    expect(screen.queryByText(message)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Team Member Budget (USD)")).toHaveValue(42);
+    expect(screen.getByLabelText("用户 ID")).toHaveValue("u1");
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("combobox", { name: "界面语言", hidden: true }), {
+      target: { value: "en" },
+    });
+    expect(screen.getByText(message)).toBeInTheDocument();
   });
 
   it("submits only the fields the config renders, never the rest of the member record", async () => {

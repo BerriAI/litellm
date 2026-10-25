@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export default function CustomDimensionRows({ rows, disabled, onChange, onWeight, onAdd, onRemove }: Props) {
+  const { t } = useLanguage();
   const [draft, setDraft] = useState<{ id: string; raw: string } | null>(null);
   const update = (id: string, patch: Partial<CustomDimensionRow>) =>
     onChange(rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
@@ -34,23 +36,25 @@ export default function CustomDimensionRows({ rows, disabled, onChange, onWeight
     <div className="space-y-4">
       {rows.map((row, index) => (
         <fieldset key={row.id} className="min-w-0 space-y-3 rounded-md border p-3">
-          <legend className="float-left text-sm font-semibold">Custom dimension {index + 1}</legend>
+          <legend className="float-left text-sm font-semibold">
+            {t("Custom dimension")} {index + 1}
+          </legend>
           <div className="flex items-center gap-2">
             <Button
               type="button"
               variant="ghost"
               size="sm"
               className="text-destructive hover:text-destructive/80"
-              aria-label={`Remove custom dimension ${index + 1}`}
+              aria-label={t("Remove custom dimension {index}", { index: index + 1 })}
               disabled={disabled}
               onClick={() => onRemove(row.id)}
             >
               <Trash2 />
-              Remove
+              {t("Remove")}
             </Button>
           </div>
           <div className="space-y-1">
-            <Label htmlFor={`${row.id}-name`}>Name</Label>
+            <Label htmlFor={`${row.id}-name`}>{t("Name")}</Label>
             <Input
               id={`${row.id}-name`}
               value={row.name}
@@ -59,7 +63,7 @@ export default function CustomDimensionRows({ rows, disabled, onChange, onWeight
             />
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <Label htmlFor={`${row.id}-weight`}>Weight</Label>
+            <Label htmlFor={`${row.id}-weight`}>{t("Weight")}</Label>
             <Slider
               min={0}
               max={1}
@@ -67,7 +71,7 @@ export default function CustomDimensionRows({ rows, disabled, onChange, onWeight
               disabled={disabled}
               value={[row.weight]}
               className="min-w-24 flex-1"
-              aria-label={`${row.name || `Custom dimension ${index + 1}`} weight`}
+              aria-label={t("{name} weight", { name: row.name || t("Custom dimension {index}", { index: index + 1 }) })}
               onValueChange={(value) => onWeight(row.id, Array.isArray(value) ? value[0] : value)}
             />
             <Input
@@ -84,7 +88,7 @@ export default function CustomDimensionRows({ rows, disabled, onChange, onWeight
             {(["keywords", "patterns"] as const).map((field) => (
               <div key={field} className="min-w-0 space-y-1">
                 <Label htmlFor={`${row.id}-${field}`}>
-                  {field === "keywords" ? "Keywords" : "Regex patterns"} (one per line)
+                  {field === "keywords" ? t("Keywords") : t("Regex patterns")} {t("(one per line)")}
                 </Label>
                 <Textarea
                   id={`${row.id}-${field}`}
@@ -98,9 +102,9 @@ export default function CustomDimensionRows({ rows, disabled, onChange, onWeight
             ))}
           </div>
           <div className="space-y-1">
-            <Label htmlFor={`${row.id}-scoring`}>Scoring</Label>
+            <Label htmlFor={`${row.id}-scoring`}>{t("Scoring")}</Label>
             <Select
-              items={SCORING_MODES}
+              items={SCORING_MODES.map((mode) => ({ ...mode, label: t(mode.label) }))}
               value={row.scoring_mode ?? "binary"}
               onValueChange={(mode) => {
                 if (mode === "binary" || mode === "match_count") update(row.id, { scoring_mode: mode });
@@ -112,24 +116,26 @@ export default function CustomDimensionRows({ rows, disabled, onChange, onWeight
               <SelectContent>
                 {SCORING_MODES.map((mode) => (
                   <SelectItem key={mode.value} value={mode.value}>
-                    {mode.label}
+                    {t(mode.label)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              Binary uses the full weight for any hit. Match count uses half for one distinct matcher and full weight
-              for two or more.
+              {t(
+                "Binary uses the full weight for any hit. Match count uses half for one distinct matcher and full weight for two or more.",
+              )}
             </p>
           </div>
         </fieldset>
       ))}
       <Button type="button" variant="outline" size="sm" disabled={disabled || rows.length >= 16} onClick={onAdd}>
-        Add custom dimension
+        {t("Add custom dimension")}
       </Button>
       <p className="text-xs text-muted-foreground">
-        Keywords match the current ask. Regex scans its first 2,048 characters and permits bounded single-character
-        repeats up to 64. The proxy validates patterns on save.
+        {t(
+          "Keywords match the current ask. Regex scans its first 2,048 characters and permits bounded single-character repeats up to 64. The proxy validates patterns on save.",
+        )}
       </p>
     </div>
   );

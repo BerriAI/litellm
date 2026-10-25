@@ -257,6 +257,11 @@ class UISettings(LiteLLMBaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    # 使用现有设置存储与审计链，不为语言偏好新增数据表
+    default_ui_language: Literal["en", "zh-CN"] = Field(
+        default="en",
+        description="Default dashboard language for users without a personal language preference.",
+    )
     usage_default_time_range: Literal["today", "last_7_days", "last_30_days", "month_to_date", "year_to_date"] = Field(
         default="last_7_days",
         description="Default date range when opening Usage without an explicit URL range. Calendar ranges use the browser timezone.",
@@ -392,6 +397,7 @@ class UISettingsResponse(SettingsResponse):
 
 # Allowlist of UI settings that can be stored
 ALLOWED_UI_SETTINGS_FIELDS: Final = {
+    "default_ui_language",
     "usage_default_time_range",
     "disable_model_add_for_internal_users",
     "disable_team_admin_delete_team_user",

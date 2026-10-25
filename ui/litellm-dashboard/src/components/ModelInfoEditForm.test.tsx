@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { CredentialItem } from "@/components/networking";
 
 import ModelInfoEditForm, { perMillionToPerToken } from "./ModelInfoEditForm";
+import { LanguageProvider, useLanguage } from "@/contexts/LanguageContext";
+import { translate, type Language } from "@/i18n/language";
 
 vi.mock("@/components/networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/networking")>();
@@ -23,36 +25,48 @@ const credentialsList: CredentialItem[] = [
   },
 ];
 
+function SwitchLanguage() {
+  const { setPreference } = useLanguage();
+  return <button onClick={() => setPreference("en")}>English</button>;
+}
+
 const renderForm = ({
   onSubmit = vi.fn().mockResolvedValue(undefined),
   isEditing = true,
   litellmParams = { model: "gpt-4o" } as Record<string, unknown>,
+  language = "en" as Language,
+  modelName = "gpt-4o",
+  modelInfo = {} as Record<string, unknown>,
+  withLanguageSwitch = false,
 } = {}) =>
   render(
-    <ModelInfoEditForm
-      localModelData={{
-        model_name: "gpt-4o",
-        litellm_params: litellmParams,
-        model_info: {},
-      }}
-      modelData={{ model_info: {} }}
-      teamAlias={null}
-      accessToken="test-token"
-      isEditing={isEditing}
-      isSaving={false}
-      isWildcardModel={false}
-      ptuCostAttributionEnabled={false}
-      showCacheControl={false}
-      setShowCacheControl={vi.fn()}
-      onCancel={vi.fn()}
-      onSubmit={onSubmit}
-      modelAccessGroups={[]}
-      guardrailsList={[]}
-      tagsList={{}}
-      credentialsList={credentialsList}
-      healthCheckModelOptions={[]}
-      teams={[]}
-    />,
+    <LanguageProvider defaultLanguage={language} userId="model-info" storageScope="model-info-language">
+      {withLanguageSwitch && <SwitchLanguage />}
+      <ModelInfoEditForm
+        localModelData={{
+          model_name: modelName,
+          litellm_params: litellmParams,
+          model_info: modelInfo,
+        }}
+        modelData={{ model_info: {} }}
+        teamAlias={null}
+        accessToken="test-token"
+        isEditing={isEditing}
+        isSaving={false}
+        isWildcardModel={false}
+        ptuCostAttributionEnabled={false}
+        showCacheControl={false}
+        setShowCacheControl={vi.fn()}
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+        modelAccessGroups={[]}
+        guardrailsList={[]}
+        tagsList={{}}
+        credentialsList={credentialsList}
+        healthCheckModelOptions={[]}
+        teams={[]}
+      />
+    </LanguageProvider>,
   );
 
 describe("perMillionToPerToken", () => {
@@ -74,6 +88,35 @@ describe("perMillionToPerToken", () => {
 });
 
 describe("ModelInfoEditForm pricing fields", () => {
+  it("只读模型详情翻译空值，不翻译模型名称", () => {
+    const formOptions = {
+      isEditing: false,
+      language: "zh-CN" as const,
+      modelName: "Home",
+      modelInfo: { access_groups: [] },
+    };
+    renderForm(formOptions);
+    expect(screen.getByText("Home")).toBeInTheDocument();
+    expect(screen.getAllByText("未设置").length).toBeGreaterThan(0);
+    expect(screen.queryAllByText("Not Set")).toHaveLength(0);
+    expect(screen.getByText("模型名称")).toBeInTheDocument();
+    expect(screen.getByText("输入费用（每百万 Token）")).toBeInTheDocument();
+    expect(screen.getByText("未分配分组")).toBeInTheDocument();
+  });
+
+  it("编辑标签和提示随语言切换，保留模型草稿且不提交", () => {
+    const onSubmit = vi.fn();
+    const formOptions = { language: "zh-CN" as const, modelName: "Home", withLanguageSwitch: true, onSubmit };
+    renderForm(formOptions);
+    const modelInput = screen.getByPlaceholderText(translate("zh-CN", "Enter model name"));
+    expect(modelInput).not.toHaveAttribute("placeholder", "Enter model name");
+    fireEvent.change(modelInput, { target: { value: "Home draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+    expect(screen.getByPlaceholderText("Enter model name")).toHaveValue("Home draft");
+    expect(screen.getByText("Model Name")).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   const storedPrices = {
     model: "gpt-4o",
     input_cost_per_token: 0.000003,

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ConfigType, useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
 import { StoreModelInDBParams, useStoreModelInDB } from "@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB";
 import { toast } from "@/lib/toast";
@@ -32,6 +33,7 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
 );
 
 const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCancel, onSuccess }) => {
+  const { t } = useLanguage();
   const { mutateAsync, isPending } = useStoreModelInDB();
   const { data: proxyConfigData, isLoading: isLoadingConfig, refetch } = useProxyConfig(ConfigType.GENERAL_SETTINGS);
 
@@ -63,16 +65,16 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
     try {
       await mutateAsync(formValues, {
         onSuccess: () => {
-          toast.success("Model storage settings updated successfully");
+          toast.success(t("Model storage settings updated successfully"));
           refetch();
           onSuccess?.();
         },
         onError: (error) => {
-          toast.fromError("Failed to save model storage settings: " + parseErrorMessage(error));
+          toast.fromError(t("Failed to save model storage settings: {error}", { error: parseErrorMessage(error) }));
         },
       });
     } catch (error) {
-      toast.fromError("Failed to save model storage settings: " + parseErrorMessage(error));
+      toast.fromError(t("Failed to save model storage settings: {error}", { error: parseErrorMessage(error) }));
     }
   };
 
@@ -85,7 +87,7 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
     <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-base">Model Settings</DialogTitle>
+          <DialogTitle className="text-base">{t("Model Settings")}</DialogTitle>
         </DialogHeader>
         <TooltipProvider>
           <form onSubmit={(event) => event.preventDefault()}>
@@ -94,16 +96,16 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
                 control={form.control}
                 name="store_model_in_db"
                 label={labelWithHint(
-                  "Store Model in DB",
+                  t("Store Model in DB"),
                   proxyConfigData?.find((f) => f.field_name === "store_model_in_db")?.field_description ||
-                    "If enabled, models and config are stored in and loaded from the database.",
+                    t("If enabled, models and config are stored in and loaded from the database."),
                 )}
               >
                 {({ id, value, onChange, onBlur }) =>
                   isLoadingConfig ? (
                     <Skeleton
                       role="status"
-                      aria-label="Loading model settings"
+                      aria-label={t("Loading model settings")}
                       className="h-[18.4px] w-8 rounded-full"
                     />
                   ) : (
@@ -122,14 +124,14 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
         </TooltipProvider>
         <DialogFooter>
           <Button variant="outline" onClick={handleCancel} disabled={isPending || isLoadingConfig}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             disabled={isPending || isLoadingConfig}
             aria-busy={isPending}
             onClick={() => void form.handleSubmit(handleFormSubmit)()}
           >
-            {isPending ? "Saving..." : "Save Settings"}
+            {isPending ? t("Saving...") : t("Save Settings")}
           </Button>
         </DialogFooter>
       </DialogContent>

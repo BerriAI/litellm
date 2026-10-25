@@ -713,7 +713,7 @@ describe("ModelSelect", () => {
       ["All Openai models", "All Anthropic models"],
       ["gpt-4", "claude-3"],
     ]);
-    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Unavailable Models")).toBeInTheDocument();
   });
 
   it("should keep an unavailable selection removable while a special option is selected", async () => {
@@ -755,7 +755,7 @@ describe("ModelSelect", () => {
     await openModelList(user);
 
     expectOffered("All Proxy Models");
-    expectNotOffered("Unavailable");
+    expectNotOffered("Unavailable Models");
   });
 
   it("should list selections outside the organization's model ceiling as Unavailable", async () => {
@@ -818,7 +818,7 @@ describe("ModelSelect", () => {
     await openModelList(user);
 
     expectOffered("No Default Models");
-    expectNotOffered("Unavailable");
+    expectNotOffered("Unavailable Models");
   });
 
   it("should not show an Unavailable group when every selection is offered", async () => {
@@ -835,6 +835,6 @@ describe("ModelSelect", () => {
     await openModelList(user);
 
     expect(screen.getByRole("option", { name: "gpt-4" })).toHaveAttribute("aria-selected", "true");
-    expectNotOffered("Unavailable");
+    expectNotOffered("Unavailable Models");
   });
 });

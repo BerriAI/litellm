@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingForm } from "./OnboardingForm";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 const mockUseOnboardingCredentials = vi.fn();
 const mockClaimToken = vi.fn();
@@ -45,7 +46,7 @@ vi.mock("./OnboardingFormBody", () => ({
   }: {
     variant: string;
     userEmail: string;
-    claimError: string | null;
+    claimError: React.ReactNode;
     onSubmit: (formValues: { password: string }) => void;
   }) => (
     <div data-testid="form-body" data-variant={variant} data-email={userEmail}>
@@ -64,6 +65,77 @@ describe("OnboardingForm", () => {
     document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
     document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/ui";
     sessionStorage.clear();
+    localStorage.clear();
+  });
+
+  it.each([
+    { kind: "session", english: "Failed to start session. Please try again.", chinese: "无法建立会话，请重试。" },
+    { kind: "submit", english: "Failed to submit. Please try again.", chinese: "提交失败，请重试。" },
+  ])("已有的本地 $kind 错误随语言切换更新，不重复提交邀请", async ({ kind, english, chinese }) => {
+    mockUseOnboardingCredentials.mockReturnValue({
+      data: { token: "fake-jwt-token" },
+      isLoading: false,
+      isError: false,
+    });
+    mockClaimToken.mockImplementation((_params, options) => {
+      if (kind === "session") options.onSuccess({});
+      else options.onError(new Error(""));
+    });
+    const tree = (language: "en" | "zh-CN") => (
+      <LanguageProvider defaultLanguage={language} userId={null} storageScope={`invite-error-${kind}`}>
+        <OnboardingForm variant="signup" />
+      </LanguageProvider>
+    );
+    const view = render(tree("en"));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Submit" })));
+    expect(screen.getByText(english, { exact: true })).toBeInTheDocument();
+    view.rerender(tree("zh-CN"));
+    expect(screen.getByText(chinese, { exact: true })).toBeInTheDocument();
+    view.rerender(tree("en"));
+    expect(screen.getByText(english, { exact: true })).toBeInTheDocument();
+    expect(mockClaimToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("请求期间切换语言后，本地会话错误使用最新语言", async () => {
+    mockUseOnboardingCredentials.mockReturnValue({
+      data: { token: "fake-jwt-token" },
+      isLoading: false,
+      isError: false,
+    });
+    mockClaimToken.mockImplementation(() => undefined);
+    const tree = (language: "en" | "zh-CN") => (
+      <LanguageProvider defaultLanguage={language} userId={null} storageScope="invite-pending-error">
+        <OnboardingForm variant="signup" />
+      </LanguageProvider>
+    );
+    const view = render(tree("en"));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Submit" })));
+    const pendingOptions = mockClaimToken.mock.lastCall![1];
+    view.rerender(tree("zh-CN"));
+    await act(async () => pendingOptions.onSuccess({}));
+    expect(screen.getByText("无法建立会话，请重试。", { exact: true })).toBeInTheDocument();
+    expect(mockClaimToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("与本地文案同名的服务端错误始终保留原文", async () => {
+    mockUseOnboardingCredentials.mockReturnValue({
+      data: { token: "fake-jwt-token" },
+      isLoading: false,
+      isError: false,
+    });
+    const rawMessage = "Failed to start session. Please try again.";
+    mockClaimToken.mockImplementation((_params, options) => options.onError(new Error(rawMessage)));
+    const tree = (language: "en" | "zh-CN") => (
+      <LanguageProvider defaultLanguage={language} userId={null} storageScope="invite-remote-error">
+        <OnboardingForm variant="signup" />
+      </LanguageProvider>
+    );
+    const view = render(tree("en"));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Submit" })));
+    view.rerender(tree("zh-CN"));
+    expect(screen.getByText(rawMessage, { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("无法建立会话，请重试。", { exact: true })).not.toBeInTheDocument();
+    expect(mockClaimToken).toHaveBeenCalledTimes(1);
   });
 
   it("should render loading view when credentials are loading", () => {

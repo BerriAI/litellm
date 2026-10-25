@@ -17,10 +17,12 @@ import { cardProvider, cardSummary, cardTitle, formatPublishedOn, latestLaunches
 import { Logo } from "@/components/molecules/logo/Logo";
 import UpdatesFeed from "./UpdatesFeed";
 import { HOME_USAGE_DAYS, useHomeUsage } from "./useHomeUsage";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 const LEADERBOARD = { metric: "tokens", dimension: "model_groups" } as const;
 
 export default function HomePage() {
+  const { t, language } = useLanguage();
   const { isViewOnly } = useAuthorized();
   const usage = useHomeUsage();
   const blog = useBlogPosts();
@@ -30,12 +32,12 @@ export default function HomePage() {
   return (
     <Page>
       <PageHeader>
-        <PageHeaderTitle>Home</PageHeaderTitle>
+        <PageHeaderTitle>{t("Home")}</PageHeaderTitle>
         {!isViewOnly && (
           <PageHeaderControls>
             <Button render={<a href={uiHref("api-keys?create=true")} />}>
               <Plus />
-              Create New Virtual Key
+              {t("Create New Virtual Key")}
             </Button>
           </PageHeaderControls>
         )}
@@ -43,12 +45,12 @@ export default function HomePage() {
 
       <LiteAdminHome />
 
-      <section aria-label={`Usage, last ${HOME_USAGE_DAYS} days`}>
+      <section aria-label={t("Usage, last {days} days", { days: HOME_USAGE_DAYS })}>
         {usage.failed ? (
           <div className="flex items-center justify-between gap-2 rounded-xl border bg-card px-4 py-3 text-sm">
-            <span className="text-destructive">Failed to load usage</span>
+            <span className="text-destructive">{t("Failed to load usage")}</span>
             <Button variant="outline" size="sm" onClick={usage.retry}>
-              Retry
+              {t("Retry")}
             </Button>
           </div>
         ) : (
@@ -69,7 +71,7 @@ export default function HomePage() {
               <div>
                 <h2 id="home-whats-new" className="flex items-center gap-2 text-lg font-semibold">
                   <Sparkles className="size-4 text-muted-foreground" />
-                  What&apos;s new in LiteLLM?
+                  {t("What's new in LiteLLM?")}
                 </h2>
               </div>
               <div className="grid gap-4 sm:grid-cols-3">
@@ -88,7 +90,7 @@ export default function HomePage() {
                         <div className="line-clamp-2 text-base font-semibold leading-tight">{cardTitle(post)}</div>
                         <p className="m-0 line-clamp-3 text-sm text-muted-foreground">{cardSummary(post)}</p>
                         <div className="mt-auto flex items-center justify-between pt-1 text-xs text-muted-foreground">
-                          <span>{formatPublishedOn(post.date)}</span>
+                          <span>{formatPublishedOn(post.date, language)}</span>
                           <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
                         </div>
                       </Card>
@@ -100,8 +102,11 @@ export default function HomePage() {
           )}
 
           <Panel
-            title="Leaderboard"
-            subtitle={`Share of tokens over the last ${HOME_USAGE_DAYS} days, with the change between the first and second half of the period`}
+            title={t("Leaderboard")}
+            subtitle={t(
+              "Share of tokens over the last {days} days, with the change between the first and second half of the period",
+              { days: HOME_USAGE_DAYS },
+            )}
             testId="home-leaderboard"
           >
             <Leaderboard

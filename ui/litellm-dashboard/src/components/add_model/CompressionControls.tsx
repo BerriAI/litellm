@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { SearchSelect, SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Label } from "@/components/ui/label";
@@ -19,6 +20,7 @@ interface CompressionControlsProps {
 const NONE_OPTION: SearchSelectOption = { label: "None (no compression)", value: NO_COMPRESSION };
 
 const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChange }) => {
+  const { t } = useLanguage();
   const { routing, sameAsRouting, model } = value;
   const onRoutingChange = (newRouting: string | undefined) => onChange({ ...value, routing: newRouting });
   const onSameAsRoutingChange = (newSameAsRouting: boolean) => onChange({ ...value, sameAsRouting: newSameAsRouting });
@@ -28,14 +30,18 @@ const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChan
   const compressionOptions: SearchSelectOption[] = (data?.guardrails ?? [])
     .filter((g) => isCompressionGuardrailProvider(g.litellm_params?.guardrail))
     .map((g) => ({ label: g.guardrail_name, value: g.guardrail_name }));
-  const options: SearchSelectOption[] = [NONE_OPTION, ...compressionOptions];
+  const options: SearchSelectOption[] = [{ ...NONE_OPTION, label: t(NONE_OPTION.label) }, ...compressionOptions];
 
   return (
     <div className="space-y-4">
       <div>
         <div className="mb-1 flex items-center gap-2">
-          <span className="text-sm font-medium">Routing decision</span>
-          <SimpleTooltip content="Compression applied to the classifier's own call that picks a tier, separate from the model the request routes to.">
+          <span className="text-sm font-medium">{t("Routing decision")}</span>
+          <SimpleTooltip
+            content={t(
+              "Compression applied to the classifier's own call that picks a tier, separate from the model the request routes to.",
+            )}
+          >
             <Info className="size-4 text-muted-foreground" />
           </SimpleTooltip>
         </div>
@@ -43,15 +49,15 @@ const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChan
           options={options}
           value={routing}
           onValueChange={(value) => onRoutingChange(value ?? undefined)}
-          placeholder="Inherit from the request's own compression guardrails"
-          emptyText="No compression guardrails found"
-          aria-label="Routing decision compression"
+          placeholder={t("Inherit from the request's own compression guardrails")}
+          emptyText={t("No compression guardrails found")}
+          aria-label={t("Routing decision compression")}
         />
       </div>
 
       {routing !== undefined && (
         <div>
-          <span className="mb-2 block text-sm font-medium">Model call</span>
+          <span className="mb-2 block text-sm font-medium">{t("Model call")}</span>
           <RadioGroup
             value={sameAsRouting ? "same" : "different"}
             onValueChange={(value: unknown) => onSameAsRoutingChange(value === "same")}
@@ -60,11 +66,11 @@ const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChan
             <div className="flex w-full flex-col items-start gap-2">
               <Label className="items-start font-normal leading-normal">
                 <RadioGroupItem value="same" className="mt-0.5" />
-                <span>Same as the routing decision</span>
+                <span>{t("Same as the routing decision")}</span>
               </Label>
               <Label className="items-start font-normal leading-normal">
                 <RadioGroupItem value="different" className="mt-0.5" />
-                <span>Use a different compression</span>
+                <span>{t("Use a different compression")}</span>
               </Label>
             </div>
           </RadioGroup>
@@ -75,9 +81,9 @@ const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChan
                 options={options}
                 value={model}
                 onValueChange={(value) => onModelChange(value ?? undefined)}
-                placeholder="None (no compression)"
-                emptyText="No compression guardrails found"
-                aria-label="Model call compression"
+                placeholder={t("None (no compression)")}
+                emptyText={t("No compression guardrails found")}
+                aria-label={t("Model call compression")}
               />
             </div>
           )}

@@ -3,19 +3,25 @@ import { CircleAlert } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { buttonVariants } from "@/components/ui/button";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
+import { useLanguage } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
 
 export function OnboardingErrorView() {
+  const { t } = useLanguage();
   return (
     <div className="mx-auto w-full max-w-md mt-10">
       <Alert variant="error">
         <CircleAlert />
-        <AlertTitle>Failed to load invitation</AlertTitle>
-        <AlertDescription>The invitation link may be invalid or expired.</AlertDescription>
+        <AlertTitle>{t("Failed to load invitation")}</AlertTitle>
+        <AlertDescription>{t("The invitation link may be invalid or expired.")}</AlertDescription>
       </Alert>
       <div className="mt-4">
         <a href={getLoginUrl()} className={buttonVariants({ variant: "outline" })}>
-          Back to Login
+          {t("Back to Login")}
         </a>
+      </div>
+      <div className="mt-4">
+        <LanguageSelector />
       </div>
     </div>
   );

@@ -224,7 +224,7 @@ describe("TeamAdminSettingsForm", () => {
       const { onSave } = renderForm(new Set(["metadata"]), { metadata });
 
       await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
-      const keys = screen.getAllByPlaceholderText("Key");
+      const keys = screen.getAllByPlaceholderText("Metadata key");
       const values = screen.getAllByPlaceholderText("Value");
       await user.type(keys[keys.length - 1], "project");
       await user.type(values[values.length - 1], "atlas");
@@ -242,7 +242,7 @@ describe("TeamAdminSettingsForm", () => {
       const { onSave } = renderForm(new Set(["metadata"]), { metadata });
 
       await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
-      const keys = screen.getAllByPlaceholderText("Key");
+      const keys = screen.getAllByPlaceholderText("Metadata key");
       await user.type(keys[keys.length - 1], "priority");
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 

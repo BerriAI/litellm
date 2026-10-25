@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { Table } from "@tanstack/react-table";
 import { RefreshCw, Search, SlidersHorizontal, X } from "lucide-react";
 import type * as React from "react";
@@ -37,7 +38,7 @@ export function DataTableToolbar<TData>({
   table,
   searchValue,
   onSearchChange,
-  searchPlaceholder = "Search",
+  searchPlaceholder,
   onOpenFilters,
   onRefresh,
   isRefreshing = false,
@@ -47,6 +48,7 @@ export function DataTableToolbar<TData>({
   children,
   className,
 }: DataTableToolbarProps<TData>) {
+  const { t } = useLanguage();
   const filters = table.getState().columnFilters;
 
   const labelFor = (columnId: string): string =>
@@ -63,7 +65,7 @@ export function DataTableToolbar<TData>({
             <Input
               value={searchValue ?? ""}
               onChange={(event) => onSearchChange(event.target.value)}
-              placeholder={searchPlaceholder}
+              placeholder={searchPlaceholder ?? t("Search")}
               className="h-8 w-56 pl-8"
               data-testid="datatable-search"
             />
@@ -75,7 +77,7 @@ export function DataTableToolbar<TData>({
             {valueFor(filter.id, filter.value)}
             <button
               type="button"
-              aria-label={`Remove ${labelFor(filter.id)} filter`}
+              aria-label={t("Remove {field} filter", { field: labelFor(filter.id) })}
               data-testid={`filter-chip-remove-${filter.id}`}
               onClick={() => table.setColumnFilters((previous) => previous.filter((entry) => entry.id !== filter.id))}
               className="ml-0.5 rounded-full text-muted-foreground hover:text-foreground"
@@ -91,7 +93,7 @@ export function DataTableToolbar<TData>({
             onClick={() => table.setColumnFilters([])}
             data-testid="datatable-clear-filters"
           >
-            Clear all
+            {t("Clear all")}
           </Button>
         )}
       </div>
@@ -103,18 +105,18 @@ export function DataTableToolbar<TData>({
             size="icon-sm"
             onClick={onRefresh}
             disabled={isRefreshing}
-            aria-label="Refresh"
-            title="Refresh"
+            aria-label={t("Refresh")}
+            title={t("Refresh")}
             data-testid="datatable-refresh"
           >
             <RefreshCw className={isRefreshing ? "animate-spin" : ""} />
           </Button>
         )}
-        {showViewOptions && <DataTableViewOptions table={table} label="Columns" />}
+        {showViewOptions && <DataTableViewOptions table={table} label={t("Columns")} />}
         {onOpenFilters !== undefined && (
           <Button variant="outline" size="sm" onClick={onOpenFilters} data-testid="datatable-filters-trigger">
             <SlidersHorizontal />
-            Filters
+            {t("Filters")}
             {filters.length > 0 && (
               <Badge className="ml-1 h-5 min-w-5 justify-center rounded-full px-1" data-testid="datatable-filter-count">
                 {filters.length}

@@ -241,7 +241,10 @@ describe("EditAutoRouterModal keyword matching", () => {
     await selectAutoRouterOption("Heuristic before the judge", "Heuristic v2");
     fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "1.1" } });
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
-    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "0.88" } });
+    // 推进本次编辑的防抖及查询通知，仍按真实按钮状态判断能否保存。
+    await renderWithSettledAvailability(() =>
+      fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "0.88" } }),
+    );
     await waitFor(() => expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: "Save Changes" }));
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
@@ -929,7 +932,9 @@ describe("EditAutoRouterModal deployment affinity", () => {
     renderWithStoredConfig({ ...STORED_CONFIG, modality_routing: true });
 
     openAutoRouterAdvanced("Modality Routing");
-    await user.click(await screen.findByRole("switch", { name: "Override session pin for image requests" }));
+    const override = await screen.findByRole("switch", { name: "Override session pin for image requests" });
+    // 只推进配置编辑后的异步检查，保存操作仍由用户交互触发。
+    await renderWithSettledAvailability(() => fireEvent.click(override));
 
     await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -1489,10 +1494,13 @@ describe("EditAutoRouterModal prompt compression", () => {
 
   it("preserves a stored different-compression choice through an untouched open-and-save", async () => {
     const user = userEvent.setup();
-    renderWithStoredCompression({
-      auto_router_routing_compression: "headroom-a",
-      auto_router_model_compression: "none",
-    });
+    // 先完成挂载后的配置水合和可用性检查，再验证原样保存。
+    await renderWithSettledAvailability(() =>
+      renderWithStoredCompression({
+        auto_router_routing_compression: "headroom-a",
+        auto_router_model_compression: "none",
+      }),
+    );
 
     await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled());
     await user.click(await screen.findByRole("button", { name: /save changes/i }));

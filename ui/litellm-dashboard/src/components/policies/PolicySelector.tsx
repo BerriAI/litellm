@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useEffect, useState } from "react";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { Policy } from "./types";
@@ -52,6 +53,7 @@ const PolicySelector: React.FC<PolicySelectorProps> = ({
   disabled,
   onPoliciesLoaded,
 }) => {
+  const { t } = useLanguage();
   const canViewPolicies = useCan("viewPolicies");
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(false);
@@ -90,7 +92,7 @@ const PolicySelector: React.FC<PolicySelectorProps> = ({
       <MultiSelect
         disabled={disabled}
         placeholder={
-          disabled ? "Setting policies is a premium feature." : "Select policies (production or published versions)"
+          disabled ? "Setting policies is a premium feature." : t("Select policies (production or published versions)")
         }
         onValueChange={handlePolicyChange}
         value={value}

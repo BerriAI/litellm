@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState } from "react";
 import { ArrowRight, Sparkles, X } from "lucide-react";
 
@@ -9,6 +10,7 @@ import { Button } from "@/components/ui/button";
 const STORAGE_KEY = "hideDecisionModelsBanner";
 
 const DecisionModelsBanner: React.FC = () => {
+  const { t } = useLanguage();
   const [dismissed, setDismissed] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem(STORAGE_KEY) === "true";
@@ -26,12 +28,14 @@ const DecisionModelsBanner: React.FC = () => {
         <Sparkles className="size-4 text-muted-foreground" />
       </div>
       <div className="min-w-0 flex-1">
-        <h4 className="m-0 text-sm font-semibold text-foreground">Decision models are now supported</h4>
+        <h4 className="m-0 text-sm font-semibold text-foreground">{t("Decision models are now supported")}</h4>
         <p className="m-0 mt-0.5 text-xs text-muted-foreground">
-          Call them at <code>/v1/decisions</code> or <code>/v1/systemone</code>, or try them in the Decisions
-          playground.{" "}
+          {t("Call them at {decisions} or {systemone}, or try them in the Decisions playground.", {
+            decisions: "/v1/decisions",
+            systemone: "/v1/systemone",
+          })}{" "}
           <a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
-            How to call them
+            {t("How to call them")}
           </a>
         </p>
       </div>
@@ -42,7 +46,7 @@ const DecisionModelsBanner: React.FC = () => {
         role="link"
         render={<a href={DECISIONS_PROVIDERS_DOCS_URL} target="_blank" rel="noopener noreferrer" />}
       >
-        Supported providers
+        {t("Supported providers")}
       </Button>
       <Button
         className="shrink-0"
@@ -50,7 +54,7 @@ const DecisionModelsBanner: React.FC = () => {
         role="link"
         render={<a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} />}
       >
-        Try decision models
+        {t("Try decision models")}
         <ArrowRight />
       </Button>
       <Button
@@ -62,7 +66,7 @@ const DecisionModelsBanner: React.FC = () => {
           localStorage.setItem(STORAGE_KEY, "true");
         }}
         className="shrink-0"
-        aria-label="Dismiss banner"
+        aria-label={t("Dismiss banner")}
       >
         <X />
       </Button>

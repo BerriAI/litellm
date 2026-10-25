@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { CircleHelp } from "lucide-react";
 
@@ -75,6 +76,7 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
   "aria-invalid": ariaInvalid,
   "aria-describedby": ariaDescribedBy,
 }) => {
+  const { t } = useLanguage();
   const controlId = id ?? `rate-limit-type-${name}`;
   const options = rateLimitTypeOptions(type);
 
@@ -98,7 +100,7 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
         disabled={disabled}
       >
         <SelectTrigger id={controlId} className="w-full" aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
-          <SelectValue placeholder="Select rate limit type">
+          <SelectValue placeholder={t("Select rate limit type")}>
             {(selected: string | null) =>
               selected === null ? "Select rate limit type" : plainLabels[selected] ?? selected
             }

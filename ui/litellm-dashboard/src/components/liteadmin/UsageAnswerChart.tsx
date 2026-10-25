@@ -1,9 +1,11 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { BarChart } from "@/components/shared/charts/bar_chart";
 import { LineChart } from "@/components/shared/charts/line_chart";
 import { STACKED_USAGE_PALETTE } from "@/components/shared/charts/StackedUsageChart";
 import { formatUsageChartValue, type UsageChart } from "./usageChart";
 
 export function UsageAnswerChart({ chart }: { chart: UsageChart }) {
+  const { t } = useLanguage();
   const formatValue = (value: number) => formatUsageChartValue(value, chart.unit);
   const unavailable = chart.data.filter((point) => point.value == null).map((point) => point.label);
   const data = chart.data.map((point) => ({ label: point.label, [chart.unit]: point.value }));
@@ -51,10 +53,10 @@ export function UsageAnswerChart({ chart }: { chart: UsageChart }) {
           className="h-40"
         />
       )}
-      <table className="sr-only" aria-label={`${chart.title} values`}>
+      <table className="sr-only" aria-label={t("{title} values", { title: String(chart.title) })}>
         <thead>
           <tr>
-            <th scope="col">Category</th>
+            <th scope="col">{t("Category")}</th>
             <th scope="col">{chart.unit}</th>
           </tr>
         </thead>

@@ -12,6 +12,8 @@ import { Profiler } from "react";
 import UserInfoView from "./user_info_view";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import type { AutoRouterBenchmarksResponse } from "@/app/(dashboard)/cost-optimization/_components/autoRouterBenchmarks";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
 
 const mockTeamMemberAddCall = vi.fn();
 const mockTeamMemberDeleteCall = vi.fn();
@@ -162,6 +164,27 @@ describe("UserInfoView add-to-team form", () => {
         model_max_budget: { "gpt-4": { budget_limit: 5, time_period: "30d" } },
       });
       mockUserUpdateUserCall.mockResolvedValue({});
+    });
+
+    // 语言切换不重新加载用户数据，也不重置编辑器的未保存字段。
+    it("切换语言保留用户别名草稿且不重新请求或提交用户数据", async () => {
+      localStorage.clear();
+      const user = setup();
+      render(
+        <LanguageProvider defaultLanguage="en" userId="user-test" storageScope="test">
+          <LanguageSelector />
+          <UserInfoView {...budgetProps} />
+        </LanguageProvider>,
+      );
+      await openEditor(user);
+      fireEvent.change(screen.getByRole("textbox", { name: "User Alias" }), {
+        target: { value: "Home Settings, untouched alias" },
+      });
+      await user.selectOptions(screen.getByRole("combobox", { name: "Interface language" }), "zh-CN");
+      expect(screen.getByRole("textbox", { name: "用户别名" })).toHaveValue("Home Settings, untouched alias");
+      expect(mockUserGetInfoV2).toHaveBeenCalledTimes(1);
+      expect(mockTeamInfoCall).toHaveBeenCalledTimes(2);
+      expect(mockUserUpdateUserCall).not.toHaveBeenCalled();
     });
 
     it("shows the saved cap, not the pre-save one, when the form is reopened", async () => {

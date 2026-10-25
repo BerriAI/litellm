@@ -2,6 +2,7 @@
 import React, { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { OnboardingForm } from "./OnboardingForm";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 function OnboardingContent() {
   const searchParams = useSearchParams()!;
@@ -11,8 +12,9 @@ function OnboardingContent() {
 }
 
 export default function Onboarding() {
+  const { t } = useLanguage();
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">{t("Loading...")}</div>}>
       <OnboardingContent />
     </Suspense>
   );

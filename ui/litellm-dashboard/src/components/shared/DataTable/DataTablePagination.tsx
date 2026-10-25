@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,7 @@ export function DataTablePagination({
   isLoading = false,
   className,
 }: DataTablePaginationProps) {
+  const { t } = useLanguage();
   const pageCount = pageSize > 0 ? Math.ceil(rowCount / pageSize) : 0;
   const start = rowCount === 0 ? 0 : page * pageSize + 1;
   const end = Math.min((page + 1) * pageSize, rowCount);
@@ -42,7 +44,7 @@ export function DataTablePagination({
       className={cn("flex flex-wrap items-center justify-between gap-4 px-4 py-2.5", className)}
     >
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <span>Rows per page</span>
+        <span>{t("Rows per page")}</span>
         <Select
           value={String(pageSize)}
           onValueChange={(value) => {
@@ -66,17 +68,17 @@ export function DataTablePagination({
 
       <div data-slot="table-pagination-summary" className="flex items-center gap-4">
         <span data-testid="pagination-range" className="text-sm text-muted-foreground tabular-nums">
-          {rowCount === 0 ? "No results" : `Showing ${start}-${end} of ${rowCount}`}
+          {rowCount === 0 ? t("No results") : t("Showing {start}-{end} of {total}", { start, end, total: rowCount })}
         </span>
         <span data-testid="pagination-page" className="text-sm text-muted-foreground tabular-nums">
-          Page {page + 1} of {Math.max(pageCount, 1)}
+          {t("Page {page} of {total}", { page: page + 1, total: Math.max(pageCount, 1) })}
         </span>
         <div className="flex items-center gap-1">
           <Button
             variant="outline"
             size="icon-sm"
             data-testid="pagination-first"
-            aria-label="Go to first page"
+            aria-label={t("Go to first page")}
             disabled={!canPrev}
             onClick={() => onPageChange(0)}
           >
@@ -86,7 +88,7 @@ export function DataTablePagination({
             variant="outline"
             size="icon-sm"
             data-testid="pagination-prev"
-            aria-label="Go to previous page"
+            aria-label={t("Go to previous page")}
             disabled={!canPrev}
             onClick={() => onPageChange(page - 1)}
           >
@@ -96,7 +98,7 @@ export function DataTablePagination({
             variant="outline"
             size="icon-sm"
             data-testid="pagination-next"
-            aria-label="Go to next page"
+            aria-label={t("Go to next page")}
             disabled={!canNext}
             onClick={() => onPageChange(page + 1)}
           >
@@ -106,7 +108,7 @@ export function DataTablePagination({
             variant="outline"
             size="icon-sm"
             data-testid="pagination-last"
-            aria-label="Go to last page"
+            aria-label={t("Go to last page")}
             disabled={!canNext}
             onClick={() => onPageChange(lastPage)}
           >

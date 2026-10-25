@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 
 interface VariableWarningProps {
@@ -6,6 +7,7 @@ interface VariableWarningProps {
 }
 
 const VariableWarning: React.FC<VariableWarningProps> = ({ extractedVariables, variables }) => {
+  const { t } = useLanguage();
   const missingVariables = extractedVariables.filter(
     (varName) => !variables[varName] || variables[varName].trim() === "",
   );
@@ -19,9 +21,9 @@ const VariableWarning: React.FC<VariableWarningProps> = ({ extractedVariables, v
       <div className="flex items-start gap-2">
         <span className="text-warning text-sm">⚠️</span>
         <div className="flex-1">
-          <p className="text-sm text-warning font-medium mb-1">Please fill in all template variables above</p>
+          <p className="text-sm text-warning font-medium mb-1">{t("Please fill in all template variables above")}</p>
           <p className="text-xs text-warning">
-            Missing: {missingVariables.map((varName) => `{{${varName}}}`).join(", ")}
+            {t("Missing:")} {missingVariables.map((varName) => `{{${varName}}}`).join(", ")}
           </p>
         </div>
       </div>

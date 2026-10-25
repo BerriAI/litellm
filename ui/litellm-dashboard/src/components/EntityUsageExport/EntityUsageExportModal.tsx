@@ -8,6 +8,7 @@ import ExportSummary from "./ExportSummary";
 import ExportTypeSelector from "./ExportTypeSelector";
 import type { EntityUsageExportModalProps, ExportFormat, ExportType } from "./types";
 import { downloadBlob, exportFilename } from "./utils";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   isOpen,
@@ -18,23 +19,30 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   selectedFilters = [],
   customTitle,
 }) => {
+  const { t } = useLanguage();
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
   const [exportType, setExportType] = useState<ExportType>("daily");
   const [isExporting, setIsExporting] = useState(false);
 
-  const entityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
-  const modalTitle = customTitle || `Export ${entityLabel} Usage`;
+  // 实体来自固定枚举；调用方自定义标题不作为翻译键。
+  const entityLabel = t(entityType.charAt(0).toUpperCase() + entityType.slice(1));
+  const modalTitle = customTitle || t("Export {entity} Usage", { entity: entityLabel });
 
   const handleExport = async () => {
     setIsExporting(true);
     try {
       const blob = await onExport(exportType, exportFormat);
       downloadBlob(blob, exportFilename(entityType, exportType, exportFormat, dateRange));
-      toast.success(`${entityLabel} usage data exported successfully as ${exportFormat.toUpperCase()}`);
+      toast.success(
+        t("{entity} usage data exported successfully as {format}", {
+          entity: entityLabel,
+          format: exportFormat.toUpperCase(),
+        }),
+      );
       onClose();
     } catch (error) {
       console.error("Error exporting data:", error);
-      toast.fromError("Failed to export data");
+      toast.fromError(t("Failed to export data"));
     } finally {
       setIsExporting(false);
     }
@@ -57,11 +65,11 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
           <ExportFormatSelector value={exportFormat} onChange={setExportFormat} />
           <div className="flex items-center justify-end gap-2 pt-4 border-t">
             <Button variant="outline" onClick={onClose} disabled={isExporting}>
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button onClick={handleExport} disabled={isExporting}>
               {isExporting && <Loader2 className="animate-spin" />}
-              {isExporting ? "Exporting..." : `Export ${exportFormat.toUpperCase()}`}
+              {isExporting ? t("Exporting...") : t("Export {format}", { format: exportFormat.toUpperCase() })}
             </Button>
           </div>
         </div>

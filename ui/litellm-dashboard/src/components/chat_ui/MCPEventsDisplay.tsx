@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { MCPEvent } from "@/components/mcp_tools/types";
@@ -58,6 +59,7 @@ interface MCPEventsPanelsProps {
 }
 
 function MCPEventsPanels({ toolsEvent, mcpCallEvents }: MCPEventsPanelsProps) {
+  const { t } = useLanguage();
   const [openPanels, setOpenPanels] = useState<Record<string, boolean>>({});
 
   const toggleKey = (key: string, open: boolean) => {
@@ -72,7 +74,7 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents }: MCPEventsPanelsProps) {
         {toolsEvent && (
           <MCPEventPanel
             panelKey="list-tools"
-            title="List tools"
+            title={t("List tools")}
             open={openPanels["list-tools"] ?? false}
             onOpenChange={(open) => toggleKey("list-tools", open)}
           >
@@ -95,13 +97,13 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents }: MCPEventsPanelsProps) {
             <MCPEventPanel
               key={key}
               panelKey={key}
-              title={callEvent.item?.name || "Tool call"}
+              title={callEvent.item?.name || t("Tool call")}
               open={openPanels[key] ?? true}
               onOpenChange={(open) => toggleKey(key, open)}
             >
               <div>
                 <div className="relative z-raised mb-3 bg-card last:mb-0">
-                  <div className="mb-1 text-[13px] font-medium text-muted-foreground">Request</div>
+                  <div className="mb-1 text-[13px] font-medium text-muted-foreground">{t("Request")}</div>
                   <div className="rounded-md border border-border bg-muted p-2 text-xs">
                     {callEvent.item?.arguments && (
                       <pre className="m-0 whitespace-pre-wrap break-words font-mono text-foreground">
@@ -116,13 +118,13 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents }: MCPEventsPanelsProps) {
                     <span className="mr-1.5 font-bold text-success" aria-hidden="true">
                       ✓
                     </span>
-                    Approved
+                    {t("Approved")}
                   </div>
                 </div>
 
                 {callEvent.item?.output && (
                   <div className="relative z-raised mb-3 bg-card last:mb-0">
-                    <div className="mb-1 text-[13px] font-medium text-muted-foreground">Response</div>
+                    <div className="mb-1 text-[13px] font-medium text-muted-foreground">{t("Response")}</div>
                     <div className="whitespace-pre-wrap font-mono text-[13px] leading-normal text-foreground">
                       {callEvent.item.output}
                     </div>

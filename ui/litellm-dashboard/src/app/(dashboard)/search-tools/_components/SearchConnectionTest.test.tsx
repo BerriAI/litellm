@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import SearchConnectionTest from "./SearchConnectionTest";
 import * as networking from "@/components/networking";
 import { toast } from "@/lib/toast";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("@/components/networking", () => ({
   testSearchToolConnection: vi.fn(),
@@ -17,6 +18,22 @@ const defaultProps = {
 describe("SearchConnectionTest", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("切换语言只更新结果文案，不重复执行连通测试", async () => {
+    vi.mocked(networking.testSearchToolConnection).mockResolvedValue({ status: "success", message: "ok" });
+    const onTestComplete = vi.fn();
+    const tree = (language: string) => (
+      <LanguageProvider defaultLanguage={language} userId="search-test" storageScope="language-effects">
+        <SearchConnectionTest {...defaultProps} onTestComplete={onTestComplete} />
+      </LanguageProvider>
+    );
+    const view = render(tree("en"));
+    await screen.findByText(/Connection to tavily successful/i);
+    view.rerender(tree("zh-CN"));
+    await screen.findByRole("link", { name: "查看搜索文档" });
+    expect(networking.testSearchToolConnection).toHaveBeenCalledTimes(1);
+    expect(onTestComplete).toHaveBeenCalledTimes(1);
   });
 
   it("passes the access token and params to the connection test", async () => {

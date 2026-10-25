@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { AlertTriangle, CircleCheck, Copy, ExternalLink, Info, LoaderCircle } from "lucide-react";
 
@@ -25,6 +26,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
   onClose: _onClose,
   onTestComplete,
 }) => {
+  const { t } = useLanguage();
   const [error, setError] = React.useState<Error | string | null>(null);
   const [rawResponse, setRawResponse] = React.useState<any>(null);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -41,7 +43,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     try {
-      const result = await prepareModelAddRequest(formValues, accessToken, null);
+      const result = await prepareModelAddRequest(formValues, accessToken, null, t);
 
       if (!result?.length) {
         setError(
@@ -58,7 +60,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
       const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj, modelInfoObj?.mode);
 
       if (response.status === "success") {
-        toast.success("Connection test successful!");
+        toast.success(t("Connection test successful!"));
         setError(null);
         setIsSuccess(true);
       } else {
@@ -141,13 +143,13 @@ ${formattedBody}
       {isLoading ? (
         <div aria-busy="true" className="flex flex-col items-center justify-center gap-4 px-5 py-8 text-center">
           <LoaderCircle className="size-8 animate-spin text-primary" />
-          <p className="text-base">Testing connection to {modelName}...</p>
+          <p className="text-base">{t("Testing connection to {model}...", { model: modelName })}</p>
         </div>
       ) : isSuccess ? (
         <div className="flex items-center justify-center gap-2.5 px-5 py-8">
           <CircleCheck className="size-6 text-primary" />
           <p data-testid="connection-success-msg" className="text-lg font-medium">
-            Connection to {modelName} successful!
+            {t("Connection to {model} successful!", { model: modelName })}
           </p>
         </div>
       ) : (
@@ -155,12 +157,12 @@ ${formattedBody}
           <div className="mb-5 flex items-center gap-3">
             <AlertTriangle className="size-6 text-destructive" />
             <p data-testid="connection-failure-msg" className="text-lg font-medium text-destructive">
-              Connection to {modelName} failed
+              {t("Connection to {model} failed", { model: modelName })}
             </p>
           </div>
 
           <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/10 p-4 shadow-xs">
-            <p className="mb-2 font-medium">Error:</p>
+            <p className="mb-2 font-medium">{t("Error:")}</p>
             <p className="text-sm leading-relaxed text-destructive">{errorMessage}</p>
 
             {error && (
@@ -170,14 +172,14 @@ ${formattedBody}
                 className="mt-3 h-auto px-0"
                 onClick={() => setShowDetails((visible) => !visible)}
               >
-                {showDetails ? "Hide Details" : "Show Details"}
+                {showDetails ? t("Hide Details") : t("Show Details")}
               </Button>
             )}
           </div>
 
           {showDetails && (
             <div className="mb-5">
-              <p className="mb-2 text-sm font-medium">Troubleshooting Details</p>
+              <p className="mb-2 text-sm font-medium">{t("Troubleshooting Details")}</p>
               <pre className="max-h-52 overflow-auto rounded-lg border bg-muted/50 p-4 text-xs leading-relaxed">
                 {typeof error === "string" ? error : JSON.stringify(error, null, 2)}
               </pre>
@@ -185,9 +187,9 @@ ${formattedBody}
           )}
 
           <div>
-            <p className="mb-2 text-sm font-medium">API Request</p>
+            <p className="mb-2 text-sm font-medium">{t("API Request")}</p>
             <pre className="max-h-64 overflow-auto rounded-lg border bg-muted/50 p-4 text-xs leading-relaxed">
-              {curlCommand || "No request data available"}
+              {curlCommand || t("No request data available")}
             </pre>
             <Button
               type="button"
@@ -195,11 +197,11 @@ ${formattedBody}
               className="mt-2"
               onClick={() => {
                 navigator.clipboard.writeText(curlCommand || "");
-                toast.success("Copied to clipboard");
+                toast.success(t("Copied to clipboard"));
               }}
             >
               <Copy data-icon="inline-start" />
-              Copy to Clipboard
+              {t("Copy to Clipboard")}
             </Button>
           </div>
         </div>
@@ -213,7 +215,7 @@ ${formattedBody}
         render={<a href="https://docs.litellm.ai/docs/providers" target="_blank" rel="noopener noreferrer" />}
       >
         <Info data-icon="inline-start" />
-        View Documentation
+        {t("View Documentation")}
         <ExternalLink data-icon="inline-end" />
       </Button>
     </div>

@@ -33,5 +33,6 @@ export const cardSummary = (post: BlogPost): string =>
 export const cardProvider = (post: BlogPost): string | undefined =>
   post.tags.find((tag) => getProviderLogoAndName(tag).logo !== "");
 
-export const formatPublishedOn = (isoDate: string): string =>
-  new Date(`${isoDate}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+// 社区文章保留原文，仅让发布时间跟随界面语言
+export const formatPublishedOn = (isoDate: string, language = "en-US"): string =>
+  new Date(`${isoDate}T00:00:00`).toLocaleDateString(language, { month: "short", day: "numeric" });

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
@@ -14,6 +15,7 @@ interface Props {
 }
 
 const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onChange }) => {
+  const { t } = useLanguage();
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [loadingServers, setLoadingServers] = useState(true);
   const [togglingOn, setTogglingOn] = useState<Set<string>>(new Set());
@@ -56,12 +58,16 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
     try {
       const result = await listMCPTools(accessToken, serverName);
       if (result?.error) {
-        toast.warning(`Could not load tools for ${serverName} \u2014 it will be excluded from this message.`);
+        toast.warning(
+          t("Could not load tools for {server} — it will be excluded from this message.", { server: serverName }),
+        );
         return;
       }
       onChange([...selectedServers, serverName]);
     } catch {
-      toast.warning(`Could not load tools for ${serverName} \u2014 it will be excluded from this message.`);
+      toast.warning(
+        t("Could not load tools for {server} — it will be excluded from this message.", { server: serverName }),
+      );
     } finally {
       setTogglingOn((prev) => {
         const next = new Set(prev);
@@ -89,7 +95,7 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
           ))}
         </div>
       ) : servers.length === 0 ? (
-        <div className="px-3 py-4 text-muted-foreground text-[13px] text-center">No MCP servers configured</div>
+        <div className="px-3 py-4 text-muted-foreground text-[13px] text-center">{t("No MCP servers configured")}</div>
       ) : (
         servers.map((server) => {
           const name = server.server_name ?? server.alias ?? server.server_id;

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronRight } from "lucide-react";
@@ -82,17 +83,21 @@ export const ForecastSolverModels = ({
   fastModeByModel,
   additionalPoolsOnly = false,
 }: Props & { fastModeByModel: Record<string, boolean>; additionalPoolsOnly?: boolean }) => {
+  const { t } = useLanguage();
   const id = React.useId();
   const names = forecastTierNames(value);
   const additionalRows =
     value.classifier_type === "capability"
       ? activeTierRows(value)
           .filter((row) => !names.includes(row.id) && row.models.length > 0)
-          .map((row) => ({ tier: row.id, label: `${tierRowLabel(row, value.tier_labels)} routing pool` }))
+          .map((row) => ({
+            tier: row.id,
+            label: t("{tier} routing pool", { tier: tierRowLabel(row, value.tier_labels) }),
+          }))
       : [];
   const rows = additionalPoolsOnly
     ? additionalRows
-    : names.map((tier, index) => ({ tier, label: index === 0 ? "Efficient solver" : "Capable solver" }));
+    : names.map((tier, index) => ({ tier, label: index === 0 ? t("Efficient solver") : t("Capable solver") }));
   if (rows.length === 0) return null;
   return (
     <div className="rounded-lg border p-4 space-y-4">
@@ -110,7 +115,7 @@ export const ForecastSolverModels = ({
                 inputId={`${id}-${tier}`}
                 value={models[0] ?? ""}
                 aria-label={label}
-                placeholder={`Select ${label.toLowerCase()}`}
+                placeholder={t("Select {label}", { label: label.toLowerCase() })}
                 onValueChange={(model) => setModels(model ? [model] : [])}
               />
             ) : (
@@ -119,7 +124,7 @@ export const ForecastSolverModels = ({
                 id={`${id}-${tier}`}
                 value={models}
                 onValueChange={setModels}
-                placeholder={`Select ${label.toLowerCase()} models`}
+                placeholder={t("Select {label} models", { label: label.toLowerCase() })}
               />
             )}
             <TierModelEffortRows
@@ -151,7 +156,7 @@ export const ForecastSolverModels = ({
       })}
       {!additionalPoolsOnly && (
         <p className="text-sm text-muted-foreground">
-          Invalid forecasts and classifier failures route to the capable solver
+          {t("Invalid forecasts and classifier failures route to the capable solver")}
         </p>
       )}
     </div>
@@ -168,28 +173,32 @@ const CalibrationFields = ({
   bounded?: boolean;
   value: { slope: number; intercept: number };
   onChange: (value: { slope: number; intercept: number }) => void;
-}) => (
-  <div className="grid gap-3 sm:grid-cols-2">
-    <NumberField
-      label={`${label} slope`}
-      value={value.slope}
-      min={0}
-      max={bounded ? 20 : undefined}
-      onChange={(slope) => onChange({ ...value, slope })}
-    />
-    <NumberField
-      label={`${label} intercept`}
-      value={value.intercept}
-      min={bounded ? -20 : undefined}
-      max={bounded ? 20 : undefined}
-      onChange={(intercept) => onChange({ ...value, intercept })}
-    />
-  </div>
-);
+}) => {
+  const { t } = useLanguage();
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <NumberField
+        label={t("{label} slope", { label })}
+        value={value.slope}
+        min={0}
+        max={bounded ? 20 : undefined}
+        onChange={(slope) => onChange({ ...value, slope })}
+      />
+      <NumberField
+        label={t("{label} intercept", { label })}
+        value={value.intercept}
+        min={bounded ? -20 : undefined}
+        max={bounded ? 20 : undefined}
+        onChange={(intercept) => onChange({ ...value, intercept })}
+      />
+    </div>
+  );
+};
 
 const emptyCoefficients = () => ({ slope: Number.NaN, intercept: Number.NaN });
 
 const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptionsByModel, section = "all" }: Props) => {
+  const { t } = useLanguage();
   const id = React.useId();
   const isCapability = value.classifier_type === "capability";
   const capability = value.capability_classifier_config ?? newCapabilitySettings();
@@ -205,24 +214,26 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
       updateCapability({ ...capability, calibration: { ...capability.calibration, version } });
     if (!isCapability && fuse.calibration) updateFuse({ ...fuse, calibration: { ...fuse.calibration, version } });
   };
-  const error = getForecastConfigError(value);
+  const error = getForecastConfigError(value, t);
   return (
     <div className="mt-4 space-y-4">
       <p className="text-sm text-muted-foreground">
         {isCapability
-          ? "Forecasts whether the efficient solver can complete the task using the bundled capability card"
-          : "Forecasts success for both solvers and selects efficient when the estimated quality gap is within your allowance"}
+          ? t("Forecasts whether the efficient solver can complete the task using the bundled capability card")
+          : t(
+              "Forecasts success for both solvers and selects efficient when the estimated quality gap is within your allowance",
+            )}
       </p>
       {section === "all" && (
         <>
           <div className="space-y-1">
-            <Label htmlFor={`${id}-judge`}>Judge model</Label>
+            <Label htmlFor={`${id}-judge`}>{t("Judge model")}</Label>
             <SearchSelect
               inputId={`${id}-judge`}
-              aria-label="Judge model"
+              aria-label={t("Judge model")}
               options={modelOptions}
               value={llm.model}
-              placeholder="Select the judge model"
+              placeholder={t("Select the judge model")}
               onValueChange={(model) => {
                 if (model === llm.model) return;
                 onChange({
@@ -239,11 +250,11 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
           {isCapability ? (
             <>
               <NumberField
-                label="Solve probability threshold"
+                label={t("Solve probability threshold")}
                 value={capability.base_threshold}
                 min={0}
                 max={1}
-                help="Minimum estimated chance of whole-task success required to use the efficient solver"
+                help={t("Minimum estimated chance of whole-task success required to use the efficient solver")}
                 onChange={(base_threshold) => updateCapability({ ...capability, base_threshold })}
               />
             </>
@@ -251,11 +262,13 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
             <>
               <FuseProfilePresets value={fuse} onChange={updateFuse} />
               <NumberField
-                label="Maximum quality gap"
+                label={t("Maximum quality gap")}
                 value={fuse.max_quality_gap}
                 min={0}
                 max={1}
-                help="Allowed difference between capable and efficient success probabilities, from 0 to 1. Tune on held-out tasks from your workload; this estimate is not a measured quality guarantee. A gap of 0 still selects efficient on tied or higher forecasts. Route directly to one model to avoid judging when you do not want model selection"
+                help={t(
+                  "Allowed difference between capable and efficient success probabilities, from 0 to 1. Tune on held-out tasks from your workload; this estimate is not a measured quality guarantee. A gap of 0 still selects efficient on tied or higher forecasts. Route directly to one model to avoid judging when you do not want model selection",
+                )}
                 onChange={(max_quality_gap) => updateFuse({ ...fuse, max_quality_gap })}
               />
             </>
@@ -270,7 +283,7 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
           {section === "all" && (
             <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left font-medium">
               <ChevronRight className="size-4 transition-transform group-data-panel-open:rotate-90" />
-              Classifier options
+              {t("Classifier options")}
             </CollapsibleTrigger>
           )}
           <CollapsibleContent className="space-y-4 px-4 pb-4">
@@ -283,11 +296,11 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
               }
             />
             <NumberField
-              label="Timeout (ms)"
+              label={t("Timeout (ms)")}
               min={1}
               step={1}
               value={llm.timeout_ms}
-              help="Allow enough time for the judge to produce its forecast"
+              help={t("Allow enough time for the judge to produce its forecast")}
               onChange={(timeout_ms) => onChange({ ...value, classifier_llm_config: { ...llm, timeout_ms } })}
             />
             <ClassifierCircuitBreakerConfig
@@ -300,31 +313,33 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
             />
             {isCapability && (
               <NumberField
-                label="Capability boundary step"
+                label={t("Capability boundary step")}
                 value={capability.threshold_step ?? 0}
                 min={0}
                 max={0.5}
-                help="Added once for uncertain or unmatched tasks and twice for unsupported tasks; the final threshold cannot exceed 1"
+                help={t(
+                  "Added once for uncertain or unmatched tasks and twice for unsupported tasks; the final threshold cannot exceed 1",
+                )}
                 onChange={(threshold_step) => updateCapability({ ...capability, threshold_step })}
               />
             )}
             <NumberField
-              label="Classifier output token limit"
+              label={t("Classifier output token limit")}
               min={1}
               step={1}
               value={config.max_output_tokens ?? (isCapability ? 4096 : 1024)}
               onChange={(max_output_tokens) => updateTransport({ max_output_tokens })}
             />
             <div className="space-y-1">
-              <Label htmlFor={`${id}-format`}>Forecast response format</Label>
+              <Label htmlFor={`${id}-format`}>{t("Forecast response format")}</Label>
               <SearchSelect
                 inputId={`${id}-format`}
-                aria-label="Forecast response format"
+                aria-label={t("Forecast response format")}
                 value={config.response_format ?? "json_schema"}
                 allowClear={false}
                 options={[
-                  { value: "json_schema", label: "Strict JSON schema" },
-                  { value: "json_object", label: "JSON object (for judges without strict schema support)" },
+                  { value: "json_schema", label: t("Strict JSON schema") },
+                  { value: "json_object", label: t("JSON object (for judges without strict schema support)") },
                 ]}
                 onValueChange={(response_format) => {
                   if (response_format === "json_schema" || response_format === "json_object")
@@ -355,14 +370,14 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
                         })
                   }
                 />
-                Use fitted calibration
+                {t("Use fitted calibration")}
               </Label>
               <p className="text-xs text-muted-foreground">
-                Optional coefficients fitted for your judge, solvers, and harness. Leave off to use raw forecasts
+                {t("Optional coefficients fitted for your judge, solvers, and harness. Leave off to use raw forecasts")}
               </p>
               {config.calibration && (
                 <div className="space-y-1">
-                  <Label htmlFor={`${id}-version`}>Calibration version</Label>
+                  <Label htmlFor={`${id}-version`}>{t("Calibration version")}</Label>
                   <Input
                     id={`${id}-version`}
                     value={config.calibration.version}
@@ -373,7 +388,7 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
               )}
               {isCapability && capability.calibration && (
                 <CalibrationFields
-                  label="Efficient"
+                  label={t("Efficient")}
                   bounded
                   value={capability.calibration}
                   onChange={(next) =>
@@ -389,7 +404,7 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
                 (["efficient", "capable"] as const).map((role) => (
                   <CalibrationFields
                     key={role}
-                    label={role === "efficient" ? "Efficient" : "Capable"}
+                    label={role === "efficient" ? t("Efficient") : t("Capable")}
                     value={fuse.calibration![role]}
                     onChange={(next) => {
                       if (fuse.calibration) updateFuse({ ...fuse, calibration: { ...fuse.calibration, [role]: next } });
@@ -403,16 +418,16 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
       {section === "all" && (
         <>
           <div className="space-y-1">
-            <Label htmlFor={`${id}-frequency`}>How often to classify</Label>
+            <Label htmlFor={`${id}-frequency`}>{t("How often to classify")}</Label>
             <SearchSelect
               inputId={`${id}-frequency`}
-              aria-label="How often to classify"
+              aria-label={t("How often to classify")}
               value={classificationFrequency(value)}
               allowClear={false}
               options={[
-                { value: "every_request", label: "Every request" },
-                { value: "user_turn", label: "Every new user message" },
-                { value: "session", label: "Once per session" },
+                { value: "every_request", label: t("Every request") },
+                { value: "user_turn", label: t("Every new user message") },
+                { value: "session", label: t("Once per session") },
               ]}
               onValueChange={(frequency) => {
                 if (frequency) onChange(withClassificationFrequency(value, frequency as ClassificationFrequency));
@@ -422,7 +437,7 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
         </>
       )}
       <p className="text-xs text-muted-foreground">
-        The classifier uses its bundled prompt and always falls back to the capable solver
+        {t("The classifier uses its bundled prompt and always falls back to the capable solver")}
       </p>
       {section !== "advanced" && error && (
         <p role="alert" className="text-sm text-destructive">

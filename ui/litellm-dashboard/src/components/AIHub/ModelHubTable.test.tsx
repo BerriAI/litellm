@@ -5,6 +5,7 @@ import type { MCPServerData } from "./MCPHubTableColumns";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
 import ModelHubTable from "./ModelHubTable";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 const mockUseUISettings = vi.hoisted(() => vi.fn());
 const mockGetCookie = vi.hoisted(() => vi.fn());
@@ -373,6 +374,54 @@ describe("ModelHubTable", () => {
   });
 
   describe("model details usage example", () => {
+    it.each([
+      ["dashboard", "Home"],
+      ["dashboard", "Vision"],
+      ["chat", "Home"],
+      ["chat", "Vision"],
+    ] as const)("AI Hub %s 详情保留扩展模式 %s 和能力原文", async (variant, mode) => {
+      localStorage.clear();
+      const model = {
+        model_group: "custom-model",
+        providers: ["openai"],
+        mode,
+        supports_vision: true,
+        supports_settings: true,
+      };
+      vi.mocked(networking.modelHubCall).mockResolvedValue({ data: [model] });
+      vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
+      vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+      mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+      const user = userEvent.setup();
+      const tree = (language: "zh-CN" | "en") => (
+        <LanguageProvider defaultLanguage={language} userId="hub-details" storageScope={`hub-details-${variant}`}>
+          <ModelHubTable
+            accessToken="test-token"
+            publicPage={false}
+            premiumUser={false}
+            userRole="Admin"
+            canOpenPlayground={false}
+            canAddModels={false}
+            variant={variant}
+          />
+        </LanguageProvider>
+      );
+      const view = renderWithProviders(tree("zh-CN"));
+      await user.click(await screen.findByRole("button", { name: /^custom-model/ }));
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText(mode, { exact: true })).toBeInTheDocument();
+      expect(within(dialog).getByText("Settings", { exact: true })).toBeInTheDocument();
+      expect(within(dialog).getByText("视觉", { exact: true })).toBeInTheDocument();
+      // 全站语言变化只更新固定文案，不能关闭详情或重新读取业务数据。
+      const requests = vi.mocked(networking.modelHubCall).mock.calls.length;
+      await act(async () => view.rerender(tree("en")));
+      expect(within(dialog).getAllByText(mode, { exact: true })).toHaveLength(mode === "Vision" ? 2 : 1);
+      expect(within(dialog).getByText("Settings", { exact: true })).toBeInTheDocument();
+      expect(within(dialog).getByText("Capabilities", { exact: true })).toBeInTheDocument();
+      expect(networking.modelHubCall).toHaveBeenCalledTimes(requests);
+    });
+
     const openDetails = async (
       model: { model_group: string; providers: string[]; mode: string },
       canOpenPlayground = true,

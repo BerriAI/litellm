@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, testQueryClient } from "@/../tests/test-utils";
 import { setServerRootPath } from "@/lib/serverRootPath";
 import ChatLayout from "./layout";
+import DashboardLanguageProvider from "@/contexts/DashboardLanguageProvider";
 
-const { router, route } = vi.hoisted(() => ({
+const { router, route, settings } = vi.hoisted(() => ({
   router: { push: vi.fn(), replace: vi.fn() },
   route: { pathname: "/ui/chat" },
+  settings: { defaultLanguage: "en" },
 }));
 
 vi.mock("next/navigation", () => ({
@@ -27,8 +29,13 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
-  useUISettings: () => ({ data: { values: { enable_chat_ui: true } }, isLoading: false }),
+  useUISettings: () => ({
+    data: { values: { enable_chat_ui: true, default_ui_language: settings.defaultLanguage } },
+    isLoading: false,
+  }),
 }));
+// 实际根布局的 AuthProvider 与 useAuthorized 返回同一账户。
+vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ userID: "chat-layout-user" }) }));
 
 const plugin = { name: "observability", display_name: "Observability", url: "https://plugin.example.com" };
 const originalLocation = Object.getOwnPropertyDescriptor(window, "location")!;
@@ -37,6 +44,7 @@ const assign = vi.fn();
 describe("Chat layout product navigation", () => {
   beforeEach(() => {
     route.pathname = "/ui/chat";
+    settings.defaultLanguage = "en";
     localStorage.clear();
     localStorage.setItem("litellm_plugin_mode", plugin.name);
     testQueryClient.clear();
@@ -134,4 +142,30 @@ describe("Chat layout product navigation", () => {
       }
     },
   );
+
+  it("沿用全站默认语言，并记住个人选择用于聊天导航", async () => {
+    settings.defaultLanguage = "zh-CN";
+    const user = userEvent.setup();
+    const view = renderWithProviders(
+      <DashboardLanguageProvider>
+        <ChatLayout>
+          <h1>Chat content</h1>
+        </ChatLayout>
+      </DashboardLanguageProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "打开聊天导航" }));
+    expect(screen.getByRole("button", { name: "新建对话" })).toBeVisible();
+    await user.selectOptions(screen.getByRole("combobox", { name: "界面语言" }), "en");
+    expect(screen.getByRole("button", { name: "New Chat" })).toBeVisible();
+    view.unmount();
+    renderWithProviders(
+      <DashboardLanguageProvider>
+        <ChatLayout>
+          <h1>Chat content</h1>
+        </ChatLayout>
+      </DashboardLanguageProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
+    expect(screen.getByRole("button", { name: "New Chat" })).toBeVisible();
+  });
 });

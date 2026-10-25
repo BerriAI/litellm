@@ -1,3 +1,5 @@
+import { useLanguage } from "@/contexts/LanguageContext";
+import type { Translate } from "@/i18n/language";
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,19 +15,46 @@ interface EmailSettingsProps {
   alerts: any[];
 }
 
-const REQUIRED_MARKER = <span className="text-destructive"> Required * </span>;
-
-const FIELD_HELP: Record<string, React.ReactNode> = {
-  SMTP_HOST: <>Enter the SMTP host address, e.g. `smtp.resend.com`{REQUIRED_MARKER}</>,
-  SMTP_PORT: <>Enter the SMTP port number, e.g. `587`{REQUIRED_MARKER}</>,
-  SMTP_USERNAME: <>Enter the SMTP username, e.g. `username`{REQUIRED_MARKER}</>,
-  SMTP_PASSWORD: REQUIRED_MARKER,
-  SMTP_SENDER_EMAIL: <>Enter the sender email address, e.g. `sender@berri.ai`{REQUIRED_MARKER}</>,
-  TEST_EMAIL_ADDRESS: <>Email Address to send `Test Email Alert` to. example: `info@berri.ai`{REQUIRED_MARKER}</>,
-  EMAIL_LOGO_URL: <>(Optional) Customize the Logo that appears in the email, pass a url to your logo</>,
-  EMAIL_SUPPORT_CONTACT: (
-    <>(Optional) Customize the support email address that appears in the email. Default is support@berri.ai</>
-  ),
+// 帮助文案按语言生成，环境变量名和输入值不变
+const fieldHelp = (t: Translate): Record<string, React.ReactNode> => {
+  const required = <span className="text-destructive"> {t("Required")} * </span>;
+  return {
+    SMTP_HOST: (
+      <>
+        {t("Enter the SMTP host address, e.g. `smtp.resend.com`")}
+        {required}
+      </>
+    ),
+    SMTP_PORT: (
+      <>
+        {t("Enter the SMTP port number, e.g. `587`")}
+        {required}
+      </>
+    ),
+    SMTP_USERNAME: (
+      <>
+        {t("Enter the SMTP username, e.g. `username`")}
+        {required}
+      </>
+    ),
+    SMTP_PASSWORD: required,
+    SMTP_SENDER_EMAIL: (
+      <>
+        {t("Enter the sender email address, e.g. `sender@berri.ai`")}
+        {required}
+      </>
+    ),
+    TEST_EMAIL_ADDRESS: (
+      <>
+        {t("Email Address to send `Test Email Alert` to. example: `info@berri.ai`")}
+        {required}
+      </>
+    ),
+    EMAIL_LOGO_URL: <>(Optional) Customize the Logo that appears in the email, pass a url to your logo</>,
+    EMAIL_SUPPORT_CONTACT: (
+      <>(Optional) Customize the support email address that appears in the email. Default is support@berri.ai</>
+    ),
+  };
 };
 
 const PREMIUM_ONLY_FIELDS = ["EMAIL_LOGO_URL", "EMAIL_SUPPORT_CONTACT"];
@@ -33,6 +62,8 @@ const PREMIUM_ONLY_FIELDS = ["EMAIL_LOGO_URL", "EMAIL_SUPPORT_CONTACT"];
 const SENSITIVE_FIELD_PATTERN = /(PASSWORD|SECRET|KEY|TOKEN)/i;
 
 const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser, alerts }) => {
+  const { t } = useLanguage();
+  const help = fieldHelp(t);
   const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
 
   const toggleFieldVisibility = (key: string) => {
@@ -78,7 +109,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
     };
     try {
       await setCallbacksCall(accessToken, payload);
-      toast.success("Email settings updated successfully");
+      toast.success(t("Email settings updated successfully"));
     } catch (error) {
       toast.fromError(error);
     }
@@ -91,7 +122,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
       </div>
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Email Server Settings</CardTitle>
+          <CardTitle className="text-base">{t("Email Server Settings")}</CardTitle>
           <p className="text-sm">
             <a
               href="https://docs.litellm.ai/docs/proxy/email"
@@ -99,7 +130,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
               rel="noreferrer"
               className="text-primary underline underline-offset-4"
             >
-              LiteLLM Docs: email alerts
+              {t("LiteLLM Docs: email alerts")}
             </a>
           </p>
         </CardHeader>
@@ -139,14 +170,14 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                             <InputGroupButton
                               size="icon-xs"
                               onClick={() => toggleFieldVisibility(key)}
-                              aria-label={isVisible ? "Hide credential" : "Show credential"}
+                              aria-label={isVisible ? t("Hide credential") : t("Show credential")}
                             >
                               {isVisible ? <EyeOff /> : <Eye />}
                             </InputGroupButton>
                           </InputGroupAddon>
                         )}
                       </InputGroup>
-                      <div className="text-xs text-muted-foreground italic">{FIELD_HELP[key]}</div>
+                      <div className="text-xs text-muted-foreground italic">{help[key]}</div>
                     </div>
                   );
                 })}
@@ -154,20 +185,20 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
             ))}
 
           <div className="mt-6 flex gap-2">
-            <Button onClick={() => handleSaveEmailSettings()}>Save Changes</Button>
+            <Button onClick={() => handleSaveEmailSettings()}>{t("Save Changes")}</Button>
             <Button
               variant="secondary"
               onClick={async () => {
                 if (!accessToken) return;
                 try {
                   await serviceHealthCheck(accessToken, "email");
-                  toast.success("Email test triggered. Check your configured email inbox/logs.");
+                  toast.success(t("Email test triggered. Check your configured email inbox/logs."));
                 } catch (error) {
                   toast.fromError(error);
                 }
               }}
             >
-              Test Email Alerts
+              {t("Test Email Alerts")}
             </Button>
           </div>
         </CardContent>

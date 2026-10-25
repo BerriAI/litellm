@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ColumnDef } from "@tanstack/react-table";
 import { Bot, Layers, MoreHorizontal, Server, Sparkles, Trash2 } from "lucide-react";
 
@@ -15,6 +16,7 @@ import {
 import { cn } from "@/lib/cva.config";
 
 import { AccessGroup } from "./types";
+import { englishTranslate, type Translate } from "@/i18n/language";
 
 interface ResourceTone {
   icon: typeof Layers;
@@ -37,11 +39,12 @@ const RESOURCE_TONES: Record<"models" | "mcpServers" | "agents" | "skills", Reso
 };
 
 function ResourcesCell({ group }: { group: AccessGroup }) {
+  const { t } = useLanguage();
   const items = [
-    { key: "models" as const, label: "Models", count: group.modelIds.length },
-    { key: "mcpServers" as const, label: "MCP Servers", count: group.mcpServerIds.length },
-    { key: "agents" as const, label: "Agents", count: group.agentIds.length },
-    { key: "skills" as const, label: "Skills", count: group.skillNames.length },
+    { key: "models" as const, label: t("Models"), count: group.modelIds.length },
+    { key: "mcpServers" as const, label: t("MCP Servers"), count: group.mcpServerIds.length },
+    { key: "agents" as const, label: t("Agents"), count: group.agentIds.length },
+    { key: "skills" as const, label: t("Skills"), count: group.skillNames.length },
   ];
 
   return (
@@ -74,10 +77,11 @@ function AccessGroupRowActions({
   group: AccessGroup;
   onDeleteClick: (group: AccessGroup) => void;
 }) {
+  const { t } = useLanguage();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open access group actions"
+        aria-label={t("Open access group actions")}
         data-testid={`access-group-actions-${group.id}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -90,7 +94,7 @@ function AccessGroupRowActions({
           onClick={() => onDeleteClick(group)}
         >
           <Trash2 />
-          Delete access group
+          {t("Delete access group")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -98,12 +102,14 @@ function AccessGroupRowActions({
 }
 
 interface AccessGroupsTableColumnsDeps {
+  t?: Translate;
   canModify: boolean;
   onGroupClick: (id: string) => void;
   onDeleteClick: (group: AccessGroup) => void;
 }
 
 export const getAccessGroupsTableColumns = ({
+  t = englishTranslate,
   canModify,
   onGroupClick,
   onDeleteClick,
@@ -127,8 +133,8 @@ export const getAccessGroupsTableColumns = ({
     {
       id: "name",
       accessorKey: "name",
-      meta: { title: "Name" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Name" />,
+      meta: { title: t("Name") },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Name")} />,
       size: 220,
       enableSorting: true,
       cell: ({ row }) => {
@@ -142,8 +148,8 @@ export const getAccessGroupsTableColumns = ({
     },
     {
       id: "resources",
-      meta: { title: "Resources" },
-      header: "Resources",
+      meta: { title: t("Resources") },
+      header: t("Resources"),
       size: 220,
       enableSorting: false,
       cell: ({ row }) => <ResourcesCell group={row.original} />,
@@ -151,8 +157,8 @@ export const getAccessGroupsTableColumns = ({
     {
       id: "createdAt",
       accessorKey: "createdAt",
-      meta: { title: "Created" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Created" />,
+      meta: { title: t("Created") },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Created")} />,
       size: 150,
       enableSorting: true,
       sortingFn: "datetime",
@@ -161,8 +167,8 @@ export const getAccessGroupsTableColumns = ({
     {
       id: "updatedAt",
       accessorKey: "updatedAt",
-      meta: { title: "Updated" },
-      header: "Updated",
+      meta: { title: t("Updated") },
+      header: t("Updated"),
       size: 150,
       enableSorting: false,
       cell: ({ row }) => <DateCell value={row.original.updatedAt} precision="date" />,
@@ -178,7 +184,7 @@ export const getAccessGroupsTableColumns = ({
     {
       id: "actions",
       meta: { className: "text-right", headerClassName: "text-right" },
-      header: () => <span className="sr-only">Actions</span>,
+      header: () => <span className="sr-only">{t("Actions")}</span>,
       size: 64,
       enableSorting: false,
       enableHiding: false,

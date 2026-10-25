@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useId, useRef } from "react";
 import { Paperclip } from "lucide-react";
 import { toast } from "@/lib/toast";
@@ -18,6 +19,7 @@ const ResponsesImageUpload: React.FC<ResponsesImageUploadProps> = ({
   onImageUpload,
   disabled = false,
 }) => {
+  const { t } = useLanguage();
   const inputRef = useRef<HTMLInputElement>(null);
   const inputId = useId();
 
@@ -59,7 +61,7 @@ const ResponsesImageUpload: React.FC<ResponsesImageUploadProps> = ({
               variant="ghost"
               size="icon-sm"
               disabled={disabled}
-              aria-label="Attach image or PDF"
+              aria-label={t("Attach image or PDF")}
               className="text-muted-foreground hover:text-foreground"
               onClick={() => inputRef.current?.click()}
             />
@@ -67,7 +69,7 @@ const ResponsesImageUpload: React.FC<ResponsesImageUploadProps> = ({
         >
           <Paperclip className="size-4" />
         </TooltipTrigger>
-        <TooltipContent>Attach image or PDF</TooltipContent>
+        <TooltipContent>{t("Attach image or PDF")}</TooltipContent>
       </Tooltip>
     </>
   );

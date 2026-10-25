@@ -1,5 +1,7 @@
 "use client";
 
+import { englishTranslate, type Translate } from "@/i18n/language";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, MoreHorizontal, Trash2 } from "lucide-react";
 
@@ -30,10 +32,11 @@ function formatFileSize(bytes?: number): string {
 }
 
 function DocumentRowActions({ document, onRemove }: { document: DocumentUpload; onRemove: (uid: string) => void }) {
+  const { t } = useLanguage();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open document actions"
+        aria-label={t("Open document actions")}
         data-testid={`document-actions-${document.uid}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -42,10 +45,10 @@ function DocumentRowActions({ document, onRemove }: { document: DocumentUpload; 
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem
           data-testid="document-action-copy"
-          onClick={() => void copyToClipboard(document.uid, "Document ID copied to clipboard")}
+          onClick={() => void copyToClipboard(document.uid, t("Document ID copied to clipboard"))}
         >
           <Copy />
-          Copy document ID
+          {t("Copy document ID")}
         </DropdownMenuItem>
         <DropdownMenuItem
           variant="destructive"
@@ -53,7 +56,7 @@ function DocumentRowActions({ document, onRemove }: { document: DocumentUpload; 
           onClick={() => onRemove(document.uid)}
         >
           <Trash2 />
-          Remove
+          {t("Remove")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -61,15 +64,19 @@ function DocumentRowActions({ document, onRemove }: { document: DocumentUpload; 
 }
 
 interface DocumentsTableColumnsDeps {
+  t?: Translate;
   onRemove: (uid: string) => void;
 }
 
-export const getDocumentsTableColumns = ({ onRemove }: DocumentsTableColumnsDeps): ColumnDef<DocumentUpload>[] => [
+export const getDocumentsTableColumns = ({
+  t = englishTranslate,
+  onRemove,
+}: DocumentsTableColumnsDeps): ColumnDef<DocumentUpload>[] => [
   {
     id: "name",
     accessorKey: "name",
-    meta: { title: "Name" },
-    header: "Name",
+    meta: { title: t("Name") },
+    header: t("Name"),
     enableSorting: false,
     cell: ({ row }) => (
       <div className="flex items-center gap-2">
@@ -85,19 +92,19 @@ export const getDocumentsTableColumns = ({ onRemove }: DocumentsTableColumnsDeps
   {
     id: "status",
     accessorKey: "status",
-    meta: { title: "Status", skeleton: "badge" },
-    header: "Status",
+    meta: { title: t("Status"), skeleton: "badge" },
+    header: t("Status"),
     size: 150,
     enableSorting: false,
     cell: ({ row }) => {
-      const config = STATUS_CONFIG[row.original.status] ?? { tone: "neutral", label: row.original.status };
-      return <StatusBadge tone={config.tone} label={config.label} />;
+      const config = STATUS_CONFIG[row.original.status];
+      return <StatusBadge tone={config?.tone ?? "neutral"} label={config ? t(config.label) : row.original.status} />;
     },
   },
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },
-    header: () => <span className="sr-only">Actions</span>,
+    header: () => <span className="sr-only">{t("Actions")}</span>,
     size: 64,
     enableSorting: false,
     enableHiding: false,

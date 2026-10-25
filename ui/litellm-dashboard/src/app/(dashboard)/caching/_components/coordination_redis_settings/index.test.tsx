@@ -209,7 +209,9 @@ describe("CoordinationRedisSettings", () => {
       await screen.findByLabelText("Host");
       await clickSave(user);
 
-      await waitFor(() => expect(notifications.success).toHaveBeenCalledWith(expect.stringMatching(/restart/i)));
+      await waitFor(() => expect(notifications.success).toHaveBeenCalledTimes(1));
+      render(<>{notifications.success.mock.calls[0][0]}</>);
+      expect(screen.getByText("Coordination Redis settings saved. Restart the proxy to apply them.")).toBeVisible();
     });
   });
 
@@ -221,7 +223,9 @@ describe("CoordinationRedisSettings", () => {
       await screen.findByLabelText("Host");
       await user.click(screen.getByRole("button", { name: /test connection/i }));
 
-      await waitFor(() => expect(notifications.success).toHaveBeenCalledWith(expect.stringMatching(/successful/i)));
+      await waitFor(() => expect(notifications.success).toHaveBeenCalledTimes(1));
+      render(<>{notifications.success.mock.calls[0][0]}</>);
+      expect(screen.getByText("Coordination Redis connection test successful!")).toBeVisible();
       expect(testConnection).toHaveBeenCalledWith("sk-test", { port: 6379, ssl: false });
     });
 
@@ -233,9 +237,9 @@ describe("CoordinationRedisSettings", () => {
       await screen.findByLabelText("Host");
       await user.click(screen.getByRole("button", { name: /test connection/i }));
 
-      await waitFor(() =>
-        expect(notifications.fromError).toHaveBeenCalledWith(expect.stringContaining("connection refused")),
-      );
+      await waitFor(() => expect(notifications.fromError).toHaveBeenCalledTimes(1));
+      render(<>{notifications.fromError.mock.calls[0][1]?.description}</>);
+      expect(screen.getByText("Connection test failed: connection refused")).toBeVisible();
       expect(notifications.success).not.toHaveBeenCalled();
     });
   });

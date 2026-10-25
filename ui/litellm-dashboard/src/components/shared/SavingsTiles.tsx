@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useMemo } from "react";
 
 import SummaryCard from "@/components/shared/SummaryCard";
@@ -32,34 +33,42 @@ const useSavingsTotals = (results: DailyData[]) =>
   );
 
 const SavingsTiles = ({ results, isLoading }: { results: DailyData[]; isLoading: boolean }) => {
+  const { t } = useLanguage();
   const totals = useSavingsTotals(results);
 
+  // 固定提示在传入卡片前翻译，金额和统计值保持原样。
   return (
     <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
       <SummaryCard
-        label="Total recorded savings"
+        label={t("Total recorded savings")}
         value={usd(totals.total)}
-        hint={isLoading ? "Loading..." : "Compression + prompt caching + auto-router"}
-        info="The sum of recorded savings in the three tiles beside it. Auto-router requests without an estimate are excluded. Its caching term is the LiteLLM-injected share; caching supplied by clients or providers appears only in the caching tile's Total figure."
+        hint={isLoading ? t("Loading...") : t("Compression + prompt caching + auto-router")}
+        info={t(
+          "The sum of recorded savings in the three tiles beside it. Auto-router requests without an estimate are excluded. Its caching term is the LiteLLM-injected share; caching supplied by clients or providers appears only in the caching tile's Total figure.",
+        )}
       />
       <SummaryCard
-        label="Compression savings"
+        label={t("Compression savings")}
         value={usd(totals.compression)}
-        hint={`${formatNumberWithCommas(totals.savedTokens)} tokens compressed`}
-        info="Tokens Headroom removed before the call, priced at the model's input rate."
+        hint={t("{count} tokens compressed", { count: formatNumberWithCommas(totals.savedTokens) })}
+        info={t("Tokens Headroom removed before the call, priced at the model's input rate.")}
       />
       <SummaryCard
-        label="Prompt caching savings"
+        label={t("Prompt caching savings")}
         value={usd(totals.gatewayAttributedCaching)}
-        hint="LiteLLM injected"
-        secondary={{ label: "Total", value: usd(totals.caching) }}
-        info="What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. The headline figure is the share LiteLLM earned by inserting the breakpoints itself, through configured injection points or auto prompt caching. The total beside it also counts requests that arrived with their own cache_control and providers that cache implicitly. Either can be negative on traffic that writes more cache than it reuses, which is why the headline is not always the smaller of the two."
+        hint={t("LiteLLM injected")}
+        secondary={{ label: t("Total"), value: usd(totals.caching) }}
+        info={t(
+          "What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. The headline figure is the share LiteLLM earned by inserting the breakpoints itself, through configured injection points or auto prompt caching. The total beside it also counts requests that arrived with their own cache_control and providers that cache implicitly. Either can be negative on traffic that writes more cache than it reuses, which is why the headline is not always the smaller of the two.",
+        )}
       />
       <SummaryCard
-        label="Auto-router savings"
+        label={t("Auto-router savings")}
         value={usd(totals.autorouter)}
-        hint="Recorded estimates subtotal"
-        info="Sum of available per-request savings estimates against each router's highest-tier baseline, net of classifier cost. Requests without an estimate contribute nothing to this subtotal; this does not mean they saved zero. Historical records retain the estimator used when they were written. The Auto-router usage tab shows coverage for current estimates."
+        hint={t("Recorded estimates subtotal")}
+        info={t(
+          "Sum of available per-request savings estimates against each router's highest-tier baseline, net of classifier cost. Requests without an estimate contribute nothing to this subtotal; this does not mean they saved zero. Historical records retain the estimator used when they were written. The Auto-router usage tab shows coverage for current estimates.",
+        )}
       />
     </div>
   );

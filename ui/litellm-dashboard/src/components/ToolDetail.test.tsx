@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 import { ToolDetail } from "./ToolDetail";
 import {
   deleteToolPolicyOverride,
@@ -53,17 +54,27 @@ const detail = {
   overrides: [],
 } as unknown as ToolDetailResponse;
 
-const renderDetail = (onBack = vi.fn()) => {
+const renderDetail = (onBack = vi.fn(), language?: string) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  return render(
+  const tree = (
     <QueryClientProvider client={queryClient}>
       <ToolDetail toolName="search_docs" onBack={onBack} accessToken="tok" />
-    </QueryClientProvider>,
+    </QueryClientProvider>
+  );
+  return render(
+    language ? (
+      <LanguageProvider defaultLanguage={language} userId="tool-language" storageScope="test">
+        {tree}
+      </LanguageProvider>
+    ) : (
+      tree
+    ),
   );
 };
 
 describe("ToolDetail", () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     vi.mocked(fetchToolDetail).mockResolvedValue(detail);
     vi.mocked(fetchToolPolicyOptions).mockResolvedValue({ input_policies: [], output_policies: [] });
@@ -92,6 +103,25 @@ describe("ToolDetail", () => {
     expect(screen.getByText("Output Policy")).toBeInTheDocument();
     expect(screen.getByText("untrusted")).toBeInTheDocument();
     expect(screen.getByText("trusted")).toBeInTheDocument();
+  });
+
+  // 只翻译前端固定说明，后端策略描述即使匹配词条也原样展示。
+  it("翻译缺省策略说明且保留策略原始值", async () => {
+    renderDetail(vi.fn(), "zh-CN");
+    expect(await screen.findByText("控制此工具允许接收的数据。")).toBeVisible();
+    expect(screen.getByText("控制下游工具如何信任此工具的输出。")).toBeVisible();
+    expect(screen.getByText("untrusted")).toBeVisible();
+    expect(screen.getByText("trusted")).toBeVisible();
+  });
+
+  it("中文下保留后端提供的策略说明", async () => {
+    vi.mocked(fetchToolPolicyOptions).mockResolvedValue({
+      input_policies: [{ value: "untrusted", description: "Settings" } as ToolPolicyOption],
+      output_policies: [{ value: "trusted", description: "Home" } as ToolPolicyOption],
+    });
+    renderDetail(vi.fn(), "zh-CN");
+    expect(await screen.findByText("Settings")).toBeVisible();
+    expect(screen.getByText("Home")).toBeVisible();
   });
 
   it("uses the policy option descriptions when the backend supplies them", async () => {

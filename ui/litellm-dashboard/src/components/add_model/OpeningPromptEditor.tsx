@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useEffect, useState } from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { getAutoRouterAssembledPromptCall } from "@/components/networking";
@@ -76,6 +77,7 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
   tierSource,
   contextWindowSize,
 }) => {
+  const { t } = useLanguage();
   const { accessToken } = useAuthorized();
   const [isOpen, setIsOpen] = useState(false);
   const [instructionDraft, setInstructionDraft] = useState("");
@@ -153,12 +155,14 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
     <div>
       {rubricSummary && (
         <p className="mb-1 text-xs text-muted-foreground">
-          {isOverridden ? `Custom opening on the ${rubricSummary.label} rubric` : `${rubricSummary.label} rubric`}
+          {isOverridden
+            ? t("Custom opening on the {rubric} rubric", { rubric: t(rubricSummary.label) })
+            : t("{rubric} rubric", { rubric: t(rubricSummary.label) })}
         </p>
       )}
       <div className="flex items-center gap-2">
         <Button type="button" size="sm" variant="outline" onClick={openEditor}>
-          {isOverridden ? "Edit custom prompt" : "Customize prompt"}
+          {isOverridden ? t("Edit custom prompt") : t("Customize prompt")}
         </Button>
         {isOverridden && (
           <Button
@@ -173,33 +177,33 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
               })
             }
           >
-            Reset to default
+            {t("Reset to default")}
           </Button>
         )}
       </div>
-      <p className="mt-1 text-xs text-muted-foreground">{isOverridden ? copy.overridden : copy.default}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{t(isOverridden ? copy.overridden : copy.default)}</p>
 
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
-            <DialogTitle>Classifier prompt</DialogTitle>
+            <DialogTitle>{t("Classifier prompt")}</DialogTitle>
           </DialogHeader>
 
           {tierSource.kind === "builtIn" && (
             <div>
               <label className="text-sm font-medium" htmlFor="base-classification-rubric">
-                Base rubric
+                {t("Base rubric")}
               </label>
               <Select
                 items={Object.entries(CLASSIFICATION_RUBRIC_DESCRIPTIONS).map(([rubric, description]) => ({
                   value: rubric,
-                  label: description.label,
+                  label: t(description.label),
                 }))}
                 value={classificationRubric ?? tierSource.classificationRubric}
                 onValueChange={(rubric: ClassificationRubric | null) => rubric && setRubricDraft(rubric)}
                 disabled={Boolean(tierSource.rubricRestriction)}
               >
-                <SelectTrigger id="base-classification-rubric" aria-label="Base rubric" className="mt-1 w-full">
+                <SelectTrigger id="base-classification-rubric" aria-label={t("Base rubric")} className="mt-1 w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent
@@ -209,45 +213,48 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
                 >
                   {Object.entries(CLASSIFICATION_RUBRIC_DESCRIPTIONS).map(([rubric, description]) => (
                     <SelectItem key={rubric} value={rubric}>
-                      {description.label}
+                      {t(description.label)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <p className="mt-1 text-xs text-muted-foreground">
-                {tierSource.rubricRestriction ?? draftRubricSummary?.description}
+                {tierSource.rubricRestriction
+                  ? t(tierSource.rubricRestriction)
+                  : draftRubricSummary && t(draftRubricSummary.description)}
               </p>
             </div>
           )}
 
-          <p className="text-sm text-muted-foreground">{copy.explainer}</p>
+          <p className="text-sm text-muted-foreground">{t(copy.explainer)}</p>
 
           <div className="mt-3 space-y-4">
             <div>
               <label className="text-sm font-medium" htmlFor="classification-instructions">
-                Classification instructions
+                {t("Classification instructions")}
               </label>
               <p className="mt-1 text-xs text-muted-foreground">
-                Explain what the classifier should judge. Tier definitions are managed separately below.
+                {t("Explain what the classifier should judge. Tier definitions are managed separately below.")}
               </p>
               <Textarea
                 id="classification-instructions"
                 value={instructionDraft}
                 onChange={(e) => setInstructionDraft(e.target.value)}
                 rows={5}
-                placeholder={copy.placeholder}
-                aria-label="Classification instructions"
+                placeholder={t(copy.placeholder)}
+                aria-label={t("Classification instructions")}
                 className="mt-2 font-mono text-xs"
               />
             </div>
 
             <div>
               <label className="text-sm font-medium" htmlFor="calibration-examples">
-                Calibration examples
+                {t("Calibration examples")}
               </label>
               <p className="mt-1 text-xs text-muted-foreground">
-                Show representative requests and the tier they should receive. The router adds these after its tier
-                definitions.
+                {t(
+                  "Show representative requests and the tier they should receive. The router adds these after its tier definitions.",
+                )}
               </p>
               <Textarea
                 id="calibration-examples"
@@ -255,25 +262,25 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
                 onChange={(e) => setExampleDraft(e.target.value)}
                 rows={6}
                 placeholder={'- "what is the capital of France?" -> SIMPLE'}
-                aria-label="Calibration examples"
+                aria-label={t("Calibration examples")}
                 className="mt-2 font-mono text-xs"
               />
             </div>
           </div>
 
           <div className="mt-3">
-            <p className="text-xs font-medium">What this router sends</p>
+            <p className="text-xs font-medium">{t("What this router sends")}</p>
             {preview.status === "loading" && (
-              <p className="mt-1 text-xs text-muted-foreground">Loading the assembled prompt…</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("Loading the assembled prompt…")}</p>
             )}
             {preview.status === "error" && (
               <p className="mt-1 text-xs text-muted-foreground">
-                Could not load the assembled prompt. Your text is still saved as written.
+                {t("Could not load the assembled prompt. Your text is still saved as written.")}
               </p>
             )}
             {preview.status === "ready" && (
               <pre
-                aria-label="Assembled classifier prompt"
+                aria-label={t("Assembled classifier prompt")}
                 className="mt-1 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap text-muted-foreground"
               >
                 {preview.text}
@@ -283,10 +290,10 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
 
           <DialogFooter className="mt-4">
             <Button type="button" variant="outline" onClick={() => setIsOpen(false)}>
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button type="button" onClick={handleSave}>
-              Save prompt
+              {t("Save prompt")}
             </Button>
           </DialogFooter>
         </DialogContent>

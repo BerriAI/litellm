@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -21,6 +22,7 @@ interface BudgetWindowsEditorProps {
 }
 
 export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProps) {
+  const { t } = useLanguage();
   const addWindow = () => {
     onChange([...value, { budget_duration: "24h", max_budget: null }]);
   };
@@ -42,7 +44,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
           <div key={idx} style={{ marginBottom: 12 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <Select
-                items={BUDGET_WINDOW_OPTIONS}
+                items={BUDGET_WINDOW_OPTIONS.map((option) => ({ ...option, label: t(option.label) }))}
                 value={window.budget_duration}
                 onValueChange={(v: string | null) => v && updateWindow(idx, "budget_duration", v)}
               >
@@ -52,7 +54,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                 <SelectContent>
                   {BUDGET_WINDOW_OPTIONS.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
-                      {option.label}
+                      {t(option.label)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -76,7 +78,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                       updateWindow(idx, "max_budget", Number(typed.toFixed(2)));
                     }
                   }}
-                  placeholder="Max spend ($)"
+                  placeholder={t("Max spend ($)")}
                 />
               </InputGroup>
               <Button
@@ -88,7 +90,11 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                 ✕
               </Button>
             </div>
-            {hint && <div style={{ fontSize: 11, color: "#888", marginTop: 3, marginLeft: 2 }}>↻ {hint}</div>}
+            {hint && (
+              <div style={{ fontSize: 11, color: "#888", marginTop: 3, marginLeft: 2 }}>
+                ↻ {hint ? t(hint) : undefined}
+              </div>
+            )}
           </div>
         );
       })}
@@ -100,7 +106,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
           addWindow();
         }}
       >
-        + Add Budget Window
+        {t("+ Add Budget Window")}
       </Button>
     </div>
   );

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import SpendByProvider from "./SpendByProvider";
+import SpendByProvider, { ProviderSpendBreakdown } from "./SpendByProvider";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("@/components/shared/chart_loader", () => ({
   ChartLoader: ({ isDateChanging }: { isDateChanging: boolean }) => (
@@ -50,6 +51,26 @@ describe("SpendByProvider", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("中文只翻译空服务商的占位文案，保留真实名称", () => {
+    localStorage.clear();
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="provider-language" storageScope="provider-test">
+        <ProviderSpendBreakdown
+          rows={[
+            { ...mockProviderSpend[0], provider: "", spend: 100 },
+            { ...mockProviderSpend[0], provider: "Home", spend: 50 },
+            { ...mockProviderSpend[0], provider: "unknown", spend: 50 },
+          ]}
+        />
+      </LanguageProvider>,
+    );
+
+    expect(screen.getByTitle("未知 · 50.0%")).toBeInTheDocument();
+    expect(screen.getByText("未知")).toBeInTheDocument();
+    expect(screen.getByTitle("Home · 25.0%")).toBeInTheDocument();
+    expect(screen.getByTitle("unknown · 25.0%")).toBeInTheDocument();
   });
 
   it("should render", () => {

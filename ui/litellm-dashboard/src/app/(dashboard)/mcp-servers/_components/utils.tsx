@@ -1,4 +1,5 @@
 import { MCPEnvVar, MCPEnvVarScope, type MCPServer } from "@/components/mcp_tools/types";
+import { englishTranslate, type Translate } from "@/i18n/language";
 
 export const getMCPNetworkAccess = (
   server: Pick<MCPServer, "available_on_public_internet" | "mcp_info">,
@@ -72,18 +73,18 @@ export const getMaskedAndFullUrl = (url: string): { maskedUrl: string; hasToken:
 };
 
 // Validation utilities for MCP server forms
-export const validateMCPServerUrl = (value: string) => {
+export const validateMCPServerUrl = (value: string, t: Translate = englishTranslate) => {
   if (!value) return Promise.resolve();
   // More flexible URL validation that allows Kubernetes service names and various URL formats
   const urlPattern = /^https?:\/\/[^\s/$.?#].[^\s]*$/i;
   return urlPattern.test(value)
     ? Promise.resolve()
-    : Promise.reject("Please enter a valid URL (e.g., http://service-name.domain:1234/path or https://example.com)");
+    : Promise.reject(t("Please enter a valid URL (e.g., http://service-name.domain:1234/path or https://example.com)"));
 };
 
-export const validateMCPServerName = (value: string) => {
+export const validateMCPServerName = (value: string, t: Translate = englishTranslate) => {
   return value && (value.includes("-") || value.includes(" "))
-    ? Promise.reject("Cannot contain '-' (hyphen) or spaces. Please use '_' (underscore) instead.")
+    ? Promise.reject(t("Cannot contain '-' (hyphen) or spaces. Please use '_' (underscore) instead."))
     : Promise.resolve();
 };
 

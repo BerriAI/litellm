@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useRef, useState } from "react";
 import { ChevronDown, PanelRight, RotateCcw, SquarePen } from "lucide-react";
 import useCan from "@/app/(dashboard)/hooks/useCan";
@@ -129,6 +130,7 @@ export function PlaygroundChat({
   disabledPersonalKeyCreation: boolean;
   proxySettings: ProxySettings | undefined;
 }) {
+  const { t } = useLanguage();
   const { settings: stored, update, reset } = usePlaygroundSettings(disabledPersonalKeyCreation);
   const canViewPolicies = useCan("viewPolicies");
   const apiKey = (stored.keySource === "session" ? accessToken : stored.virtualKey.trim()) || null;
@@ -211,13 +213,13 @@ export function PlaygroundChat({
 
   const newChat = () => {
     clearChat();
-    toast.success("Chat history cleared.");
+    toast.success(t("Chat history cleared."));
   };
 
   const resetAll = () => {
     clearChat();
     reset();
-    toast.success("Chat and settings reset");
+    toast.success(t("Chat and settings reset"));
   };
 
   const code = (sdk: CodeSdk): string => {
@@ -250,8 +252,8 @@ export function PlaygroundChat({
     <>
       {capabilities.target === "model" && (
         <TargetPicker
-          label="Model"
-          placeholder="Select a model"
+          label={t("Model")}
+          placeholder={t("Select a model")}
           groups={modelGroups(filterModelsForEndpoint([...modelList], settings.endpoint))}
           value={settings.model}
           onValueChange={selectModel}
@@ -262,8 +264,8 @@ export function PlaygroundChat({
       )}
       {capabilities.target === "agent" && (
         <TargetPicker
-          label="Agent"
-          placeholder="Select an agent"
+          label={t("Agent")}
+          placeholder={t("Select an agent")}
           groups={[
             {
               label: "Agents",
@@ -277,14 +279,14 @@ export function PlaygroundChat({
           value={settings.agent}
           onValueChange={(agent) => update({ agent })}
           isLoading={agents.isLoading}
-          emptyText="No agents available for this key"
+          emptyText={t("No agents available for this key")}
         />
       )}
       {capabilities.target === "mcpTool" && (
         <>
           <TargetPicker
-            label="Server"
-            placeholder="Select an MCP server"
+            label={t("Server")}
+            placeholder={t("Select an MCP server")}
             groups={[
               {
                 label: "MCP servers",
@@ -302,15 +304,15 @@ export function PlaygroundChat({
             value={directSelection}
             onValueChange={(server) => update({ mcpSelection: [server], directTool: null })}
             isLoading={mcp.isLoading}
-            emptyText="No MCP servers available for this key"
+            emptyText={t("No MCP servers available for this key")}
           />
           {directByok?.is_byok && (
             <ByokKeyButton server={directByok} name={serverName(directByok)} onConnected={mcp.refreshCredentials} />
           )}
           {directSelection && (
             <TargetPicker
-              label="Tool"
-              placeholder="Select a tool"
+              label={t("Tool")}
+              placeholder={t("Select a tool")}
               groups={[
                 {
                   label: "Tools",
@@ -324,7 +326,7 @@ export function PlaygroundChat({
               value={settings.directTool}
               onValueChange={(tool) => update({ directTool: tool })}
               isLoading={directServers.some((server) => directServerTools[server]?.isLoading)}
-              emptyText={toolsFailed ? "Unable to load tools for this server" : "This server has no tools"}
+              emptyText={toolsFailed ? t("Unable to load tools for this server") : t("This server has no tools")}
             />
           )}
         </>
@@ -416,28 +418,28 @@ export function PlaygroundChat({
             {!isWide && (
               <Button variant="outline" size="sm" onClick={() => setSheetOpen(true)}>
                 <PanelRight />
-                Inspector
+                {t("Inspector")}
               </Button>
             )}
             <ButtonGroup>
               <Button variant="outline" size="sm" onClick={newChat}>
                 <SquarePen />
-                New chat
+                {t("New chat")}
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger
-                  render={<Button variant="outline" size="icon-sm" aria-label="More chat actions" />}
+                  render={<Button variant="outline" size="icon-sm" aria-label={t("More chat actions")} />}
                 >
                   <ChevronDown />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-64">
                   <DropdownMenuItem onClick={newChat}>
                     <SquarePen />
-                    New chat, keep settings
+                    {t("New chat, keep settings")}
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={resetAll}>
                     <RotateCcw />
-                    Reset chat and settings
+                    {t("Reset chat and settings")}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -473,13 +475,13 @@ export function PlaygroundChat({
         <div className="mx-auto w-full max-w-3xl px-6 pb-6">{composer}</div>
       </div>
       {isWide ? (
-        <aside aria-label="Inspector" className="flex w-96 shrink-0 flex-col border-l border-border">
+        <aside aria-label={t("Inspector")} className="flex w-96 shrink-0 flex-col border-l border-border">
           {inspector}
         </aside>
       ) : (
         <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
           <SheetContent side="right" className="w-96 gap-0 p-0" showCloseButton={false}>
-            <SheetTitle className="sr-only">Inspector</SheetTitle>
+            <SheetTitle className="sr-only">{t("Inspector")}</SheetTitle>
             {inspector}
           </SheetContent>
         </Sheet>

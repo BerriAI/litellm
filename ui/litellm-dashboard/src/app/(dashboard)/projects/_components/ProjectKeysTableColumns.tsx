@@ -1,5 +1,6 @@
 "use client";
 
+import { englishTranslate, type Translate } from "@/i18n/language";
 import { ColumnDef } from "@tanstack/react-table";
 
 import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
@@ -22,12 +23,12 @@ function OwnerCell({ record }: { record: KeyResponse }) {
   );
 }
 
-export const getProjectKeysTableColumns = (): ColumnDef<KeyResponse>[] => [
+export const getProjectKeysTableColumns = (t: Translate = englishTranslate): ColumnDef<KeyResponse>[] => [
   {
     id: "key_alias",
     accessorKey: "key_alias",
-    meta: { title: "Key Name" },
-    header: "Key Name",
+    meta: { title: t("Key Name") },
+    header: t("Key Name"),
     enableSorting: false,
     cell: ({ row }) => (
       <IdentityCell
@@ -39,16 +40,16 @@ export const getProjectKeysTableColumns = (): ColumnDef<KeyResponse>[] => [
   },
   {
     id: "owner",
-    meta: { title: "Owner" },
-    header: "Owner",
+    meta: { title: t("Owner") },
+    header: t("Owner"),
     enableSorting: false,
     cell: ({ row }) => <OwnerCell record={row.original} />,
   },
   {
     id: "created_at",
     accessorKey: "created_at",
-    meta: { title: "Created" },
-    header: "Created",
+    meta: { title: t("Created") },
+    header: t("Created"),
     size: 130,
     enableSorting: false,
     cell: ({ row }) => <DateCell value={row.original.created_at} precision="date" />,
@@ -56,10 +57,10 @@ export const getProjectKeysTableColumns = (): ColumnDef<KeyResponse>[] => [
   {
     id: "last_active",
     accessorKey: "last_active",
-    meta: { title: "Last Active" },
-    header: "Last Active",
+    meta: { title: t("Last Active") },
+    header: t("Last Active"),
     size: 130,
     enableSorting: false,
-    cell: ({ row }) => <DateCell value={row.original.last_active} precision="date" fallback="Never" />,
+    cell: ({ row }) => <DateCell value={row.original.last_active} precision="date" fallback={t("Never")} />,
   },
 ];

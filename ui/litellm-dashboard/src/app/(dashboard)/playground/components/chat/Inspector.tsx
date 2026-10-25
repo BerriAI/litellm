@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useState, type ReactNode } from "react";
 import {
   ArrowDownToLine,
@@ -80,55 +81,66 @@ const millis = (value: number | undefined): string | undefined =>
   value === undefined ? undefined : `${Math.round(value)}ms`;
 
 function Routing({ message }: { message: MessageType }) {
+  const { t } = useLanguage();
   const trace = message.trace;
   const served = servedModel(message);
   const fellBack = (trace?.attemptedFallbacks ?? 0) > 0;
   const reported = Boolean(trace?.callId || trace?.modelGroup || trace?.providerModel);
   return (
-    <TraceSection value="routing" title="Routing">
+    <TraceSection value="routing" title={t("Routing")}>
       {trace?.requestedModel && (
-        <TraceRow title="Requested">
-          <LongValue value={trace.requestedModel} detail="Requested model" copyLabel="model name" className="text-xs" />
+        <TraceRow title={t("Requested")}>
+          <LongValue
+            value={trace.requestedModel}
+            detail="Requested model"
+            copyLabel={t("model name")}
+            className="text-xs"
+          />
         </TraceRow>
       )}
       {served && (
-        <TraceRow title="Served by">
+        <TraceRow title={t("Served by")}>
           {fellBack && <FallbackBadge />}
-          <LongValue value={served} detail="Model group that answered" copyLabel="model name" className="text-xs" />
+          <LongValue
+            value={served}
+            detail="Model group that answered"
+            copyLabel={t("model name")}
+            className="text-xs"
+          />
         </TraceRow>
       )}
       {trace?.providerModel && (
-        <TraceRow title="Provider model">
+        <TraceRow title={t("Provider model")}>
           <LongValue
             value={trace.providerModel}
             detail={trace.deploymentId ? `Deployment ID ${trace.deploymentId}` : "Model sent to the provider"}
-            copyLabel="provider model"
+            copyLabel={t("provider model")}
             className="text-xs"
             align="end"
           />
         </TraceRow>
       )}
       {trace?.apiBase && (
-        <TraceRow title="API base">
+        <TraceRow title={t("API base")}>
           <LongValue
             value={trace.apiBase}
             detail="Provider endpoint"
-            copyLabel="API base"
+            copyLabel={t("API base")}
             className="text-xs"
             align="end"
           />
         </TraceRow>
       )}
       {trace?.callId && (
-        <TraceRow title="Call ID">
+        <TraceRow title={t("Call ID")}>
           <span className="min-w-0 truncate font-mono text-xs">{trace.callId}</span>
-          <CopyIconButton value={trace.callId} label="call ID" />
+          <CopyIconButton value={trace.callId} label={t("call ID")} />
         </TraceRow>
       )}
       {trace?.responseId && (
-        <TraceRow title="Response ID">
+        <TraceRow title={t("Response ID")}>
           <span className="min-w-0 truncate font-mono text-xs">{trace.responseId}</span>
-          <CopyIconButton value={trace.responseId} label="response ID" />
+          <CopyIconButton value={trace.responseId} label={t("response ID")} />
         </TraceRow>
       )}
       <StatGrid
@@ -140,7 +152,7 @@ function Routing({ message }: { message: MessageType }) {
       />
       {!reported && (
         <Muted>
-          The gateway did not share routing details with this page. Open the dashboard from the proxy to see them
+          {t("The gateway did not share routing details with this page. Open the dashboard from the proxy to see them")}
         </Muted>
       )}
     </TraceSection>
@@ -153,39 +165,43 @@ const noneRan = (policies: readonly string[] | undefined): string | null => {
 };
 
 function Guardrails({ message }: { message: MessageType }) {
+  const { t } = useLanguage();
   const guardrails = message.trace?.appliedGuardrails;
   const policies = message.trace?.appliedPolicies;
   if (guardrails === undefined) {
     return (
-      <TraceSection value="guardrails" title="Guardrails and policies">
-        <Muted>This endpoint does not report which guardrails or policies ran</Muted>
+      <TraceSection value="guardrails" title={t("Guardrails and policies")}>
+        <Muted>{t("This endpoint does not report which guardrails or policies ran")}</Muted>
       </TraceSection>
     );
   }
   const emptyNote = guardrails.length === 0 ? noneRan(policies) : null;
   return (
-    <TraceSection value="guardrails" title="Guardrails and policies">
+    <TraceSection value="guardrails" title={t("Guardrails and policies")}>
       {guardrails.map((name) => (
-        <TraceRow key={`g-${name}`} title={name} description="Guardrail">
-          <Badge variant="secondary">Ran</Badge>
+        <TraceRow key={`g-${name}`} title={name} description={t("Guardrail")}>
+          <Badge variant="secondary">{t("Ran")}</Badge>
         </TraceRow>
       ))}
       {policies?.map((name) => (
-        <TraceRow key={`p-${name}`} title={name} description="Policy">
-          <Badge variant="secondary">Ran</Badge>
+        <TraceRow key={`p-${name}`} title={name} description={t("Policy")}>
+          <Badge variant="secondary">{t("Ran")}</Badge>
         </TraceRow>
       ))}
       {emptyNote && <Muted>{emptyNote}</Muted>}
-      {policies === undefined && <Muted>Policies are only reported when the dashboard is opened from the proxy</Muted>}
+      {policies === undefined && (
+        <Muted>{t("Policies are only reported when the dashboard is opened from the proxy")}</Muted>
+      )}
     </TraceSection>
   );
 }
 
 function SpeedAndCost({ message }: { message: MessageType }) {
+  const { t } = useLanguage();
   const usage = message.usage;
   const cost = usage?.cost ?? message.trace?.cost;
   return (
-    <TraceSection value="performance" title="Speed and cost">
+    <TraceSection value="performance" title={t("Speed and cost")}>
       <StatGrid
         stats={[
           {
@@ -211,12 +227,13 @@ function SpeedAndCost({ message }: { message: MessageType }) {
 }
 
 function NothingYet() {
+  const { t } = useLanguage();
   return (
     <Empty className="flex-1">
       <EmptyHeader>
-        <EmptyTitle className="text-sm">Nothing to inspect yet</EmptyTitle>
+        <EmptyTitle className="text-sm">{t("Nothing to inspect yet")}</EmptyTitle>
         <EmptyDescription>
-          Each reply shows here with the deployment that served it, fallbacks, guardrails, timing and cost
+          {t("Each reply shows here with the deployment that served it, fallbacks, guardrails, timing and cost")}
         </EmptyDescription>
       </EmptyHeader>
     </Empty>
@@ -235,6 +252,7 @@ function Trace({ message }: { message: MessageType | null }) {
 }
 
 function CodeTab({ code }: { code: (sdk: CodeSdk) => string }) {
+  const { t } = useLanguage();
   const [sdk, setSdk] = useState<CodeSdk>("openai");
   const snippet = code(sdk);
   return (
@@ -256,11 +274,11 @@ function CodeTab({ code }: { code: (sdk: CodeSdk) => string }) {
           </ToggleGroupItem>
         </ToggleGroup>
         <span className="ml-auto">
-          <CopyIconButton value={snippet} label="code" />
+          <CopyIconButton value={snippet} label={t("code")} />
         </span>
       </div>
       <FieldDescription className="px-4 pt-2 text-xs">
-        Send this request from your own app. Replace YOUR_LITELLM_API_KEY with a virtual key
+        {t("Send this request from your own app. Replace YOUR_LITELLM_API_KEY with a virtual key")}
       </FieldDescription>
       <ScrollArea className="w-full">
         <pre className="px-4 py-3 font-mono text-xs leading-5 whitespace-pre text-foreground">{snippet}</pre>
@@ -271,12 +289,13 @@ function CodeTab({ code }: { code: (sdk: CodeSdk) => string }) {
 }
 
 export function InspectorPanel({ message, code }: { message: MessageType | null; code: (sdk: CodeSdk) => string }) {
+  const { t } = useLanguage();
   return (
     <Tabs defaultValue="trace" className="min-h-0 flex-1 gap-0">
       <div className="flex h-12 shrink-0 items-center border-b border-border px-4">
         <TabsList className="w-full">
-          <TabsTrigger value="trace">Trace</TabsTrigger>
-          <TabsTrigger value="code">Code</TabsTrigger>
+          <TabsTrigger value="trace">{t("Trace")}</TabsTrigger>
+          <TabsTrigger value="code">{t("Code")}</TabsTrigger>
         </TabsList>
       </div>
       <ScrollArea className="min-h-0 flex-1">

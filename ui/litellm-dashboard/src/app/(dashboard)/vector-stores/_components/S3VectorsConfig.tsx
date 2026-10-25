@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState, useEffect } from "react";
 import { CircleHelp, Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -33,6 +34,7 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
 const asText = (value: unknown): string => (typeof value === "string" ? value : "");
 
 const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({ accessToken, providerParams, onParamsChange }) => {
+  const { t } = useLanguage();
   const [embeddingModels, setEmbeddingModels] = useState<ModelGroup[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
 
@@ -74,22 +76,22 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({ accessToken, provider
     <TooltipProvider>
       <Alert variant="info" className="mb-4">
         <Info />
-        <AlertTitle>AWS S3 Vectors Setup</AlertTitle>
+        <AlertTitle>{t("AWS S3 Vectors Setup")}</AlertTitle>
         <AlertDescription>
           <div>
-            <p>AWS S3 Vectors allows you to store and query vector embeddings directly in S3:</p>
+            <p>{t("AWS S3 Vectors allows you to store and query vector embeddings directly in S3:")}</p>
             <ul style={{ marginLeft: "16px", marginTop: "8px" }}>
-              <li>Vector buckets and indexes will be automatically created if they don&apos;t exist</li>
-              <li>Vector dimensions are auto-detected from your selected embedding model</li>
-              <li>Ensure your AWS credentials have permissions for S3 Vectors operations</li>
+              <li>{t("Vector buckets and indexes will be automatically created if they don't exist")}</li>
+              <li>{t("Vector dimensions are auto-detected from your selected embedding model")}</li>
+              <li>{t("Ensure your AWS credentials have permissions for S3 Vectors operations")}</li>
               <li>
-                Learn more:{" "}
+                {t("Learn more:")}{" "}
                 <a
                   href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vector-buckets.html"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  AWS S3 Vectors Documentation
+                  {t("AWS S3 Vectors Documentation")}
                 </a>
               </li>
             </ul>
@@ -100,15 +102,17 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({ accessToken, provider
       <Field data-invalid={bucketNameError !== undefined || undefined}>
         <FieldLabel htmlFor="s3-vector-bucket-name">
           {labelWithHint(
-            "Vector Bucket Name",
-            "S3 bucket name for vector storage (must be at least 3 characters, lowercase letters, numbers, hyphens, and periods only)",
+            t("Vector Bucket Name"),
+            t(
+              "S3 bucket name for vector storage (must be at least 3 characters, lowercase letters, numbers, hyphens, and periods only)",
+            ),
           )}
         </FieldLabel>
         <Input
           id="s3-vector-bucket-name"
           value={bucketName}
           onChange={(e) => handleFieldChange("vector_bucket_name", e.target.value)}
-          placeholder="my-vector-bucket (min 3 chars)"
+          placeholder={t("my-vector-bucket (min 3 chars)")}
           aria-invalid={bucketNameError !== undefined || undefined}
         />
         <FieldError>{bucketNameError}</FieldError>
@@ -117,15 +121,17 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({ accessToken, provider
       <Field data-invalid={indexNameError !== undefined || undefined}>
         <FieldLabel htmlFor="s3-index-name">
           {labelWithHint(
-            "Index Name",
-            "Name for the vector index (optional, will be auto-generated if not provided). If provided, must be at least 3 characters.",
+            t("Index Name"),
+            t(
+              "Name for the vector index (optional, will be auto-generated if not provided). If provided, must be at least 3 characters.",
+            ),
           )}
         </FieldLabel>
         <Input
           id="s3-index-name"
           value={indexName}
           onChange={(e) => handleFieldChange("index_name", e.target.value)}
-          placeholder="my-vector-index (optional, min 3 chars)"
+          placeholder={t("my-vector-index (optional, min 3 chars)")}
           aria-invalid={indexNameError !== undefined || undefined}
         />
         <FieldError>{indexNameError}</FieldError>
@@ -133,7 +139,7 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({ accessToken, provider
 
       <Field>
         <FieldLabel htmlFor="s3-aws-region-name">
-          {labelWithHint("AWS Region", "AWS region where the S3 bucket is located (e.g., us-west-2)")}
+          {labelWithHint(t("AWS Region"), t("AWS region where the S3 bucket is located (e.g., us-west-2)"))}
         </FieldLabel>
         <Input
           id="s3-aws-region-name"
@@ -145,16 +151,16 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({ accessToken, provider
 
       <Field>
         <FieldLabel htmlFor="s3-embedding-model">
-          {labelWithHint("Embedding Model", "Select the embedding model to use for vector generation")}
+          {labelWithHint(t("Embedding Model"), t("Select the embedding model to use for vector generation"))}
         </FieldLabel>
         <Combobox
           value={asText(providerParams.embedding_model) || null}
           onValueChange={(value: string | null) => value !== null && handleFieldChange("embedding_model", value)}
           items={embeddingModels.map((model) => model.model_group)}
         >
-          <ComboboxInput id="s3-embedding-model" placeholder="Select an embedding model" />
+          <ComboboxInput id="s3-embedding-model" placeholder={t("Select an embedding model")} />
           <ComboboxContent>
-            <ComboboxEmpty>{isLoadingModels ? "Loading models..." : "No embedding models found."}</ComboboxEmpty>
+            <ComboboxEmpty>{isLoadingModels ? t("Loading models...") : t("No embedding models found.")}</ComboboxEmpty>
             <ComboboxList>
               {(model: string) => (
                 <ComboboxItem key={model} value={model}>

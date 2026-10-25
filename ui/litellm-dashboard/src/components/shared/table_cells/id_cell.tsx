@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Copy } from "lucide-react";
 import * as React from "react";
 
@@ -43,7 +44,7 @@ export function IdCell({
   href,
   onClick,
   copyable = false,
-  copyLabel = "Copy ID",
+  copyLabel,
   truncate = true,
   fallback = "-",
   tooltip,
@@ -51,6 +52,7 @@ export function IdCell({
   dataTestId,
   className,
 }: IdCellProps) {
+  const { t } = useLanguage();
   if (!value) {
     return <span className="text-muted-foreground">{fallback}</span>;
   }
@@ -94,7 +96,7 @@ export function IdCell({
       {withTooltip}
       <button
         type="button"
-        aria-label={copyLabel}
+        aria-label={copyLabel ?? t("Copy ID")}
         className="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
         onClick={(event) => {
           event.stopPropagation();

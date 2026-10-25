@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import moment from "moment";
 import { CalendarDays } from "lucide-react";
 import { type ComponentProps, useState } from "react";
@@ -43,14 +44,14 @@ interface LogsTimeRangePickerProps {
 }
 
 export function LogsTimeRangePicker({ value, onValueChange }: LogsTimeRangePickerProps) {
+  const { t } = useLanguage();
   const [open, setOpen] = useState(false);
 
   const selectedOption = QUICK_SELECT_OPTIONS.find(
     (option) => option.value === value.interval.value && option.unit === value.interval.unit,
   );
-  const displayLabel = value.isCustomDate
-    ? getTimeRangeDisplay(true, value.startTime, value.endTime)
-    : selectedOption?.label;
+  const relativeLabel = selectedOption ? t(selectedOption.label) : undefined;
+  const displayLabel = value.isCustomDate ? getTimeRangeDisplay(true, value.startTime, value.endTime) : relativeLabel;
 
   return (
     <>
@@ -75,7 +76,7 @@ export function LogsTimeRangePicker({ value, onValueChange }: LogsTimeRangePicke
                   setOpen(false);
                 }}
               >
-                {option.label}
+                {t(option.label)}
               </Button>
             ))}
             <div className="my-2 border-t" />
@@ -84,7 +85,7 @@ export function LogsTimeRangePicker({ value, onValueChange }: LogsTimeRangePicke
               className="w-full justify-start font-normal"
               onClick={() => onValueChange({ ...value, isCustomDate: !value.isCustomDate })}
             >
-              Custom Range
+              {t("Custom Range")}
             </Button>
           </div>
         </PopoverContent>
@@ -98,7 +99,7 @@ export function LogsTimeRangePicker({ value, onValueChange }: LogsTimeRangePicke
             value={value.startTime}
             onChange={(event) => onValueChange({ ...value, startTime: event.target.value })}
           />
-          <span className="text-sm text-muted-foreground">to</span>
+          <span className="text-sm text-muted-foreground">{t("to")}</span>
           <Input
             type="datetime-local"
             className="w-auto"

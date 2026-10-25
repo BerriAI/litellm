@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,18 +19,18 @@ interface MSTeamsSettingsProps {
   alerts: AlertingDestination[];
 }
 
-const FIELD_HELP: Record<string, React.ReactNode> = {
-  MS_TEAMS_WEBHOOK_URL: (
-    <>
-      Incoming webhook URL for your Teams channel (Workflows or incoming webhook connector)
-      <span className="text-destructive"> Required * </span>
-    </>
-  ),
-};
-
 const SENSITIVE_FIELD_PATTERN = /(PASSWORD|SECRET|KEY|TOKEN|URL)/i;
 
 const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, userID, userRole, alerts }) => {
+  const { t } = useLanguage();
+  const help: Record<string, React.ReactNode> = {
+    MS_TEAMS_WEBHOOK_URL: (
+      <>
+        {t("Incoming webhook URL for your Teams channel (Workflows or incoming webhook connector)")}
+        <span className="text-destructive"> {t("Required")} * </span>
+      </>
+    ),
+  };
   const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
 
   const toggleFieldVisibility = (key: string) => {
@@ -77,7 +78,7 @@ const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, userID, 
         environment_variables: updatedVariables,
       };
       await setCallbacksCall(accessToken, payload);
-      toast.success("MS Teams settings updated successfully");
+      toast.success(t("MS Teams settings updated successfully"));
     } catch (error) {
       toast.fromError(error);
     }
@@ -86,16 +87,16 @@ const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, userID, 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Microsoft Teams Alerting Settings</CardTitle>
+        <CardTitle className="text-base">{t("Microsoft Teams Alerting Settings")}</CardTitle>
         <p className="text-sm">
-          Send LiteLLM alerts to a Microsoft Teams channel via an incoming webhook. Create one from{" "}
+          {t("Send LiteLLM alerts to a Microsoft Teams channel via an incoming webhook. Create one from")}{" "}
           <a
             href="https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook"
             target="_blank"
             rel="noreferrer"
             className="text-primary underline underline-offset-4"
           >
-            Microsoft Docs: incoming webhooks
+            {t("Microsoft Docs: incoming webhooks")}
           </a>
         </p>
       </CardHeader>
@@ -122,14 +123,14 @@ const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, userID, 
                           <InputGroupButton
                             size="icon-xs"
                             onClick={() => toggleFieldVisibility(key)}
-                            aria-label={isVisible ? "Hide credential" : "Show credential"}
+                            aria-label={isVisible ? t("Hide credential") : t("Show credential")}
                           >
                             {isVisible ? <EyeOff /> : <Eye />}
                           </InputGroupButton>
                         </InputGroupAddon>
                       )}
                     </InputGroup>
-                    <div className="text-xs text-muted-foreground italic">{FIELD_HELP[key]}</div>
+                    <div className="text-xs text-muted-foreground italic">{help[key]}</div>
                   </div>
                 );
               })}
@@ -137,20 +138,20 @@ const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, userID, 
           ))}
 
         <div className="mt-6 flex gap-2">
-          <Button onClick={() => handleSaveMSTeamsSettings()}>Save Changes</Button>
+          <Button onClick={() => handleSaveMSTeamsSettings()}>{t("Save Changes")}</Button>
           <Button
             variant="secondary"
             onClick={async () => {
               if (!accessToken) return;
               try {
                 await serviceHealthCheck(accessToken, "ms_teams");
-                toast.success("MS Teams test alert triggered. Check your Teams channel.");
+                toast.success(t("MS Teams test alert triggered. Check your Teams channel."));
               } catch (error) {
                 toast.fromError(error);
               }
             }}
           >
-            Test MS Teams Alerts
+            {t("Test MS Teams Alerts")}
           </Button>
         </div>
       </CardContent>

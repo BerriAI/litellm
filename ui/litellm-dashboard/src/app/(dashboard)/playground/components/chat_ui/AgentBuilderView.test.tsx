@@ -4,6 +4,7 @@ import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AgentBuilderView from "./AgentBuilderView";
 import type { AgentModel } from "../../llm_calls/fetch_agents";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 const modelCreateCall = vi.fn().mockResolvedValue({ model_id: "id-new" });
 const modelPatchUpdateCall = vi.fn().mockResolvedValue({});
@@ -98,6 +99,20 @@ beforeEach(() => {
 });
 
 describe("AgentBuilderView", () => {
+  it("切换语言保留代理草稿且不重新请求列表", async () => {
+    const tree = (language: string) => (
+      <LanguageProvider defaultLanguage={language} userId="agent-test" storageScope="language-effects">
+        <AgentBuilderView {...props} />
+      </LanguageProvider>
+    );
+    const view = render(tree("en"));
+    const prompt = await screen.findByDisplayValue("Be helpful.");
+    fireEvent.change(prompt, { target: { value: "unsaved-draft" } });
+    view.rerender(tree("zh-CN"));
+    expect(await screen.findByDisplayValue("unsaved-draft")).toBeInTheDocument();
+    expect(fetchAvailableAgentModels).toHaveBeenCalledTimes(1);
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+  });
   it("asks the visitor to sign in when there is no session", () => {
     render(<AgentBuilderView accessToken={null} token={null} userID={null} userRole={null} />);
 

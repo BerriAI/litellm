@@ -1,3 +1,5 @@
+import { useLanguage } from "@/contexts/LanguageContext";
+
 export type ModelViewType = "groups" | "individual";
 
 const MODEL_VIEW_OPTIONS: readonly { value: ModelViewType; label: string }[] = [
@@ -11,6 +13,7 @@ interface ModelViewToggleProps {
 }
 
 export default function ModelViewToggle({ value, onChange }: ModelViewToggleProps) {
+  const { t } = useLanguage();
   return (
     <div className="flex bg-muted rounded-lg p-1">
       {MODEL_VIEW_OPTIONS.map((option) => (
@@ -21,7 +24,7 @@ export default function ModelViewToggle({ value, onChange }: ModelViewToggleProp
           }`}
           onClick={() => onChange(option.value)}
         >
-          {option.label}
+          {t(option.label)}
         </button>
       ))}
     </div>

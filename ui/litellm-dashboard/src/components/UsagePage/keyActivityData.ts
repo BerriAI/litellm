@@ -3,6 +3,7 @@ import { processActivityData } from "@/components/activity_metrics";
 import type { DailyActivityAggregatedResponse, DailyActivityMetadata, KeySpendActivityRow } from "./dailyActivityApi";
 import { toDailyData } from "./dailyActivityApi";
 import type { ModelActivityData } from "./types";
+import { englishTranslate, type Translate } from "@/i18n/language";
 
 export const overallUsageMetrics = (
   results: ReturnType<typeof toDailyData>,
@@ -58,4 +59,6 @@ export const keyDetailFromResponse = (
   response: DailyActivityAggregatedResponse,
   apiKey: string,
   teams: Team[],
-): ModelActivityData | undefined => processActivityData({ results: toDailyData(response) }, "api_keys", teams)[apiKey];
+  t: Translate = englishTranslate,
+): ModelActivityData | undefined =>
+  processActivityData({ results: toDailyData(response) }, "api_keys", teams, t)[apiKey];

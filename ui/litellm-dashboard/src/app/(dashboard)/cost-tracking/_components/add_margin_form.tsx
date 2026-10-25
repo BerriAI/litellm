@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { CircleHelp } from "lucide-react";
 import { Providers, provider_map } from "@/components/provider_info_helpers";
@@ -75,7 +76,10 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
   onFixedAmountChange,
   onAddProvider,
 }) => {
-  const providerOptions = buildProviderOptions(marginConfig);
+  const { t } = useLanguage();
+  const providerOptions = buildProviderOptions(marginConfig).map((option) =>
+    option.providerEnum === null ? { ...option, label: t(option.label) } : option,
+  );
   const selectedOption = providerOptions.find((option) => option.value === selectedProvider) ?? null;
 
   return (
@@ -84,8 +88,8 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
         <Field>
           <FieldLabel htmlFor="margin-provider">
             {labelWithHint(
-              "Provider",
-              "Select 'Global' to apply margin to all providers, or select a specific provider",
+              t("Provider"),
+              t("Select 'Global' to apply margin to all providers, or select a specific provider"),
             )}
           </FieldLabel>
           <Combobox
@@ -95,9 +99,9 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
             itemToStringLabel={(option: ProviderOption) => option.label}
             isItemEqualToValue={(option: ProviderOption, selected: ProviderOption) => option.value === selected.value}
           >
-            <ComboboxInput id="margin-provider" placeholder="Select provider or 'Global'" className="w-full" />
+            <ComboboxInput id="margin-provider" placeholder={t("Select provider or 'Global'")} className="w-full" />
             <ComboboxContent>
-              <ComboboxEmpty>No matching providers</ComboboxEmpty>
+              <ComboboxEmpty>{t("No matching providers")}</ComboboxEmpty>
               <ComboboxList>
                 {(option: ProviderOption) => (
                   <ComboboxItem key={option.value} value={option}>
@@ -116,7 +120,7 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
 
         <Field>
           <FieldTitle>
-            {labelWithHint("Margin Type", "Choose how to apply the margin: percentage-based or fixed amount")}
+            {labelWithHint(t("Margin Type"), t("Choose how to apply the margin: percentage-based or fixed amount"))}
           </FieldTitle>
           <RadioGroup
             value={marginType}
@@ -125,11 +129,11 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
           >
             <FieldLabel className="font-normal">
               <RadioGroupItem value="percentage" />
-              Percentage-based
+              {t("Percentage-based")}
             </FieldLabel>
             <FieldLabel className="font-normal">
               <RadioGroupItem value="fixed" />
-              Fixed Amount
+              {t("Fixed Amount")}
             </FieldLabel>
           </RadioGroup>
         </Field>
@@ -137,7 +141,7 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
         {marginType === "percentage" && (
           <Field>
             <FieldLabel htmlFor="margin-percentage">
-              {labelWithHint("Margin Percentage", "Enter a percentage value (e.g., 10 for 10% margin)")}
+              {labelWithHint(t("Margin Percentage"), t("Enter a percentage value (e.g., 10 for 10% margin)"))}
             </FieldLabel>
             <div className="flex items-center gap-2">
               <Input
@@ -155,7 +159,10 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
         {marginType === "fixed" && (
           <Field>
             <FieldLabel htmlFor="margin-fixed-amount">
-              {labelWithHint("Fixed Margin Amount", "Enter a fixed amount in USD (e.g., 0.001 for $0.001 per request)")}
+              {labelWithHint(
+                t("Fixed Margin Amount"),
+                t("Enter a fixed amount in USD (e.g., 0.001 for $0.001 per request)"),
+              )}
             </FieldLabel>
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground">$</span>
@@ -180,7 +187,7 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
               (marginType === "fixed" && !fixedAmountValue)
             }
           >
-            Add Provider Margin
+            {t("Add Provider Margin")}
           </Button>
         </div>
       </div>

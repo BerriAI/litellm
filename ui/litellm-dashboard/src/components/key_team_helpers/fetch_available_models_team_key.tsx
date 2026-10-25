@@ -1,4 +1,5 @@
 import { modelAvailableCall } from "../networking";
+import { englishTranslate, type Translate } from "@/i18n/language";
 
 export const fetchAvailableModelsForTeamOrKey = async (
   userID: string,
@@ -41,13 +42,13 @@ export const excludeProxyWideSentinel = (models: string[]): string[] =>
 export const hasAllModelsSentinel = (models: string[]): boolean =>
   models.includes("all-proxy-models") || models.includes("all-team-models");
 
-export const getModelDisplayName = (model: string) => {
+export const getModelDisplayName = (model: string, t: Translate = englishTranslate) => {
   if (model === "all-proxy-models") {
-    return "All Proxy Models";
+    return t("All Proxy Models");
   }
   if (model.endsWith("/*")) {
     const provider = model.replace("/*", "");
-    return `All ${provider} models`;
+    return t("All {provider} models", { provider });
   }
   return model;
 };

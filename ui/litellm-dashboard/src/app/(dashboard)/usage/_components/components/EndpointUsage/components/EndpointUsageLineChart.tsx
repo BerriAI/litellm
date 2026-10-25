@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useMemo } from "react";
 import { ChartLine } from "lucide-react";
 import { LineChart, stackedUsageColor } from "@/components/shared/charts";
@@ -44,6 +45,7 @@ function transformDailyDataToChart(dailyData: DailyData[]): Array<Record<string,
 }
 
 export function EndpointUsageLineChart({ dailyData }: EndpointUsageLineChartProps) {
+  const { t } = useLanguage();
   const chartData = useMemo(() => {
     if (!dailyData?.results || dailyData.results.length === 0) {
       return [];
@@ -62,7 +64,7 @@ export function EndpointUsageLineChart({ dailyData }: EndpointUsageLineChartProp
   const colors = useMemo(() => categories.map((_, i) => stackedUsageColor(i)), [categories]);
 
   return (
-    <Panel icon={ChartLine} title="Endpoint Usage Trends">
+    <Panel icon={ChartLine} title={t("Endpoint Usage Trends")}>
       <LineChart
         className="h-64"
         data={chartData}

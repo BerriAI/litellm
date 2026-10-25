@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { createContext, useContext, type ReactNode } from "react";
 import { Waypoints } from "lucide-react";
 
@@ -37,6 +38,7 @@ export interface AutoRouterTagProps {
 }
 
 export function AutoRouterTag({ modelGroup, className }: AutoRouterTagProps) {
+  const { t } = useLanguage();
   const isAutoRouted = useIsAutoRoutedModelGroup(modelGroup);
 
   if (!isAutoRouted) return null;
@@ -44,7 +46,7 @@ export function AutoRouterTag({ modelGroup, className }: AutoRouterTagProps) {
   return (
     <Badge
       variant="secondary"
-      title={`Routed by auto-router "${modelGroup}"`}
+      title={t('Routed by auto-router "{modelGroup}"', { modelGroup: String(modelGroup) })}
       className={cn("gap-1.5 px-2.5 py-1 text-sm font-normal text-foreground", className)}
     >
       <Waypoints aria-hidden />

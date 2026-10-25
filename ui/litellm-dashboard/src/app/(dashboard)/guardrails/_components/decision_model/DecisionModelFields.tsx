@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Info, Plus, X } from "lucide-react";
 import React from "react";
 import { useWatch } from "react-hook-form";
@@ -46,16 +47,18 @@ const ProviderLogo: React.FC<{ provider: string }> = ({ provider }) => (
 );
 
 const NoDecisionModels: React.FC<{ providerFilter: string | null }> = ({ providerFilter }) => {
+  const { t } = useLanguage();
   const source = providerFilter ? ` from the ${getProviderLogoAndName(providerFilter).displayName} provider` : "";
   return (
-    <Alert variant="info" role="note" aria-label="No decision models">
+    <Alert variant="info" role="note" aria-label={t("No decision models")}>
       <Info />
-      <AlertTitle>No decision models yet</AlertTitle>
+      <AlertTitle>{t("No decision models yet")}</AlertTitle>
       <AlertDescription>
         <p>
-          Add a decision model{source} to use this guardrail. A model shows up here once its mode is decisions.{" "}
+          {t("Add a decision model")}
+          {source} {t("to use this guardrail. A model shows up here once its mode is decisions.")}{" "}
           <a href={uiHref("models-and-endpoints")} target="_blank" rel="noopener noreferrer">
-            Add a model
+            {t("Add a model")}
           </a>
         </p>
       </AlertDescription>
@@ -93,6 +96,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
   onChecksChange,
   control,
 }) => {
+  const { t } = useLanguage();
   const selectedModel = asText(useWatch({ control, name: "decision_model" }));
   const duplicateNames = duplicateDecisionCheckNames(checks);
   const providerByModel = new Map(decisionModels.map((option) => [option.model, option.provider]));
@@ -107,19 +111,20 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
   return (
     <div className="space-y-5">
       <div className="rounded-md border border-success/20 bg-success/10 px-3.5 py-2.5 text-[13px] text-success">
-        The <strong>Decision Model</strong> answers yes/no questions about each request (pre_call, during_call) or
-        response (post_call). A question whose probability reaches its threshold blocks the call, or is recorded when
-        set to Log only.
+        {t("The")} <strong>{t("Decision Model")}</strong>{" "}
+        {t(
+          "answers yes/no questions about each request (pre_call, during_call) or response (post_call). A question whose probability reaches its threshold blocks the call, or is recorded when set to Log only.",
+        )}
       </div>
 
       <GuardrailField
         control={control}
         name="decision_model"
         label={labelWithHint(
-          "Decision Model",
-          "A decisions-API model on this proxy, such as typesafe/jev-latest. It scores every question below.",
+          t("Decision Model"),
+          t("A decisions-API model on this proxy, such as typesafe/jev-latest. It scores every question below."),
         )}
-        rules={requiredRule("Select a decision model")}
+        rules={requiredRule(t("Select a decision model"))}
       >
         {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
           <Combobox
@@ -134,11 +139,11 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
               id={id}
               aria-invalid={ariaInvalid}
               aria-describedby={ariaDescribedBy}
-              placeholder={decisionModels.length > 0 ? "Select a decision model" : "No decision models yet"}
+              placeholder={decisionModels.length > 0 ? t("Select a decision model") : t("No decision models yet")}
               className="w-full"
             />
             <ComboboxContent>
-              <ComboboxEmpty>No matching models</ComboboxEmpty>
+              <ComboboxEmpty>{t("No matching models")}</ComboboxEmpty>
               <ComboboxList>
                 {(model: string) => {
                   const provider = providerByModel.get(model);
@@ -160,10 +165,11 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
       {decisionModels.length === 0 && <NoDecisionModels providerFilter={providerFilter} />}
 
       <Field>
-        <FieldLabel>Questions</FieldLabel>
+        <FieldLabel>{t("Questions")}</FieldLabel>
         <p className="m-0 text-xs text-muted-foreground">
-          Yes/no questions the decision model answers about the text. Block stops the call once a score reaches the
-          threshold, and Log only records it.
+          {t(
+            "Yes/no questions the decision model answers about the text. Block stops the call once a score reaches the threshold, and Log only records it.",
+          )}
         </p>
         {checks.map((check, index) => {
           const position = index + 1;
@@ -172,30 +178,30 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
               <button
                 type="button"
                 onClick={() => removeCheck(check.id)}
-                aria-label={`Remove question ${position}`}
+                aria-label={t("Remove question {position}", { position: String(position) })}
                 className="absolute top-2 right-2 p-1 text-muted-foreground transition-colors hover:text-destructive"
               >
                 <X className="size-4" />
               </button>
               <div>
-                <span className="mb-1 block text-xs font-medium text-muted-foreground">Name</span>
+                <span className="mb-1 block text-xs font-medium text-muted-foreground">{t("Name")}</span>
                 <Input
-                  aria-label={`Question ${position} name`}
-                  placeholder="Name (e.g. invoice_policy)"
+                  aria-label={t("Question {position} name", { position: String(position) })}
+                  placeholder={t("Name (e.g. invoice_policy)")}
                   className="bg-background"
                   value={check.name}
                   onChange={(event) => updateCheck(check.id, { name: event.target.value })}
                 />
                 {duplicateNames.has(check.name.trim()) && (
-                  <p className="m-0 mt-1 text-xs text-destructive">Another question already uses this name</p>
+                  <p className="m-0 mt-1 text-xs text-destructive">{t("Another question already uses this name")}</p>
                 )}
               </div>
               <div>
-                <span className="mb-1 block text-xs font-medium text-muted-foreground">Question</span>
+                <span className="mb-1 block text-xs font-medium text-muted-foreground">{t("Question")}</span>
                 <Textarea
-                  aria-label={`Question ${position}`}
+                  aria-label={t("Question {position}", { position: String(position) })}
                   rows={2}
-                  placeholder="The question the decision model answers, e.g. Does the text ask about invoices?"
+                  placeholder={t("The question the decision model answers, e.g. Does the text ask about invoices?")}
                   className="w-full resize-none bg-background"
                   value={check.instructions}
                   onChange={(event) => updateCheck(check.id, { instructions: event.target.value })}
@@ -203,7 +209,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
               </div>
               <div className="flex items-end gap-6">
                 <div className="w-32">
-                  <span className="mb-1 block text-xs font-medium text-muted-foreground">Action</span>
+                  <span className="mb-1 block text-xs font-medium text-muted-foreground">{t("Action")}</span>
                   <Select
                     items={ACTION_ITEMS}
                     value={check.action}
@@ -211,7 +217,10 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                       next && updateCheck(check.id, { action: next as "block" | "log" })
                     }
                   >
-                    <SelectTrigger className="w-full bg-background" aria-label={`Question ${position} action`}>
+                    <SelectTrigger
+                      className="w-full bg-background"
+                      aria-label={t("Question {position} action", { position: String(position) })}
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -224,10 +233,10 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                   </Select>
                 </div>
                 <div className="w-56">
-                  <span className="mb-1 block text-xs font-medium text-muted-foreground">Threshold</span>
+                  <span className="mb-1 block text-xs font-medium text-muted-foreground">{t("Threshold")}</span>
                   <div className="flex h-9 items-center">
                     <ThresholdSlider
-                      aria-label={`Question ${position} threshold`}
+                      aria-label={t("Question {position} threshold", { position: String(position) })}
                       value={check.threshold}
                       onChange={(next) => updateCheck(check.id, { threshold: next })}
                     />
@@ -240,7 +249,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
         <div>
           <Button variant="outline" size="sm" onClick={addCheck}>
             <Plus className="size-3" />
-            Add question
+            {t("Add question")}
           </Button>
         </div>
       </Field>

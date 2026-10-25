@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { CircleCheck, ChevronDown, MinusCircle, TriangleAlert, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import moment from "moment";
@@ -64,6 +65,7 @@ export function LogViewer({
   startDate = "",
   endDate = "",
 }: LogViewerProps) {
+  const { t } = useLanguage();
   const [sampleSize, setSampleSize] = useState(10);
   const [activeFilter, setActiveFilter] = useState<string>(filterAction);
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
@@ -118,14 +120,14 @@ export function LogViewer({
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h3 className="text-base font-semibold text-foreground">
-              {guardrailName ? `Logs — ${guardrailName}` : "Request Logs"}
+              {guardrailName ? `Logs — ${guardrailName}` : t("Request Logs")}
             </h3>
             <p className="text-xs text-muted-foreground mt-0.5">
               {logsLoading
-                ? "Loading…"
+                ? t("Loading…")
                 : logs.length > 0
                   ? `Showing ${displayLogs.length} of ${total} entries`
-                  : "No logs for this period. Select a guardrail and date range."}
+                  : t("No logs for this period. Select a guardrail and date range.")}
             </p>
           </div>
           {logs.length > 0 && (
@@ -144,7 +146,7 @@ export function LogViewer({
               </div>
               <div className="h-4 w-px bg-border" />
               <div className="flex items-center gap-1">
-                <span className="text-xs text-muted-foreground mr-1">Sample:</span>
+                <span className="text-xs text-muted-foreground mr-1">{t("Sample:")}</span>
                 {sampleSizes.map((size) => (
                   <Button
                     key={size}
@@ -168,7 +170,7 @@ export function LogViewer({
       )}
       {!logsLoading && displayLogs.length === 0 && (
         <div className="py-12 text-center text-sm text-muted-foreground">
-          No logs to display. Adjust filters or date range.
+          {t("No logs to display. Adjust filters or date range.")}
         </div>
       )}
       {!logsLoading && displayLogs.length > 0 && (

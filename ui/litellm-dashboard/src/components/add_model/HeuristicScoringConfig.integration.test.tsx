@@ -6,6 +6,7 @@ import { SHIPPED_SCORER_DEFAULTS } from "../../../tests/mocks/complexityScorerDe
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { getComplexityScorerDefaults } from "@/components/networking";
+import { LanguageProvider, useLanguage } from "@/contexts/LanguageContext";
 
 vi.mock("@/components/networking", () => ({ getComplexityScorerDefaults: vi.fn() }));
 
@@ -24,12 +25,39 @@ function Editor({ initial = base }: { initial?: ComplexityRouterConfigValue }) {
 }
 const draft = (): ComplexityRouterConfigValue => JSON.parse(screen.getByLabelText("Draft config").textContent!);
 
+function LanguageSwitch() {
+  const { setPreference } = useLanguage();
+  return <button onClick={() => setPreference("en")}>English</button>;
+}
+
 beforeEach(() => {
   testQueryClient.clear();
   vi.mocked(getComplexityScorerDefaults).mockResolvedValue(SHIPPED_SCORER_DEFAULTS);
 });
 
 describe("combined heuristic editor", () => {
+  it("本地评分校验随语言切换，且不修改维度或表单值", async () => {
+    const initial: ComplexityRouterConfigValue = {
+      ...base,
+      token_thresholds: { simple: 100, complex: 10 },
+      custom_dimensions: [{ id: "custom", name: "", weight: 0.2, keywords: ["Home"] }],
+    };
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="scoring" storageScope="scoring-validation">
+        <LanguageSwitch />
+        <Editor initial={initial} />
+      </LanguageProvider>,
+    );
+    await userEvent.click(screen.getByText("高级评分"));
+    expect(await screen.findByText(/短文本阈值不小于长文本阈值/)).toBeInTheDocument();
+    expect(screen.getByText(/自定义维度 1：名称必须以字母开头/)).toBeInTheDocument();
+    expect(draft()).toEqual(initial);
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+    expect(screen.getByText(/The short threshold is not below the long one/)).toBeInTheDocument();
+    expect(screen.getByText(/Custom dimension 1: use a name starting/)).toBeInTheDocument();
+    expect(draft()).toEqual(initial);
+  });
+
   it("adds and edits a graded dimension, rebalances builtins, preserves matcher-only edits, and removes it", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Editor />);

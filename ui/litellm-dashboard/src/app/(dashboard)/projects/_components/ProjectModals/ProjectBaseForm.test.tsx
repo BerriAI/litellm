@@ -1,10 +1,13 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { ProjectBaseForm } from "./ProjectBaseForm";
 import { emptyProjectFormValues, projectFormSchema } from "./projectFormSchema";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
+import { translate } from "@/i18n/language";
 
 const mockUseTeams = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
@@ -146,5 +149,26 @@ describe("ProjectBaseForm", () => {
     expect(screen.getByLabelText("TPM Limit")).toBeInTheDocument();
     expect(screen.getByLabelText("Input TPM Limit")).toBeInTheDocument();
     expect(screen.getByLabelText("Output TPM Limit")).toBeInTheDocument();
+  });
+
+  it("项目动态行的删除按钮切换为中文，元数据键名不误译为密钥", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="project-dynamic-labels" storageScope="test">
+        <LanguageSelector />
+        <FormWrapper />
+      </LanguageProvider>,
+    );
+    await user.click(screen.getByText("Advanced Settings"));
+    await user.click(screen.getByRole("button", { name: /add model limit/i }));
+    await user.click(screen.getByRole("button", { name: "Add Key-Value Pair" }));
+    fireEvent.change(screen.getByPlaceholderText("Metadata key"), { target: { value: "Home" } });
+
+    // 只替换删除动作的可访问名称，不改元数据的实际键名。
+    fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+    expect(screen.getByPlaceholderText(translate("zh-CN", "Metadata key"))).toHaveValue("Home");
+    expect(screen.getByRole("button", { name: "移除第 1 项模型限额" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "移除第 1 项元数据" })).toBeInTheDocument();
   });
 });

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useMCPAccessGroups } from "@/app/(dashboard)/hooks/mcpServers/useMCPAccessGroups";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
@@ -52,6 +53,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   allowNoMcpServers = false,
   allowAllProxyMcpServers = false,
 }) => {
+  const { t } = useLanguage();
   const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId, userId);
   const { data: accessGroups = [], isLoading: groupsLoading } = useMCPAccessGroups();
   const { data: toolsets = [], isLoading: toolsetsLoading } = useMCPToolsets();
@@ -130,7 +132,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
         value={selectedValues}
         onValueChange={handleChange}
         placeholder={placeholder}
-        emptyText="No MCP servers found"
+        emptyText={t("No MCP servers found")}
         loading={loading}
         disabled={disabled}
         className={`w-full ${className ?? ""}`}

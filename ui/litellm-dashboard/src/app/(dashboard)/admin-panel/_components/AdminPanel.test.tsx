@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AdminPanel from "./AdminPanel";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 const mockGetSSOSettings = vi.fn();
 const mockGetAllowedIPs = vi.fn();
@@ -27,6 +28,15 @@ vi.mock("@/components/Settings/AdminSettings/SSOSettings/SSOSettings", () => ({
 
 vi.mock("@/components/Settings/AdminSettings/UISettings/UISettings", () => ({
   default: () => <div>UI Settings</div>,
+}));
+
+// 容器单测隔离同一标签下的子页面，避免引入它们的数据查询依赖。
+vi.mock("@/components/Settings/AdminSettings/UISettings/TeamAdminEditableFieldsSettings", () => ({
+  default: () => null,
+}));
+
+vi.mock("@/components/Settings/AdminSettings/UserBannerSettings/UserBannerSettings", () => ({
+  default: () => null,
 }));
 
 vi.mock("@/components/SCIM", () => ({
@@ -66,6 +76,30 @@ describe("AdminPanel", () => {
     render(<AdminPanel />);
     expect(screen.getByRole("heading", { name: /admin access/i })).toBeInTheDocument();
     expect(screen.getByText(/go to 'internal users' page to add other admins/i)).toBeInTheDocument();
+  });
+
+  it("共享管理标题和界面设置入口支持双向切换，不重新请求或写配置", async () => {
+    // 子页面由替身隔离，仅验证容器标签和固定 tab 值不随语言变化。
+    const content = (language: string) => (
+      <LanguageProvider defaultLanguage={language} userId={null} storageScope="admin-language">
+        <AdminPanel />
+      </LanguageProvider>
+    );
+    localStorage.clear();
+    const user = userEvent.setup();
+    const view = render(content("en"));
+    await waitFor(() => expect(mockGetSSOSettings).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("tab", { name: "UI Settings" }));
+    view.rerender(content("zh-CN"));
+    expect(screen.getByRole("heading", { name: "管理员访问" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "界面设置" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("UI Settings")).toBeInTheDocument();
+    view.rerender(content("en"));
+    expect(screen.getByRole("tab", { name: "UI Settings" })).toHaveAttribute("aria-selected", "true");
+    expect(mockGetSSOSettings).toHaveBeenCalledTimes(1);
+    expect(mockGetAllowedIPs).not.toHaveBeenCalled();
+    expect(mockAddAllowedIP).not.toHaveBeenCalled();
+    expect(mockDeleteAllowedIP).not.toHaveBeenCalled();
   });
 
   describe("Tabs", () => {

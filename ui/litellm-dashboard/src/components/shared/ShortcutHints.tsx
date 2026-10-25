@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Fragment, type ReactNode } from "react";
 import { useHotkeysContext } from "react-hotkeys-hook";
 
@@ -69,12 +70,13 @@ function Kbd({ children }: { children: ReactNode }) {
 
 /** The shortcuts active right now, read from what is bound rather than typed by hand. */
 export function ShortcutHints({ className }: { className?: string }) {
+  const { t } = useLanguage();
   const { hotkeys } = useHotkeysContext();
   const hints = shortcutHints(hotkeys);
   if (hints.length === 0) return null;
   return (
     <div
-      aria-label="Keyboard shortcuts"
+      aria-label={t("Keyboard shortcuts")}
       data-slot="shortcut-hints"
       className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground", className)}
     >

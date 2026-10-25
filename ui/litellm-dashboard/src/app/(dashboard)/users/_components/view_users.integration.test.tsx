@@ -1,12 +1,22 @@
 /* @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import ViewUserDashboard from "./view_users";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
+import { Toaster } from "@/components/ui/sonner";
+import { toast } from "@/lib/toast";
+import {
+  invitationCreateCall,
+  userDeleteCall,
+  modelAvailableCall,
+  getPossibleUserRoles,
+} from "@/components/networking";
 
 const userListCall = vi.fn();
 
@@ -363,5 +373,128 @@ describe("ViewUserDashboard", () => {
       expect(await screen.findByText("Loading users…")).toBeInTheDocument();
       expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("用户列表异步通知的语言边界", () => {
+  beforeEach(async () => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    const userList = {
+      users: [makeUser("Home", "home@example.com")],
+      total: 1,
+      page: 1,
+      page_size: 25,
+      total_pages: 1,
+    };
+    userListCall.mockResolvedValue(userList);
+    const actual = await vi.importActual<typeof import("@/lib/toast")>("@/lib/toast");
+    // 固定通知交给真实语言上下文和 Sonner，保留本文件既有的详情页替身。
+    vi.mocked(toast.success).mockImplementation(actual.toast.success);
+    vi.mocked(toast.fromError).mockImplementation(actual.toast.fromError);
+  });
+
+  afterEach(async () => {
+    const actual = await vi.importActual<typeof import("@/lib/toast")>("@/lib/toast");
+    act(() => actual.toast.dismiss());
+    vi.mocked(toast.success).mockReset();
+    vi.mocked(toast.fromError).mockReset();
+  });
+
+  const renderLocalizedDashboard = () => {
+    const client = createQueryClient();
+    const tree = (defaultLanguage: string) => (
+      <QueryClientProvider client={client}>
+        <LanguageProvider defaultLanguage={defaultLanguage} userId="users-review" storageScope="/users">
+          <LanguageSelector />
+          <ViewUserDashboard {...defaultProps} />
+          <Toaster expand duration={Infinity} />
+        </LanguageProvider>
+      </QueryClientProvider>
+    );
+    return { ...renderWithProviders(tree("en")), tree };
+  };
+
+  const switchLanguage = (value: "en" | "zh-CN") =>
+    fireEvent.change(screen.getByRole("combobox", { name: /Interface language|界面语言/ }), { target: { value } });
+
+  const chooseUserAction = async (user: ReturnType<typeof userEvent.setup>, action: "reset-password" | "delete") => {
+    expect(await screen.findByText("home@example.com")).toBeInTheDocument();
+    await user.click(screen.getByTestId("user-actions-Home"));
+    await user.click(await screen.findByTestId(`user-action-${action}`));
+  };
+
+  it("生成密码重置链接的等待提示跟随语言，请求不会重复发送", async () => {
+    const user = userEvent.setup();
+    const pending = Promise.withResolvers<Awaited<ReturnType<typeof invitationCreateCall>>>();
+    vi.mocked(invitationCreateCall).mockReturnValueOnce(pending.promise);
+    renderLocalizedDashboard();
+    await chooseUserAction(user, "reset-password");
+    expect(await screen.findByText("Generating password reset link...")).toBeInTheDocument();
+    const modelLoads = vi.mocked(modelAvailableCall).mock.calls.length;
+    const roleLoads = vi.mocked(getPossibleUserRoles).mock.calls.length;
+
+    switchLanguage("zh-CN");
+    expect(screen.getByText("正在生成密码重置链接...")).toBeInTheDocument();
+    switchLanguage("en");
+    expect(screen.getByText("Generating password reset link...")).toBeInTheDocument();
+    expect(invitationCreateCall).toHaveBeenCalledExactlyOnceWith("test-token", "Home");
+    expect(userListCall).toHaveBeenCalledTimes(1);
+    expect(modelAvailableCall).toHaveBeenCalledTimes(modelLoads);
+    expect(getPossibleUserRoles).toHaveBeenCalledTimes(roleLoads);
+    await act(async () => pending.reject(new Error("private-reset-detail")));
+  });
+
+  it.each([false, true])("密码重置失败提示只显示当前语言的本地说明，等待中切换=%s", async (switchWhilePending) => {
+    const user = userEvent.setup();
+    const pending = Promise.withResolvers<Awaited<ReturnType<typeof invitationCreateCall>>>();
+    vi.mocked(invitationCreateCall).mockReturnValueOnce(pending.promise);
+    renderLocalizedDashboard();
+    await chooseUserAction(user, "reset-password");
+    if (switchWhilePending) switchLanguage("zh-CN");
+    await act(async () => pending.reject(new Error("private-reset-detail")));
+    if (!switchWhilePending) {
+      expect(await screen.findByText("Failed to generate password reset link")).toBeInTheDocument();
+      switchLanguage("zh-CN");
+    }
+
+    expect(await screen.findByText("生成密码重置链接失败，请重试")).toBeInTheDocument();
+    expect(screen.queryByText("private-reset-detail")).not.toBeInTheDocument();
+    switchLanguage("en");
+    expect(screen.getByText("Failed to generate password reset link")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(invitationCreateCall).toHaveBeenCalledExactlyOnceWith("test-token", "Home");
+    expect(userListCall).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("删除用户的结果提示跟随当前语言，确认和列表更新不变，失败=%s", async (failed) => {
+    const user = userEvent.setup();
+    const pending = Promise.withResolvers<Awaited<ReturnType<typeof userDeleteCall>>>();
+    vi.mocked(userDeleteCall).mockReturnValueOnce(pending.promise);
+    const view = renderLocalizedDashboard();
+    await chooseUserAction(user, "delete");
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("Home");
+    expect(userDeleteCall).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    // 删除确认框开启时模拟全站默认更新，不点击模态外控件。
+    view.rerender(view.tree("zh-CN"));
+    expect(within(dialog).getByRole("button", { name: "正在删除…" })).toBeDisabled();
+    expect(userDeleteCall).toHaveBeenCalledExactlyOnceWith("test-token", ["Home"]);
+    await act(async () => {
+      if (failed) pending.reject(new Error("private-delete-detail"));
+      else pending.resolve({});
+    });
+
+    expect(await screen.findByText(failed ? "删除用户失败，请重试" : "用户已删除")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByText("private-delete-detail")).not.toBeInTheDocument();
+    if (failed) expect(screen.getByText("home@example.com")).toBeInTheDocument();
+    else expect(screen.queryByText("home@example.com")).not.toBeInTheDocument();
+    switchLanguage("en");
+    expect(screen.getByText(failed ? "Failed to delete user" : "User deleted successfully")).toBeInTheDocument();
+    expect(userDeleteCall).toHaveBeenCalledTimes(1);
+    expect(userListCall).toHaveBeenCalledTimes(1);
   });
 });

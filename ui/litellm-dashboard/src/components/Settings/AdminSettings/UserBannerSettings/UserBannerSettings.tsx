@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SEVERITY_ICONS, UserBannerMarkdown } from "@/components/UserBanner";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 const SEVERITY_LABELS: Record<UserBannerSeverity, string> = {
   info: "Info",
@@ -54,6 +55,9 @@ interface UserBannerSettingsFormProps {
 }
 
 function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }: UserBannerSettingsFormProps) {
+  const { t } = useLanguage();
+  // 仅翻译控件文案，管理员撰写的公告内容始终保留原文
+  const severityItems = SEVERITY_ITEMS.map((item) => ({ ...item, label: t(item.label) }));
   const [draft, setDraft] = useState<UserBannerUpdate>({
     enabled: persisted.enabled,
     message: persisted.message,
@@ -65,7 +69,7 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
   const handleSave = () => {
     saveBanner(draft, {
       onSuccess: () => {
-        toast.success("User banner updated successfully");
+        toast.success(t("User banner updated successfully"));
       },
       onError: (error) => {
         toast.fromError(error);
@@ -76,10 +80,11 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
   return (
     <Card>
       <CardHeader>
-        <CardTitle>User Banner</CardTitle>
+        <CardTitle>{t("User Banner")}</CardTitle>
         <CardDescription>
-          Publish an announcement to all dashboard users. Markdown is supported; the banner appears below the header on
-          every page until you unpublish it. Users can dismiss it, and it reappears whenever the content changes.
+          {t(
+            "Publish an announcement to all dashboard users. Markdown is supported; the banner appears below the header on every page until you unpublish it. Users can dismiss it, and it reappears whenever the content changes.",
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -91,40 +96,42 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
               <Switch
                 checked={draft.enabled}
                 onCheckedChange={(checked: boolean) => setDraft({ ...draft, enabled: checked })}
-                aria-label="Publish user banner"
+                aria-label={t("Publish user banner")}
               />
-              <Label>Publish user banner</Label>
+              <Label>{t("Publish user banner")}</Label>
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="user-banner-message">Message</Label>
+              <Label htmlFor="user-banner-message">{t("Message")}</Label>
               <Textarea
                 id="user-banner-message"
                 value={draft.message}
                 maxLength={4000}
                 rows={3}
-                placeholder="**Scheduled maintenance** tonight at 10 PM UTC. See [status page](https://example.com)."
+                placeholder={t(
+                  "**Scheduled maintenance** tonight at 10 PM UTC. See [status page](https://example.com).",
+                )}
                 onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) =>
                   setDraft({ ...draft, message: event.target.value })
                 }
               />
-              {messageMissing && <p className="text-sm text-destructive">Add a message before publishing.</p>}
+              {messageMissing && <p className="text-sm text-destructive">{t("Add a message before publishing.")}</p>}
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label>Severity</Label>
+              <Label>{t("Severity")}</Label>
               <Select
-                items={SEVERITY_ITEMS}
+                items={severityItems}
                 value={draft.severity}
                 onValueChange={(value: string | null) =>
                   setDraft({ ...draft, severity: (value ?? "info") as UserBannerSeverity })
                 }
               >
-                <SelectTrigger className="w-48" aria-label="Banner severity">
-                  <SelectValue placeholder="Severity" />
+                <SelectTrigger className="w-48" aria-label={t("Banner severity")}>
+                  <SelectValue placeholder={t("Severity")} />
                 </SelectTrigger>
                 <SelectContent>
-                  {SEVERITY_ITEMS.map((item) => (
+                  {severityItems.map((item) => (
                     <SelectItem key={item.value} value={item.value}>
                       {item.label}
                     </SelectItem>
@@ -135,7 +142,7 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
 
             {draft.message.trim() !== "" && (
               <div className="flex flex-col gap-2">
-                <Label>Preview</Label>
+                <Label>{t("Preview")}</Label>
                 <Alert variant={draft.severity}>
                   {SEVERITY_ICONS[draft.severity]}
                   <AlertDescription>
@@ -147,7 +154,7 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
 
             <div className="flex justify-end">
               <Button onClick={handleSave} disabled={isPending || messageMissing}>
-                {isPending ? "Saving..." : "Save banner"}
+                {t(isPending ? "Saving..." : "Save banner")}
               </Button>
             </div>
           </div>

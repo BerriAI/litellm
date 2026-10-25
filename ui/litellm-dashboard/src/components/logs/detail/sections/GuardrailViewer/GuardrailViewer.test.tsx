@@ -9,6 +9,7 @@ import {
   makeGuardrailInformation,
 } from "@/components/logs/detail/sections/GuardrailViewer/__tests__/fixtures";
 import GuardrailViewer from "@/components/logs/detail/sections/GuardrailViewer/GuardrailViewer";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 // We will mock child components selectively for some tests to assert prop passthrough,
 // but also run an integration-style render without mocks.
@@ -72,6 +73,39 @@ const ranPostCall: Partial<GuardrailInformation> = {
 describe("GuardrailViewer", () => {
   beforeEach(() => {
     vi.resetModules();
+  });
+
+  it.each([1, 2])("汉化 %i 个护栏及文本记录数量，不拼接英文复数或改写名称", (count) => {
+    localStorage.clear();
+    const data = Array.from({ length: count }, (_, index) =>
+      makeGuardrailInformation({
+        guardrail_name: index === 0 ? "Home" : "Settings",
+        guardrail_usage: { text_records: index === 0 ? 1 : 1000 },
+      }),
+    );
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId="guardrail-count-test" storageScope="guardrail-count-test">
+        <GuardrailViewer data={data} />
+      </LanguageProvider>,
+    );
+
+    expect(screen.getByText(`已评估 ${count} 个防护规则`)).toBeInTheDocument();
+    expect(screen.getByText("1 条文本记录")).toBeInTheDocument();
+    expect(screen.getByText("Home")).toBeInTheDocument();
+    if (count === 2) {
+      expect(screen.getByText(`${(1000).toLocaleString()} 条文本记录`)).toBeInTheDocument();
+      expect(screen.getByText("Settings")).toBeInTheDocument();
+    }
+  });
+
+  it.each([1, 2])("英文保留 %i 个护栏和文本记录的单复数", (count) => {
+    const data = Array.from({ length: count }, () =>
+      makeGuardrailInformation({ guardrail_usage: { text_records: count } }),
+    );
+    renderWithProviders(<GuardrailViewer data={data} />);
+
+    expect(screen.getByText(`${count} guardrail${count === 1 ? "" : "s"} evaluated`)).toBeInTheDocument();
+    expect(screen.getAllByText(`${count} text record${count === 1 ? "" : "s"}`)).toHaveLength(count);
   });
 
   it("shows header, status pill, and duration", () => {

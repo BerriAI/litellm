@@ -42,7 +42,7 @@ describe("RoutingGroupsTable", () => {
 
   it("should render every column header", () => {
     render(<RoutingGroupsTable {...defaultProps} />);
-    for (const header of ["Group Name", "Models", "Strategy"]) {
+    for (const header of ["Routing Group Name", "Models", "Strategy"]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
   });

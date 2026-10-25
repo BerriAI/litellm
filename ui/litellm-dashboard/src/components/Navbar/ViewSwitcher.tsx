@@ -14,6 +14,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import { uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
 import moyaiHead from "../../../public/assets/moyai/moyai-head.svg";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 const GATEWAY = "ai-gateway";
 const CHAT = "chat";
@@ -79,6 +80,7 @@ interface ViewSwitcherProps {
 }
 
 export default function ViewSwitcher({ className, contentClassName }: ViewSwitcherProps) {
+  const { t } = useLanguage();
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
   const pathname = usePathname();
@@ -96,6 +98,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
     isMoyaiRoute,
     plugins.find((p) => p.name === mode)?.display_name,
   );
+  const displayedLabel = activeIcon === MOYAI || (mode !== GATEWAY && !isChatRoute) ? activeLabel : t(activeLabel);
 
   const modeEntries = [
     { key: GATEWAY, label: "AI Gateway" },
@@ -117,11 +120,13 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
         <span className="flex items-center gap-2">
           <WorkspaceIcon workspace={CHAT} />
           <span className="flex max-w-[220px] flex-col">
-            <span className="font-medium">Chat</span>{" "}
-            <span className="text-xs leading-snug text-muted-foreground">Chat UI for using LLMs, MCPs, Agents</span>{" "}
+            <span className="font-medium">{t("Chat")}</span>{" "}
+            <span className="text-xs leading-snug text-muted-foreground">
+              {t("Chat UI for using LLMs, MCPs, Agents")}
+            </span>{" "}
             {!chatEnabled && (
               <span className="whitespace-normal text-xs leading-snug text-muted-foreground">
-                Admins can enable in Settings
+                {t("Admins can enable in Settings")}
               </span>
             )}
           </span>
@@ -139,7 +144,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
         <div className="flex w-full items-center justify-between gap-6 py-0.5">
           <span className="flex items-center gap-2">
             <WorkspaceIcon workspace={GATEWAY} />
-            <span className="font-medium">{e.label}</span>
+            <span className="font-medium">{e.key === GATEWAY ? t(e.label) : e.label}</span>
           </span>
           {!isStandaloneRoute && e.key === mode && <Check className="size-4 text-info" />}
         </div>
@@ -155,7 +160,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
             <WorkspaceIcon workspace={MOYAI} />
             <span className="flex flex-col">
               <span className="font-medium">Moyai</span>{" "}
-              <span className="text-xs leading-snug text-muted-foreground">Cloud Coding Agent</span>
+              <span className="text-xs leading-snug text-muted-foreground">{t("Cloud Coding Agent")}</span>
             </span>
           </span>
           {isMoyaiRoute && <Check className="size-4 text-info" />}
@@ -168,7 +173,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label={`Switch workspace, current: ${activeLabel}`}
+        aria-label={t("Switch workspace, current: {workspace}", { workspace: displayedLabel })}
         render={
           <Button
             type="button"
@@ -180,7 +185,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       >
         <WorkspaceIcon workspace={activeIcon} />
         <span data-slot="workspace-label" className="truncate">
-          {activeLabel}
+          {displayedLabel}
         </span>
         <ChevronsUpDown data-slot="workspace-chevron" className="size-3.5 flex-none text-muted-foreground" />
       </DropdownMenuTrigger>

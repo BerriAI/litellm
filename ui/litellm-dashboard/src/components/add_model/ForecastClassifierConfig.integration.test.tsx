@@ -330,7 +330,7 @@ describe("forecast classifier form", () => {
         }}
       />,
     );
-    await selectAutoRouterApproach("Capability");
+    await selectAutoRouterApproach("Capability classifier");
     fireEvent.change(screen.getByLabelText("Solve probability threshold"), { target: { value: "0.7" } });
     expect(screen.getByRole("button", { name: "Save configuration" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
@@ -360,7 +360,7 @@ describe("forecast classifier form", () => {
         tier_model_params: { MEDIUM: { efficient: { max_tokens: 128 } }, COMPLEX: { capable: { speed: "fast" } } },
       };
       renderWithProviders(<Form initialValue={previous} />);
-      await selectAutoRouterApproach(source === "capability" ? "Fuse v2" : "Capability");
+      await selectAutoRouterApproach(source === "capability" ? "Fuse v2" : "Capability classifier");
       if (source === "capability") {
         fireEvent.change(screen.getByLabelText("Efficient solver profile"), { target: { value: "Small solver" } });
         fireEvent.change(screen.getByLabelText("Capable solver profile"), { target: { value: "Large solver" } });

@@ -1,3 +1,5 @@
+import { useLanguage } from "@/contexts/LanguageContext";
+import { englishTranslate, type Translate } from "@/i18n/language";
 import {
   AreaChart,
   BarChart,
@@ -46,29 +48,42 @@ const modelAverageResponseTimeMs = (metrics: ModelActivityData): number | null =
 
 const formatSpend = (value: number) => `$${formatNumberWithCommas(value, 2, true)}`;
 
-export const ResponseTimeTooltip = ({ active, payload, label }: ChartTooltipProps) => (
-  <ValueTooltip
-    active={active}
-    payload={payload?.map((item) => ({ ...item, name: formatCategoryName(String(item.dataKey ?? "")) }))}
-    label={label}
-    valueFormatter={formatResponseTime}
-  />
-);
+export const ResponseTimeTooltip = ({ active, payload, label }: ChartTooltipProps) => {
+  const { t } = useLanguage();
+  return (
+    <ValueTooltip
+      active={active}
+      payload={payload?.map((item) => ({
+        ...item,
+        name:
+          item.dataKey === "metrics.avg_response_time_ms"
+            ? t(formatCategoryName(item.dataKey))
+            : formatCategoryName(String(item.dataKey ?? "")),
+      }))}
+      label={label}
+      valueFormatter={formatResponseTime}
+    />
+  );
+};
 
-const SeriesKey = ({ categories, colors }: { categories: readonly string[]; colors: readonly ChartColor[] }) => (
-  <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-    {categories.map((category, idx) => (
-      <span key={category} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <span
-          aria-hidden="true"
-          className="size-2 shrink-0 rounded-[2px]"
-          style={{ backgroundColor: chartColorValue(colors[idx % colors.length]) }}
-        />
-        {formatCategoryName(category)}
-      </span>
-    ))}
-  </div>
-);
+const SeriesKey = ({ categories, colors }: { categories: readonly string[]; colors: readonly ChartColor[] }) => {
+  const { t } = useLanguage();
+  // 分类来自固定指标键，不对模型名或密钥名做词典查询。
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+      {categories.map((category, idx) => (
+        <span key={category} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span
+            aria-hidden="true"
+            className="size-2 shrink-0 rounded-[2px]"
+            style={{ backgroundColor: chartColorValue(colors[idx % colors.length]) }}
+          />
+          {t(formatCategoryName(category))}
+        </span>
+      ))}
+    </div>
+  );
+};
 
 /** A stat value kept as a heading so it stays addressable by its accessible name. */
 const StatValue = ({ children }: { children: ReactNode }) => <h4 className="truncate">{children}</h4>;
@@ -114,11 +129,14 @@ const ItemMark = ({ label, color }: { label: string; color: string }) => {
   );
 };
 
-const TopKeysPanel = ({ children }: { children: ReactNode }) => (
-  <Panel icon={KeyRound} title="Top Virtual Keys by Spend">
-    {children}
-  </Panel>
-);
+const TopKeysPanel = ({ children }: { children: ReactNode }) => {
+  const { t } = useLanguage();
+  return (
+    <Panel icon={KeyRound} title={t("Top Virtual Keys by Spend")}>
+      {children}
+    </Panel>
+  );
+};
 
 const ModelTopKeys = ({
   modelName,
@@ -127,6 +145,7 @@ const ModelTopKeys = ({
   modelName: string;
   fetchTopApiKeys: (model: string) => Promise<ModelTopKeysResponse>;
 }) => {
+  const { t } = useLanguage();
   interface ModelTopKeyRow {
     api_key: string;
     key_alias: string | null;
@@ -179,7 +198,7 @@ const ModelTopKeys = ({
   if (current === null) {
     return (
       <TopKeysPanel>
-        <p className="py-2 text-xs text-muted-foreground">Loading top keys...</p>
+        <p className="py-2 text-xs text-muted-foreground">{t("Loading top keys...")}</p>
       </TopKeysPanel>
     );
   }
@@ -188,7 +207,7 @@ const ModelTopKeys = ({
     return (
       <TopKeysPanel>
         <p className="py-2 text-xs text-muted-foreground">
-          Could not load top keys.{" "}
+          {t("Could not load top keys.")}{" "}
           <button
             type="button"
             className="font-medium text-foreground underline"
@@ -197,7 +216,7 @@ const ModelTopKeys = ({
               setRetryToken((token) => token + 1);
             }}
           >
-            Retry
+            {t("Retry")}
           </button>
         </p>
       </TopKeysPanel>
@@ -216,15 +235,21 @@ const ModelTopKeys = ({
             <li key={keyData.api_key} className="flex items-center justify-between gap-4 py-2.5">
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-foreground">{keyLabel}</p>
-                {keyData.team_id && <p className="truncate text-xs text-muted-foreground">Team: {keyData.team_id}</p>}
+                {keyData.team_id && (
+                  <p className="truncate text-xs text-muted-foreground">
+                    {t("Team:")} {keyData.team_id}
+                  </p>
+                )}
                 {keyData.user && keyData.user !== keyLabel && (
-                  <p className="truncate text-xs text-muted-foreground">User: {keyData.user}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {t("User:")} {keyData.user}
+                  </p>
                 )}
               </div>
               <div className="shrink-0 text-right">
                 <p className="text-sm tabular-nums text-foreground">${formatNumberWithCommas(keyData.spend, 2)}</p>
                 <p className="text-xs tabular-nums text-muted-foreground">
-                  {keyData.requests.toLocaleString()} requests | {keyData.tokens.toLocaleString()} tokens
+                  {keyData.requests.toLocaleString()} {t("requests |")} {keyData.tokens.toLocaleString()} {t("tokens")}
                 </p>
               </div>
             </li>
@@ -246,37 +271,44 @@ export const ModelSection = ({
   hidePromptCachingMetrics?: boolean;
   fetchTopApiKeys?: (model: string) => Promise<ModelTopKeysResponse>;
 }) => {
+  const { t } = useLanguage();
   return (
     <div className="grid gap-3">
       <StatStrip columns={5}>
         <StatCell>
-          <Stat label="Total Requests" value={<StatValue>{metrics.total_requests.toLocaleString()}</StatValue>} />
+          <Stat label={t("Total Requests")} value={<StatValue>{metrics.total_requests.toLocaleString()}</StatValue>} />
         </StatCell>
         <StatCell>
           <Stat
-            label="Total Successful Requests"
+            label={t("Total Successful Requests")}
             value={<StatValue>{metrics.total_successful_requests.toLocaleString()}</StatValue>}
           />
         </StatCell>
         <StatCell>
           <Stat
-            label="Total Tokens"
+            label={t("Total Tokens")}
             value={<StatValue>{metrics.total_tokens.toLocaleString()}</StatValue>}
-            hint={`${Math.round(metrics.total_tokens / metrics.total_successful_requests)} avg per successful request`}
+            hint={t("{value1} avg per successful request", {
+              value1: String(Math.round(metrics.total_tokens / metrics.total_successful_requests)),
+            })}
           />
         </StatCell>
         <StatCell>
           <Stat
-            label="Total Spend"
+            label={t("Total Spend")}
             value={<StatValue>${formatNumberWithCommas(metrics.total_spend, 2)}</StatValue>}
-            hint={`$${formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3)} per successful request`}
+            hint={t("${value1} per successful request", {
+              value1: String(formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3)),
+            })}
           />
         </StatCell>
         <StatCell>
           <Stat
-            label="Avg Response Time"
+            label={t("Avg Response Time")}
             value={<StatValue>{formatResponseTime(modelAverageResponseTimeMs(metrics))}</StatValue>}
-            hint={`over ${(metrics.total_timed_requests ?? 0).toLocaleString()} timed successful requests`}
+            hint={t("over {value1} timed successful requests", {
+              value1: String((metrics.total_timed_requests ?? 0).toLocaleString()),
+            })}
           />
         </StatCell>
       </StatStrip>
@@ -285,12 +317,17 @@ export const ModelSection = ({
 
       {metrics.top_models && metrics.top_models.length > 0 && <KeyModelUsageView topModels={metrics.top_models} />}
 
-      <Panel icon={Coins} title="Spend per day" action={<SeriesKey categories={["metrics.spend"]} colors={[BRAND]} />}>
+      <Panel
+        icon={Coins}
+        title={t("Spend per day")}
+        action={<SeriesKey categories={["metrics.spend"]} colors={[BRAND]} />}
+      >
         <BarChart
           className={CHART_CLASS}
           data={metrics.daily_data}
           index="date"
           categories={["metrics.spend"]}
+          categoryLabels={{ "metrics.spend": t("Spend") }}
           colors={[BRAND]}
           maxBarSize={28}
           valueFormatter={formatSpend}
@@ -300,7 +337,7 @@ export const ModelSection = ({
       </Panel>
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <Panel title="Total Tokens" action={<SeriesKey categories={TOKEN_CATEGORIES} colors={TOKEN_COLORS} />}>
+        <Panel title={t("Total Tokens")} action={<SeriesKey categories={TOKEN_CATEGORIES} colors={TOKEN_COLORS} />}>
           <AreaChart
             className={CHART_CLASS}
             data={metrics.daily_data}
@@ -313,7 +350,10 @@ export const ModelSection = ({
           />
         </Panel>
 
-        <Panel title="Requests per day" action={<SeriesKey categories={["metrics.api_requests"]} colors={[BRAND]} />}>
+        <Panel
+          title={t("Requests per day")}
+          action={<SeriesKey categories={["metrics.api_requests"]} colors={[BRAND]} />}
+        >
           <BarChart
             className={CHART_CLASS}
             data={metrics.daily_data}
@@ -330,7 +370,7 @@ export const ModelSection = ({
         {(metrics.total_timed_requests ?? 0) > 0 && (
           <Panel
             icon={Timer}
-            title="Avg Response Time per day"
+            title={t("Avg Response Time per day")}
             action={<SeriesKey categories={["metrics.avg_response_time_ms"]} colors={[BRAND]} />}
           >
             <LineChart
@@ -348,7 +388,7 @@ export const ModelSection = ({
         )}
 
         <Panel
-          title="Success vs Failed Requests"
+          title={t("Success vs Failed Requests")}
           action={<SeriesKey categories={REQUEST_CATEGORIES} colors={["green", "red"]} />}
         >
           <AreaChart
@@ -366,12 +406,16 @@ export const ModelSection = ({
         {!hidePromptCachingMetrics && (
           <Panel
             icon={Database}
-            title="Prompt Caching Metrics"
+            title={t("Prompt Caching Metrics")}
             action={<SeriesKey categories={CACHE_CATEGORIES} colors={["cyan", "purple"]} />}
           >
             <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs tabular-nums text-muted-foreground">
-              <p>Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</p>
-              <p>Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</p>
+              <p>
+                {t("Cache Read:")} {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} {t("tokens")}
+              </p>
+              <p>
+                {t("Cache Creation:")} {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} {t("tokens")}
+              </p>
             </div>
             <AreaChart
               className={cn(CHART_CLASS, "mt-3")}
@@ -436,10 +480,11 @@ export const ModelCollapsible = ({
 export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
   modelMetrics,
   summaryMetrics,
-  summaryTitle = "Overall Usage",
+  summaryTitle,
   hidePromptCachingMetrics = false,
   fetchTopApiKeys,
 }) => {
+  const { t } = useLanguage();
   const modelNames = Object.keys(modelMetrics).sort((a, b) => {
     if (a === "") return 1;
     if (b === "") return -1;
@@ -524,29 +569,29 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
       <section className="grid gap-3">
         <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
           <Activity aria-hidden="true" className="size-4 text-muted-foreground" strokeWidth={1.75} />
-          {summaryTitle}
+          {summaryTitle ?? t("Overall Usage")}
         </h3>
         <StatStrip columns={4}>
           <StatCell>
-            <Stat label="Total Requests" value={<StatValue>{totalRequests.toLocaleString()}</StatValue>} />
+            <Stat label={t("Total Requests")} value={<StatValue>{totalRequests.toLocaleString()}</StatValue>} />
           </StatCell>
           <StatCell>
             <Stat
-              label="Total Successful Requests"
+              label={t("Total Successful Requests")}
               value={<StatValue>{totalSuccessfulRequests.toLocaleString()}</StatValue>}
             />
           </StatCell>
           <StatCell>
-            <Stat label="Total Tokens" value={<StatValue>{totalTokens.toLocaleString()}</StatValue>} />
+            <Stat label={t("Total Tokens")} value={<StatValue>{totalTokens.toLocaleString()}</StatValue>} />
           </StatCell>
           <StatCell>
-            <Stat label="Total Spend" value={<StatValue>${formatNumberWithCommas(totalSpend, 2)}</StatValue>} />
+            <Stat label={t("Total Spend")} value={<StatValue>${formatNumberWithCommas(totalSpend, 2)}</StatValue>} />
           </StatCell>
         </StatStrip>
 
         <div className="grid gap-3 lg:grid-cols-2">
           <Panel
-            title="Total Tokens Over Time"
+            title={t("Total Tokens Over Time")}
             action={<SeriesKey categories={TOKEN_CATEGORIES} colors={TOKEN_COLORS} />}
           >
             <AreaChart
@@ -562,7 +607,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
             />
           </Panel>
           <Panel
-            title="Total Requests Over Time"
+            title={t("Total Requests Over Time")}
             action={<SeriesKey categories={REQUEST_CATEGORIES} colors={["emerald", "red"]} />}
           >
             <AreaChart
@@ -584,7 +629,8 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
         <div className="overflow-hidden rounded-xl border bg-card">
           {modelNames.map((modelName, index) => {
             const metrics = modelMetrics[modelName];
-            const label = metrics.label || "Unknown Item";
+            // 仅翻译缺失展示名，取数使用的模型标识保持原值。
+            const label = metrics.label || t("Unknown Item");
             const provider = providerForModel(metrics.label || "");
             const avgResponse = modelAverageResponseTimeMs(metrics);
             const share = maxSpend > 0 ? (metrics.total_spend / maxSpend) * 100 : 0;
@@ -614,9 +660,13 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
                     </div>
                     <div className="flex shrink-0 items-center gap-5 text-sm tabular-nums text-muted-foreground">
                       <span className="text-foreground">${formatNumberWithCommas(metrics.total_spend, 2)}</span>
-                      <span>{metrics.total_requests.toLocaleString()} requests</span>
+                      <span>
+                        {metrics.total_requests.toLocaleString()} {t("requests")}
+                      </span>
                       {avgResponse != null && (
-                        <span className="hidden md:inline">{formatResponseTime(avgResponse)} avg response</span>
+                        <span className="hidden md:inline">
+                          {formatResponseTime(avgResponse)} {t("avg response")}
+                        </span>
                       )}
                     </div>
                   </div>
@@ -642,12 +692,16 @@ export const formatKeyLabel = (
   modelData: Pick<KeyMetricWithMetadata, "metadata">,
   model: string,
   teams: Team[],
+  t: Translate = englishTranslate,
 ): string => {
   const keyAlias = keyActivityLabel(modelData.metadata, `key-hash-${model}`);
   const teamId = modelData.metadata.team_id;
   if (teamId) {
     const teamAlias = resolveTeamAliasFromTeamID(teamId, teams);
-    return teamAlias ? `${keyAlias} (team: ${teamAlias})` : `${keyAlias} (team_id: ${teamId})`;
+    // 只翻译本地标签模板，密钥别名和团队信息不作为翻译键。
+    return teamAlias
+      ? t("{key} (team: {team})", { key: keyAlias, team: teamAlias })
+      : t("{key} (team_id: {teamId})", { key: keyAlias, teamId });
   }
   return keyAlias;
 };
@@ -657,6 +711,7 @@ export const processActivityData = (
   dailyActivity: { results: DailyData[] },
   key: "models" | "model_groups" | "api_keys" | "mcp_servers" | "entities",
   teams: Team[] = [],
+  t: Translate = englishTranslate,
 ): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
 
@@ -666,7 +721,7 @@ export const processActivityData = (
         modelMetrics[model] = {
           label:
             key === "api_keys"
-              ? formatKeyLabel(modelData as KeyMetricWithMetadata, model, teams)
+              ? formatKeyLabel(modelData as KeyMetricWithMetadata, model, teams, t)
               : key === "entities"
                 ? (modelData as any).metadata?.agent_name || (modelData as any).metadata?.team_alias || model
                 : model,

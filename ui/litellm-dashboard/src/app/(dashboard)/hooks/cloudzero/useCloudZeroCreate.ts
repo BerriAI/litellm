@@ -1,5 +1,6 @@
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { useMutation } from "@tanstack/react-query";
+import { LOCAL_CLOUDZERO_ERROR } from "./cloudZeroErrors";
 
 interface CreateParams {
   connection_id: string;
@@ -30,9 +31,10 @@ const performCloudZeroCreate = async (accessToken: string, params: CreateParams)
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    const errorMessage =
-      errorData?.error?.message || errorData?.message || errorData?.detail || "Failed to create CloudZero integration";
-    throw new Error(errorMessage);
+    const errorMessage = errorData?.error?.message || errorData?.message || errorData?.detail;
+    throw errorMessage
+      ? new Error(errorMessage)
+      : new Error("Failed to create CloudZero integration", { cause: LOCAL_CLOUDZERO_ERROR });
   }
 
   const data = await response.json();
@@ -43,7 +45,7 @@ export const useCloudZeroCreate = (accessToken: string) => {
   return useMutation<CreateResponse, Error, CreateParams>({
     mutationFn: async (params: CreateParams) => {
       if (!accessToken) {
-        throw new Error("Access token is required");
+        throw new Error("Access token is required", { cause: LOCAL_CLOUDZERO_ERROR });
       }
       return await performCloudZeroCreate(accessToken, params);
     },

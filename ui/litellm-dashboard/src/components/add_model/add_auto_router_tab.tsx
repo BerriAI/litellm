@@ -1,3 +1,5 @@
+import { useLanguage } from "@/contexts/LanguageContext";
+import { englishTranslate, type Translate } from "@/i18n/language";
 import { AutoRouterAvailabilityContext, useAutoRouterAvailability } from "./AutoRouterAvailability";
 import { decisionDeploymentName } from "./jev_classifier_config";
 import DecisionModelSelect from "./DecisionModelSelect";
@@ -103,16 +105,16 @@ type PresetAvailability =
 
 // Every non-"available" state disables the option. Selection derives from this same function
 // (see presetAvailability below), so an option a caller can click is always one that can be applied.
-const presetDisabledHint = (availability: PresetAvailability): string | null => {
+const presetDisabledHint = (availability: PresetAvailability, t: Translate): string | null => {
   switch (availability.kind) {
     case "available":
       return null;
     case "loading":
-      return "Checking model availability...";
+      return t("Checking model availability...");
     case "unverifiable":
-      return "Cannot verify these models are available";
+      return t("Cannot verify these models are available");
     case "missing_models":
-      return `Missing: ${availability.models.join(", ")}`;
+      return t("Missing: {models}", { models: availability.models.join(", ") });
   }
 };
 
@@ -130,38 +132,40 @@ export const getSubmitBlockedReason = (
   config: ComplexityRouterConfigValue,
   keywordTierRules: KeywordTierRule[],
   referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
-  ...capabilities: [availability: ModelAvailability, modelInfo?: readonly ModelGroup[]]
+  ...capabilities: [availability: ModelAvailability, modelInfo?: readonly ModelGroup[], t?: Translate]
 ): string | null => {
-  const [availability, modelInfo = []] = capabilities;
+  const [availability, modelInfo = [], t = englishTranslate] = capabilities;
   return (
     (config.custom_tier_set
-      ? getCustomTierRowsError(config.custom_tier_set)
-      : getTierLabelsError(config.tier_labels)) ??
+      ? getCustomTierRowsError(config.custom_tier_set, t)
+      : getTierLabelsError(config.tier_labels, t)) ??
     (isForecastClassifier(config.classifier_type)
-      ? getForecastConfigError(config)
-      : getMissingTiersError(activeTierRows(config))) ??
-    getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
-    getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
+      ? getForecastConfigError(config, t)
+      : getMissingTiersError(activeTierRows(config), t)) ??
+    getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config), t) ??
+    getKeywordTierRulesError(keywordTierRules, activeTierRows(config), t) ??
     (effectiveClassifierType(config) === "jev" && !config.jev_classifier_config?.deployment_name
-      ? "Please select a decision model"
+      ? t("Please select a decision model")
       : null) ??
-    getClassifierModelError(config) ??
-    getHeuristicV2SuccessThresholdError(config.heuristic_v2_success_threshold) ??
-    getReminderMarkersError(config.reminder_markers) ??
-    getClassifierPluginTimeoutError(config.classifier_type, config.classifier_plugin_timeout_ms) ??
-    (heuristicScoringRole(config) === "decides" ? customDimensionsError(config.custom_dimensions) : null) ??
-    getClassifierReasoningEffortError(config, modelInfo) ??
-    getReferencedModelsError(referencedModelsParams, availability)
+    getClassifierModelError(config, t) ??
+    getHeuristicV2SuccessThresholdError(config.heuristic_v2_success_threshold, t) ??
+    getReminderMarkersError(config.reminder_markers, t) ??
+    getClassifierPluginTimeoutError(config.classifier_type, config.classifier_plugin_timeout_ms, t) ??
+    (heuristicScoringRole(config) === "decides"
+      ? customDimensionsError(config.custom_dimensions, undefined, t)
+      : null) ??
+    getClassifierReasoningEffortError(config, modelInfo, t) ??
+    getReferencedModelsError(referencedModelsParams, availability, t)
   );
 };
 
-const autoRouterSchema = (requiresTeamScope: boolean) =>
+const autoRouterSchema = (requiresTeamScope: boolean, t: Translate = englishTranslate) =>
   z.object({
-    auto_router_name: z.string().min(1, "Auto router name is required"),
+    auto_router_name: z.string().min(1, t("Auto router name is required")),
     team_id: z
       .string()
       .nullable()
-      .refine((teamId) => !requiresTeamScope || Boolean(teamId), "Please select a team to continue"),
+      .refine((teamId) => !requiresTeamScope || Boolean(teamId), t("Please select a team to continue")),
     model_access_group: z.array(z.string()).optional(),
   });
 
@@ -179,8 +183,8 @@ const teamScopePayload = (requiresTeamScope: boolean, teamId: string | null): { 
 const BlockedReasonTooltip: React.FC<{ reason: string | null; children: React.ReactElement }> = ({
   reason,
   children,
-}) =>
-  reason === null ? (
+}) => {
+  return reason === null ? (
     children
   ) : (
     <Tooltip>
@@ -188,6 +192,7 @@ const BlockedReasonTooltip: React.FC<{ reason: string | null; children: React.Re
       <TooltipContent>{reason}</TooltipContent>
     </Tooltip>
   );
+};
 
 const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   handleOk,
@@ -197,8 +202,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   createScope = "unscoped-ok",
   teams = null,
 }) => {
+  const { t } = useLanguage();
   const requiresTeamScope = createScope === "team-required";
-  const form = useZodForm(autoRouterSchema(requiresTeamScope), { defaultValues: EMPTY_FORM_VALUES });
+  const form = useZodForm(autoRouterSchema(requiresTeamScope, t), { defaultValues: EMPTY_FORM_VALUES });
   const watchedName = useWatch({ control: form.control, name: "auto_router_name" });
   const watchedTeamId = useWatch({ control: form.control, name: "team_id" });
   const actor = { userRole, userID: userId ?? null, isViewOnly: false };
@@ -333,9 +339,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const templateItems = React.useMemo(
     () => [
       ...sortedPresetOptions.map(({ preset }) => ({ value: preset.key, label: preset.label })),
-      { value: "custom", label: "Start from scratch" },
+      { value: "custom", label: t("Start from scratch") },
     ],
-    [sortedPresetOptions],
+    [sortedPresetOptions, t],
   );
 
   const applyPrefill = (prefill: PresetPrefill) => {
@@ -393,6 +399,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     referencedModelsParams,
     groupsOnlyAvailability,
     modelInfo,
+    t,
   );
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
@@ -442,8 +449,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         referencedModelsParams,
         groupsOnlyAvailability,
         modelInfo,
+        t,
       ) ??
-      getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
+      getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules }, t);
     if (blockedReason) {
       setShowValidationErrors(true);
       toast.fromError(blockedReason);
@@ -456,7 +464,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       : (["auto_router_name"] as const);
 
     if (!(await form.trigger(validatedFields))) {
-      toast.fromError("Please fill in all required fields");
+      toast.fromError(t("Please fill in all required fields"));
       return;
     }
 
@@ -470,7 +478,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       complexityRouterConfigPayload as unknown as Record<string, unknown>,
       requiresTeamScope ? form.getValues("team_id") ?? undefined : undefined,
     );
-    const dryRunError = dryRunRejection(serverVerdict);
+    const dryRunError = dryRunRejection(serverVerdict, t);
     if (dryRunError) {
       setShowValidationErrors(true);
       toast.fromError(dryRunError);
@@ -491,7 +499,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           }),
     };
 
-    await handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
+    await handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), {
+      callback: handleOk,
+      t,
+    });
   };
 
   const handleAutoRouterSubmit = async () => {
@@ -500,7 +511,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (!name) {
       setShowValidationErrors(true);
       void form.trigger("auto_router_name");
-      toast.fromError("Please enter an Auto Router Name");
+      toast.fromError(t("Please enter an Auto Router Name"));
       return;
     }
 
@@ -530,7 +541,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     const targets = buildAutoRouterTestTargets(testTargetParams);
 
     if (targets.length === 0) {
-      toast.fromError("Please select at least one model for a complexity tier");
+      toast.fromError(t("Please select at least one model for a complexity tier"));
       return;
     }
 
@@ -548,15 +559,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           value={selectedPreset ?? null}
           onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
         >
-          <SelectTrigger aria-label="Use a template" data-testid="template-selector" className="w-full">
-            <SelectValue placeholder="Use a template" />
+          <SelectTrigger aria-label={t("Use a template")} data-testid="template-selector" className="w-full">
+            <SelectValue placeholder={t("Use a template")} />
           </SelectTrigger>
           <SelectContent className="[&_[data-slot=select-item]>div]:min-w-0 [&_[data-slot=select-item]>div]:shrink [&_[data-slot=select-item]>div]:whitespace-normal [&_[data-slot=select-item]>div]:break-words">
             {sortedPresetOptions.map(({ preset, availability: presetState }) => {
-              const disabledHint = presetDisabledHint(presetState);
+              const disabledHint = presetDisabledHint(presetState, t);
               const hintClass = isPresetHintAlarming(presetState) ? "text-destructive" : "text-muted-foreground";
               const matchedHint =
-                presetState.kind === "available" && presetState.viaDeployments ? "Matches your deployments" : null;
+                presetState.kind === "available" && presetState.viaDeployments ? t("Matches your deployments") : null;
 
               return (
                 <SelectItem
@@ -569,7 +580,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   <div>
                     <div className="font-medium">{preset.label}</div>
                     <div className="text-xs text-muted-foreground">{preset.description}</div>
-                    <div className="text-xs text-muted-foreground">Replaces classifier and model choices</div>
+                    <div className="text-xs text-muted-foreground">{t("Replaces classifier and model choices")}</div>
                     {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
                     {matchedHint && <div className="text-xs mt-1 text-success">{matchedHint}</div>}
                   </div>
@@ -577,23 +588,23 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               );
             })}
             <SelectSeparator className="mx-0" />
-            <SelectItem value="custom" label="Start from scratch">
+            <SelectItem value="custom" label={t("Start from scratch")}>
               <div>
-                <div className="font-medium">Start from scratch</div>
+                <div className="font-medium">{t("Start from scratch")}</div>
                 <div className="text-xs text-muted-foreground">
-                  Clears tier models, switches to Heuristics, and resets routing settings
+                  {t("Clears tier models, switches to Heuristics, and resets routing settings")}
                 </div>
               </div>
             </SelectItem>
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">Replaces classifier and model choices</p>
-        {presetsPending && <div className="text-xs mt-1 text-muted-foreground">Loading templates...</div>}
+        <p className="text-xs text-muted-foreground">{t("Replaces classifier and model choices")}</p>
+        {presetsPending && <div className="text-xs mt-1 text-muted-foreground">{t("Loading templates...")}</div>}
         {presetsUnavailable && (
           <div className="text-xs mt-1 text-destructive">
-            Could not load templates, so only Start from scratch is shown.{" "}
+            {t("Could not load templates, so only Start from scratch is shown.")}{" "}
             <button type="button" className="underline" onClick={() => void refetchPresets()}>
-              Retry
+              {t("Retry")}
             </button>
           </div>
         )}
@@ -614,7 +625,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
       keywordTierRules={keywordTierRules}
       onKeywordTierRulesChange={setKeywordTierRules}
-      keywordRulesError={getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig))}
+      keywordRulesError={getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig), t)}
       semanticMatchingEnabled={semanticMatchingEnabled}
       onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
       embeddingModel={embeddingModel}
@@ -639,10 +650,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 <FormField
                   control={form.control}
                   name="auto_router_name"
-                  label={labelWithHint("Auto Router Name", "Unique name for this auto router configuration")}
+                  label={labelWithHint(t("Auto Router Name"), t("Unique name for this auto router configuration"))}
                 >
                   {({ ref, ...field }) => (
-                    <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />
+                    <Input {...field} ref={ref} placeholder={t("e.g., smart_router, auto_router_1")} />
                   )}
                 </FormField>
               </div>
@@ -653,8 +664,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       control={form.control}
                       name="model_access_group"
                       label={labelWithHint(
-                        "Model Access Group",
-                        "Use model access groups to control who can access this auto router",
+                        t("Model Access Group"),
+                        t("Use model access groups to control who can access this auto router"),
                       )}
                     >
                       {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
@@ -676,8 +687,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   control={form.control}
                   name="team_id"
                   label={labelWithHint(
-                    "Select Team",
-                    "Select the team this auto router belongs to. Only keys for this team will be able to call it.",
+                    t("Select Team"),
+                    t("Select the team this auto router belongs to. Only keys for this team will be able to call it."),
                   )}
                 >
                   {({ id, value, onChange }) => (
@@ -717,9 +728,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 <FieldGroup>
                   {modelsUnverifiable && (
                     <p className="text-sm text-destructive">
-                      Could not load available models.{" "}
+                      {t("Could not load available models.")}{" "}
                       <button type="button" className="underline" onClick={() => void refetchModels()}>
-                        Retry
+                        {t("Retry")}
                       </button>
                     </p>
                   )}
@@ -733,11 +744,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                             href="https://github.com/BerriAI/litellm/issues"
                             className="text-sm text-primary underline-offset-4 hover:underline"
                           >
-                            Need Help?
+                            {t("Need Help?")}
                           </a>
                         }
                       />
-                      <TooltipContent>Get help on our github</TooltipContent>
+                      <TooltipContent>{t("Get help on our github")}</TooltipContent>
                     </Tooltip>
                     <div className="flex flex-wrap gap-2">
                       <BlockedReasonTooltip reason={submitBlockedReason}>
@@ -748,7 +759,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                           disabled={submitBlockedReason !== null || isSubmitting}
                           onClick={() => setIsRoutingTestVisible(true)}
                         >
-                          Test Routing
+                          {t("Test Routing")}
                         </Button>
                       </BlockedReasonTooltip>
                       <Button
@@ -759,7 +770,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                         disabled={isTestingConnection}
                       >
                         {isTestingConnection && <UiLoadingSpinner className="size-4" />}
-                        Test Connection
+                        {t("Test Connection")}
                       </Button>
                       <BlockedReasonTooltip reason={saveBlockedReason}>
                         <Button
@@ -769,7 +780,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                             void handleAutoRouterSubmit();
                           }}
                         >
-                          Add Auto Router
+                          {t("Add Auto Router")}
                         </Button>
                       </BlockedReasonTooltip>
                     </div>
@@ -783,7 +794,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         <Dialog open={isRoutingTestVisible} onOpenChange={(open) => !open && setIsRoutingTestVisible(false)}>
           <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[760px]">
             <DialogHeader>
-              <DialogTitle>Test Routing</DialogTitle>
+              <DialogTitle>{t("Test Routing")}</DialogTitle>
             </DialogHeader>
             {isRoutingTestVisible && (
               <AutoRouterRoutingTest
@@ -800,7 +811,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             <DialogFooter>
               {" "}
               <Button variant="outline" onClick={() => setIsRoutingTestVisible(false)}>
-                Close
+                {t("Close")}
               </Button>
             </DialogFooter>
           </DialogContent>

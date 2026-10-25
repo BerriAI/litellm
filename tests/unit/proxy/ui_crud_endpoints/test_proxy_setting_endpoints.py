@@ -18,6 +18,115 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 client = TestClient(app)
 
 
+def test_default_ui_language_defaults_to_english() -> None:
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UISettings
+
+    assert UISettings().default_ui_language == "en"
+
+
+@pytest.mark.parametrize("language", ["en", "zh-CN"])
+def test_default_ui_language_accepts_supported_languages(language: str) -> None:
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UISettings
+
+    assert UISettings.model_validate({"default_ui_language": language}).default_ui_language == language
+
+
+@pytest.mark.parametrize("language", ["fr", "zh", "", None, 1])
+def test_default_ui_language_rejects_unsupported_values(language: object) -> None:
+    from pydantic import ValidationError
+
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UISettings
+
+    # 默认语言必须在白名单内，不能静默持久化无效配置
+    with pytest.raises(ValidationError):
+        UISettings.model_validate({"default_ui_language": language})
+
+
+@pytest.mark.asyncio
+async def test_default_ui_language_patch_round_trips_without_resetting_other_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.config_resolvers import SettingsStore
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import get_ui_settings, update_ui_settings
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_uisettings.find_unique = AsyncMock(
+        return_value=SimpleNamespace(ui_settings={"disable_custom_api_keys": True})
+    )
+    prisma.db.litellm_uisettings.upsert = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server.proxy_config, "settings", SettingsStore("general_settings"))
+    actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    await update_ui_settings({"default_ui_language": "zh-CN"}, actor)
+    saved: Final = prisma.db.litellm_uisettings.upsert.await_args.kwargs["data"]["update"]["ui_settings"]
+    prisma.db.litellm_uisettings.find_unique.return_value = SimpleNamespace(ui_settings=saved)
+    result: Final = await get_ui_settings()
+    assert result.values["default_ui_language"] == "zh-CN"
+    assert result.values["disable_custom_api_keys"] is True
+    assert result.source["default_ui_language"] == "db"
+
+
+@pytest.mark.asyncio
+async def test_default_ui_language_yaml_outranks_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.config_resolvers import SettingsStore
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import get_ui_settings
+
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"default_ui_language": "en"})
+    store.apply_db_row("ui_settings", {"default_ui_language": "zh-CN"})
+    prisma: Final = MagicMock()
+    prisma.db.litellm_uisettings.find_unique = AsyncMock(
+        return_value=SimpleNamespace(ui_settings={"default_ui_language": "zh-CN"})
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server.proxy_config, "settings", store)
+    result: Final = await get_ui_settings()
+    assert result.values["default_ui_language"] == "en"
+    assert result.source["default_ui_language"] == "config"
+
+
+@pytest.mark.asyncio
+async def test_default_ui_language_invalid_patch_does_not_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import update_ui_settings
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_uisettings.upsert = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    with pytest.raises(HTTPException) as error:
+        await update_ui_settings({"default_ui_language": "fr"}, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+    assert error.value.status_code == 422
+    prisma.db.litellm_uisettings.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+async def test_default_ui_language_patch_requires_proxy_admin(role: LitellmUserRoles) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import update_ui_settings
+
+    with pytest.raises(HTTPException) as error:
+        await update_ui_settings({"default_ui_language": "zh-CN"}, UserAPIKeyAuth(user_role=role))
+    assert error.value.status_code == 403
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("config_value,stored_value,expected", [
     (None, None, False), (None, False, False), (None, True, True),
@@ -3004,7 +3113,8 @@ def test_update_ui_theme_settings_writes_audit_log(mock_proxy_config, monkeypatc
         app.dependency_overrides.pop(user_api_key_auth, None)
 
 
-def test_update_ui_settings_writes_audit_log(monkeypatch):
+@pytest.mark.parametrize("setting,value", [("disable_custom_api_keys", True), ("default_ui_language", "zh-CN")])
+def test_update_ui_settings_writes_audit_log(monkeypatch: pytest.MonkeyPatch, setting: str, value: bool | str) -> None:
     """Updating UI settings must be audited under the UI settings table."""
     from unittest.mock import AsyncMock, MagicMock
 
@@ -3034,7 +3144,7 @@ def test_update_ui_settings_writes_audit_log(monkeypatch):
     app.dependency_overrides[user_api_key_auth] = _admin_auth
     try:
         resp = client.patch(
-            "/update/ui_settings", json={"disable_custom_api_keys": True}
+            "/update/ui_settings", json={setting: value}
         )
         assert resp.status_code == 200, resp.text
 
@@ -3044,7 +3154,7 @@ def test_update_ui_settings_writes_audit_log(monkeypatch):
         assert written["table_name"] == "LiteLLM_UISettings"
         assert written["changed_by"] == "audit-admin"
         after = json.loads(written["updated_values"])
-        assert after["disable_custom_api_keys"] is True
+        assert after[setting] == value
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
 

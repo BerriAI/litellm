@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import {
   choiceToLoggingOnlyScope,
@@ -18,29 +19,32 @@ const isLoggingOnlyScopeChoice = (value: unknown): value is LoggingOnlyScopeChoi
 export const CustomCodeLoggingOnlyScopeSelect: React.FC<{
   value: LoggingOnlyScopeChoice;
   onChange: (choice: LoggingOnlyScopeChoice) => void;
-}> = ({ value, onChange }) => (
-  <div className="w-[240px]">
-    <label className="mb-1 block text-xs font-medium text-muted-foreground">Logging only scope</label>
-    <Select
-      items={LOGGING_ONLY_SCOPE_ITEMS}
-      value={value}
-      onValueChange={(nextValue) => {
-        if (isLoggingOnlyScopeChoice(nextValue)) onChange(nextValue);
-      }}
-    >
-      <SelectTrigger className="w-full" aria-label="Logging only scope">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {LOGGING_ONLY_SCOPE_ITEMS.map((option) => (
-          <SelectItem key={option.value} value={option.value}>
-            {option.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  </div>
-);
+}> = ({ value, onChange }) => {
+  const { t } = useLanguage();
+  return (
+    <div className="w-[240px]">
+      <label className="mb-1 block text-xs font-medium text-muted-foreground">{t("Logging only scope")}</label>
+      <Select
+        items={LOGGING_ONLY_SCOPE_ITEMS}
+        value={value}
+        onValueChange={(nextValue) => {
+          if (isLoggingOnlyScopeChoice(nextValue)) onChange(nextValue);
+        }}
+      >
+        <SelectTrigger className="w-full" aria-label={t("Logging only scope")}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {LOGGING_ONLY_SCOPE_ITEMS.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+};
 
 export const getCustomCodeLoggingOnlyScopeCreate = (
   mode: string[],

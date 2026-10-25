@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useId, useState } from "react";
 import { toast } from "@/lib/toast";
 import { fetchClient } from "@/lib/http/api";
@@ -26,6 +27,7 @@ interface ByokCredentialModalProps {
 }
 
 export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server, open, onClose, onSuccess }) => {
+  const { t } = useLanguage();
   const [step, setStep] = useState<1 | 2>(1);
   const [apiKey, setApiKey] = useState("");
   const [saveKey, setSaveKey] = useState(true);
@@ -45,7 +47,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
 
   const handleAuthorize = async () => {
     if (!apiKey.trim()) {
-      toast.error("Please enter your API key");
+      toast.error(t("Please enter your API key"));
       return;
     }
     setLoading(true);
@@ -54,7 +56,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
         params: { path: { server_id: server.server_id } },
         body: { credential: apiKey.trim(), save: saveKey },
       });
-      toast.success(`Connected to ${serverDisplayName}`);
+      toast.success(t("Connected to {serverDisplayName}", { serverDisplayName: String(serverDisplayName) }));
       onSuccess(server.server_id);
       handleClose();
     } catch (e) {
@@ -78,7 +80,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                 onClick={() => setStep(1)}
                 className="flex items-center gap-1 text-muted-foreground hover:text-foreground text-sm"
               >
-                <ArrowLeft className="size-3.5" /> Back
+                <ArrowLeft className="size-3.5" /> {t("Back")}
               </button>
             ) : (
               <div />
@@ -105,9 +107,11 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                 </div>
               </div>
 
-              <h2 className="text-2xl font-bold text-foreground mb-2">Connect {serverDisplayName}</h2>
+              <h2 className="text-2xl font-bold text-foreground mb-2">
+                {t("Connect")} {serverDisplayName}
+              </h2>
               <p className="text-muted-foreground mb-6">
-                LiteLLM needs access to {serverDisplayName} to complete your request.
+                {t("LiteLLM needs access to")} {serverDisplayName} {t("to complete your request.")}
               </p>
 
               {/* How it works */}
@@ -120,10 +124,13 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                     </svg>
                   </div>
                   <div>
-                    <p className="font-semibold text-foreground mb-1">How it works</p>
+                    <p className="font-semibold text-foreground mb-1">{t("How it works")}</p>
                     <p className="text-muted-foreground text-sm">
-                      LiteLLM acts as a secure bridge. Your requests are routed through our MCP client directly to{" "}
-                      {serverDisplayName}&apos;s API.
+                      {t(
+                        "LiteLLM acts as a secure bridge. Your requests are routed through our MCP client directly to",
+                      )}{" "}
+                      {serverDisplayName}
+                      {t("'s API.")}
                     </p>
                   </div>
                 </div>
@@ -137,7 +144,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                       <path d="M12 2L12 22M2 12L22 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                       <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
                     </svg>
-                    Requested Access
+                    {t("Requested Access")}
                   </p>
                   <ul className="space-y-2">
                     {server.byok_description.map((item, i) => (
@@ -154,13 +161,13 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                 onClick={() => setStep(2)}
                 className="w-full bg-gray-900 hover:bg-gray-700 text-white font-medium py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors"
               >
-                Continue to Authentication <ArrowRight className="size-4" />
+                {t("Continue to Authentication")} <ArrowRight className="size-4" />
               </button>
               <button
                 onClick={handleClose}
                 className="mt-3 w-full text-muted-foreground hover:text-foreground text-sm py-2"
               >
-                Cancel
+                {t("Cancel")}
               </button>
             </div>
           ) : (
@@ -170,18 +177,18 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                 <Key className="size-5 text-info" />
               </div>
 
-              <h2 className="text-2xl font-bold text-foreground mb-2">Provide API Key</h2>
+              <h2 className="text-2xl font-bold text-foreground mb-2">{t("Provide API Key")}</h2>
               <p className="text-muted-foreground mb-6">
-                Enter your {serverDisplayName} API key to authorize this connection.
+                {t("Enter your")} {serverDisplayName} {t("API key to authorize this connection.")}
               </p>
 
               <div className="mb-4">
                 <label htmlFor={apiKeyInputId} className="block text-sm font-semibold text-foreground mb-2">
-                  {serverDisplayName} API Key
+                  {serverDisplayName} {t("API Key")}
                 </label>
                 <PasswordInput
                   id={apiKeyInputId}
-                  placeholder="Enter your API key"
+                  placeholder={t("Enter your API key")}
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   groupClassName="rounded-lg"
@@ -193,7 +200,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                     rel="noopener noreferrer"
                     className="text-info hover:text-info/80 text-sm mt-2 flex items-center gap-1"
                   >
-                    Where do I find my API key? <Link2 className="size-3.5" />
+                    {t("Where do I find my API key?")} <Link2 className="size-3.5" />
                   </a>
                 )}
               </div>
@@ -207,16 +214,16 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                       fill="currentColor"
                     />
                   </svg>
-                  <span className="text-sm font-medium text-foreground">Save key for future use</span>
+                  <span className="text-sm font-medium text-foreground">{t("Save key for future use")}</span>
                 </div>
-                <Switch checked={saveKey} onCheckedChange={setSaveKey} aria-label="Save key for future use" />
+                <Switch checked={saveKey} onCheckedChange={setSaveKey} aria-label={t("Save key for future use")} />
               </div>
 
               {/* Security note */}
               <div className="bg-info/10 rounded-xl p-4 flex items-start gap-3 mb-6">
                 <Lock className="mt-0.5 size-4 shrink-0 text-info" />
                 <p className="text-sm text-info">
-                  Your key is stored securely and transmitted over HTTPS. It is never shared with third parties.
+                  {t("Your key is stored securely and transmitted over HTTPS. It is never shared with third parties.")}
                 </p>
               </div>
 
@@ -225,7 +232,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                 disabled={loading}
                 className="w-full bg-info hover:bg-info/80 disabled:opacity-60 text-info-foreground font-medium py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors"
               >
-                <Lock className="size-4" /> Connect &amp; Authorize
+                <Lock className="size-4" /> {t("Connect & Authorize")}
               </button>
             </div>
           )}

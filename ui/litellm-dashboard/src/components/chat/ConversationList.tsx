@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Pencil, Trash2, Search, MessageSquare, Clock3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -72,6 +73,7 @@ interface ConversationRowProps {
 }
 
 const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSelect, onDelete, onRename }) => {
+  const { t } = useLanguage();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(conv.title);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -121,7 +123,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
       {editing ? (
         <Input
           ref={inputRef}
-          aria-label="Conversation title"
+          aria-label={t("Conversation title")}
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -161,7 +163,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
                       onClick={startEditing}
                       variant="ghost"
                       size="icon-xs"
-                      aria-label={`Rename ${conv.title}`}
+                      aria-label={t("Rename {name}", { name: conv.title })}
                       className="text-muted-foreground"
                     >
                       <Pencil className="h-3 w-3" />
@@ -169,7 +171,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
                   }
                 />
                 <TooltipContent side="bottom">
-                  <p>Rename</p>
+                  <p>{t("Rename")}</p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -184,7 +186,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
                           <Button
                             variant="ghost"
                             size="icon-xs"
-                            aria-label={`Delete ${conv.title}`}
+                            aria-label={t("Delete {name}", { name: conv.title })}
                             className="text-muted-foreground hover:text-destructive"
                           >
                             <Trash2 className="h-3 w-3" />
@@ -194,22 +196,22 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
                     }
                   />
                   <TooltipContent side="bottom">
-                    <p>Delete</p>
+                    <p>{t("Delete")}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
               <AlertDialogContent className="chat-theme">
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Delete this conversation?</AlertDialogTitle>
-                  <AlertDialogDescription>This action cannot be undone</AlertDialogDescription>
+                  <AlertDialogTitle>{t("Delete this conversation?")}</AlertDialogTitle>
+                  <AlertDialogDescription>{t("This action cannot be undone")}</AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogCancel>{t("Cancel")}</AlertDialogCancel>
                   <AlertDialogAction
                     onClick={() => onDelete(conv.id)}
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   >
-                    Delete
+                    {t("Delete")}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -229,6 +231,7 @@ interface SearchModalProps {
 }
 
 const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect, onClose }) => {
+  const { t } = useLanguage();
   const [query, setQuery] = useState("");
   const [wasOpen, setWasOpen] = useState(open);
 
@@ -249,13 +252,13 @@ const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="chat-theme sm:max-w-[480px] p-4 gap-0">
-        <DialogTitle className="sr-only">Search conversations</DialogTitle>
+        <DialogTitle className="sr-only">{t("Search conversations")}</DialogTitle>
         <div className="relative mb-3">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             autoFocus
-            aria-label="Search conversations"
-            placeholder="Search conversations\u2026"
+            aria-label={t("Search conversations")}
+            placeholder={t("Search conversations\\u2026")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9"
@@ -264,7 +267,7 @@ const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect
 
         <ScrollArea className="h-[320px]">
           {filtered.length === 0 ? (
-            <div className="text-center py-6 text-muted-foreground text-sm">No conversations found</div>
+            <div className="text-center py-6 text-muted-foreground text-sm">{t("No conversations found")}</div>
           ) : (
             filtered.map((conv) => {
               return (
@@ -299,6 +302,7 @@ const ConversationList: React.FC<Props> = ({
   onSearchOpenChange,
   hideSearchButton = false,
 }) => {
+  const { t } = useLanguage();
   const [localSearchOpen, setLocalSearchOpen] = useState(false);
   const searchModalOpen = searchOpen ?? localSearchOpen;
   const setSearchModalOpen = onSearchOpenChange ?? setLocalSearchOpen;
@@ -331,7 +335,7 @@ const ConversationList: React.FC<Props> = ({
               className="chat-nav-item w-full justify-start gap-2.5 text-muted-foreground hover:bg-sidebar-accent"
             >
               <Search className="size-4" />
-              Search chats
+              {t("Search chats")}
             </Button>
           </div>
         )}
@@ -340,17 +344,17 @@ const ConversationList: React.FC<Props> = ({
             <div>
               <div className="moyai-chat-history-heading flex items-center gap-2 text-xs text-sidebar-foreground">
                 <Clock3 className="size-3.5" aria-hidden="true" />
-                <span className="flex-1">Recent</span>
+                <span className="flex-1">{t("Recent")}</span>
                 <span>0</span>
               </div>
-              <p className="moyai-chat-empty-history text-xs text-muted-foreground">No chats here yet.</p>
+              <p className="moyai-chat-empty-history text-xs text-muted-foreground">{t("No chats here yet.")}</p>
             </div>
           ) : (
             grouped.map(({ group, items }) => (
               <div key={group} className="mb-2">
                 <div className="moyai-chat-history-heading flex items-center gap-2 px-2 pt-2 pb-1 text-xs font-normal text-sidebar-foreground">
                   <Clock3 className="size-3.5" aria-hidden="true" />
-                  {group === "Recents" ? "Recent" : group}
+                  {t(group)}
                 </div>
                 {items.map((conv) => (
                   <ConversationRow

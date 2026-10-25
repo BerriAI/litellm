@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Badge } from "@/components/ui/badge";
 
 export type ModelCustomMetadataValue = string | number | boolean;
@@ -20,19 +21,20 @@ export function ModelCustomTags({ tags, className = "" }: { tags: string[]; clas
 }
 
 export function ModelCustomMetadata({ customTags, customMetadata }: ModelCustomMetadataProps) {
+  const { t } = useLanguage();
   const tags = customTags ?? [];
   const entries = Object.entries(customMetadata ?? {});
   return (
     <>
       {tags.length > 0 && (
         <div className="col-span-2">
-          <p className="font-medium">Tags:</p>
+          <p className="font-medium">{t("Tags:")}</p>
           <ModelCustomTags tags={tags} className="mt-1" />
         </div>
       )}
       {entries.length > 0 && (
         <div className="col-span-2">
-          <p className="font-medium">Custom Metadata:</p>
+          <p className="font-medium">{t("Custom Metadata:")}</p>
           <dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
             {entries.map(([key, value]) => (
               <div key={key} className="contents">

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import * as React from "react";
 import { Area, AreaChart as RechartsAreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, type ChartConfig } from "@/components/ui/chart";
@@ -11,6 +12,8 @@ export type AreaChartProps<TDatum extends Record<string, unknown>> = {
   data: readonly TDatum[];
   index: string;
   categories: readonly string[];
+  // 仅翻译图例和提示框，保留原始数据字段
+  categoryLabels?: Readonly<Record<string, string>>;
   colors?: readonly ChartColor[];
   valueFormatter?: (value: number) => string;
   yAxisWidth?: number;
@@ -27,6 +30,7 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
   data,
   index,
   categories,
+  categoryLabels,
   colors,
   valueFormatter,
   yAxisWidth = 56,
@@ -38,6 +42,7 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
   className,
   style,
 }: AreaChartProps<TDatum>) {
+  const { t } = useLanguage();
   const gradientId = React.useId().replace(/:/g, "");
 
   if (data.length === 0) {
@@ -46,13 +51,15 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
         className={cn("flex h-80 w-full items-center justify-center rounded-lg border border-dashed", className)}
         style={style}
       >
-        <p className="text-sm text-muted-foreground">No data</p>
+        <p className="text-sm text-muted-foreground">{t("No data")}</p>
       </div>
     );
   }
 
   const fills = categoryFills(categories.length, colors);
-  const config: ChartConfig = Object.fromEntries(categories.map((category) => [category, { label: category }]));
+  const config: ChartConfig = Object.fromEntries(
+    categories.map((category) => [category, { label: categoryLabels?.[category] ?? category }]),
+  );
   const TooltipContent = customTooltip ?? ValueTooltip;
 
   return (
@@ -92,6 +99,7 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
             key={category}
             type="linear"
             dataKey={category}
+            name={categoryLabels?.[category] ?? category}
             stroke={fills[i]}
             strokeWidth={2}
             fill={`url(#fill-${gradientId}-${i})`}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { userDetailHref } from "@/utils/entityLinks";
@@ -18,6 +19,7 @@ interface UserPopoverCellProps {
 }
 
 export function UserPopoverCell({ userAlias, userEmail, userId, width }: UserPopoverCellProps) {
+  const { t } = useLanguage();
   const displayValue = userAlias || userEmail || userId;
   const isDefaultAdmin = userId === DEFAULT_PROXY_ADMIN_USER_ID;
 
@@ -31,7 +33,13 @@ export function UserPopoverCell({ userAlias, userEmail, userId, width }: UserPop
         <div key={label} className="flex flex-col min-w-0">
           <span className="text-muted-foreground">{label}</span>
           {value ? (
-            <IdCell value={value} variant="plain" copyable copyLabel={`Copy ${label}`} className="max-w-full" />
+            <IdCell
+              value={value}
+              variant="plain"
+              copyable
+              copyLabel={t("Copy {label}", { label: String(label) })}
+              className="max-w-full"
+            />
           ) : (
             <span className="font-mono">-</span>
           )}

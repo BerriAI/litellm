@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { STACKED_USAGE_PALETTE } from "@/components/shared/charts";
 import UserAgentActivity from "./user_agent_activity";
 import * as networking from "./networking";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 // Mock the networking module
 vi.mock("./networking", () => ({
@@ -95,6 +96,7 @@ describe("UserAgentActivity", () => {
   };
 
   beforeEach(() => {
+    localStorage.clear();
     mockUserAgentSummaryCall.mockClear();
     mockTagDauCall.mockClear();
     mockTagWauCall.mockClear();
@@ -114,6 +116,19 @@ describe("UserAgentActivity", () => {
       page_size: 50,
       total_pages: 0,
     });
+  });
+
+  it("中文周期切换不改变代理名称或调用参数", async () => {
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="agent-language" storageScope="agent-test">
+        <UserAgentActivity {...defaultProps} />
+      </LanguageProvider>,
+    );
+    expect(await screen.findByText("按用户代理汇总")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("Chrome/1.0").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByText("周活"));
+    expect(await screen.findByText("最近七周的每周活跃用户")).toBeInTheDocument();
+    expect(mockTagWauCall).toHaveBeenCalledWith(defaultProps.accessToken, expect.anything(), undefined, undefined);
   });
 
   it("should render summary cards with user agent data", async () => {

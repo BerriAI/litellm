@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useId, useState, type ReactNode } from "react";
 import { Blocks, KeyRound, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -84,9 +85,14 @@ function MasterRow({
   onSelect: () => void;
   summary?: string;
 }) {
+  const { t } = useLanguage();
   return (
     <div data-active={active || undefined} className="flex items-center gap-1 rounded-sm pl-2 data-active:bg-accent">
-      <Checkbox checked={checked} onCheckedChange={onCheckedChange} aria-label={`Use ${row.label}`} />
+      <Checkbox
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+        aria-label={t("Use {label}", { label: String(row.label) })}
+      />
       <Button
         variant="ghost"
         size="sm"
@@ -168,6 +174,7 @@ export function McpDialog({
   onCredentialSaved: () => void;
   defaultOpen?: boolean;
 }) {
+  const { t } = useLanguage();
   const [focused, setFocused] = useState<string>(selection.find((item) => item !== ALL_MCP_SERVERS) ?? ALL_MCP_SERVERS);
   const [query, setQuery] = useState("");
   const [toolQuery, setToolQuery] = useState("");
@@ -227,14 +234,14 @@ export function McpDialog({
 
   const detail = (): ReactNode => {
     if (focused === ALL_MCP_SERVERS)
-      return <Note title="All MCP servers">Every server this key can reach, with all of its tools</Note>;
+      return <Note title={t("All MCP servers")}>{t("Every server this key can reach, with all of its tools")}</Note>;
     const toolset = toolsets.find((item) => `${TOOLSET_PREFIX}${item.toolset_id}` === focused);
     if (toolset)
       return (
         <ScrollArea className="min-h-0 flex-1">
           <div className="flex flex-col gap-3 p-4">
             <p className="text-sm text-muted-foreground">
-              {toolset.description || "A toolset's tools are fixed by whoever created it"}
+              {toolset.description || t("A toolset's tools are fixed by whoever created it")}
             </p>
             <div className="flex flex-wrap gap-1.5">
               {toolset.tools.map((tool) => (
@@ -247,7 +254,7 @@ export function McpDialog({
         </ScrollArea>
       );
     const server = serverById.get(focused);
-    if (!server) return <Note title="Nothing selected">Pick a server or toolset on the left</Note>;
+    if (!server) return <Note title={t("Nothing selected")}>{t("Pick a server or toolset on the left")}</Note>;
     const name = serverName(server);
     if (needsKey(server) || replacingKey === focused)
       return (
@@ -264,13 +271,13 @@ export function McpDialog({
     const replaceKey = server.is_byok ? (
       <Button variant="outline" size="sm" onClick={() => setReplacingKey(focused)}>
         <KeyRound />
-        Replace key
+        {t("Replace key")}
       </Button>
     ) : undefined;
     if (!selection.includes(focused))
       return (
         <Note title={name} action={replaceKey}>
-          Check this server to choose which of its tools the model can call
+          {t("Check this server to choose which of its tools the model can call")}
         </Note>
       );
     const state = toolsByServer[focused];
@@ -283,11 +290,11 @@ export function McpDialog({
     if (state.failed)
       return (
         <Note title={name} action={replaceKey}>
-          Couldn&apos;t load this server&apos;s tools
+          {t("Couldn't load this server's tools")}
         </Note>
       );
     const tools = toolNames(focused);
-    if (tools.length === 0) return <Note title={name}>This server has no tools</Note>;
+    if (tools.length === 0) return <Note title={name}>{t("This server has no tools")}</Note>;
     const allowed = allowedTools(toolLimits, focused, tools);
     return (
       <div className="flex min-h-0 flex-1 flex-col">
@@ -295,7 +302,7 @@ export function McpDialog({
           <SearchField
             value={toolQuery}
             onChange={setToolQuery}
-            placeholder={`Search ${name} tools`}
+            placeholder={t("Search {name} tools", { name: String(name) })}
             autoFocus={false}
           />
           <Button
@@ -304,7 +311,7 @@ export function McpDialog({
             disabled={allowed.length === tools.length}
             onClick={() => onChange(selection, { ...toolLimits, [focused]: [] })}
           >
-            Allow all
+            {t("Allow all")}
           </Button>
           {replaceKey}
         </div>
@@ -344,23 +351,25 @@ export function McpDialog({
       </DialogTrigger>
       <DialogContent className="gap-0 p-0 sm:max-w-3xl">
         <DialogHeader className="border-b border-border p-4">
-          <DialogTitle>MCP servers</DialogTitle>
+          <DialogTitle>{t("MCP servers")}</DialogTitle>
           <DialogDescription>
-            Pick the servers the model can use, then limit their tools. A server allows every tool until you uncheck
-            some.
+            {t(
+              "Pick the servers the model can use, then limit their tools. A server allows every tool until you uncheck some.",
+            )}
           </DialogDescription>
         </DialogHeader>
         {nothingAvailable ? (
           <div className="h-96">
-            <Note title="No MCP servers for this key">
-              Add one on the <a href={uiHref("mcp-servers")}>MCP servers page</a>, or send as a key that can reach one
+            <Note title={t("No MCP servers for this key")}>
+              {t("Add one on the")} <a href={uiHref("mcp-servers")}>{t("MCP servers page")}</a>
+              {t(", or send as a key that can reach one")}
             </Note>
           </div>
         ) : (
           <div className="grid h-96 grid-cols-[18rem_1fr]">
             <div className="flex min-h-0 flex-col border-r border-border">
               <div className="p-2">
-                <SearchField value={query} onChange={setQuery} placeholder="Search servers" autoFocus />
+                <SearchField value={query} onChange={setQuery} placeholder={t("Search servers")} autoFocus />
               </div>
               <ScrollArea className="min-h-0 flex-1">
                 {isLoading ? (
@@ -370,11 +379,11 @@ export function McpDialog({
                 ) : (
                   <div className="p-1">
                     <RowGroup
-                      title="MCP servers"
+                      title={t("MCP servers")}
                       rows={visible([{ value: ALL_MCP_SERVERS, label: "All MCP servers" }, ...serverRows])}
                       render={masterRow}
                     />
-                    <RowGroup title="Toolsets" rows={visible(toolsetRows)} render={masterRow} />
+                    <RowGroup title={t("Toolsets")} rows={visible(toolsetRows)} render={masterRow} />
                   </div>
                 )}
               </ScrollArea>
@@ -383,7 +392,7 @@ export function McpDialog({
           </div>
         )}
         <DialogFooter className="m-0 border-t border-border p-3">
-          <DialogClose render={<Button size="sm" />}>Done</DialogClose>
+          <DialogClose render={<Button size="sm" />}>{t("Done")}</DialogClose>
         </DialogFooter>
       </DialogContent>
     </Dialog>

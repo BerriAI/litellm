@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import React from "react";
@@ -7,6 +8,7 @@ const ContextWindowEscalationConfig: React.FC<{
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
 }> = ({ value, onChange }) => {
+  const { t } = useLanguage();
   const enabled = value.enable_context_window_escalation ?? false;
   // A number input renders Number("0.") as "0", so a decimal cannot be typed without a local draft.
   const [bufferDraft, setBufferDraft] = React.useState<string | null>(null);
@@ -26,19 +28,19 @@ const ContextWindowEscalationConfig: React.FC<{
         <Switch
           checked={enabled}
           onCheckedChange={(next) => onChange({ ...value, enable_context_window_escalation: next })}
-          aria-label="Escalate oversized prompts to a tier that fits"
+          aria-label={t("Escalate oversized prompts to a tier that fits")}
         />
-        <strong className="font-semibold">Escalate oversized prompts to a tier that fits</strong>
+        <strong className="font-semibold">{t("Escalate oversized prompts to a tier that fits")}</strong>
       </div>
       <span className="block text-xs mb-3 text-muted-foreground">
-        When a prompt provably cannot fit the decided tier&apos;s context windows, route it to the lowest tier whose
-        window holds it instead of letting the provider reject it. Disabled by default. Off means requests dispatch on
-        complexity alone.
+        {t(
+          "When a prompt provably cannot fit the decided tier's context windows, route it to the lowest tier whose window holds it instead of letting the provider reject it. Disabled by default. Off means requests dispatch on complexity alone.",
+        )}
       </span>
       {enabled && (
         <div style={{ maxWidth: 320 }}>
           <label className="block text-sm font-medium mb-1" htmlFor="context-window-escalation-buffer">
-            Window fit buffer
+            {t("Window fit buffer")}
           </label>
           <Input
             id="context-window-escalation-buffer"
@@ -49,8 +51,9 @@ const ContextWindowEscalationConfig: React.FC<{
             onBlur={(event) => commitBuffer(event.target.value)}
           />
           <span className="block text-xs mt-1 text-muted-foreground">
-            Fraction of a model&apos;s window the counted prompt must fit within, above 0 up to 1. Empty tracks the
-            backend default of 0.95.
+            {t(
+              "Fraction of a model's window the counted prompt must fit within, above 0 up to 1. Empty tracks the backend default of 0.95.",
+            )}
           </span>
         </div>
       )}

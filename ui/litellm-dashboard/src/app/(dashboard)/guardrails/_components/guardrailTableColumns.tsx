@@ -1,5 +1,7 @@
 "use client";
 
+import { englishTranslate, type Translate } from "@/i18n/language";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ColumnDef } from "@tanstack/react-table";
 import { MoreHorizontal, Trash2 } from "lucide-react";
 
@@ -36,12 +38,13 @@ interface GuardrailRowActionsProps {
 }
 
 function GuardrailRowActions({ guardrail, onDeleteClick }: GuardrailRowActionsProps) {
+  const { t } = useLanguage();
   const isConfigGuardrail = guardrail.guardrail_definition_location === GuardrailDefinitionLocation.CONFIG;
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open guardrail actions"
+        aria-label={t("Open guardrail actions")}
         data-testid={`guardrail-actions-${guardrail.guardrail_id}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -52,11 +55,11 @@ function GuardrailRowActions({ guardrail, onDeleteClick }: GuardrailRowActionsPr
           variant="destructive"
           disabled={isConfigGuardrail}
           data-testid="guardrail-action-delete"
-          title={isConfigGuardrail ? CONFIG_DELETE_HINT : undefined}
-          onClick={() => onDeleteClick(guardrail.guardrail_id, guardrail.guardrail_name || "Unnamed Guardrail")}
+          title={isConfigGuardrail ? t(CONFIG_DELETE_HINT) : undefined}
+          onClick={() => onDeleteClick(guardrail.guardrail_id, guardrail.guardrail_name || t("Unnamed Guardrail"))}
         >
           <Trash2 />
-          Delete
+          {t("Delete")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -64,19 +67,21 @@ function GuardrailRowActions({ guardrail, onDeleteClick }: GuardrailRowActionsPr
 }
 
 interface GuardrailTableColumnsDeps {
+  t?: Translate;
   onGuardrailClick: (guardrailId: string) => void;
   onDeleteClick: (guardrailId: string, guardrailName: string) => void;
 }
 
 export const getGuardrailTableColumns = ({
+  t = englishTranslate,
   onGuardrailClick,
   onDeleteClick,
 }: GuardrailTableColumnsDeps): ColumnDef<Guardrail>[] => [
   {
     id: "guardrail_id",
     accessorKey: "guardrail_id",
-    meta: { title: "Guardrail ID" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Guardrail ID" />,
+    meta: { title: t("Guardrail ID") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Guardrail ID")} />,
     size: 200,
     enableSorting: true,
     cell: ({ row }) => (
@@ -90,8 +95,8 @@ export const getGuardrailTableColumns = ({
   {
     id: "guardrail_name",
     accessorKey: "guardrail_name",
-    meta: { title: "Name" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Name" />,
+    meta: { title: t("Name") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Name")} />,
     size: 200,
     enableSorting: true,
     cell: ({ row }) => {
@@ -105,16 +110,16 @@ export const getGuardrailTableColumns = ({
   },
   {
     id: "provider",
-    meta: { title: "Provider" },
-    header: "Provider",
+    meta: { title: t("Provider") },
+    header: t("Provider"),
     size: 180,
     enableSorting: false,
     cell: ({ row }) => <GuardrailProviderCell provider={row.original.litellm_params.guardrail} />,
   },
   {
     id: "mode",
-    meta: { title: "Mode" },
-    header: "Mode",
+    meta: { title: t("Mode") },
+    header: t("Mode"),
     size: 130,
     enableSorting: false,
     cell: ({ row }) => {
@@ -128,22 +133,25 @@ export const getGuardrailTableColumns = ({
   },
   {
     id: "default_on",
-    meta: { title: "Default On" },
-    header: "Default On",
+    meta: { title: t("Default On") },
+    header: t("Default On"),
     size: 120,
     enableSorting: false,
     cell: ({ row }) => {
       const isDefaultOn = !!row.original.litellm_params?.default_on;
       return (
-        <StatusBadge tone={isDefaultOn ? "success" : "neutral"} label={isDefaultOn ? "Default On" : "Default Off"} />
+        <StatusBadge
+          tone={isDefaultOn ? "success" : "neutral"}
+          label={isDefaultOn ? t("Default On") : t("Default Off")}
+        />
       );
     },
   },
   {
     id: "created_at",
     accessorKey: "created_at",
-    meta: { title: "Created At" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Created At" />,
+    meta: { title: t("Created At") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Created At")} />,
     size: 150,
     enableSorting: true,
     cell: ({ row }) => <DateCell value={row.original.created_at} />,
@@ -151,8 +159,8 @@ export const getGuardrailTableColumns = ({
   {
     id: "updated_at",
     accessorKey: "updated_at",
-    meta: { title: "Updated At" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Updated At" />,
+    meta: { title: t("Updated At") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Updated At")} />,
     size: 150,
     enableSorting: true,
     cell: ({ row }) => <DateCell value={row.original.updated_at} />,
@@ -160,7 +168,7 @@ export const getGuardrailTableColumns = ({
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },
-    header: () => <span className="sr-only">Actions</span>,
+    header: () => <span className="sr-only">{t("Actions")}</span>,
     size: 64,
     enableSorting: false,
     enableHiding: false,

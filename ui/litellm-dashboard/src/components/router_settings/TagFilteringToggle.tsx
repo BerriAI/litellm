@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useId } from "react";
 import { CONFIG_OWNED_HINT, ConfigOwnedBadge } from "./ConfigOwned";
 import { Switch } from "@/components/ui/switch";
@@ -15,6 +16,7 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
   onToggle,
   ownedByConfig = false,
 }) => {
+  const { t } = useLanguage();
   const toggleId = useId();
 
   return (
@@ -22,7 +24,7 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <label htmlFor={toggleId} className="text-xs font-medium text-foreground uppercase tracking-wide">
-            {routerFieldsMetadata["enable_tag_filtering"]?.ui_field_name || "Enable Tag Filtering"}
+            {routerFieldsMetadata["enable_tag_filtering"]?.ui_field_name || t("Enable Tag Filtering")}
           </label>
           {ownedByConfig && <ConfigOwnedBadge />}
           <p className="text-xs text-muted-foreground mt-0.5">
@@ -36,7 +38,7 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
                   rel="noopener noreferrer"
                   className="text-info hover:text-info/80 underline"
                 >
-                  Learn more
+                  {t("Learn more")}
                 </a>
               </>
             )}
@@ -47,7 +49,7 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
           checked={enabled}
           onCheckedChange={onToggle}
           disabled={ownedByConfig}
-          title={ownedByConfig ? CONFIG_OWNED_HINT : undefined}
+          title={ownedByConfig ? t(CONFIG_OWNED_HINT) : undefined}
           className="ml-4"
         />
       </div>

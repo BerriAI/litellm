@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useEffect, useMemo } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useFormContext, useWatch } from "react-hook-form";
@@ -5,6 +6,7 @@ import { DataTable } from "@/components/shared/DataTable";
 import { Input } from "@/components/ui/input";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { validatorRules } from "../common_components/formRules";
+import { localizeValidation } from "../key_team_helpers/localizeValidation";
 import { MountedFormField, type MountedFormValues } from "../common_components/MountedFormField";
 import { Providers } from "../provider_info_helpers";
 
@@ -38,23 +40,49 @@ const tooltipCodeClassName = "rounded-sm bg-background/20 px-1 py-0.5 font-mono 
 
 const ANTHROPIC_1M_HEADERS = JSON.stringify({ extra_headers: { "anthropic-beta": "context-1m-2025-08-07" } }, null, 2);
 
-const publicNameTooltipContent = (
-  <div className="flex flex-col gap-2 text-left font-normal">
-    <div>The name you specify in your API calls to LiteLLM Proxy</div>
-    <div>
-      <strong>Example:</strong> If you name your public model <code className={tooltipCodeClassName}>example-name</code>
-      , and choose <code className={tooltipCodeClassName}>openai/qwen-plus-latest</code> as the LiteLLM model
+function PublicNameTooltipContent() {
+  const { t } = useLanguage();
+  return (
+    <div className="flex flex-col gap-2 text-left font-normal">
+      <div>{t("The name you specify in your API calls to LiteLLM Proxy")}</div>
+      <div>
+        <strong>{t("Example:")}</strong>{" "}
+        {t("Name the public model {publicName} and use {modelName} as the LiteLLM model.", {
+          publicName: "example-name",
+          modelName: "openai/qwen-plus-latest",
+        })}
+      </div>
+      <div>
+        <strong>{t("Usage example:")}</strong> {t("You make an API call to the LiteLLM proxy with")}{" "}
+        <code className={tooltipCodeClassName}>model = &quot;example-name&quot;</code>
+      </div>
+      <div>
+        <strong>{t("Result:")}</strong>{" "}
+        {t("LiteLLM sends {modelName} to the provider", { modelName: "qwen-plus-latest" })}
+      </div>
     </div>
-    <div>
-      <strong>Usage:</strong> You make an API call to the LiteLLM proxy with{" "}
-      <code className={tooltipCodeClassName}>model = &quot;example-name&quot;</code>
-    </div>
-    <div>
-      <strong>Result:</strong> LiteLLM sends <code className={tooltipCodeClassName}>qwen-plus-latest</code> to the
-      provider
-    </div>
-  </div>
-);
+  );
+}
+
+function PublicModelNameHeader() {
+  const { t } = useLanguage();
+  return (
+    <span className="flex items-center">
+      {t("Public Model Name")}
+      <SimpleTooltip content={<PublicNameTooltipContent />} width="500px" />
+    </span>
+  );
+}
+
+function LiteLLMModelNameHeader() {
+  const { t } = useLanguage();
+  return (
+    <span className="flex items-center">
+      {t("LiteLLM Model Name")}
+      <SimpleTooltip content={<div>{t("The model name LiteLLM will send to the LLM API")}</div>} width="360px" />
+    </span>
+  );
+}
 
 const PublicNameInput: React.FC<{ readonly index: number; readonly value: string }> = ({ index, value }) => {
   const form = useFormContext<MountedFormValues>();
@@ -92,27 +120,18 @@ const columns: ColumnDef<ModelMapping>[] = [
   {
     id: "public_name",
     accessorKey: "public_name",
-    header: () => (
-      <span className="flex items-center">
-        Public Model Name
-        <SimpleTooltip content={publicNameTooltipContent} width="500px" />
-      </span>
-    ),
+    header: PublicModelNameHeader,
     cell: ({ row }) => <PublicNameInput index={row.index} value={row.original.public_name} />,
   },
   {
     id: "litellm_model",
     accessorKey: "litellm_model",
-    header: () => (
-      <span className="flex items-center">
-        LiteLLM Model Name
-        <SimpleTooltip content={<div>The model name LiteLLM will send to the LLM API</div>} width="360px" />
-      </span>
-    ),
+    header: LiteLLMModelNameHeader,
   },
 ];
 
 const ConditionalPublicModelName: React.FC = () => {
+  const { t } = useLanguage();
   const form = useFormContext<MountedFormValues>();
 
   const modelValue = useWatch({ control: form.control, name: "model" }) || [];
@@ -205,12 +224,12 @@ const ConditionalPublicModelName: React.FC = () => {
       name="model_mappings"
       label={
         <span className="flex items-center">
-          Model Mappings
-          <SimpleTooltip content="Map public model names to LiteLLM model names for load balancing" />
+          {t("Model Mappings")}
+          <SimpleTooltip content={t("Map public model names to LiteLLM model names for load balancing")} />
         </span>
       }
       required
-      rules={{ validate: validatorRules(modelMappingsRule) }}
+      rules={{ validate: localizeValidation(validatorRules(modelMappingsRule), t) }}
       className="mb-4"
     >
       {(control) => (

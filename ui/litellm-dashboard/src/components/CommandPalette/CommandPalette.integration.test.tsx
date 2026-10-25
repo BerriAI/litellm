@@ -11,6 +11,7 @@ import { renderWithProviders, testQueryClient } from "../../../tests/test-utils"
 import { COMMAND_PALETTE_HINT_KEY } from "./CommandPaletteHint";
 import { CommandPaletteProvider } from "./CommandPaletteProvider";
 import { CommandPaletteTrigger } from "./CommandPaletteTrigger";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 const mocks = vi.hoisted(() => ({
   pathname: "/api-keys",
@@ -136,6 +137,25 @@ afterEach(() => {
 });
 
 describe("CommandPalette integration", () => {
+  it("中文导航可用中英文搜索，并保持原有路由", async () => {
+    mocks.pathname = "/home";
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider userId="test-admin" defaultLanguage="zh-CN" storageScope="palette-test">
+        <CommandPaletteProvider>
+          <CommandPaletteTrigger />
+        </CommandPaletteProvider>
+      </LanguageProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "搜索或跳转…" }));
+    const search = await screen.findByRole("combobox", { name: "搜索" });
+    fireEvent.change(search, { target: { value: "模型" } });
+    expect(screen.getByRole("option", { name: /^模型与端点/ })).toBeVisible();
+    fireEvent.change(search, { target: { value: "Virtual Keys" } });
+    await user.click(screen.getByRole("option", { name: /^虚拟密钥/ }));
+    expect(mocks.push).toHaveBeenCalledWith(uiHref("api-keys"));
+  });
+
   it("shows the discovery hint on the keys route", async () => {
     renderPalette();
 

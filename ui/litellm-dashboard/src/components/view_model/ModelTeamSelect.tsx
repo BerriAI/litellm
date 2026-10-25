@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Team } from "../key_team_helpers/key_list";
 
@@ -10,6 +11,7 @@ interface ModelTeamSelectProps {
 }
 
 export const ModelTeamSelect: React.FC<ModelTeamSelectProps> = ({ id, value, onChange, onBlur, teams }) => {
+  const { t } = useLanguage();
   const items = (teams ?? []).map((team) => ({
     value: team.team_id,
     label: team.team_alias ? `${team.team_alias} (${team.team_id})` : team.team_id,
@@ -17,7 +19,7 @@ export const ModelTeamSelect: React.FC<ModelTeamSelectProps> = ({ id, value, onC
   return (
     <Select items={items} value={value || null} onValueChange={(selected: string | null) => onChange(selected ?? "")}>
       <SelectTrigger id={id} className="w-full" onBlur={onBlur}>
-        <SelectValue placeholder="Select a team" />
+        <SelectValue placeholder={t("Select a team")} />
       </SelectTrigger>
       <SelectContent>
         {items.map((item) => (

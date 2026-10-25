@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import LatencyBasedConfiguration from "./LatencyBasedConfiguration";
 import { RouterSettingsSource, isOwnedByConfig } from "./ConfigOwned";
@@ -28,6 +29,7 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
   routingStrategyDescriptions,
   routerSettingsSource = {},
 }) => {
+  const { t } = useLanguage();
   const handleStrategyChange = (strategy: string) => {
     onChange({
       ...value,
@@ -47,8 +49,8 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
       {/* Routing Settings Section */}
       <div className="space-y-6">
         <div className="max-w-3xl">
-          <h3 className="text-sm font-medium text-foreground">Routing Settings</h3>
-          <p className="text-xs text-muted-foreground mt-1">Configure how requests are routed to deployments</p>
+          <h3 className="text-sm font-medium text-foreground">{t("Routing Settings")}</h3>
+          <p className="text-xs text-muted-foreground mt-1">{t("Configure how requests are routed to deployments")}</p>
         </div>
 
         {/* Routing Strategy */}

@@ -5,7 +5,9 @@ import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useInfiniteKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { ApiError } from "@/lib/http/client";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("./useShadowEval", () => ({
   useShadowEvalJobs: vi.fn(),
@@ -235,7 +237,37 @@ const mockHooks = ({
 
 describe("ShadowEvalSection", () => {
   beforeEach(() => {
+    localStorage.clear();
     authorizedRoleMock.mockReturnValue({ accessToken: "token", isViewOnly: false });
+  });
+
+  it("中文显示评估状态和整句标题，停止操作仍使用原任务 ID", async () => {
+    const user = userEvent.setup();
+    const languageJob = {
+      router_name: "Home",
+      router_names: ["Home"],
+      targets: [targetEntry("key-opaque", { target_alias: "Home" })],
+      ends_at: new Date(Date.now() + 3 * 86_400_000).toISOString(),
+    };
+    const { stop } = mockHooks({
+      jobs: [job(languageJob)],
+    });
+    render(
+      <LanguageProvider defaultLanguage="zh-CN" userId="shadow-language" storageScope="shadow-test">
+        <ShadowEvalSection />
+      </LanguageProvider>,
+    );
+
+    expect(screen.getByText("运行中")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_, element) => element?.tagName === "P" && element.textContent === "使用 Home 对 Home 的 10% 流量进行影子评估",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/3 天后结束/)).toBeInTheDocument();
+    expect(screen.getAllByRole("columnheader", { name: "当前模型胜率" }).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "停止", exact: true }));
+    expect(stop.mutate).toHaveBeenCalledWith("job-1");
   });
 
   it("shows a key picker load failure instead of posing as no matching keys", async () => {
@@ -256,6 +288,39 @@ describe("ShadowEvalSection", () => {
     expect(await screen.findByText("Keys could not be loaded. Refresh the page to retry.")).toBeInTheDocument();
     expect(screen.queryByText("No matching keys")).not.toBeInTheDocument();
     if (defaultKeysImpl) vi.mocked(useInfiniteKeys).mockImplementation(defaultKeysImpl);
+  });
+
+  it("中文显示密钥和用户选择器的加载失败提示", async () => {
+    const user = userEvent.setup();
+    const failedQuery = {
+      data: undefined,
+      isPending: false,
+      isError: true,
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+    };
+    mockHooks({});
+    await vi.mocked(useInfiniteKeys).withImplementation(
+      () => failedQuery as unknown as ReturnType<typeof useInfiniteKeys>,
+      async () => {
+        await vi.mocked(useInfiniteUsers).withImplementation(
+          () => failedQuery as unknown as ReturnType<typeof useInfiniteUsers>,
+          async () => {
+            render(
+              <LanguageProvider defaultLanguage="zh-CN" userId="shadow-language" storageScope="shadow-test">
+                <ShadowEvalSection />
+              </LanguageProvider>,
+            );
+            await user.click(screen.getByPlaceholderText("按别名搜索密钥"));
+            expect(await screen.findByText("无法加载密钥，请刷新页面重试。")).toBeInTheDocument();
+            await user.keyboard("{Escape}");
+            await user.click(screen.getByPlaceholderText("按邮箱搜索用户"));
+            expect(await screen.findByText("无法加载用户，请刷新页面重试。")).toBeInTheDocument();
+          },
+        );
+      },
+    );
   });
 
   it("labels only configured judge recommendations", async () => {

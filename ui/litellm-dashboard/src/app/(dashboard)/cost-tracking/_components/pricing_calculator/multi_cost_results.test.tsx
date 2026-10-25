@@ -6,6 +6,7 @@ import { renderWithProviders } from "../../../../../../tests/test-utils";
 import MultiCostResults from "./multi_cost_results";
 import type { MultiModelResult } from "./types";
 import type { CostEstimateResponse } from "../types";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("./multi_export_utils", () => ({
   exportMultiToPDF: vi.fn(),
@@ -132,6 +133,35 @@ describe("MultiCostResults", () => {
   });
 
   describe("when there are errors but no valid results", () => {
+    it("中文仅翻译缺失模型的占位文案，保留模型名和后端错误", () => {
+      localStorage.clear();
+      const multiResult = emptyMultiResult();
+      renderWithProviders(
+        <LanguageProvider defaultLanguage="zh-CN" userId="cost-result-language" storageScope="cost-result-test">
+          <MultiCostResults
+            multiResult={{
+              ...multiResult,
+              entries: [
+                { ...multiResult.entries[0], error: "Pricing not found" },
+                {
+                  ...multiResult.entries[0],
+                  entry: { ...multiResult.entries[0].entry, id: "e2", model: "Home" },
+                  error: "Error",
+                },
+              ],
+            }}
+            timePeriod="month"
+          />
+        </LanguageProvider>,
+      );
+
+      expect(screen.getByText("未知模型:")).toBeInTheDocument();
+      expect(screen.getByText("Home:")).toBeInTheDocument();
+      expect(screen.getByText(/Pricing not found/)).toBeInTheDocument();
+      expect(screen.getByText(/Error$/)).toBeInTheDocument();
+      expect(screen.queryByText("Unknown model:")).not.toBeInTheDocument();
+    });
+
     it("should display the error message with the model name", () => {
       const multiResult: MultiModelResult = {
         entries: [

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useEffect, type RefObject } from "react";
 import { ArrowDown, Check, ChevronDown } from "lucide-react";
 import { MessageScroller, useMessageScroller } from "@shadcn/react/message-scroller";
@@ -50,12 +51,13 @@ export function LiteAdminConversation({
   onQuestion,
   questionsDisabled,
 }: ConversationProps) {
+  const { t } = useLanguage();
   return (
     <MessageScroller.Provider autoScroll>
       <MessageScroller.Root className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <MessageScroller.Viewport
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain data-pending-scroll:invisible"
-          aria-label={`${ARIA_AGENT_LABEL} conversation`}
+          aria-label={t("{ARIA_AGENT_LABEL} conversation", { ARIA_AGENT_LABEL: String(ARIA_AGENT_LABEL) })}
         >
           <MessageScroller.Content className="flex flex-col gap-6 p-4 sm:p-6" aria-busy={thinking}>
             {entries.map((entry) => (
@@ -64,8 +66,8 @@ export function LiteAdminConversation({
                   (entry.message.role === "assistant" ? (
                     <AriaAnswer message={entry.message} chart={entry.chart} question={entry.question} />
                   ) : (
-                    <article aria-label="Your question" className="space-y-2">
-                      <p className="text-right text-xs font-medium text-muted-foreground">You</p>
+                    <article aria-label={t("Your question")} className="space-y-2">
+                      <p className="text-right text-xs font-medium text-muted-foreground">{t("You")}</p>
                       <ChatMessageContent
                         message={entry.message}
                         allowImages={false}
@@ -86,10 +88,14 @@ export function LiteAdminConversation({
             ))}
             {thinking && (
               <MessageScroller.Item messageId="thinking">
-                <div role="status" aria-label={`${ARIA_AGENT_LABEL} is working`} className="space-y-2">
+                <div
+                  role="status"
+                  aria-label={t("{ARIA_AGENT_LABEL} is working", { ARIA_AGENT_LABEL: String(ARIA_AGENT_LABEL) })}
+                  className="space-y-2"
+                >
                   <Skeleton className="h-3 w-3/4" />
                   <Skeleton className="h-3 w-1/2" />
-                  <span className="sr-only">Working…</span>
+                  <span className="sr-only">{t("Working…")}</span>
                 </div>
               </MessageScroller.Item>
             )}
@@ -99,9 +105,9 @@ export function LiteAdminConversation({
           <div className="absolute inset-0 flex flex-col items-center gap-4 overflow-y-auto p-5 text-center">
             <div className="flex items-center gap-2 pt-2">
               <AriaAvatar size={40} />
-              <p className="text-base font-semibold">Hi, I’m Aria.</p>
+              <p className="text-base font-semibold">{t("Hi, I’m Aria.")}</p>
             </div>
-            <div className="flex w-full flex-col gap-2" aria-label="Suggested questions">
+            <div className="flex w-full flex-col gap-2" aria-label={t("Suggested questions")}>
               {SUGGESTED_QUESTIONS.map((question) => (
                 <Button
                   key={question}
@@ -115,12 +121,14 @@ export function LiteAdminConversation({
               ))}
             </div>
             <p className="max-w-64 text-xs leading-relaxed text-muted-foreground">
-              {readOnly ? "Answers use usage data your account can access." : "You review every change before it runs."}
+              {readOnly
+                ? t("Answers use usage data your account can access.")
+                : t("You review every change before it runs.")}
             </p>
           </div>
         )}
         <MessageScroller.Button
-          aria-label="Jump to latest"
+          aria-label={t("Jump to latest")}
           className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full shadow-sm data-[active=false]:pointer-events-none data-[active=false]:opacity-0"
           render={<Button variant="outline" size="icon-sm" />}
         >
@@ -137,6 +145,7 @@ function ActionCard({
   reviewRef,
   onAnswer,
 }: Pick<ConversationProps, "open" | "reviewRef" | "onAnswer"> & { entry: ActionEntry }) {
+  const { t } = useLanguage();
   const { scrollToEnd } = useMessageScroller();
   const review = entry.status === "review";
   useEffect(() => {
@@ -187,7 +196,7 @@ function ActionCard({
           <Collapsible>
             <CollapsibleTrigger render={<Button variant="ghost" size="xs" />}>
               <ChevronDown className="size-3" />
-              Details
+              {t("Details")}
             </CollapsibleTrigger>
             <CollapsibleContent>{fields}</CollapsibleContent>
           </Collapsible>
@@ -201,19 +210,21 @@ function ActionCard({
           <div className="space-y-2">
             <div className="flex items-start gap-2">
               <code className="min-w-0 flex-1 break-all text-xs">{entry.key}</code>
-              <CopyButton value={entry.key} label="Copy generated key" />
+              <CopyButton value={entry.key} label={t("Copy generated key")} />
             </div>
-            <p className="text-xs text-muted-foreground">Copy this key now. It stays only in this chat session.</p>
+            <p className="text-xs text-muted-foreground">
+              {t("Copy this key now. It stays only in this chat session.")}
+            </p>
           </div>
         )}
       </CardContent>
       {review && (
         <CardFooter className="justify-end gap-2">
           <Button variant="outline" onClick={() => answer(false)}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button variant={entry.action.destructive ? "destructive" : "default"} onClick={() => answer(true)}>
-            Confirm change
+            {t("Confirm change")}
           </Button>
         </CardFooter>
       )}

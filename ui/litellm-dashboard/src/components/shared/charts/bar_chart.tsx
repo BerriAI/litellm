@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import * as React from "react";
 import { Bar, BarChart as RechartsBarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, type ChartConfig } from "@/components/ui/chart";
@@ -12,6 +13,8 @@ export type BarChartProps<TDatum extends Record<string, unknown>> = {
   index: string;
   indexFormatter?: (value: string) => string;
   categories: readonly string[];
+  // 展示别名与数据字段分离，语言切换不改变分组或点击回调的键
+  categoryLabels?: Readonly<Record<string, string>>;
   colors?: readonly ChartColor[];
   colorByDatum?: boolean;
   maxBarSize?: number;
@@ -35,6 +38,7 @@ export function BarChart<TDatum extends Record<string, unknown>>({
   index,
   indexFormatter,
   categories,
+  categoryLabels,
   colors,
   colorByDatum = false,
   maxBarSize,
@@ -52,19 +56,22 @@ export function BarChart<TDatum extends Record<string, unknown>>({
   className,
   style,
 }: BarChartProps<TDatum>) {
+  const { t } = useLanguage();
   if (data.length === 0) {
     return (
       <div
         className={cn("flex h-80 w-full items-center justify-center rounded-lg border border-dashed", className)}
         style={style}
       >
-        <p className="text-sm text-muted-foreground">No data</p>
+        <p className="text-sm text-muted-foreground">{t("No data")}</p>
       </div>
     );
   }
 
   const fills = categoryFills(colorByDatum ? data.length : categories.length, colors);
-  const config: ChartConfig = Object.fromEntries(categories.map((category) => [category, { label: category }]));
+  const config: ChartConfig = Object.fromEntries(
+    categories.map((category) => [category, { label: categoryLabels?.[category] ?? category }]),
+  );
   const vertical = layout === "vertical";
   const TooltipContent = customTooltip ?? ValueTooltip;
 
@@ -127,6 +134,7 @@ export function BarChart<TDatum extends Record<string, unknown>>({
           <Bar
             key={category}
             dataKey={category}
+            name={categoryLabels?.[category] ?? category}
             fill={fills[i]}
             stackId={stack ? "stack" : undefined}
             isAnimationActive={false}

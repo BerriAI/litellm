@@ -2,6 +2,7 @@ import { CloudZeroSettings } from "@/components/CloudZeroCostTracking/types";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
+import { LOCAL_CLOUDZERO_ERROR } from "./cloudZeroErrors";
 
 const cloudZeroSettingsKeys = createQueryKeys("cloudZeroSettings");
 
@@ -93,23 +94,15 @@ const updateCloudZeroSettings = async (accessToken: string, params: UpdateParams
   });
 
   if (!response.ok) {
-    let errorMessage = "Failed to update CloudZero settings";
-    try {
-      const errorData = await response.json();
-      if (typeof errorData === "object" && errorData !== null) {
-        errorMessage =
-          errorData?.error?.message ||
-          errorData?.error ||
-          errorData?.message ||
-          errorData?.detail ||
-          (typeof errorData?.error === "string" ? errorData.error : errorMessage);
-      } else if (typeof errorData === "string") {
-        errorMessage = errorData;
-      }
-    } catch {
-      errorMessage = response.statusText || errorMessage;
-    }
-    throw new Error(errorMessage);
+    // 正文无法解析时保留服务端状态文本，只有缺少详情才使用本地兜底。
+    const errorData = await response.json().catch(() => response.statusText);
+    const errorMessage =
+      typeof errorData === "string"
+        ? errorData
+        : errorData?.error?.message || errorData?.error || errorData?.message || errorData?.detail;
+    throw errorMessage
+      ? new Error(errorMessage)
+      : new Error("Failed to update CloudZero settings", { cause: LOCAL_CLOUDZERO_ERROR });
   }
 
   const data = await response.json();
@@ -122,7 +115,7 @@ export const useCloudZeroUpdateSettings = (accessToken: string) => {
   return useMutation<UpdateResponse, Error, UpdateParams>({
     mutationFn: async (params: UpdateParams) => {
       if (!accessToken) {
-        throw new Error("Access token is required");
+        throw new Error("Access token is required", { cause: LOCAL_CLOUDZERO_ERROR });
       }
       return await updateCloudZeroSettings(accessToken, params);
     },

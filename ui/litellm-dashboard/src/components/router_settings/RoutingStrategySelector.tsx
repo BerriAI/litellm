@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { CONFIG_OWNED_HINT, ConfigOwnedBadge } from "./ConfigOwned";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -19,11 +20,12 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
   onStrategyChange,
   ownedByConfig = false,
 }) => {
+  const { t } = useLanguage();
   return (
     <div className="space-y-2 max-w-3xl">
       <div>
         <label className="text-xs font-medium text-foreground uppercase tracking-wide">
-          {routerFieldsMetadata["routing_strategy"]?.ui_field_name || "Routing Strategy"}
+          {routerFieldsMetadata["routing_strategy"]?.ui_field_name || t("Routing Strategy")}
         </label>
         {ownedByConfig && <ConfigOwnedBadge />}
         <p className="text-xs text-muted-foreground mt-0.5 mb-2">
@@ -36,7 +38,7 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
           onValueChange={(strategy: string | null) => strategy && onStrategyChange(strategy)}
           disabled={ownedByConfig}
         >
-          <SelectTrigger className="w-full" aria-label={ownedByConfig ? CONFIG_OWNED_HINT : undefined}>
+          <SelectTrigger className="w-full" aria-label={ownedByConfig ? t(CONFIG_OWNED_HINT) : undefined}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

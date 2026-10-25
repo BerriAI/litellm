@@ -5,6 +5,7 @@ import React from "react";
 import { describe, it, expect, vi, type Mock } from "vitest";
 import ComplexityRouterConfigView, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 const ComplexityRouterConfig = (props: React.ComponentProps<typeof ComplexityRouterConfigView>) => (
   <AutoRouterClassifierTabs value={props.value} onChange={props.onChange}>
     <ComplexityRouterConfigView {...props} />
@@ -52,6 +53,20 @@ const baseProps = {
 };
 
 describe("ComplexityRouterConfig", () => {
+  it.each([
+    { creationFlow: false, heading: "按层级分配模型" },
+    { creationFlow: true, heading: "定义层级" },
+  ])("固定层级标题使用中文，保留模型值，创建模式 $creationFlow", ({ creationFlow, heading }) => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="zh-CN" userId={null} storageScope="tier-heading">
+        <ComplexityRouterConfig {...baseProps} creationFlow={creationFlow} onChange={onChange} />
+      </LanguageProvider>,
+    );
+    expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it.each(["Heuristic first", "Hybrid"])(
     "shows only the selected heuristic tuning when chaining with %s",
     async (mode) => {

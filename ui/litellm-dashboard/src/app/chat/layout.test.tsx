@@ -35,6 +35,8 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: mockReplace }),
 }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: mockUseAuthorized }));
+// 根布局提供认证；此布局单测仅注入相同账户标识供语言偏好隔离。
+vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ userID: state.userId }) }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: mockUseUISettings }));
 vi.mock("@/utils/uiHref", () => ({ uiHref: mockUiHref }));
 vi.mock("@/components/navbar", () => ({ default: () => <div data-testid="navbar" /> }));

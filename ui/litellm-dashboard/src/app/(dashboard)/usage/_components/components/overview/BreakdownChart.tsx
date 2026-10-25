@@ -5,6 +5,7 @@ import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import type { DailyData } from "@/components/UsagePage/types";
 import { cn } from "@/lib/cva.config";
+import { useLanguage } from "@/contexts/LanguageContext";
 import {
   colorForModel,
   formatMetricValue,
@@ -40,12 +41,12 @@ export interface BreakdownState {
 export const useBreakdown = (
   results: readonly DailyData[],
   { metric, dimension }: BreakdownState,
-  top = 6,
-  colorByKey?: ReadonlyMap<string, string>,
+  options: number | { top?: number; colorByKey?: ReadonlyMap<string, string>; otherLabel?: string } = 6,
 ) => {
+  const { top = 6, colorByKey, otherLabel = "Other" } = typeof options === "number" ? { top: options } : options;
   const series = useMemo(
-    () => seriesBy(results, dimension, metric, { top, colorByKey }),
-    [results, dimension, metric, top, colorByKey],
+    () => seriesBy(results, dimension, metric, { top, colorByKey, otherLabel }),
+    [results, dimension, metric, top, colorByKey, otherLabel],
   );
   const ranking = useMemo(() => leaderboard(results, dimension, metric), [results, dimension, metric]);
   return { series, ranking };
@@ -60,19 +61,20 @@ export function BreakdownControls({
   onChange: (next: BreakdownState) => void;
   showDimension?: boolean;
 }) {
+  const { t } = useLanguage();
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Segmented
-        label="Metric"
+        label={t("Metric")}
         value={state.metric}
-        options={METRIC_OPTIONS}
+        options={METRIC_OPTIONS.map((option) => ({ ...option, label: t(option.label) }))}
         onChange={(metric) => onChange({ ...state, metric })}
       />
       {showDimension && (
         <Segmented
-          label="Group by"
+          label={t("Group by")}
           value={state.dimension}
-          options={DIMENSION_OPTIONS}
+          options={DIMENSION_OPTIONS.map((option) => ({ ...option, label: t(option.label) }))}
           onChange={(dimension) => onChange({ ...state, dimension })}
         />
       )}
@@ -134,6 +136,7 @@ export function Leaderboard({
   dense?: boolean;
   colorByKey?: ReadonlyMap<string, string>;
 }) {
+  const { t } = useLanguage();
   const colorOf = (name: string) => {
     if (colorByKey) return colorForModel(name, colorByKey);
     const index = series.labels.indexOf(name);
@@ -142,7 +145,7 @@ export function Leaderboard({
   const value = (row: LeaderRow) => rankValue(row, metric);
   const rows = ranking.slice(0, limit);
   if (rows.length === 0) {
-    return <p className="py-8 text-center text-xs text-muted-foreground">No usage in this range</p>;
+    return <p className="py-8 text-center text-xs text-muted-foreground">{t("No usage in this range")}</p>;
   }
   const half = columns === 2 ? Math.ceil(rows.length / 2) : rows.length;
   const groups = columns === 2 ? [rows.slice(0, half), rows.slice(half)] : [rows];
@@ -168,7 +171,9 @@ export function Leaderboard({
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium text-foreground">{row.key}</span>
                   {providerForModel(row.key) && (
-                    <span className="block truncate text-xs text-muted-foreground">by {providerForModel(row.key)}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {t("by {provider}", { provider: providerForModel(row.key) ?? "" })}
+                    </span>
                   )}
                 </span>
               </span>

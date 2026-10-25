@@ -1,5 +1,6 @@
 import type React from "react";
 import type { Validate } from "react-hook-form";
+import { englishTranslate, type Translate } from "@/i18n/language";
 
 import type { MountedFieldControlProps, MountedFormValues } from "@/components/common_components/MountedFormField";
 
@@ -35,14 +36,14 @@ const toTags = (value: unknown): string[] =>
     (entry): entry is string => typeof entry === "string" && entry !== "",
   );
 
-export const tagsControl = (control: MountedFieldControlProps) => {
+export const tagsControl = (control: MountedFieldControlProps, t: Translate = englishTranslate) => {
   const value = toTags(control.value);
   return {
     id: control.id,
     options: [...new Set(value)].map((tag) => ({ label: tag, value: tag })),
     value,
     onValueChange: control.onChange,
-    emptyText: "Type to add",
+    emptyText: t("Type to add"),
     allowCustomValues: true,
   };
 };

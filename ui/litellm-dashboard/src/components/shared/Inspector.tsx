@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import { ArrowLeft, ChevronDown, ChevronsRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
@@ -185,6 +186,7 @@ function useExitPresence<T>(item: T | null, itemKey: (item: T) => string) {
 }
 
 function ResizeHandle({ noun, width, onResize }: { noun: string; width: number; onResize: (width: number) => void }) {
+  const { t } = useLanguage();
   const [dragging, setDragging] = useState(false);
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -207,7 +209,7 @@ function ResizeHandle({ noun, width, onResize }: { noun: string; width: number; 
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label={`Resize ${noun} panel`}
+      aria-label={t("Resize {noun} panel", { noun: String(noun) })}
       aria-valuenow={width}
       aria-valuemin={MIN_WIDTH}
       tabIndex={0}
@@ -254,17 +256,26 @@ function HeaderButton({
 }
 
 function Header() {
+  const { t } = useLanguage();
   const { index, total, noun, step, close, fullScreen, setFullScreen } = useInspector();
   return (
     <div data-slot="inspector-header" className="flex h-[37px] shrink-0 items-center gap-1 border-b border-border px-2">
-      <HeaderButton label="Close (Esc)" onClick={close}>
+      <HeaderButton label={t("Close (Esc)")} onClick={close}>
         <ChevronsRight className="size-4" />
       </HeaderButton>
       <span className="mx-1 h-4 w-px bg-border" />
-      <HeaderButton label={`Next ${noun} (J)`} disabled={index < 0 || index >= total - 1} onClick={() => step(1)}>
+      <HeaderButton
+        label={t("Next {noun} (J)", { noun: String(noun) })}
+        disabled={index < 0 || index >= total - 1}
+        onClick={() => step(1)}
+      >
         <ChevronDown className="size-4" />
       </HeaderButton>
-      <HeaderButton label={`Previous ${noun} (K)`} disabled={index <= 0} onClick={() => step(-1)}>
+      <HeaderButton
+        label={t("Previous {noun} (K)", { noun: String(noun) })}
+        disabled={index <= 0}
+        onClick={() => step(-1)}
+      >
         <ChevronUp className="size-4" />
       </HeaderButton>
       {index >= 0 && (
@@ -274,12 +285,12 @@ function Header() {
       )}
       <div className="ml-auto flex items-center gap-1">
         <HeaderButton
-          label={fullScreen ? "Exit full screen" : "Enter full screen"}
+          label={fullScreen ? t("Exit full screen") : t("Enter full screen")}
           onClick={() => setFullScreen(!fullScreen)}
         >
           {fullScreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
         </HeaderButton>
-        <HeaderButton label={`Close ${noun} (Esc)`} onClick={close}>
+        <HeaderButton label={t("Close {noun} (Esc)", { noun: String(noun) })} onClick={close}>
           <X className="size-4" />
         </HeaderButton>
       </div>

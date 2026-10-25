@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { groupNameByModel, modelConflictError } from "./modelOwnership";
 import type { RoutingGroup } from "./types";
+import { translate } from "@/i18n/language";
 
 const groups: RoutingGroup[] = [
   { group_name: "cheap", models: ["m1", "m2"], routing_strategy: "latency-based-routing" },
@@ -29,6 +30,11 @@ describe("groupNameByModel", () => {
 });
 
 describe("modelConflictError", () => {
+  it("翻译冲突说明但保留与词典同名的模型和组名", () => {
+    expect(
+      modelConflictError(["Home"], { Home: "Settings" }, (message, values) => translate("zh-CN", message, values)),
+    ).toBe("每个模型最多只能属于一个非优先级组。以下模型已被占用：Home（属于“Settings”）");
+  });
   it("passes models that no other group claims", () => {
     expect(modelConflictError(["m4"], groupNameByModel(groups, "cheap"))).toBeNull();
     expect(modelConflictError(undefined, groupNameByModel(groups))).toBeNull();

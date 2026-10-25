@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState, useLayoutEffect } from "react";
+import { useLanguage } from "@/contexts/LanguageContext";
+import React, { useCallback, useEffect, useEffectEvent, useRef, useState, useLayoutEffect } from "react";
 import { Plus, ChevronDown, Paperclip, ImageIcon, X } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ import { runChatRequest } from "@/components/chat/runChatRequest";
 import { readChatAttachment, MAX_CHAT_ATTACHMENTS, CHAT_ATTACHMENT_ACCEPT } from "@/components/chat/attachmentHelpers";
 import ChatFileChip from "@/components/chat/ChatFileChip";
 import { useQueryState } from "nuqs";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
 
 const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
 
@@ -37,9 +39,10 @@ function AttachmentPreview({
   disabled: boolean;
   onRemove: (id: string) => void;
 }) {
+  const { t } = useLanguage();
   if (!attachments.length) return null;
   return (
-    <div className="flex w-full flex-wrap gap-3 px-4 pt-4" aria-label="Attached files">
+    <div className="flex w-full flex-wrap gap-3 px-4 pt-4" aria-label={t("Attached files")}>
       {attachments.map((attachment) => (
         <div key={attachment.id} className={attachment.kind === "file" ? "relative max-w-64" : "relative w-20"}>
           {attachment.kind === "file" ? (
@@ -56,7 +59,7 @@ function AttachmentPreview({
             type="button"
             variant="secondary"
             size="icon-xs"
-            aria-label={`Remove ${attachment.name}`}
+            aria-label={t("Remove {name}", { name: attachment.name })}
             className="absolute -right-2 -top-2 rounded-full"
             disabled={disabled}
             onClick={() => onRemove(attachment.id)}
@@ -70,6 +73,7 @@ function AttachmentPreview({
 }
 
 export default function ChatConversationPage() {
+  const { t } = useLanguage();
   const [, setConversationIdInUrl] = useQueryState("id", { history: "push" });
   const router = useRouter();
   const {
@@ -91,7 +95,8 @@ export default function ChatConversationPage() {
   const [models, setModels] = useState<ModelGroup[]>([]);
   const [mode, setMode] = useState<ChatMode>("chat");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  // 固定错误在展示时读取语言，切换语言不清空附件或重新执行校验。
+  const [attachmentError, setAttachmentError] = useState<React.ReactNode>(null);
   const [isReadingAttachments, setIsReadingAttachments] = useState(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const readAttachmentsRef = useRef(false);
@@ -117,6 +122,9 @@ export default function ChatConversationPage() {
     if (staleId) router.replace(getChatRoutes().chats);
   }, [staleId, router]);
 
+  // 通知使用当前语言，但语言切换不能重新加载模型或重置所选模式。
+  const showModelLoadError = useEffectEvent(() => toast.error(t("Could not load models")));
+
   // Load models
   useEffect(() => {
     if (!accessToken) return;
@@ -140,7 +148,7 @@ export default function ChatConversationPage() {
           setMode(modelChatMode(available[0]));
         }
       })
-      .catch(() => toast.error("Could not load models"))
+      .catch(() => showModelLoadError())
       .finally(() => setIsLoadingModels(false));
   }, [accessToken]);
 
@@ -174,7 +182,9 @@ export default function ChatConversationPage() {
   const selectModel = useCallback(
     (model: ModelGroup) => {
       if (modelChatMode(model) === "image" && attachments.length > 0) {
-        setAttachmentError("Remove the attached files before switching to image generation.");
+        setAttachmentError(
+          <TranslatedMessage message="Remove the attached files before switching to image generation." />,
+        );
         return;
       }
       responsesSessionGenerationRef.current += 1;
@@ -195,7 +205,12 @@ export default function ChatConversationPage() {
     if (mode !== "chat" || files.length === 0) return;
     if (isStreaming || readAttachmentsRef.current) return;
     if (attachments.length + files.length > MAX_CHAT_ATTACHMENTS) {
-      setAttachmentError(`Attach up to ${MAX_CHAT_ATTACHMENTS} files per message.`);
+      setAttachmentError(
+        <TranslatedMessage
+          message="Attach up to {count} files per message."
+          values={{ count: MAX_CHAT_ATTACHMENTS }}
+        />,
+      );
       return;
     }
     const draftVersion = draftVersionRef.current;
@@ -207,7 +222,9 @@ export default function ChatConversationPage() {
       if (draftVersion === draftVersionRef.current) setAttachments((current) => [...current, ...images]);
     } catch (error) {
       if (draftVersion === draftVersionRef.current)
-        setAttachmentError(error instanceof Error ? error.message : "Could not read these files.");
+        setAttachmentError(
+          error instanceof Error ? error.message : <TranslatedMessage message="Could not read these files." />,
+        );
     } finally {
       readAttachmentsRef.current = false;
       setIsReadingAttachments(false);
@@ -345,7 +362,7 @@ export default function ChatConversationPage() {
       if (idx < 0) return;
       const original = msgs[idx];
       if (!original.imageGeneration && (mode !== "chat" || !selectedModel)) {
-        setAttachmentError("Choose a chat model before resending this message.");
+        setAttachmentError(<TranslatedMessage message="Choose a chat model before resending this message." />);
         return;
       }
       if (!newContent.trim() && !original.attachments?.length) return;
@@ -426,13 +443,13 @@ export default function ChatConversationPage() {
           onCancel={handleStop}
           placeholder={
             mode === "image"
-              ? "Describe the image you want to create…"
+              ? t("Describe the image you want to create…")
               : inConversation
-                ? "Send a message..."
-                : "Describe a change, paste an error, or ask a question…"
+                ? t("Send a message...")
+                : t("Describe a change, paste an error, or ask a question…")
           }
           isLoading={isStreaming}
-          submitLabel={mode === "image" ? "Generate image" : "Send"}
+          submitLabel={mode === "image" ? t("Generate image") : t("Send")}
           submitDisabled={submitDisabled}
           onPaste={(event) => {
             const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
@@ -465,7 +482,7 @@ export default function ChatConversationPage() {
                   type="file"
                   accept={CHAT_ATTACHMENT_ACCEPT}
                   multiple
-                  aria-label="Upload files"
+                  aria-label={t("Upload files")}
                   className="sr-only"
                   disabled={isStreaming || isReadingAttachments}
                   onChange={handleAttachmentInput}
@@ -474,8 +491,10 @@ export default function ChatConversationPage() {
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  aria-label="Attach files"
-                  title="Attach images, PDF, Word (.docx), Excel (.xlsx), text, or code files (up to 4 files, 10 MB each)"
+                  aria-label={t("Attach files")}
+                  title={t(
+                    "Attach images, PDF, Word (.docx), Excel (.xlsx), text, or code files (up to 4 files, 10 MB each)",
+                  )}
                   disabled={isStreaming || isReadingAttachments || attachments.length >= MAX_CHAT_ATTACHMENTS}
                   onClick={() => attachmentInputRef.current?.click()}
                 >
@@ -488,11 +507,11 @@ export default function ChatConversationPage() {
                         variant="ghost"
                         size="sm"
                         disabled={isStreaming}
-                        aria-label="Connect tools"
+                        aria-label={t("Connect tools")}
                         className="gap-1.5 text-muted-foreground"
                       >
                         <Plus className="size-3.5" />
-                        <span>Tools</span>
+                        <span>{t("Tools")}</span>
                         {selectedMCPServers.length > 0 && (
                           <span className="text-primary">{selectedMCPServers.length}</span>
                         )}
@@ -511,18 +530,20 @@ export default function ChatConversationPage() {
             ) : (
               <span className="flex items-center gap-2 text-xs text-muted-foreground">
                 <ImageIcon className="size-4" />
-                Create an image from your description
+                {t("Create an image from your description")}
               </span>
             )
           }
         />
         {isReadingAttachments && (
           <p role="status" className="mt-2 text-xs text-muted-foreground">
-            Preparing files…
+            {t("Preparing files…")}
           </p>
         )}
         {attachments.some((attachment) => attachment.kind === "file") && (
-          <p className="mt-2 text-xs text-muted-foreground">File support depends on the selected model and provider.</p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {t("File support depends on the selected model and provider.")}
+          </p>
         )}
         {attachmentError && (
           <p role="alert" className="mt-2 text-sm text-destructive">
@@ -532,12 +553,14 @@ export default function ChatConversationPage() {
         {!isLoadingModels && !selectedModel && (
           <p className="mt-2 text-sm text-muted-foreground">
             {mode === "image"
-              ? "No image-generation models are available. Ask your admin to add one to Model Hub."
-              : "No chat models are available for your account."}
+              ? t("No image-generation models are available. Ask your admin to add one to Model Hub.")
+              : t("No chat models are available for your account.")}
           </p>
         )}
         <p className="moyai-chat-home-composer-hint">
-          {mode === "image" ? "Describe an image · Enter to generate" : "Drop files or paste images · Enter to send"}
+          {mode === "image"
+            ? t("Describe an image · Enter to generate")
+            : t("Drop files or paste images · Enter to send")}
         </p>
       </div>
     );
@@ -547,7 +570,7 @@ export default function ChatConversationPage() {
     <>
       {storageUnavailable && !storageBannerDismissed && (
         <div className="bg-warning/10 border-b border-warning/20 px-5 py-1.5 text-[13px] text-warning flex justify-between items-center">
-          <span>Some chat history or attachments could not be saved or restored.</span>
+          <span>{t("Some chat history or attachments could not be saved or restored.")}</span>
           <Button
             variant="ghost"
             size="icon-xs"
@@ -600,7 +623,7 @@ export default function ChatConversationPage() {
                     }
                   }}
                   className="absolute bottom-[100px] left-1/2 -translate-x-1/2 z-chrome rounded-full border bg-background/75 text-muted-foreground shadow-sm backdrop-blur-md hover:bg-background/95"
-                  aria-label="Scroll to bottom"
+                  aria-label={t("Scroll to bottom")}
                 >
                   <ChevronDown className="h-3 w-3" />
                 </Button>

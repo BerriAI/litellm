@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { ApiError } from "@/lib/http/client";
+import { LanguageProvider } from "@/contexts/LanguageContext";
 
 vi.mock("./useAutoRouterBenchmarks", () => ({ useAutoRouterBenchmarks: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({ useAutoRouters: vi.fn() }));
@@ -128,7 +129,7 @@ const response = (groups: AutoRouterBenchmarkGroup[], shared: Totals = totals())
   groups,
 });
 
-const renderTab = () => {
+const renderTab = (language: "en" | "zh-CN" = "en") => {
   const dateValue = { from: new Date(2026, 6, 6), to: new Date(2026, 7, 5) };
   const onDateChange = vi.fn();
   const activity = {
@@ -147,7 +148,9 @@ const renderTab = () => {
     onDateChange,
     ...render(
       <QueryClientProvider client={queryClient}>
-        <AutoRouterBenchmarksTab accessToken="sk-test" activity={activity} />
+        <LanguageProvider defaultLanguage={language} userId="benchmark-language" storageScope="benchmark-test">
+          <AutoRouterBenchmarksTab accessToken="sk-test" activity={activity} />
+        </LanguageProvider>
       </QueryClientProvider>,
     ),
   };
@@ -155,7 +158,21 @@ const renderTab = () => {
 
 describe("AutoRouterBenchmarksTab", () => {
   beforeEach(() => {
+    localStorage.clear();
     mockAutoRouters();
+  });
+
+  it("中文将缺失的基准费用显示为暂无数据", () => {
+    mockHook({ data: response([], totals({ baseline_spend: null })) });
+    renderTab("zh-CN");
+
+    expect(screen.getAllByRole("definition").map((row) => row.textContent)).toEqual([
+      "暂无数据",
+      "暂无数据",
+      "暂无数据",
+      "暂无数据",
+    ]);
+    expect(screen.queryByText("Unavailable")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -189,7 +206,7 @@ describe("AutoRouterBenchmarksTab", () => {
         : ["Unavailable", "Unavailable", "Unavailable", "Unavailable"],
     );
     expect(screen.queryByText(/Matching cost details are unavailable/)).not.toBeInTheDocument();
-    expect(screen.getByLabelText("question-circle")).toBeInTheDocument();
+    expect(screen.getByLabelText("Help")).toBeInTheDocument();
     const partial = estimatedTurns > 0 && estimatedTurns < 3073;
     expect(screen.queryByText(/adaptive and quality routers are excluded/) != null).toBe(partial);
     if (partial) {

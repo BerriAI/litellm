@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useRef, useState } from "react";
 import { Info, UserPlus } from "lucide-react";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
@@ -64,6 +65,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   defaultRole = "user",
   teamId,
 }) => {
+  const { t } = useLanguage();
   const emptyValues: FormValues = { user_email: undefined, user_id: undefined, role: defaultRole };
   const form = useForm<FormValues>({ defaultValues: emptyValues });
   const selectedUserId = form.watch("user_id");
@@ -172,8 +174,8 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
           autoHighlight="always"
           isLoading={loading}
           placeholder={placeholder}
-          emptyText="No results"
-          loadingText="Loading..."
+          emptyText={t("No results")}
+          loadingText={t("Loading...")}
           inputId={controlProps.id}
         />
       </div>
@@ -191,25 +193,26 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
             <Alert variant="info" className="mb-4" data-testid="member-existing-users-notice">
               <Info />
               <AlertTitle>
-                Search selects from users that already exist. To add someone new, ask a proxy admin to create their
-                account first.
+                {t(
+                  "Search selects from users that already exist. To add someone new, ask a proxy admin to create their account first.",
+                )}
               </AlertTitle>
             </Alert>
 
             <FieldGroup>
-              <FormField control={form.control} name="user_email" label="Email">
+              <FormField control={form.control} name="user_email" label={t("Email")}>
                 {({ id, value, onChange }) =>
                   renderUserSearch("user_email", "Search by email", { id, value, onChange }, "member-email-search")
                 }
               </FormField>
 
-              <div className="text-center">OR</div>
+              <div className="text-center">{t("OR")}</div>
 
-              <FormField control={form.control} name="user_id" label="User ID">
+              <FormField control={form.control} name="user_id" label={t("User ID")}>
                 {({ id, value, onChange }) => renderUserSearch("user_id", "Search by user ID", { id, value, onChange })}
               </FormField>
 
-              <FormField control={form.control} name="role" label="Member Role">
+              <FormField control={form.control} name="role" label={t("Member Role")}>
                 {({ id, value, onChange }) => (
                   <Select items={roles} value={value} onValueChange={(next) => onChange(next as string)}>
                     <SelectTrigger id={id}>
@@ -240,7 +243,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
             <div className="mt-4 text-right">
               <Button type="submit" disabled={isSubmitting || (!selectedUserId && !selectedUserEmail)}>
                 {isSubmitting ? <UiLoadingSpinner className="size-4" /> : <UserPlus />}
-                {isSubmitting ? "Adding..." : "Add Member"}
+                {isSubmitting ? t("Adding...") : t("Add Member")}
               </Button>
             </div>
           </form>

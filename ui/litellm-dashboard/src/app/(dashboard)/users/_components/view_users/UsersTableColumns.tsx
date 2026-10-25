@@ -1,5 +1,7 @@
 "use client";
 
+import { englishTranslate, type Translate } from "@/i18n/language";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ColumnDef } from "@tanstack/react-table";
 import { ChartColumn, Copy, Info, KeyRound, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import Link from "next/link";
@@ -38,10 +40,11 @@ interface UserRowActionsProps {
 }
 
 function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onResetPassword }: UserRowActionsProps) {
+  const { t } = useLanguage();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open user actions"
+        aria-label={t("Open user actions")}
         data-testid={`user-actions-${user.user_id}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -50,18 +53,18 @@ function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onR
       <DropdownMenuContent align="end" className="w-48">
         <DropdownMenuItem onClick={() => onUserClick(user.user_id, true)} data-testid="user-action-edit">
           <Pencil />
-          Edit user
+          {t("Edit user")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => onResetPassword(user.user_id)} data-testid="user-action-reset-password">
           <KeyRound />
-          Reset password
+          {t("Reset password")}
         </DropdownMenuItem>
         <DropdownMenuItem
-          onClick={() => void copyToClipboard(user.user_id, "User ID copied")}
+          onClick={() => void copyToClipboard(user.user_id, t("User ID copied"))}
           data-testid="user-action-copy"
         >
           <Copy />
-          Copy user ID
+          {t("Copy user ID")}
         </DropdownMenuItem>
         {canViewUserUsage && (
           <DropdownMenuItem
@@ -69,13 +72,13 @@ function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onR
             data-testid="user-action-view-usage"
           >
             <ChartColumn />
-            View usage
+            {t("View usage")}
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
         <DropdownMenuItem variant="destructive" onClick={() => onDeleteUser(user)} data-testid="user-action-delete">
           <Trash2 />
-          Delete user
+          {t("Delete user")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -83,6 +86,7 @@ function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onR
 }
 
 export interface UsersTableColumnsDeps {
+  t?: Translate;
   possibleUIRoles: Record<string, Record<string, string>> | null;
   includeSelection: boolean;
   canViewUserUsage: boolean;
@@ -92,6 +96,7 @@ export interface UsersTableColumnsDeps {
 }
 
 export const getUsersTableColumns = ({
+  t = englishTranslate,
   possibleUIRoles,
   includeSelection,
   canViewUserUsage,
@@ -103,8 +108,8 @@ export const getUsersTableColumns = ({
     {
       id: "user_id",
       accessorKey: "user_id",
-      meta: { title: "User ID" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="User ID" variant="header-cycle" />,
+      meta: { title: t("User ID") },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("User ID")} variant="header-cycle" />,
       size: 220,
       enableSorting: true,
       cell: ({ row }) => (
@@ -118,8 +123,8 @@ export const getUsersTableColumns = ({
     {
       id: "user_email",
       accessorKey: "user_email",
-      meta: { title: "Email" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Email" variant="header-cycle" />,
+      meta: { title: t("Email") },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Email")} variant="header-cycle" />,
       size: 220,
       enableSorting: true,
       cell: ({ row }) => (
@@ -131,8 +136,8 @@ export const getUsersTableColumns = ({
     {
       id: "status",
       accessorFn: (user) => (isScimInactive(user) ? "Inactive" : "Active"),
-      meta: { title: "Status", skeleton: "badge" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Status" />,
+      meta: { title: t("Status"), skeleton: "badge" },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Status")} />,
       sortDescFirst: false,
       size: 110,
       enableSorting: true,
@@ -141,20 +146,22 @@ export const getUsersTableColumns = ({
           return (
             <StatusBadge
               tone="error"
-              label="Inactive"
+              label={t("Inactive")}
               tooltip={SCIM_INACTIVE_HINT}
               dataTestId={`user-status-${row.original.user_id}`}
             />
           );
         }
-        return <StatusBadge tone="success" label="Active" dataTestId={`user-status-${row.original.user_id}`} />;
+        return <StatusBadge tone="success" label={t("Active")} dataTestId={`user-status-${row.original.user_id}`} />;
       },
     },
     {
       id: "user_role",
       accessorKey: "user_role",
-      meta: { title: "Global Proxy Role" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Global Proxy Role" variant="header-cycle" />,
+      meta: { title: t("Global Proxy Role") },
+      header: ({ column }) => (
+        <DataTableSortHeader column={column} title={t("Global Proxy Role")} variant="header-cycle" />
+      ),
       size: 160,
       enableSorting: true,
       cell: ({ row }) => (
@@ -166,8 +173,8 @@ export const getUsersTableColumns = ({
     {
       id: "user_alias",
       accessorKey: "user_alias",
-      meta: { title: "User Alias" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="User Alias" />,
+      meta: { title: t("User Alias") },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("User Alias")} />,
       sortDescFirst: false,
       size: 150,
       enableSorting: true,
@@ -180,8 +187,8 @@ export const getUsersTableColumns = ({
     {
       id: "spend",
       accessorKey: "spend",
-      meta: { title: "Spend (USD)", numeric: true },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" variant="header-cycle" />,
+      meta: { title: t("Spend (USD)"), numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Spend (USD)")} variant="header-cycle" />,
       size: 130,
       enableSorting: true,
       cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={2} />,
@@ -189,12 +196,12 @@ export const getUsersTableColumns = ({
     {
       id: "max_budget",
       accessorKey: "max_budget",
-      meta: { title: "Budget (USD)", numeric: true },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Budget (USD)" />,
+      meta: { title: t("Budget (USD)"), numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Budget (USD)")} />,
       sortDescFirst: true,
       size: 130,
       enableSorting: true,
-      cell: ({ row }) => <MoneyCell value={row.original.max_budget} decimals={2} emptyText="Unlimited" showZero />,
+      cell: ({ row }) => <MoneyCell value={row.original.max_budget} decimals={2} emptyText={t("Unlimited")} showZero />,
     },
     {
       id: "sso_user_id",
@@ -204,8 +211,8 @@ export const getUsersTableColumns = ({
         <span className="flex items-center gap-1.5">
           <DataTableSortHeader column={column} title="SSO ID" />
           <CellTooltip
-            content={SSO_ID_HINT}
-            trigger={<Info className="size-3.5 shrink-0 text-muted-foreground" aria-label="About SSO ID" />}
+            content={t(SSO_ID_HINT)}
+            trigger={<Info className="size-3.5 shrink-0 text-muted-foreground" aria-label={t("About SSO ID")} />}
           />
         </span>
       ),
@@ -221,8 +228,8 @@ export const getUsersTableColumns = ({
     {
       id: "key_count",
       accessorKey: "key_count",
-      meta: { title: "Virtual Keys", skeleton: "badge" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Virtual Keys" />,
+      meta: { title: t("Virtual Keys"), skeleton: "badge" },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Virtual Keys")} />,
       sortDescFirst: true,
       size: 120,
       enableSorting: true,
@@ -234,7 +241,7 @@ export const getUsersTableColumns = ({
               variant="outline"
               className="whitespace-nowrap border-indigo-200 bg-indigo-50 font-normal text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-300"
             >
-              {keyCount} {keyCount === 1 ? "Key" : "Keys"}
+              {keyCount} {keyCount === 1 ? t("Key") : t("Keys")}
             </Badge>
           );
         }
@@ -243,7 +250,7 @@ export const getUsersTableColumns = ({
             variant="outline"
             className="whitespace-nowrap border-border bg-muted font-normal text-muted-foreground"
           >
-            No Keys
+            {t("No Keys")}
           </Badge>
         );
       },
@@ -251,8 +258,8 @@ export const getUsersTableColumns = ({
     {
       id: "created_at",
       accessorKey: "created_at",
-      meta: { title: "Created At" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Created At" variant="header-cycle" />,
+      meta: { title: t("Created At") },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Created At")} variant="header-cycle" />,
       size: 130,
       enableSorting: true,
       cell: ({ row }) => <DateCell value={row.original.created_at} precision="date" />,
@@ -260,8 +267,8 @@ export const getUsersTableColumns = ({
     {
       id: "updated_at",
       accessorKey: "updated_at",
-      meta: { title: "Updated At" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Updated At" />,
+      meta: { title: t("Updated At") },
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("Updated At")} />,
       sortDescFirst: false,
       size: 130,
       enableSorting: true,
@@ -269,8 +276,8 @@ export const getUsersTableColumns = ({
     },
     {
       id: "actions",
-      meta: { title: "Actions", className: "text-right", headerClassName: "text-right" },
-      header: () => <span className="sr-only">Actions</span>,
+      meta: { title: t("Actions"), className: "text-right", headerClassName: "text-right" },
+      header: () => <span className="sr-only">{t("Actions")}</span>,
       size: 60,
       enableSorting: false,
       enableHiding: false,

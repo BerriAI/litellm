@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -28,46 +29,49 @@ const CustomPatternModal: React.FC<CustomPatternModalProps> = ({
   onAdd,
   onCancel,
 }) => {
+  const { t } = useLanguage();
   return (
     <Dialog open={visible} onOpenChange={(open) => !open && onCancel()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
         <DialogHeader>
-          <DialogTitle>Add custom regex pattern</DialogTitle>
+          <DialogTitle>{t("Add custom regex pattern")}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-6">
           <div>
-            <p className="font-semibold">Pattern name</p>
+            <p className="font-semibold">{t("Pattern name")}</p>
             <Input
               className="mt-2"
-              placeholder="e.g., internal_id, employee_code"
+              placeholder={t("e.g., internal_id, employee_code")}
               value={patternName}
               onChange={(e) => onNameChange(e.target.value)}
             />
           </div>
 
           <div>
-            <p className="font-semibold">Regex pattern</p>
+            <p className="font-semibold">{t("Regex pattern")}</p>
             <Input
               className="mt-2"
-              placeholder="e.g., ID-[0-9]{6}"
+              placeholder={t("e.g., ID-[0-9]{6}")}
               value={patternRegex}
               onChange={(e) => onRegexChange(e.target.value)}
             />
-            <p className="text-xs text-muted-foreground">Enter a valid regular expression to match sensitive data</p>
+            <p className="text-xs text-muted-foreground">
+              {t("Enter a valid regular expression to match sensitive data")}
+            </p>
           </div>
 
           <div>
-            <p className="font-semibold">Action</p>
+            <p className="font-semibold">{t("Action")}</p>
             <p className="mt-1 mb-2 text-muted-foreground">
-              Choose what action the guardrail should take when this pattern is detected
+              {t("Choose what action the guardrail should take when this pattern is detected")}
             </p>
             <Select
               items={ACTION_ITEMS}
               value={patternAction}
               onValueChange={(value: string | null) => value && onActionChange(value as "BLOCK" | "MASK")}
             >
-              <SelectTrigger className="w-full" aria-label="Action">
+              <SelectTrigger className="w-full" aria-label={t("Action")}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -83,9 +87,9 @@ const CustomPatternModal: React.FC<CustomPatternModalProps> = ({
 
         <DialogFooter>
           <Button variant="outline" onClick={onCancel}>
-            Cancel
+            {t("Cancel")}
           </Button>
-          <Button onClick={onAdd}>Add</Button>
+          <Button onClick={onAdd}>{t("Add")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

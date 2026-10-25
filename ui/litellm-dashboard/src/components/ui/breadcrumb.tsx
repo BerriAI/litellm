@@ -1,11 +1,16 @@
+"use client";
+
 import * as React from "react";
 import { ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/cva.config";
+import { useLanguage } from "@/contexts/LanguageContext";
 
-const Breadcrumb = React.forwardRef<HTMLElement, React.ComponentPropsWithoutRef<"nav">>(({ ...props }, ref) => (
-  <nav ref={ref} aria-label="breadcrumb" data-slot="breadcrumb" {...props} />
-));
+const Breadcrumb = React.forwardRef<HTMLElement, React.ComponentPropsWithoutRef<"nav">>(({ ...props }, ref) => {
+  const { t } = useLanguage();
+  // 只翻译内置名称，调用方指定的可访问标签仍由原属性覆盖。
+  return <nav ref={ref} aria-label={t("Breadcrumb")} data-slot="breadcrumb" {...props} />;
+});
 Breadcrumb.displayName = "Breadcrumb";
 
 const BreadcrumbList = React.forwardRef<HTMLOListElement, React.ComponentPropsWithoutRef<"ol">>(

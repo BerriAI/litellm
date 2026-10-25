@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
@@ -89,6 +90,10 @@ const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): strin
 };
 
 export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
+  const { t } = useLanguage();
+  // 仅翻译预定义显示标签，筛选值仍使用接口约定的原始状态
+  const filterLabels = Object.fromEntries(Object.entries(FILTER_LABELS).map(([key, label]) => [key, t(label)]));
+  const statusFilterItems = STATUS_FILTER_ITEMS.map((item) => ({ ...item, label: t(item.label) }));
   const { data: fetchedOrganizations } = useOrganizations();
   const organizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const { data: fetchedTeams } = useAllTeams();
@@ -154,13 +159,14 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   const columnDeps = useMemo(
     () => ({
+      t,
       allTeams,
       organizations,
       teamMemberBudgets,
       onSelectKey: (key: KeyResponse) => void setSelectedKeyId(key.token),
       applyUserBudgetToTeamKeys,
     }),
-    [allTeams, organizations, teamMemberBudgets, setSelectedKeyId, applyUserBudgetToTeamKeys],
+    [allTeams, organizations, teamMemberBudgets, setSelectedKeyId, applyUserBudgetToTeamKeys, t],
   );
   const columns = useMemo(() => getKeyTableColumns(columnDeps), [columnDeps]);
 
@@ -214,16 +220,16 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         return organizations.find((org) => org.organization_id === raw)?.organization_alias || raw;
       }
       if (columnId === "status" && isKeyStatusFilter(raw)) {
-        return KEY_STATUS_LABELS[raw];
+        return t(KEY_STATUS_LABELS[raw]);
       }
       return raw;
     },
-    [allTeams, organizations],
+    [allTeams, organizations, t],
   );
 
   if (selectedKeyId) {
     if (!selectedKey && !selectedKeyLoadFailed) {
-      return <div className="p-4 text-sm text-muted-foreground">Loading key...</div>;
+      return <div className="p-4 text-sm text-muted-foreground">{t("Loading key...")}</div>;
     }
     return (
       <div className="w-full h-full overflow-hidden">
@@ -244,9 +250,9 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       <PageHeader>
         <PageHeaderTitle>
           <KeyRound />
-          Virtual Keys
+          {t("Virtual Keys")}
         </PageHeaderTitle>
-        <PageHeaderDescription>Every key that authenticates requests to the gateway.</PageHeaderDescription>
+        <PageHeaderDescription>{t("Every key that authenticates requests to the gateway.")}</PageHeaderDescription>
         {headerActions != null && <PageHeaderControls>{headerActions}</PageHeaderControls>}
       </PageHeader>
       <DataTable
@@ -269,8 +275,8 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         columnResizeMode="onChange"
         isLoading={isPending || isPlaceholderData}
         isError={isError}
-        loadingMessage="Loading keys..."
-        noDataMessage="No keys found"
+        loadingMessage={t("Loading keys...")}
+        noDataMessage={t("No keys found")}
         fillHeight
         size="compact"
         toolbar={(table) => (
@@ -279,65 +285,65 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               table={table}
               searchValue={searchInput}
               onSearchChange={setSearch}
-              searchPlaceholder="Search by key alias or ID…"
+              searchPlaceholder={t("Search by key alias or ID…")}
               onRefresh={() => refetch?.()}
               isRefreshing={isFetching}
               onOpenFilters={() => setFiltersOpen(true)}
-              filterLabels={FILTER_LABELS}
+              filterLabels={filterLabels}
               formatFilterValue={formatFilterValue}
             />
             <DataTableFilterDrawer
               table={table}
               open={filtersOpen}
               onOpenChange={setFiltersOpen}
-              title="Filters"
-              description="Narrow down virtual keys"
+              title={t("Filters")}
+              description={t("Narrow down virtual keys")}
             >
               {({ get, set }) => (
                 <>
-                  <DataTableFilterField label="Team">
+                  <DataTableFilterField label={t("Team")}>
                     <SearchSelect
                       options={teamOptions}
                       value={(get("team_id") as string) || undefined}
                       onValueChange={(value) => set("team_id", value ?? undefined)}
-                      placeholder="Select a team…"
-                      emptyText="No teams found"
+                      placeholder={t("Select a team…")}
+                      emptyText={t("No teams found")}
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="Organization">
+                  <DataTableFilterField label={t("Organization")}>
                     <SearchSelect
                       options={orgOptions}
                       value={(get("org_id") as string) || undefined}
                       onValueChange={(value) => set("org_id", value ?? undefined)}
-                      placeholder="Select an organization…"
-                      emptyText="No organizations found"
+                      placeholder={t("Select an organization…")}
+                      emptyText={t("No organizations found")}
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="User ID">
+                  <DataTableFilterField label={t("User ID")}>
                     <Input
                       value={(get("user_id") as string) ?? ""}
                       onChange={(event) => set("user_id", event.target.value)}
-                      placeholder="Enter User ID…"
+                      placeholder={t("Enter User ID…")}
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="Key ID">
+                  <DataTableFilterField label={t("Key ID")}>
                     <Input
                       value={(get("key_hash") as string) ?? ""}
                       onChange={(event) => set("key_hash", event.target.value)}
-                      placeholder="Enter Key ID…"
+                      placeholder={t("Enter Key ID…")}
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="Status">
+                  <DataTableFilterField label={t("Status")}>
                     <Select
-                      items={STATUS_FILTER_ITEMS}
+                      items={statusFilterItems}
                       value={(get("status") as string) || ALL_STATUSES}
                       onValueChange={(value) => set("status", value === ALL_STATUSES ? undefined : value)}
                     >
-                      <SelectTrigger className="w-full" aria-label="Status">
-                        <SelectValue placeholder="All statuses" />
+                      <SelectTrigger className="w-full" aria-label={t("Status")}>
+                        <SelectValue placeholder={t("All statuses")} />
                       </SelectTrigger>
                       <SelectContent>
-                        {STATUS_FILTER_ITEMS.map((item) => (
+                        {statusFilterItems.map((item) => (
                           <SelectItem key={item.value} value={item.value}>
                             {item.label}
                           </SelectItem>

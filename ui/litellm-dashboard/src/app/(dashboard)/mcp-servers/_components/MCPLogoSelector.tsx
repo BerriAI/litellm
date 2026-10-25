@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { Info, Link as LinkIcon } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -56,6 +57,7 @@ interface MCPLogoSelectorProps {
 }
 
 const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) => {
+  const { t } = useLanguage();
   const selectedWellKnown = WELL_KNOWN_LOGOS.find((l) => l.url === value);
 
   const handleSelect = (url: string) => {
@@ -66,13 +68,15 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
     <TooltipProvider>
       <div>
         <div className="mb-2 flex items-center gap-2">
-          <span className="text-sm font-medium">Logo</span>
+          <span className="text-sm font-medium">{t("Logo")}</span>
           <Tooltip>
             <TooltipTrigger
-              render={<Info className="size-4 cursor-help text-muted-foreground" aria-label="About the logo" />}
+              render={<Info className="size-4 cursor-help text-muted-foreground" aria-label={t("About the logo")} />}
             />
             <TooltipContent>
-              Select a well-known logo or paste a URL to any image. The logo is shown on the admin and chat pages.
+              {t(
+                "Select a well-known logo or paste a URL to any image. The logo is shown on the admin and chat pages.",
+              )}
             </TooltipContent>
           </Tooltip>
         </div>
@@ -82,7 +86,7 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
           <div className="mb-3 flex items-center gap-3 rounded-lg border border-border bg-muted p-3">
             <Logo
               src={selectedWellKnown?.src ?? value}
-              label="Selected"
+              label={t("Selected")}
               className="h-10 w-10 rounded-sm object-contain"
             />
             <div className="min-w-0 flex-1">
@@ -130,7 +134,7 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
             <LinkIcon className="size-4 text-muted-foreground" />
           </InputGroupAddon>
           <InputGroupInput
-            placeholder="Or paste a custom logo URL..."
+            placeholder={t("Or paste a custom logo URL...")}
             value={value && !selectedWellKnown ? value : ""}
             onChange={(e) => {
               const v = e.target.value.trim();

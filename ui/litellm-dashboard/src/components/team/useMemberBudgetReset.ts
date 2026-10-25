@@ -1,10 +1,10 @@
-import { useCallback, useRef, useState } from "react";
+import { createElement, useCallback, useRef, useState } from "react";
 import type { components } from "@/lib/http/schema";
 import { toast } from "@/lib/toast";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
 import {
   chunk,
   MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES,
-  pluralize,
   type MemberBudgetResetPending,
   type TeamUpdatePayload,
 } from "./memberBudgetReset";
@@ -60,10 +60,20 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
       const total = pending.userIds.length;
       if (outcome.attempted > 0) {
         toast.error(
-          `Reset ${outcome.attempted} of ${total} member ${pluralize(total, "budget", "budgets")}; the rest could not be reset`,
+          createElement(TranslatedMessage, {
+            message:
+              total === 1
+                ? "Reset {attempted} of {total} member budget; the rest could not be reset"
+                : "Reset {attempted} of {total} member budgets; the rest could not be reset",
+            values: { attempted: outcome.attempted, total },
+          }),
         );
       } else {
-        toast.fromError("Team updated, but member budgets could not be reset");
+        toast.fromError("Team updated, but member budgets could not be reset", {
+          description: createElement(TranslatedMessage, {
+            message: "Team updated, but member budgets could not be reset",
+          }),
+        });
       }
       setState({ phase: "resetFailed", pending, attempted: outcome.attempted });
       await refreshTeamData();
@@ -72,11 +82,23 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
     const failed = outcome.results.filter((r) => !r.success);
     if (failed.length > 0) {
       toast.error(
-        `Team updated, but ${failed.length} member ${pluralize(failed.length, "budget", "budgets")} could not be reset`,
+        createElement(TranslatedMessage, {
+          message:
+            failed.length === 1
+              ? "Team updated, but {count} member budget could not be reset"
+              : "Team updated, but {count} member budgets could not be reset",
+          values: { count: failed.length },
+        }),
       );
     } else {
       toast.success(
-        `Reset ${outcome.attempted} member ${pluralize(outcome.attempted, "budget", "budgets")} to the team default`,
+        createElement(TranslatedMessage, {
+          message:
+            outcome.attempted === 1
+              ? "Reset {count} member budget to the team default"
+              : "Reset {count} member budgets to the team default",
+          values: { count: outcome.attempted },
+        }),
       );
     }
     setState({ phase: "idle" });
@@ -118,7 +140,9 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
     setState({ phase: "idle" });
     try {
       await gateway.saveTeam(pending.updateData);
-      if (isCurrent(run)) toast.success("Team settings updated successfully");
+      // 通知在显示处读取语言，避免异步回调捕获旧语言或重新执行保存。
+      if (isCurrent(run))
+        toast.success(createElement(TranslatedMessage, { message: "Team settings updated successfully" }));
     } catch (error) {
       console.error("Error updating team:", error);
     }

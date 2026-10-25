@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { ScrollText } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
@@ -13,6 +14,7 @@ import { CREDENTIAL_LABELS, SPAN_TYPE_LABELS } from "../constants";
 import { LOG_FILTER_IDS, LOG_FILTER_LABELS, type LogsWindow } from "./useLogFilterLogic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
+import { englishTranslate, type Translate } from "@/i18n/language";
 
 interface RequestLogsTableProps {
   data: LogEntry[];
@@ -38,27 +40,33 @@ interface RequestLogsTableProps {
   toolbarChildren?: ReactNode;
 }
 
-const formatFilterValue = (columnId: string, value: unknown): string => {
+const formatFilterValue = (columnId: string, value: unknown, t: Translate = englishTranslate): string => {
   if (columnId === LOG_FILTER_IDS.SPAN_TYPE) {
-    return SPAN_TYPE_LABELS[String(value)] ?? String(value);
+    return SPAN_TYPE_LABELS[String(value)] ? t(SPAN_TYPE_LABELS[String(value)]) : String(value);
   }
   if (columnId === LOG_FILTER_IDS.CREDENTIAL) {
-    return CREDENTIAL_LABELS[String(value)] ?? String(value);
+    return CREDENTIAL_LABELS[String(value)] ? t(CREDENTIAL_LABELS[String(value)]) : String(value);
+  }
+  if (columnId === LOG_FILTER_IDS.STATUS && (value === "success" || value === "failure")) {
+    return value === "success" ? t("Success") : t("Failure");
   }
   return Array.isArray(value) ? value.join(", ") : String(value);
 };
 
 function RequestLogsEmptyState({ filtered }: { filtered: boolean }) {
+  const { t } = useLanguage();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <ScrollText className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">{filtered ? "No matching requests" : "No requests yet"}</div>
+      <div className="text-sm font-medium text-foreground">
+        {filtered ? t("No matching requests") : t("No requests yet")}
+      </div>
       <div className="max-w-xs text-center text-sm text-muted-foreground">
         {filtered
-          ? "No requests match your filters for this time range."
-          : "Requests proxied through LiteLLM will appear here."}
+          ? t("No requests match your filters for this time range.")
+          : t("Requests proxied through LiteLLM will appear here.")}
       </div>
     </div>
   );
@@ -87,6 +95,7 @@ export function RequestLogsTable({
   logsWindow,
   toolbarChildren,
 }: RequestLogsTableProps) {
+  const { t } = useLanguage();
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const userIds = useMemo(() => data.flatMap((log) => (log.user ? [log.user] : [])), [data]);
@@ -94,8 +103,9 @@ export function RequestLogsTable({
 
   const columns = useMemo(() => {
     const resolveUserEmail = (userId: string) => emailByUserId?.[userId];
-    return getRequestLogsTableColumns({ onKeyHashClick, onSessionClick, resolveUserEmail });
-  }, [onKeyHashClick, onSessionClick, emailByUserId]);
+    const columnOptions = { onKeyHashClick, onSessionClick, resolveUserEmail, t };
+    return getRequestLogsTableColumns(columnOptions);
+  }, [onKeyHashClick, onSessionClick, emailByUserId, t]);
 
   const isFiltered = columnFilters.length > 0 || searchValue !== "";
 
@@ -119,7 +129,7 @@ export function RequestLogsTable({
       isError={isError}
       errorMessage={errorMessage}
       onRetry={onRefresh}
-      loadingMessage="Loading request logs…"
+      loadingMessage={t("Loading request logs…")}
       noDataMessage={<RequestLogsEmptyState filtered={isFiltered} />}
       size="compact"
       onRowClick={onRowClick}
@@ -129,12 +139,12 @@ export function RequestLogsTable({
             table={table}
             searchValue={searchValue}
             onSearchChange={onSearchChange}
-            searchPlaceholder="Search logs by ID…"
+            searchPlaceholder={t("Search logs by ID…")}
             onRefresh={onRefresh}
             isRefreshing={isRefreshing}
             onOpenFilters={() => setFiltersOpen(true)}
-            filterLabels={LOG_FILTER_LABELS}
-            formatFilterValue={formatFilterValue}
+            filterLabels={Object.fromEntries(Object.entries(LOG_FILTER_LABELS).map(([key, label]) => [key, t(label)]))}
+            formatFilterValue={(id, value) => formatFilterValue(id, value, t)}
             showViewOptions={false}
           >
             {toolbarChildren}
@@ -143,8 +153,8 @@ export function RequestLogsTable({
             table={table}
             open={filtersOpen}
             onOpenChange={setFiltersOpen}
-            title="Filters"
-            description="Narrow down request logs"
+            title={t("Filters")}
+            description={t("Narrow down request logs")}
           >
             {({ get, set }) => <RequestLogsFilters get={get} set={set} teams={teams} logsWindow={logsWindow} />}
           </DataTableFilterDrawer>

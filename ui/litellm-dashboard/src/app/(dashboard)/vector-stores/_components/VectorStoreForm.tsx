@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from "react";
+import { useLanguage } from "@/contexts/LanguageContext";
+import React, { useState, useEffect, useMemo } from "react";
+import { englishTranslate, type Translate } from "@/i18n/language";
 import { CircleHelp, Eye, EyeOff, Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useWatch } from "react-hook-form";
@@ -15,6 +17,8 @@ import {
 import { Logo } from "@/components/molecules/logo/Logo";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { toast } from "@/lib/toast";
+import { extractProxyErrorMessage } from "@/lib/http/client";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
@@ -92,9 +96,9 @@ const isProviderFieldName = (name: string): name is ProviderFieldName =>
 
 const optionalText = z.string().optional();
 
-const vectorStoreShape = {
-  custom_llm_provider: z.string().min(1, "Please select a provider"),
-  vector_store_id: z.string().min(1, "Please input the vector store ID from your api provider"),
+const vectorStoreShape = (t: Translate) => ({
+  custom_llm_provider: z.string().min(1, t("Please select a provider")),
+  vector_store_id: z.string().min(1, t("Please input the vector store ID from your api provider")),
   vector_store_name: optionalText,
   vector_store_description: optionalText,
   litellm_credential_name: z.string().nullable().optional(),
@@ -119,24 +123,30 @@ const vectorStoreShape = {
   valkey_ssl: optionalText,
   valkey_text_field: optionalText,
   valkey_embedding_field: optionalText,
-};
-
-const vectorStoreSchema = z.object(vectorStoreShape).superRefine((values, ctx) => {
-  getProviderSpecificFields(values.custom_llm_provider)
-    .filter((field) => field.required && isProviderFieldName(field.name) && !values[field.name])
-    .forEach((field) =>
-      ctx.addIssue({
-        code: "custom",
-        path: [field.name],
-        message:
-          field.type === "select"
-            ? `Please select the ${field.label.toLowerCase()}`
-            : `Please input the ${field.label.toLowerCase()}`,
-      }),
-    );
 });
 
-type VectorStoreFormValues = z.output<typeof vectorStoreSchema>;
+// 校验只翻译内置字段说明，不改提供商标识和提交数据。
+const vectorStoreSchema = (t: Translate = englishTranslate) =>
+  z.object(vectorStoreShape(t)).superRefine((values, ctx) => {
+    getProviderSpecificFields(values.custom_llm_provider)
+      .filter((field) => field.required && isProviderFieldName(field.name) && !values[field.name])
+      .forEach((field) =>
+        ctx.addIssue({
+          code: "custom",
+          path: [field.name],
+          message:
+            field.type === "select"
+              ? t("Please select the {field}", {
+                  field: t(field.label) === field.label ? field.label.toLowerCase() : t(field.label),
+                })
+              : t("Please input the {field}", {
+                  field: t(field.label) === field.label ? field.label.toLowerCase() : t(field.label),
+                }),
+        }),
+      );
+  });
+
+type VectorStoreFormValues = z.output<ReturnType<typeof vectorStoreSchema>>;
 
 const VECTOR_STORE_ID_PLACEHOLDERS: Record<string, string> = {
   vertex_rag_engine: '6917529027641081856 (corpus ID from Vertex AI / "RAG Engine" console)',
@@ -173,6 +183,7 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
 
 const PasswordInput = React.forwardRef<HTMLInputElement, React.ComponentPropsWithoutRef<typeof InputGroupInput>>(
   (props, ref) => {
+    const { t } = useLanguage();
     const [revealed, setRevealed] = useState(false);
     return (
       <InputGroup>
@@ -180,7 +191,7 @@ const PasswordInput = React.forwardRef<HTMLInputElement, React.ComponentPropsWit
         <InputGroupAddon align="inline-end">
           <InputGroupButton
             size="icon-xs"
-            aria-label={revealed ? "Hide Password" : "Show Password"}
+            aria-label={revealed ? t("Hide Password") : t("Show Password")}
             onClick={() => setRevealed(!revealed)}
           >
             {revealed ? <EyeOff /> : <Eye />}
@@ -199,7 +210,10 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
   accessToken,
   credentials,
 }) => {
-  const form = useZodForm(vectorStoreSchema, { defaultValues: EMPTY_VALUES });
+  const { t } = useLanguage();
+  // 校验保存固定原文，已有错误只在显示处翻译，不随语言变化重新校验。
+  const schema = useMemo(() => vectorStoreSchema(), []);
+  const form = useZodForm(schema, { defaultValues: EMPTY_VALUES });
   const [metadataJson, setMetadataJson] = useState("{}");
   const [selectedProvider, setSelectedProvider] = useState("bedrock");
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
@@ -235,7 +249,9 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
       try {
         metadata = metadataJson.trim() ? JSON.parse(metadataJson) : {};
       } catch (e) {
-        toast.fromError("Invalid JSON in metadata field");
+        toast.fromError("Invalid JSON in metadata field", {
+          description: <TranslatedMessage message="Invalid JSON in metadata field" />,
+        });
         return;
       }
 
@@ -248,13 +264,21 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         litellm_credential_name: formValues.litellm_credential_name,
         litellm_params: buildVectorStoreLitellmParams(formValues.custom_llm_provider, formValues),
       });
-      toast.success("Vector store created successfully");
+      toast.success(<TranslatedMessage message="Vector store created successfully" />);
       form.reset(EMPTY_VALUES);
       setMetadataJson("{}");
       onSuccess();
     } catch (error) {
       console.error("Error creating vector store:", error);
-      toast.fromError("Error creating vector store: " + error);
+      // 保留原始错误的状态分类，只翻译本地上下文，不把服务端详情作为词典键。
+      toast.fromError(error, {
+        description: (
+          <TranslatedMessage
+            message="Error creating vector store: {error}"
+            values={{ error: extractProxyErrorMessage(error) }}
+          />
+        ),
+      });
     }
   };
 
@@ -274,7 +298,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
     <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
         <DialogHeader>
-          <DialogTitle>Add New Vector Store</DialogTitle>
+          <DialogTitle>{t("Add New Vector Store")}</DialogTitle>
         </DialogHeader>
         <TooltipProvider>
           <form onSubmit={form.handleSubmit(handleCreate)}>
@@ -282,7 +306,10 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
               <FormField
                 control={form.control}
                 name="custom_llm_provider"
-                label={labelWithHint("Provider", "Select the provider for this vector store")}
+                label={labelWithHint(t("Provider"), t("Select the provider for this vector store"))}
+                renderError={({ message, type }) =>
+                  type === "too_small" && message === "Please select a provider" ? t(message) : message
+                }
               >
                 {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
                   <Select value={value} onValueChange={makeProviderChangeHandler(onChange)}>
@@ -323,19 +350,19 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
               {selectedProvider === "pg_vector" && (
                 <Alert variant="info">
                   <Info />
-                  <AlertTitle>PG Vector Setup Required</AlertTitle>
+                  <AlertTitle>{t("PG Vector Setup Required")}</AlertTitle>
                   <AlertDescription>
-                    <p>LiteLLM provides a server to connect to PG Vector. To use this provider:</p>
+                    <p>{t("LiteLLM provides a server to connect to PG Vector. To use this provider:")}</p>
                     <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                       <li>
-                        Deploy the litellm-pgvector server from:{" "}
+                        {t("Deploy the litellm-pgvector server from:")}{" "}
                         <a href="https://github.com/BerriAI/litellm-pgvector" target="_blank" rel="noopener noreferrer">
                           https://github.com/BerriAI/litellm-pgvector
                         </a>
                       </li>
-                      <li>Configure your PostgreSQL database with pgvector extension</li>
-                      <li>Start the server and note the API base URL and API key</li>
-                      <li>Enter those details in the fields below</li>
+                      <li>{t("Configure your PostgreSQL database with pgvector extension")}</li>
+                      <li>{t("Start the server and note the API base URL and API key")}</li>
+                      <li>{t("Enter those details in the fields below")}</li>
                     </ol>
                   </AlertDescription>
                 </Alert>
@@ -344,33 +371,39 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
               {selectedProvider === "valkey" && (
                 <Alert variant="info">
                   <Info />
-                  <AlertTitle>Valkey Setup Required</AlertTitle>
+                  <AlertTitle>{t("Valkey Setup Required")}</AlertTitle>
                   <AlertDescription>
                     <p>
-                      LiteLLM searches documents you have already stored in Valkey. It does not create the index or
-                      upload documents for you. Before creating this vector store, make sure:
+                      {t(
+                        "LiteLLM searches documents you have already stored in Valkey. It does not create the index or upload documents for you. Before creating this vector store, make sure:",
+                      )}
                     </p>
                     <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                       <li>
-                        Your Valkey server has vector search enabled (the valkey-search module, included in the
-                        valkey-bundle image and in AWS ElastiCache / MemoryDB for Valkey)
+                        {t(
+                          "Your Valkey server has vector search enabled (the valkey-search module, included in the valkey-bundle image and in AWS ElastiCache / MemoryDB for Valkey)",
+                        )}
                       </li>
                       <li>
-                        You have already created a search index and loaded your documents and their embeddings into it.
-                        Enter that index name as the Vector Store ID
+                        {t(
+                          "You have already created a search index and loaded your documents and their embeddings into it. Enter that index name as the Vector Store ID",
+                        )}
                       </li>
                       <li>
-                        You know which embedding model created those stored embeddings. That model must be added to this
-                        proxy under Models so you can pick it below. Using a different model returns wrong results
+                        {t(
+                          "You know which embedding model created those stored embeddings. That model must be added to this proxy under Models so you can pick it below. Using a different model returns wrong results",
+                        )}
                       </li>
                       <li>
-                        You know the field names your documents use for their text and their embedding. If they are not
-                        &quot;text&quot; and &quot;embedding&quot;, set them below
+                        {t(
+                          'You know the field names your documents use for their text and their embedding. If they are not "text" and "embedding", set them below',
+                        )}
                       </li>
                     </ol>
                     <p style={{ marginTop: "8px" }}>
-                      When a query comes in, LiteLLM converts it to an embedding with the model below and returns the
-                      closest matching documents from your index.
+                      {t(
+                        "When a query comes in, LiteLLM converts it to an embedding with the model below and returns the closest matching documents from your index.",
+                      )}
                     </p>
                   </AlertDescription>
                 </Alert>
@@ -379,30 +412,30 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
               {selectedProvider === "vertex_rag_engine" && (
                 <Alert variant="info">
                   <Info />
-                  <AlertTitle>Vertex AI RAG Engine Setup</AlertTitle>
+                  <AlertTitle>{t("Vertex AI RAG Engine Setup")}</AlertTitle>
                   <AlertDescription>
-                    <p>To use Vertex AI RAG Engine:</p>
+                    <p>{t("To use Vertex AI RAG Engine:")}</p>
                     <p style={{ marginTop: "4px", fontStyle: "italic" }}>
-                      Note: Google Cloud has renamed this to &quot;RAG Engine&quot; in its console — the steps below
-                      still apply.
+                      {t(
+                        'Note: Google Cloud has renamed this to "RAG Engine" in its console — the steps below still apply.',
+                      )}
                     </p>
                     <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                       <li>
-                        Set up your Vertex AI RAG Engine corpus following the guide:{" "}
+                        {t("Set up your Vertex AI RAG Engine corpus following the guide:")}{" "}
                         <a
                           href="https://cloud.google.com/vertex-ai/generative-ai/docs/rag-engine/rag-overview"
                           target="_blank"
                           rel="noopener noreferrer"
                         >
-                          Vertex AI RAG Engine Overview
+                          {t("Vertex AI RAG Engine Overview")}
                         </a>
                       </li>
-                      <li>Create a corpus in your Google Cloud project</li>
+                      <li>{t("Create a corpus in your Google Cloud project")}</li>
                       <li>
-                        Note the corpus ID from the Vertex AI console (now labeled &quot;RAG Engine&quot; in Google
-                        Cloud)
+                        {t('Note the corpus ID from the Vertex AI console (now labeled "RAG Engine" in Google Cloud)')}
                       </li>
-                      <li>Enter the corpus ID in the Vector Store ID field below</li>
+                      <li>{t("Enter the corpus ID in the Vector Store ID field below")}</li>
                     </ol>
                   </AlertDescription>
                 </Alert>
@@ -411,36 +444,42 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
               {selectedProvider === "vertex_ai/search_api" && (
                 <Alert variant="info">
                   <Info />
-                  <AlertTitle>Vertex AI Search Setup</AlertTitle>
+                  <AlertTitle>{t("Vertex AI Search Setup")}</AlertTitle>
                   <AlertDescription>
-                    <p>To use Vertex AI Search (Discovery Engine):</p>
+                    <p>{t("To use Vertex AI Search (Discovery Engine):")}</p>
                     <p style={{ marginTop: "4px", fontStyle: "italic" }}>
-                      Note: Google Cloud has renamed this to &quot;Agent Search&quot; in its console — the steps below
-                      still apply.
+                      {t(
+                        'Note: Google Cloud has renamed this to "Agent Search" in its console — the steps below still apply.',
+                      )}
                     </p>
                     <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                       <li>
-                        Enable the Discovery Engine API on your Google Cloud project and create a data store following
-                        the guide:{" "}
+                        {t(
+                          "Enable the Discovery Engine API on your Google Cloud project and create a data store following the guide:",
+                        )}{" "}
                         <a
                           href="https://cloud.google.com/generative-ai-app-builder/docs/create-data-store-es"
                           target="_blank"
                           rel="noopener noreferrer"
                           style={{ textDecoration: "underline" }}
                         >
-                          Create a Vertex AI Search data store
+                          {t("Create a Vertex AI Search data store")}
                         </a>
                       </li>
-                      <li>Pick a supported location: global, us, or eu</li>
+                      <li>{t("Pick a supported location: global, us, or eu")}</li>
                       <li>
-                        For most data store types (Cloud Storage, BigQuery, Media): copy the data store ID and enter it
-                        in the Vector Store ID field below.
+                        {t(
+                          "For most data store types (Cloud Storage, BigQuery, Media): copy the data store ID and enter it in the Vector Store ID field below.",
+                        )}
                       </li>
                       <li>
-                        For website, healthcare, and connector-based sources (Drive, Gmail, Slack, Jira, etc.): create a
-                        search app on top of the data store, then copy the <strong>Engine ID</strong> and enter it in
-                        the Engine ID field. The Vector Store ID is still required as the LiteLLM-side name for this
-                        record, but it isn&apos;t used in the GCP URL when Engine ID is set.
+                        {t(
+                          "For website, healthcare, and connector-based sources (Drive, Gmail, Slack, Jira, etc.): create a search app on top of the data store, then copy the",
+                        )}{" "}
+                        <strong>{t("Engine ID")}</strong>{" "}
+                        {t(
+                          "and enter it in the Engine ID field. The Vector Store ID is still required as the LiteLLM-side name for this record, but it isn't used in the GCP URL when Engine ID is set.",
+                        )}
                       </li>
                     </ol>
                   </AlertDescription>
@@ -450,9 +489,14 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
               <FormField
                 control={form.control}
                 name="vector_store_id"
-                label={labelWithHint("Vector Store ID", "Enter the vector store ID from your api provider")}
+                label={labelWithHint(t("Vector Store ID"), t("Enter the vector store ID from your api provider"))}
+                renderError={({ message, type }) =>
+                  type === "too_small" && message === "Please input the vector store ID from your api provider"
+                    ? t(message)
+                    : message
+                }
               >
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder={vectorStoreIdPlaceholder} />}
+                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder={t(vectorStoreIdPlaceholder)} />}
               </FormField>
 
               {getProviderSpecificFields(selectedProvider)
@@ -465,14 +509,14 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                 control={form.control}
                 name="vector_store_name"
                 label={labelWithHint(
-                  "Vector Store Name",
-                  "Custom name you want to give to the vector store, this name will be rendered on the LiteLLM UI",
+                  t("Vector Store Name"),
+                  t("Custom name you want to give to the vector store, this name will be rendered on the LiteLLM UI"),
                 )}
               >
                 {({ ref, value, ...field }) => <Input {...field} ref={ref} value={value ?? ""} />}
               </FormField>
 
-              <FormField control={form.control} name="vector_store_description" label="Description">
+              <FormField control={form.control} name="vector_store_description" label={t("Description")}>
                 {({ ref, value, ...field }) => <Textarea {...field} ref={ref} value={value ?? ""} rows={4} />}
               </FormField>
 
@@ -480,14 +524,14 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                 control={form.control}
                 name="litellm_credential_name"
                 label={labelWithHint(
-                  "Existing Credentials",
-                  "Optionally select API provider credentials for this vector store eg. Bedrock API KEY",
+                  t("Existing Credentials"),
+                  t("Optionally select API provider credentials for this vector store eg. Bedrock API KEY"),
                 )}
               >
                 {({ id, value, onChange }) => (
                   <SearchSelect
                     inputId={id}
-                    placeholder="Select or search for existing credentials"
+                    placeholder={t("Select or search for existing credentials")}
                     options={credentialOptions(credentials)}
                     value={value ?? ""}
                     onValueChange={(selected) => onChange(selected === "" || selected === null ? undefined : selected)}
@@ -497,7 +541,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
 
               <div role="group" className="flex w-full flex-col gap-3">
                 <span className="flex w-fit gap-2 text-sm leading-snug font-medium">
-                  {labelWithHint("Metadata", "JSON metadata for the vector store (optional)")}
+                  {labelWithHint(t("Metadata"), t("JSON metadata for the vector store (optional)"))}
                 </span>
                 <Textarea
                   rows={4}
@@ -510,9 +554,9 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
 
             <div className="mt-6 flex justify-end space-x-3">
               <Button type="button" variant="outline" onClick={handleCancel}>
-                Cancel
+                {t("Cancel")}
               </Button>
-              <Button type="submit">Create</Button>
+              <Button type="submit">{t("Create")}</Button>
             </div>
           </form>
         </TooltipProvider>
@@ -533,7 +577,16 @@ interface ProviderFieldProps {
 }
 
 const ProviderField: React.FC<ProviderFieldProps> = ({ field, control, modelInfo }) => {
-  const label = labelWithHint(field.label, field.tooltip);
+  const { t } = useLanguage();
+  // 字段来自内置提供商定义，模型选项与最终提交的字段名保持原样。
+  const label = labelWithHint(t(field.label), t(field.tooltip));
+  const validationMessage = field.type === "select" ? "Please select the {field}" : "Please input the {field}";
+  const renderError = ({ message, type }: { message?: string; type: string }) =>
+    type === "custom" && message === englishTranslate(validationMessage, { field: field.label.toLowerCase() })
+      ? t(validationMessage, {
+          field: t(field.label) === field.label ? field.label.toLowerCase() : t(field.label),
+        })
+      : message;
 
   if (field.type === "select") {
     const selectOptions =
@@ -546,7 +599,7 @@ const ProviderField: React.FC<ProviderFieldProps> = ({ field, control, modelInfo
         }));
 
     return (
-      <FormField control={control} name={field.name} label={label}>
+      <FormField control={control} name={field.name} label={label} renderError={renderError}>
         {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
           <Combobox
             items={selectOptions}
@@ -566,7 +619,7 @@ const ProviderField: React.FC<ProviderFieldProps> = ({ field, control, modelInfo
               className="w-full"
             />
             <ComboboxContent>
-              <ComboboxEmpty>No matching options</ComboboxEmpty>
+              <ComboboxEmpty>{t("No matching options")}</ComboboxEmpty>
               <ComboboxList>
                 {(option: { value: string; label: string }) => (
                   <ComboboxItem key={option.value} value={option}>
@@ -582,7 +635,7 @@ const ProviderField: React.FC<ProviderFieldProps> = ({ field, control, modelInfo
   }
 
   return (
-    <FormField control={control} name={field.name} label={label}>
+    <FormField control={control} name={field.name} label={label} renderError={renderError}>
       {({ ref, value, ...controlProps }) =>
         field.type === "password" ? (
           <PasswordInput {...controlProps} ref={ref} value={value ?? ""} placeholder={field.placeholder} />

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { CircleHelp } from "lucide-react";
 import React from "react";
 import { z } from "zod";
@@ -25,6 +26,7 @@ const labelWithHint = (label: React.ReactNode, hint: string): React.ReactNode =>
   </>
 );
 
+// 本地预算错误在展示时翻译，不因语言切换重建校验或重置预算输入。
 const budgetSchema = z
   .object({
     max_budget: z.string().optional(),
@@ -49,6 +51,7 @@ const AccessGroupBudgetModal: React.FC<AccessGroupBudgetModalProps> = ({
   onCancel,
   onSubmit,
 }) => {
+  const { t } = useLanguage();
   const budget = accessGroup?.budget ?? null;
   const form = useZodForm(budgetSchema, { values: accessGroupBudgetFormValues(budget) });
 
@@ -57,12 +60,16 @@ const AccessGroupBudgetModal: React.FC<AccessGroupBudgetModalProps> = ({
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle>
-            {budget ? "Edit" : "Set"} budget for &quot;{accessGroup?.access_group}&quot;
+            {budget
+              ? t("Edit budget for {group}", { group: accessGroup?.access_group ?? "" })
+              : t("Set budget for {group}", { group: accessGroup?.access_group ?? "" })}
           </DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          Every key granted this access group by name draws from this one budget. A key that reaches the group&apos;s
-          models through a wildcard or <code>all-proxy-models</code> is not charged against it.
+          {t(
+            "Every key granted this access group by name draws from this one budget. A key that reaches the group's models through a wildcard or",
+          )}{" "}
+          <code>all-proxy-models</code> {t("is not charged against it.")}
         </p>
         <form onSubmit={form.handleSubmit((values) => onSubmit(buildAccessGroupBudgetBody(values)))} noValidate>
           <TooltipProvider>
@@ -70,9 +77,12 @@ const AccessGroupBudgetModal: React.FC<AccessGroupBudgetModalProps> = ({
               <FormField
                 control={form.control}
                 name="max_budget"
+                renderError={(error) => error.message && t(error.message)}
                 label={labelWithHint(
-                  "Max Budget (USD)",
-                  "Total the whole group may spend. Once its shared spend reaches this, every key that draws from the group is refused",
+                  t("Max Budget (USD)"),
+                  t(
+                    "Total the whole group may spend. Once its shared spend reaches this, every key that draws from the group is refused",
+                  ),
                 )}
               >
                 {({ ref, value, ...field }) => <NumericalInput {...field} value={value ?? ""} step={0.01} />}
@@ -82,8 +92,8 @@ const AccessGroupBudgetModal: React.FC<AccessGroupBudgetModalProps> = ({
                 control={form.control}
                 name="soft_budget"
                 label={labelWithHint(
-                  "Soft Budget (USD)",
-                  "Fires an alert when the group's spend reaches this. Requests keep succeeding",
+                  t("Soft Budget (USD)"),
+                  t("Fires an alert when the group's spend reaches this. Requests keep succeeding"),
                 )}
               >
                 {({ ref, value, ...field }) => <NumericalInput {...field} value={value ?? ""} step={0.01} />}
@@ -93,8 +103,8 @@ const AccessGroupBudgetModal: React.FC<AccessGroupBudgetModalProps> = ({
                 control={form.control}
                 name="budget_duration"
                 label={labelWithHint(
-                  "Reset Budget",
-                  "How often the group's spend resets. Leave empty for a budget that never resets",
+                  t("Reset Budget"),
+                  t("How often the group's spend resets. Leave empty for a budget that never resets"),
                 )}
               >
                 {({ id, value, onChange }) => (
@@ -102,22 +112,24 @@ const AccessGroupBudgetModal: React.FC<AccessGroupBudgetModalProps> = ({
                     id={id}
                     value={value || null}
                     onChange={(next) => onChange(next ?? undefined)}
-                    placeholder="Keep current"
+                    placeholder={t("Keep current")}
                   />
                 )}
               </FormField>
             </FieldGroup>
 
             <p className="mt-3 text-xs text-muted-foreground">
-              A field left blank keeps whatever the budget already has. Use Clear budget to remove the budget itself.
+              {t(
+                "A field left blank keeps whatever the budget already has. Use Clear budget to remove the budget itself.",
+              )}
             </p>
 
             <div className="mt-6 flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={onCancel}>
-                Cancel
+                {t("Cancel")}
               </Button>
               <Button type="submit" disabled={isSaving}>
-                {isSaving ? "Saving..." : "Save Budget"}
+                {isSaving ? t("Saving...") : t("Save Budget")}
               </Button>
             </div>
           </TooltipProvider>

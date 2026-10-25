@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useForm, useWatch } from "react-hook-form";
 import { parseAsString, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
@@ -24,6 +25,7 @@ const INITIAL_VALUES: MountedFormValues = { litellm_credential_name: null };
 const PREFILL_URL_PARAMS = { provider: parseAsString, litellm_model: parseAsString };
 
 export default function AddModelPanel() {
+  const { t } = useLanguage();
   const { accessToken } = useAuthorized();
   const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: INITIAL_VALUES });
   const registry = useMountRegistry();
@@ -83,7 +85,7 @@ export default function AddModelPanel() {
           void setPrefillParams({ provider: null, litellm_model: null });
         },
       },
-      refresh,
+      { callback: refresh, t },
     );
     return true;
   };

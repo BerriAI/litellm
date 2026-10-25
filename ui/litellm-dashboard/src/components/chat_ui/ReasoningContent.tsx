@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -13,6 +14,7 @@ interface ReasoningContentProps {
 }
 
 const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent }) => {
+  const { t } = useLanguage();
   const syntaxTheme = useSyntaxTheme(coy);
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -32,7 +34,7 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
           }
         >
           <Lightbulb className="size-3.5" />
-          {isExpanded ? "Hide reasoning" : "Show reasoning"}
+          {isExpanded ? t("Hide reasoning") : t("Show reasoning")}
           {isExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         </CollapsibleTrigger>
 

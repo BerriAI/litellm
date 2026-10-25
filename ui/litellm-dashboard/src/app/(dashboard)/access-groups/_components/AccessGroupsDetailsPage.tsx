@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
 import {
   ArrowLeftIcon,
@@ -48,11 +49,12 @@ function MCPToolPermissionList({
   servers: readonly AccessGroupResource[];
   toolPermissions: Readonly<Record<string, string[]>> | null;
 }) {
+  const { t } = useLanguage();
   if (toolPermissions === null || servers.length === 0) {
     return null;
   }
   return (
-    <section className="mt-6 space-y-2" aria-label="MCP tool permissions">
+    <section className="mt-6 space-y-2" aria-label={t("MCP tool permissions")}>
       {servers.map(({ id, name }) => {
         return (
           <div key={id} className="flex flex-wrap items-baseline gap-2 text-sm">
@@ -106,6 +108,7 @@ function ResourceBadge({
 }
 
 export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailProps) {
+  const { t } = useLanguage();
   const { data: accessGroup, isLoading } = useAccessGroupDetails(accessGroupId);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [showAllKeys, setShowAllKeys] = useState(false);
@@ -124,10 +127,10 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
   if (!accessGroup) {
     return (
       <div className="p-6 px-12">
-        <Button variant="ghost" size="icon" aria-label="Back" onClick={onBack} className="mb-4">
+        <Button variant="ghost" size="icon" aria-label={t("Back")} onClick={onBack} className="mb-4">
           <ArrowLeftIcon className="size-4" />
         </Button>
-        <p className="py-8 text-center text-sm text-muted-foreground">Access group not found</p>
+        <p className="py-8 text-center text-sm text-muted-foreground">{t("Access group not found")}</p>
       </div>
     );
   }
@@ -146,47 +149,47 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
     <div className="p-6 px-12">
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" aria-label="Back" onClick={onBack}>
+          <Button variant="ghost" size="icon" aria-label={t("Back")} onClick={onBack}>
             <ArrowLeftIcon className="size-4" />
           </Button>
           <div>
             <h1 className="text-xl font-semibold tracking-tight text-foreground">{accessGroup.access_group_name}</h1>
             <div className="flex items-center gap-1 text-sm text-muted-foreground">
               <span>ID: {accessGroup.access_group_id}</span>
-              <CopyButton value={accessGroup.access_group_id} label="Copy access group ID" />
+              <CopyButton value={accessGroup.access_group_id} label={t("Copy access group ID")} />
             </div>
           </div>
         </div>
         <Button onClick={() => setIsEditModalVisible(true)}>
           <EditIcon className="size-4" />
-          Edit Access Group
+          {t("Edit Access Group")}
         </Button>
       </div>
 
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Group Details</CardTitle>
+          <CardTitle>{t("Group Details")}</CardTitle>
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">Description</dt>
+            <dt className="text-muted-foreground">{t("Description")}</dt>
             <dd className="text-foreground">{accessGroup.description || "—"}</dd>
-            <dt className="text-muted-foreground">Created</dt>
+            <dt className="text-muted-foreground">{t("Created")}</dt>
             <dd className="flex items-center gap-1 text-foreground">
               {new Date(accessGroup.created_at).toLocaleString()}
               {accessGroup.created_by && (
                 <>
-                  <span>by</span>
+                  <span>{t("by")}</span>
                   <DefaultProxyAdminTag userId={accessGroup.created_by} />
                 </>
               )}
             </dd>
-            <dt className="text-muted-foreground">Last Updated</dt>
+            <dt className="text-muted-foreground">{t("Last Updated")}</dt>
             <dd className="flex items-center gap-1 text-foreground">
               {new Date(accessGroup.updated_at).toLocaleString()}
               {accessGroup.updated_by && (
                 <>
-                  <span>by</span>
+                  <span>{t("by")}</span>
                   <DefaultProxyAdminTag userId={accessGroup.updated_by} />
                 </>
               )}
@@ -200,13 +203,13 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <KeyIcon className="size-4" />
-              Attached Keys
+              {t("Attached Keys")}
               <Badge variant="secondary">{keys.length}</Badge>
             </CardTitle>
             {keys.length > MAX_PREVIEW && (
               <CardAction>
                 <Button variant="link" size="sm" onClick={() => setShowAllKeys(!showAllKeys)}>
-                  {showAllKeys ? "Show Less" : `View All (${keys.length})`}
+                  {showAllKeys ? t("Show Less") : `View All (${keys.length})`}
                 </Button>
               </CardAction>
             )}
@@ -219,7 +222,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No keys attached</p>
+              <p className="text-sm text-muted-foreground">{t("No keys attached")}</p>
             )}
           </CardContent>
         </Card>
@@ -228,13 +231,13 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <UsersIcon className="size-4" />
-              Attached Teams
+              {t("Attached Teams")}
               <Badge variant="secondary">{teams.length}</Badge>
             </CardTitle>
             {teams.length > MAX_PREVIEW && (
               <CardAction>
                 <Button variant="link" size="sm" onClick={() => setShowAllTeams(!showAllTeams)}>
-                  {showAllTeams ? "Show Less" : `View All (${teams.length})`}
+                  {showAllTeams ? t("Show Less") : `View All (${teams.length})`}
                 </Button>
               </CardAction>
             )}
@@ -247,7 +250,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No teams attached</p>
+              <p className="text-sm text-muted-foreground">{t("No teams attached")}</p>
             )}
           </CardContent>
         </Card>
@@ -259,37 +262,37 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
               <TabsTrigger value="models" className="flex-none gap-2 rounded-none px-4 py-2">
                 <LayersIcon className="size-4" />
-                Models
+                {t("Models")}
                 <Badge variant="secondary">{models.length}</Badge>
               </TabsTrigger>
               <TabsTrigger value="mcp" className="flex-none gap-2 rounded-none px-4 py-2">
                 <ServerIcon className="size-4" />
-                MCP Servers
+                {t("MCP Servers")}
                 <Badge variant="secondary">{mcpServers.length}</Badge>
               </TabsTrigger>
               <TabsTrigger value="agents" className="flex-none gap-2 rounded-none px-4 py-2">
                 <BotIcon className="size-4" />
-                Agents
+                {t("Agents")}
                 <Badge variant="secondary">{agents.length}</Badge>
               </TabsTrigger>
               <TabsTrigger value="skills" className="flex-none gap-2 rounded-none px-4 py-2">
                 <SparklesIcon className="size-4" />
-                Skills
+                {t("Skills")}
                 <Badge variant="secondary">{skills.length}</Badge>
               </TabsTrigger>
             </TabsList>
             <TabsContent value="models" className="pt-4">
-              <ResourceList items={models} emptyMessage="No models assigned to this group" />
+              <ResourceList items={models} emptyMessage={t("No models assigned to this group")} />
             </TabsContent>
             <TabsContent value="mcp" className="pt-4">
-              <ResourceList items={mcpServers} emptyMessage="No MCP servers assigned to this group" />
+              <ResourceList items={mcpServers} emptyMessage={t("No MCP servers assigned to this group")} />
               <MCPToolPermissionList servers={mcpServers} toolPermissions={accessGroup.mcp_tool_permissions ?? null} />
             </TabsContent>
             <TabsContent value="agents" className="pt-4">
-              <ResourceList items={agents} emptyMessage="No agents assigned to this group" />
+              <ResourceList items={agents} emptyMessage={t("No agents assigned to this group")} />
             </TabsContent>
             <TabsContent value="skills" className="pt-4">
-              <ResourceList items={skills} emptyMessage="No skills assigned to this group" />
+              <ResourceList items={skills} emptyMessage={t("No skills assigned to this group")} />
             </TabsContent>
           </Tabs>
         </CardContent>

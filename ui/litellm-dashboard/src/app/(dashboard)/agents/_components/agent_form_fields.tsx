@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { useFieldArray, useFormContext } from "react-hook-form";
 import { Plus, Trash2 } from "lucide-react";
@@ -47,6 +48,7 @@ interface AgentFormFieldsProps {
 }
 
 const SkillsFieldArray = () => {
+  const { t } = useLanguage();
   const { control } = useFormContext<AgentFormValues>();
   const { fields, append, remove } = useFieldArray({ control, name: "skills" });
 
@@ -138,19 +140,20 @@ const SkillsFieldArray = () => {
             onClick={() => remove(index)}
           >
             <Trash2 />
-            Remove Skill
+            {t("Remove Skill")}
           </Button>
         </div>
       ))}
       <Button type="button" variant="outline" className="w-full border-dashed" onClick={() => append({})}>
         <Plus />
-        Add Skill
+        {t("Add Skill")}
       </Button>
     </>
   );
 };
 
 const StaticHeadersFieldArray = () => {
+  const { t } = useLanguage();
   const { control } = useFormContext<AgentFormValues>();
   const { fields, append, remove } = useFieldArray({ control, name: "static_headers" });
 
@@ -164,7 +167,7 @@ const StaticHeadersFieldArray = () => {
                 {...control}
                 ref={ref}
                 className="w-55"
-                placeholder="Header name (e.g. Authorization)"
+                placeholder={t("Header name (e.g. Authorization)")}
                 value={typeof value === "string" ? value : ""}
                 onChange={onChange}
               />
@@ -176,7 +179,7 @@ const StaticHeadersFieldArray = () => {
                 {...control}
                 ref={ref}
                 className="w-65"
-                placeholder="Value (e.g. Bearer token123)"
+                placeholder={t("Value (e.g. Bearer token123)")}
                 value={typeof value === "string" ? value : ""}
                 onChange={onChange}
               />
@@ -186,7 +189,7 @@ const StaticHeadersFieldArray = () => {
             type="button"
             variant="ghost"
             size="icon"
-            aria-label="Remove static header"
+            aria-label={t("Remove static header")}
             className="text-destructive hover:text-destructive/80"
             onClick={() => remove(index)}
           >
@@ -196,13 +199,14 @@ const StaticHeadersFieldArray = () => {
       ))}
       <Button type="button" variant="outline" className="w-full border-dashed" onClick={() => append({})}>
         <Plus />
-        Add Static Header
+        {t("Add Static Header")}
       </Button>
     </>
   );
 };
 
 const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName = true, visiblePanels }) => {
+  const { t } = useLanguage();
   const shouldShow = (key: string) => !visiblePanels || visiblePanels.includes(key);
 
   return (
@@ -211,14 +215,14 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         <FieldGroup className="mb-4">
           <AgentFormField
             name="agent_name"
-            label={labelWithHint("Agent Name", "Unique identifier for the agent")}
+            label={labelWithHint(t("Agent Name"), t("Unique identifier for the agent"))}
             rules={{ required: "Please enter a unique agent name" }}
           >
             {({ value, onChange, ref, ...control }) => (
               <Input
                 {...control}
                 ref={ref}
-                placeholder="e.g., customer-support-agent"
+                placeholder={t("e.g., customer-support-agent")}
                 value={typeof value === "string" ? value : ""}
                 onChange={onChange}
               />
@@ -231,7 +235,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         {shouldShow(AGENT_FORM_CONFIG.basic.key) && (
           <AgentFormPanel
             panelKey={AGENT_FORM_CONFIG.basic.key}
-            title={`${AGENT_FORM_CONFIG.basic.title} (Required)`}
+            title={t("{title} (Required)", { title: String(AGENT_FORM_CONFIG.basic.title) })}
             panels={panels}
           >
             {AGENT_FORM_CONFIG.basic.fields.map((field) => (
@@ -366,12 +370,14 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         )}
 
         {shouldShow(AUTH_HEADERS_PANEL_KEY) && (
-          <AgentFormPanel panelKey={AUTH_HEADERS_PANEL_KEY} title="Authentication Headers" panels={panels}>
+          <AgentFormPanel panelKey={AUTH_HEADERS_PANEL_KEY} title={t("Authentication Headers")} panels={panels}>
             <Field>
               <FieldTitle>
                 {labelWithHint(
-                  "Static Headers",
-                  "Headers always sent to the backend agent, regardless of the client request. Admin-configured, static wins on conflict.",
+                  t("Static Headers"),
+                  t(
+                    "Headers always sent to the backend agent, regardless of the client request. Admin-configured, static wins on conflict.",
+                  ),
                 )}
               </FieldTitle>
               <div className="flex flex-col gap-2">
@@ -382,8 +388,10 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
             <AgentFormField
               name="extra_headers"
               label={labelWithHint(
-                "Forward Client Headers",
-                "Header names to extract from the client's request and forward to the agent. Type a name and press Enter.",
+                t("Forward Client Headers"),
+                t(
+                  "Header names to extract from the client's request and forward to the agent. Type a name and press Enter.",
+                ),
               )}
             >
               {({ id, value, onChange }) => (
@@ -391,7 +399,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
                   id={id}
                   value={Array.isArray(value) ? (value as string[]) : []}
                   onValueChange={onChange}
-                  placeholder="e.g. x-api-key, Authorization"
+                  placeholder={t("e.g. x-api-key, Authorization")}
                 />
               )}
             </AgentFormField>
@@ -399,7 +407,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
         )}
 
         {shouldShow(KILL_SWITCH_PANEL_KEY) && (
-          <AgentFormPanel panelKey={KILL_SWITCH_PANEL_KEY} title="Kill Switch" panels={panels}>
+          <AgentFormPanel panelKey={KILL_SWITCH_PANEL_KEY} title={t("Kill Switch")} panels={panels}>
             <KillSwitchFormFields />
           </AgentFormPanel>
         )}

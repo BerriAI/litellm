@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Unplug } from "lucide-react";
@@ -67,16 +68,17 @@ function DisconnectUserButton({
   userId: string | null;
   onDisconnectUser: (userId: string) => void;
 }) {
+  const { t } = useLanguage();
   if (userId === null || userId === "") return null;
   return (
     <Button
       variant="outline"
       size="sm"
       onClick={() => onDisconnectUser(userId)}
-      aria-label={`Disconnect all sessions for user ${groupLabel(userId)}`}
+      aria-label={t("Disconnect all sessions for user {value}", { value: String(groupLabel(userId)) })}
     >
       <Unplug className="size-4" />
-      Disconnect all
+      {t("Disconnect all")}
     </Button>
   );
 }
@@ -92,6 +94,7 @@ function GroupCountTable({
   labelHeader: string;
   onDisconnectUser?: (userId: string) => void;
 }) {
+  const { t } = useLanguage();
   return (
     <section aria-label={title} className="rounded-lg border border-border bg-card">
       <h3 className="border-b border-border px-4 py-2 text-sm font-semibold text-foreground">{title}</h3>
@@ -99,8 +102,8 @@ function GroupCountTable({
         <TableHeader>
           <TableRow>
             <TableHead>{labelHeader}</TableHead>
-            <TableHead className="text-right">Sessions</TableHead>
-            {onDisconnectUser ? <TableHead className="text-right">Actions</TableHead> : null}
+            <TableHead className="text-right">{t("Sessions")}</TableHead>
+            {onDisconnectUser ? <TableHead className="text-right">{t("Actions")}</TableHead> : null}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -132,6 +135,7 @@ function SessionsBody({
   isLoading: boolean;
   onDisconnect: ((selector: MCPGatewaySessionSelector) => void) | null;
 }) {
+  const { t } = useLanguage();
   if (isLoading) {
     return (
       <div
@@ -139,14 +143,14 @@ function SessionsBody({
         className="flex items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card p-12"
       >
         <UiLoadingSpinner className="size-6 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">Loading live connections...</p>
+        <p className="text-sm text-muted-foreground">{t("Loading live connections...")}</p>
       </div>
     );
   }
   if (error) {
     return (
       <Alert variant="destructive">
-        <AlertTitle>Could not load live connections</AlertTitle>
+        <AlertTitle>{t("Could not load live connections")}</AlertTitle>
         <AlertDescription>{error.message}</AlertDescription>
       </Alert>
     );
@@ -156,8 +160,8 @@ function SessionsBody({
     return (
       <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
         <p className="text-sm text-muted-foreground">
-          No live MCP connections on this worker (pid {data.worker_pid}). Connect an AI client to the gateway to see it
-          here.
+          {t("No live MCP connections on this worker (pid")} {data.worker_pid}
+          {t("). Connect an AI client to the gateway to see it here.")}
         </p>
       </div>
     );
@@ -165,35 +169,35 @@ function SessionsBody({
   return (
     <>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <StatCard label="Live sessions" value={data.total_sessions} />
-        <StatCard label="AI clients" value={data.by_client.length} />
-        <StatCard label="Users" value={data.by_user.length} />
+        <StatCard label={t("Live sessions")} value={data.total_sessions} />
+        <StatCard label={t("AI clients")} value={data.by_client.length} />
+        <StatCard label={t("Users")} value={data.by_user.length} />
       </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <GroupCountTable title="Sessions by AI client" labelHeader="Client" groups={data.by_client} />
+        <GroupCountTable title={t("Sessions by AI client")} labelHeader="Client" groups={data.by_client} />
         <GroupCountTable
-          title="Sessions by user"
+          title={t("Sessions by user")}
           labelHeader="User"
           groups={data.by_user}
           onDisconnectUser={onDisconnect ? (userId) => onDisconnect({ user_id: userId }) : undefined}
         />
       </div>
-      <section aria-label="Live sessions" className="rounded-lg border border-border bg-card">
+      <section aria-label={t("Live sessions")} className="rounded-lg border border-border bg-card">
         <h3 className="border-b border-border px-4 py-2 text-sm font-semibold text-foreground">
-          Live sessions (worker pid {data.worker_pid})
+          {t("Live sessions (worker pid")} {data.worker_pid})
         </h3>
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Session</TableHead>
-              <TableHead>Client</TableHead>
-              <TableHead>User</TableHead>
-              <TableHead>Key alias</TableHead>
-              <TableHead>Team</TableHead>
-              <TableHead>Client IP</TableHead>
-              <TableHead className="text-right">Idle</TableHead>
-              <TableHead className="text-right">In flight</TableHead>
-              {onDisconnect ? <TableHead className="text-right">Actions</TableHead> : null}
+              <TableHead>{t("Session")}</TableHead>
+              <TableHead>{t("Client")}</TableHead>
+              <TableHead>{t("User")}</TableHead>
+              <TableHead>{t("Key alias")}</TableHead>
+              <TableHead>{t("Team")}</TableHead>
+              <TableHead>{t("Client IP")}</TableHead>
+              <TableHead className="text-right">{t("Idle")}</TableHead>
+              <TableHead className="text-right">{t("In flight")}</TableHead>
+              {onDisconnect ? <TableHead className="text-right">{t("Actions")}</TableHead> : null}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -235,10 +239,12 @@ function SessionsBody({
                       variant="outline"
                       size="sm"
                       onClick={() => onDisconnect({ session_id_prefix: session.session_id_prefix })}
-                      aria-label={`Disconnect session ${session.session_id_prefix}`}
+                      aria-label={t("Disconnect session {session_id_prefix}", {
+                        session_id_prefix: String(session.session_id_prefix),
+                      })}
                     >
                       <Unplug className="size-4" />
-                      Disconnect
+                      {t("Disconnect")}
                     </Button>
                   </TableCell>
                 ) : null}
@@ -257,6 +263,7 @@ interface MCPGatewaySessionsTabProps {
 }
 
 export function MCPGatewaySessionsTab({ accessToken, canTerminate }: MCPGatewaySessionsTabProps) {
+  const { t } = useLanguage();
   const queryClient = useQueryClient();
   const [pendingSelector, setPendingSelector] = useState<MCPGatewaySessionSelector | null>(null);
   const queryOptions = {
@@ -280,11 +287,11 @@ export function MCPGatewaySessionsTab({ accessToken, canTerminate }: MCPGatewayS
     <div className="mt-4 space-y-4" data-testid="mcp-gateway-sessions-tab">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-foreground">Live Connections</h2>
+          <h2 className="text-base font-semibold text-foreground">{t("Live Connections")}</h2>
           <p className="text-sm text-muted-foreground">
-            Stateful Streamable HTTP sessions currently open on this proxy worker, grouped by the AI client that sent
-            the MCP initialize request and by the authenticated LiteLLM user. Stateless requests and SSE connections are
-            not counted.
+            {t(
+              "Stateful Streamable HTTP sessions currently open on this proxy worker, grouped by the AI client that sent the MCP initialize request and by the authenticated LiteLLM user. Stateless requests and SSE connections are not counted.",
+            )}
           </p>
         </div>
         <Button
@@ -292,25 +299,27 @@ export function MCPGatewaySessionsTab({ accessToken, canTerminate }: MCPGatewayS
           size="sm"
           onClick={() => refetch()}
           disabled={isFetching}
-          aria-label="Refresh live connections"
+          aria-label={t("Refresh live connections")}
         >
           <RefreshCw className={`size-4 ${isFetching ? "animate-spin" : ""}`} />
-          Refresh
+          {t("Refresh")}
         </Button>
       </div>
 
       {terminate.isError ? (
         <Alert variant="destructive">
-          <AlertTitle>Could not disconnect</AlertTitle>
+          <AlertTitle>{t("Could not disconnect")}</AlertTitle>
           <AlertDescription>{terminate.error.message}</AlertDescription>
         </Alert>
       ) : null}
       {terminate.isSuccess ? (
         <Alert>
-          <AlertTitle>Disconnected</AlertTitle>
+          <AlertTitle>{t("Disconnected")}</AlertTitle>
           <AlertDescription>
-            {describeTerminateResult(terminate.data)} Clients holding those sessions must send a new initialize request,
-            which re-runs authentication. Sessions on other proxy workers are not affected.
+            {describeTerminateResult(terminate.data)}{" "}
+            {t(
+              "Clients holding those sessions must send a new initialize request, which re-runs authentication. Sessions on other proxy workers are not affected.",
+            )}
           </AlertDescription>
         </Alert>
       ) : null}
@@ -325,18 +334,18 @@ export function MCPGatewaySessionsTab({ accessToken, canTerminate }: MCPGatewayS
       <AlertDialog open={pendingSelector !== null} onOpenChange={(open) => !open && setPendingSelector(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Disconnect MCP session</AlertDialogTitle>
+            <AlertDialogTitle>{t("Disconnect MCP session")}</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingSelector ? `This force-closes ${describeSelector(pendingSelector)} on this proxy worker. ` : ""}
-              In-flight requests fail and the client must initialize again before it can call tools.
+              {t("In-flight requests fail and the client must initialize again before it can call tools.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <Button variant="outline" onClick={() => setPendingSelector(null)}>
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button variant="destructive" onClick={confirmDisconnect} disabled={terminate.isPending}>
-              Disconnect
+              {t("Disconnect")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

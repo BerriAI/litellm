@@ -1,9 +1,16 @@
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import type { Policy } from "@/components/policies/types";
 import AddPolicyForm from "./add_policy_form";
+import { LanguageProvider } from "@/contexts/LanguageContext";
+import LanguageSelector from "@/components/LanguageSelector";
+import { translate } from "@/i18n/language";
+import { toast } from "@/lib/toast";
+import { Toaster } from "@/components/ui/sonner";
+
+vi.unmock("@/lib/toast");
 
 vi.mock("@/components/networking", () => ({
   getResolvedGuardrails: vi.fn().mockResolvedValue({ resolved_guardrails: [] }),
@@ -60,15 +67,111 @@ describe("AddPolicyForm", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    toast.dismiss();
   });
 
   afterEach(() => {
+    act(() => toast.dismiss());
     cleanup();
   });
 
   const enterSimpleForm = async (user: ReturnType<typeof userEvent.setup>) => {
     await user.click(await screen.findByRole("button", { name: "Create Policy" }));
   };
+
+  it("已显示的名称校验随语言立即更新，不清空草稿或提交", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="policy-errors" storageScope="test">
+        <LanguageSelector />
+        <AddPolicyForm {...defaultProps} />
+      </LanguageProvider>,
+    );
+    await enterSimpleForm(user);
+    fireEvent.change(screen.getByLabelText("Policy Name"), { target: { value: "Home invalid" } });
+    await user.click(screen.getByRole("button", { name: "Create Policy" }));
+    expect(
+      await screen.findByText("Policy name can only contain letters, numbers, hyphens, and underscores"),
+    ).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+    expect(screen.getByText("策略名称只能包含字母、数字、连字符和下划线")).toBeVisible();
+    expect(screen.getByDisplayValue("Home invalid")).toBeVisible();
+    expect(createPolicy).not.toHaveBeenCalled();
+  });
+
+  it("条件字段标签随语言和条件类型切换，保留正则草稿", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="policy-labels" storageScope="test">
+        <LanguageSelector />
+        <AddPolicyForm {...defaultProps} editingPolicy={EXISTING_POLICY} />
+      </LanguageProvider>,
+    );
+    expect(await screen.findByLabelText("Model (Optional)")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+    expect(screen.getByLabelText("模型（可选）")).toBeVisible();
+    await user.click(screen.getByRole("radio", { name: translate("zh-CN", "Custom Regex Pattern") }));
+    fireEvent.change(screen.getByLabelText("正则表达式（可选）"), { target: { value: "Home.*" } });
+    fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en" } });
+    expect(screen.getByLabelText("Regex Pattern (Optional)")).toHaveValue("Home.*");
+    expect(updatePolicy).not.toHaveBeenCalled();
+  });
+
+  it.each(["create", "update"] as const)("%s 请求完成后的通知跟随当前语言，且不重复提交", async (operation) => {
+    const pending = Promise.withResolvers<void>();
+    const save = vi.fn().mockReturnValue(pending.promise);
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="policy-save" storageScope="test">
+        <LanguageSelector />
+        <AddPolicyForm
+          {...defaultProps}
+          editingPolicy={operation === "update" ? EXISTING_POLICY : undefined}
+          createPolicy={save}
+          updatePolicy={save}
+        />
+        <Toaster expand />
+      </LanguageProvider>,
+    );
+    if (operation === "create") {
+      await enterSimpleForm(user);
+      fireEvent.change(screen.getByLabelText("Policy Name"), { target: { value: "home-policy" } });
+    }
+    await user.click(screen.getByRole("button", { name: operation === "create" ? "Create Policy" : "Update Policy" }));
+    expect(save).toHaveBeenCalledOnce();
+    fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+    await act(async () => pending.resolve());
+    expect(await screen.findByText(operation === "create" ? "策略已创建" : "策略已更新")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en" } });
+    expect(
+      screen.getByText(operation === "create" ? "Policy created successfully" : "Policy updated successfully"),
+    ).toBeVisible();
+    expect(save).toHaveBeenCalledOnce();
+  });
+
+  it("切换语言后保留策略草稿，并使用当前语言校验名称", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LanguageProvider defaultLanguage="en" userId="policy-validation" storageScope="test">
+        <LanguageSelector />
+        <AddPolicyForm {...defaultProps} />
+      </LanguageProvider>,
+    );
+    await enterSimpleForm(user);
+    fireEvent.change(await screen.findByLabelText("Policy Name"), { target: { value: "Home invalid" } });
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Settings" } });
+
+    // 切换语言只替换文案，用户填写的名称和说明仍按原文保留。
+    fireEvent.change(screen.getByLabelText("Interface language"), { target: { value: "zh-CN" } });
+    expect(screen.getByDisplayValue("Home invalid")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Settings")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: translate("zh-CN", "Create Policy") }));
+    expect(await screen.findByText("策略名称只能包含字母、数字、连字符和下划线")).toBeInTheDocument();
+    expect(createPolicy).not.toHaveBeenCalled();
+    expect(updatePolicy).not.toHaveBeenCalled();
+  });
 
   it("should send exactly six keys with empty-to-undefined and empty-to-array defaults on create", async () => {
     const user = userEvent.setup();

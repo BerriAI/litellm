@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { EyeOff, Filter, Info, Ban, X } from "lucide-react";
 import { PiiEntityCategory } from "@/components/guardrails/types";
@@ -42,6 +43,7 @@ export interface CategoryFilterProps {
 }
 
 export const CategoryFilter: React.FC<CategoryFilterProps> = ({ categories, selectedCategories, onChange }) => {
+  const { t } = useLanguage();
   const anchor = useComboboxAnchor();
   const categoryNames = categories.map((cat) => cat.category);
 
@@ -49,7 +51,7 @@ export const CategoryFilter: React.FC<CategoryFilterProps> = ({ categories, sele
     <div>
       <div className="mb-2 flex items-center">
         <Filter className="mr-1 size-4 text-muted-foreground" />
-        <span className="font-medium text-muted-foreground">Filter by category</span>
+        <span className="font-medium text-muted-foreground">{t("Filter by category")}</span>
       </div>
       <Combobox items={categoryNames} value={selectedCategories} onValueChange={onChange} multiple>
         <ComboboxChips render={<div ref={anchor} />} className="mb-4 w-full">
@@ -59,11 +61,11 @@ export const CategoryFilter: React.FC<CategoryFilterProps> = ({ categories, sele
             </ComboboxChip>
           ))}
           <ComboboxChipsInput
-            placeholder={selectedCategories.length === 0 ? "Select categories to filter by" : undefined}
+            placeholder={selectedCategories.length === 0 ? t("Select categories to filter by") : undefined}
           />
         </ComboboxChips>
         <ComboboxContent anchor={anchor}>
-          <ComboboxEmpty>No matching categories</ComboboxEmpty>
+          <ComboboxEmpty>{t("No matching categories")}</ComboboxEmpty>
           <ComboboxList>
             {(category: string) => (
               <ComboboxItem key={category} value={category}>
@@ -85,11 +87,12 @@ export interface QuickActionsProps {
 }
 
 export const QuickActions: React.FC<QuickActionsProps> = ({ onSelectAll, onUnselectAll, hasSelectedEntities }) => {
+  const { t } = useLanguage();
   return (
     <div className="mb-6 rounded-lg border border-border bg-muted/40 p-5 shadow-xs">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center">
-          <span className="text-base font-semibold">Quick Actions</span>
+          <span className="text-base font-semibold">{t("Quick Actions")}</span>
           <Tooltip>
             <TooltipTrigger
               render={
@@ -98,22 +101,22 @@ export const QuickActions: React.FC<QuickActionsProps> = ({ onSelectAll, onUnsel
                 </span>
               }
             />
-            <TooltipContent>Apply action to all PII types at once</TooltipContent>
+            <TooltipContent>{t("Apply action to all PII types at once")}</TooltipContent>
           </Tooltip>
         </div>
         <Button variant="outline" onClick={onUnselectAll} disabled={!hasSelectedEntities}>
           <X />
-          Unselect All
+          {t("Unselect All")}
         </Button>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <Button variant="outline" className="h-10 w-full" onClick={() => onSelectAll("MASK")}>
           <EyeOff />
-          Select All &amp; Mask
+          {t("Select All & Mask")}
         </Button>
         <Button variant="outline" className="h-10 w-full" onClick={() => onSelectAll("BLOCK")}>
           <Ban />
-          Select All &amp; Block
+          {t("Select All & Block")}
         </Button>
       </div>
     </div>
@@ -140,15 +143,16 @@ export const PiiEntityList: React.FC<PiiEntityListProps> = ({
   onActionSelect,
   entityToCategoryMap,
 }) => {
+  const { t } = useLanguage();
   return (
     <div className="overflow-hidden rounded-lg border border-border shadow-xs">
       <div className="flex border-b border-border bg-muted/40 px-5 py-3">
-        <span className="flex-1 font-semibold">PII Type</span>
-        <span className="w-32 text-right font-semibold">Action</span>
+        <span className="flex-1 font-semibold">{t("PII Type")}</span>
+        <span className="w-32 text-right font-semibold">{t("Action")}</span>
       </div>
       <div className="max-h-[400px] overflow-y-auto">
         {entities.length === 0 ? (
-          <div className="py-10 text-center text-muted-foreground">No PII types match your filter criteria</div>
+          <div className="py-10 text-center text-muted-foreground">{t("No PII types match your filter criteria")}</div>
         ) : (
           entities.map((entity) => {
             const isSelected = selectedEntities.includes(entity);
@@ -176,7 +180,7 @@ export const PiiEntityList: React.FC<PiiEntityListProps> = ({
                     onValueChange={(value: string | null) => value && onActionSelect(entity, value)}
                     disabled={!isSelected}
                   >
-                    <SelectTrigger className={`w-[120px] ${isSelected ? "" : "opacity-50"}`} aria-label="Action">
+                    <SelectTrigger className={`w-[120px] ${isSelected ? "" : "opacity-50"}`} aria-label={t("Action")}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

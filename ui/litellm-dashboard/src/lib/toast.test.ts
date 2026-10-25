@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/http/client";
+import TranslatedMessage from "@/components/shared/TranslatedMessage";
 
 const sonner = vi.hoisted(() => ({
   success: vi.fn(),
@@ -15,6 +16,8 @@ vi.unmock("@/lib/toast");
 import { toast } from "./toast";
 
 const lastCall = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls.at(-1) as [unknown, Record<string, unknown>];
+// 标题使用可订阅语言上下文的组件，原有状态码和通知类别断言保持不变。
+const translatedTitle = (message: string) => expect.objectContaining({ type: TranslatedMessage, props: { message } });
 
 describe("toast", () => {
   beforeEach(() => {
@@ -55,7 +58,7 @@ describe("toast", () => {
           error: { message: "Budget has been exceeded", type: "budget_exceeded", code: "400" },
         }),
       );
-      expect(sonner.warning).toHaveBeenCalledWith("Budget Exceeded", {
+      expect(sonner.warning).toHaveBeenCalledWith(translatedTitle("Budget Exceeded"), {
         description: "Budget has been exceeded",
         duration: 6000,
       });
@@ -64,12 +67,12 @@ describe("toast", () => {
 
     it("maps every *_access_denied type to Access Denied", () => {
       toast.fromError({ message: "no", type: "team_model_access_denied", code: "401" });
-      expect(lastCall(sonner.error)[0]).toBe("Access Denied");
+      expect(lastCall(sonner.error)[0]).toEqual(translatedTitle("Access Denied"));
     });
 
     it("prefers a deliberate type over the HTTP status", () => {
       toast.fromError(new ApiError("expired", 400, { error: { message: "expired", type: "expired_key" } }));
-      expect(lastCall(sonner.error)[0]).toBe("Authentication Error");
+      expect(lastCall(sonner.error)[0]).toEqual(translatedTitle("Authentication Error"));
     });
 
     it.each(["auth_error", "internal_server_error"])(
@@ -78,13 +81,13 @@ describe("toast", () => {
         toast.fromError(
           new ApiError("Model with id=abc not found in db", 400, { error: { message: "x", type, code: "400" } }),
         );
-        expect(lastCall(sonner.error)[0]).toBe("Request Error");
+        expect(lastCall(sonner.error)[0]).toEqual(translatedTitle("Request Error"));
       },
     );
 
     it("reads type and code from a bare proxy payload object", () => {
       toast.fromError({ message: "Key with alias 'k' already exists.", type: "bad_request_error", code: "400" });
-      expect(sonner.error).toHaveBeenCalledWith("Request Error", {
+      expect(sonner.error).toHaveBeenCalledWith(translatedTitle("Request Error"), {
         description: "Key with alias 'k' already exists.",
         duration: 6000,
       });
@@ -94,7 +97,10 @@ describe("toast", () => {
       toast.fromError(
         new Error(JSON.stringify({ error: { message: "Team not found", type: "not_found_error", code: "404" } })),
       );
-      expect(sonner.error).toHaveBeenCalledWith("Not Found", { description: "Team not found", duration: 6000 });
+      expect(sonner.error).toHaveBeenCalledWith(translatedTitle("Not Found"), {
+        description: "Team not found",
+        duration: 6000,
+      });
     });
 
     it("reads type and code from a JSON envelope embedded after a caller's prefix, keeping the prefix", () => {
@@ -102,7 +108,7 @@ describe("toast", () => {
         error: { message: "Key with alias 'k' already exists.", type: "bad_request_error", code: "400" },
       });
       toast.fromError(`Error creating the key: Error: ${envelope}`);
-      expect(sonner.error).toHaveBeenCalledWith("Request Error", {
+      expect(sonner.error).toHaveBeenCalledWith(translatedTitle("Request Error"), {
         description: "Error creating the key: Error: Key with alias 'k' already exists.",
         duration: 6000,
       });
@@ -110,7 +116,7 @@ describe("toast", () => {
 
     it("leaves a string alone when its braces are not a JSON envelope", () => {
       toast.fromError("Template {name} is invalid");
-      expect(sonner.error).toHaveBeenCalledWith("Error", {
+      expect(sonner.error).toHaveBeenCalledWith(translatedTitle("Error"), {
         description: "Template {name} is invalid",
         duration: 6000,
       });
@@ -132,29 +138,38 @@ describe("toast", () => {
       [502, "Server Error", sonner.error],
     ])("status %i becomes %s", (status, title, fn) => {
       toast.fromError(new ApiError("boom", status, "boom"));
-      expect(fn).toHaveBeenCalledWith(title, { description: "boom", duration: 6000 });
+      expect(fn).toHaveBeenCalledWith(translatedTitle(String(title)), { description: "boom", duration: 6000 });
     });
 
     it("reads an axios-style response status and nested data message", () => {
       toast.fromError({ response: { status: 403, data: { error: { message: "nope" } } } });
-      expect(sonner.error).toHaveBeenCalledWith("Access Denied", { description: "nope", duration: 6000 });
+      expect(sonner.error).toHaveBeenCalledWith(translatedTitle("Access Denied"), {
+        description: "nope",
+        duration: 6000,
+      });
     });
 
     it("reads a numeric status_code field", () => {
       toast.fromError({ status_code: 429, message: "slow down" });
-      expect(sonner.warning).toHaveBeenCalledWith("Rate Limit Exceeded", { description: "slow down", duration: 6000 });
+      expect(sonner.warning).toHaveBeenCalledWith(translatedTitle("Rate Limit Exceeded"), {
+        description: "slow down",
+        duration: 6000,
+      });
     });
 
     it("ignores non-HTTP code strings", () => {
       toast.fromError({ code: "ECONNREFUSED", message: "connection refused" });
-      expect(sonner.error).toHaveBeenCalledWith("Error", { description: "connection refused", duration: 6000 });
+      expect(sonner.error).toHaveBeenCalledWith(translatedTitle("Error"), {
+        description: "connection refused",
+        duration: 6000,
+      });
     });
   });
 
   describe("fromError message extraction", () => {
     it("shows a raw string as an error with the generic title", () => {
       toast.fromError("Please select at least one model");
-      expect(sonner.error).toHaveBeenCalledWith("Error", {
+      expect(sonner.error).toHaveBeenCalledWith(translatedTitle("Error"), {
         description: "Please select at least one model",
         duration: 6000,
       });

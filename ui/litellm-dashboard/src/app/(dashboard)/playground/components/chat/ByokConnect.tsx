@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useId, useState } from "react";
 import { Check, ExternalLink, KeyRound } from "lucide-react";
 import { PasswordInput } from "@/components/shared/PasswordInput";
@@ -33,6 +34,7 @@ export function ByokConnect({
   onConnected: () => void;
   onCancel?: () => void;
 }) {
+  const { t } = useLanguage();
   const [credential, setCredential] = useState("");
   const [save, setSave] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -41,7 +43,7 @@ export function ByokConnect({
 
   const connect = async () => {
     if (!credential.trim()) {
-      toast.error("Enter your API key");
+      toast.error(t("Enter your API key"));
       return;
     }
     setIsSaving(true);
@@ -50,7 +52,7 @@ export function ByokConnect({
         params: { path: { server_id: server.server_id } },
         body: { credential: credential.trim(), save },
       });
-      toast.success(`Connected to ${name}`);
+      toast.success(t("Connected to {name}", { name: String(name) }));
       setCredential("");
       onConnected();
     } catch (error) {
@@ -84,17 +86,19 @@ export function ByokConnect({
         </ul>
       )}
       <Field>
-        <FieldLabel htmlFor={keyId}>{name} API key</FieldLabel>
+        <FieldLabel htmlFor={keyId}>
+          {name} {t("API key")}
+        </FieldLabel>
         <PasswordInput
           id={keyId}
           value={credential}
           onChange={(event) => setCredential(event.target.value)}
-          placeholder="Paste your API key"
+          placeholder={t("Paste your API key")}
         />
         {server.byok_api_key_help_url && (
           <FieldDescription>
             <a href={server.byok_api_key_help_url} target="_blank" rel="noopener noreferrer">
-              Where to find this key
+              {t("Where to find this key")}
               <ExternalLink className="ml-1 inline size-3" />
             </a>
           </FieldDescription>
@@ -102,18 +106,18 @@ export function ByokConnect({
       </Field>
       <Field orientation="horizontal">
         <FieldLabel htmlFor={saveId} className="font-normal">
-          Save the key for next time
+          {t("Save the key for next time")}
         </FieldLabel>
         <Switch id={saveId} checked={save} onCheckedChange={setSave} />
       </Field>
       <div className="flex gap-2">
         <Button size="sm" onClick={() => void connect()} disabled={isSaving}>
           {isSaving && <Spinner />}
-          Connect
+          {t("Connect")}
         </Button>
         {onCancel && (
           <Button variant="ghost" size="sm" onClick={onCancel} disabled={isSaving}>
-            Cancel
+            {t("Cancel")}
           </Button>
         )}
       </div>
@@ -130,12 +134,13 @@ export function ByokKeyButton({
   name: string;
   onConnected: () => void;
 }) {
+  const { t } = useLanguage();
   const [open, setOpen] = useState(false);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger render={<InputGroupButton size="xs" className="shrink-0" />}>
         <KeyRound />
-        {server.has_user_credential ? "Replace key" : "Connect key"}
+        {server.has_user_credential ? t("Replace key") : t("Connect key")}
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80 p-0">
         <ByokConnect

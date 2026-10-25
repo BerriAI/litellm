@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useId } from "react";
 import { AutoRouterAllowanceNote } from "./AutoRouterAvailability";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ export default function JevClassifierConfig({
   onChange: (value: ComplexityRouterConfigValue) => void;
   section?: "all" | "model" | "advanced";
 }) {
+  const { t } = useLanguage();
   const id = useId();
   const config = value.jev_classifier_config ?? defaultJevClassifierConfig();
   const models = fixedClassifierModels(config.provider);
@@ -39,7 +41,7 @@ export default function JevClassifierConfig({
         <>
           <p className="text-sm text-muted-foreground">{providerDescriptions[config.provider ?? "jev"]}</p>
           <div className="space-y-2">
-            <Label htmlFor={`${id}-model`}>Classifier Model</Label>
+            <Label htmlFor={`${id}-model`}>{t("Classifier Model")}</Label>
             {models ? (
               <Select value={config.model} onValueChange={(model) => model && update({ model })}>
                 <SelectTrigger id={`${id}-model`} className="w-full">
@@ -59,7 +61,7 @@ export default function JevClassifierConfig({
                 value={config.model}
                 placeholder={
                   config.provider === "databricks"
-                    ? "ai_decide, or a serving endpoint name such as databricks-openjev-qwen35-4b"
+                    ? t("ai_decide, or a serving endpoint name such as databricks-openjev-qwen35-4b")
                     : undefined
                 }
                 onChange={(event) => update({ model: event.target.value })}
@@ -71,7 +73,7 @@ export default function JevClassifierConfig({
       {section !== "model" && (
         <>
           <div className="space-y-2">
-            <Label htmlFor={`${id}-timeout`}>Classifier Timeout (ms)</Label>
+            <Label htmlFor={`${id}-timeout`}>{t("Classifier Timeout (ms)")}</Label>
             <Input
               id={`${id}-timeout`}
               type="number"
@@ -91,24 +93,26 @@ export default function JevClassifierConfig({
             }
           />
           <div className="space-y-2">
-            <Label htmlFor={`${id}-instructions`}>Classifier Instructions</Label>
+            <Label htmlFor={`${id}-instructions`}>{t("Classifier Instructions")}</Label>
             <AutoRouterAllowanceNote
               feature="tier_or_classifier_prompt"
-              label="Custom instructions share the custom-tier allowance"
+              label={t("Custom instructions share the custom-tier allowance")}
             />
             <Textarea
               id={`${id}-instructions`}
               value={config.instructions ?? ""}
-              placeholder="Leave blank to use the built-in instructions"
+              placeholder={t("Leave blank to use the built-in instructions")}
               onChange={(event) => update({ instructions: event.target.value || undefined })}
             />
             {config.instructions && (
               <Button variant="outline" type="button" onClick={() => update({ instructions: undefined })}>
-                Restore built-in instructions
+                {t("Restore built-in instructions")}
               </Button>
             )}
             <p className="text-xs text-muted-foreground">
-              Built-in decision model classification is available without a license and uses the shipped tier criteria
+              {t(
+                "Built-in decision model classification is available without a license and uses the shipped tier criteria",
+              )}
             </p>
           </div>
         </>

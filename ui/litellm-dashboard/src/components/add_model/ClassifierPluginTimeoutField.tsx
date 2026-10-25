@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,14 +18,15 @@ const ClassifierPluginTimeoutField: React.FC<ClassifierPluginTimeoutFieldProps> 
   onChange,
   showValidationErrors = false,
 }) => {
-  const error = getClassifierPluginTimeoutError("custom", value.classifier_plugin_timeout_ms);
+  const { t } = useLanguage();
+  const error = getClassifierPluginTimeoutError("custom", value.classifier_plugin_timeout_ms, t);
   return (
     <div className="mt-4 space-y-2">
       <p className="text-sm text-muted-foreground">
-        This router uses a custom classifier plugin set in config.yaml. Pick a classifier below to replace it.
+        {t("This router uses a custom classifier plugin set in config.yaml. Pick a classifier below to replace it.")}
       </p>
       <Label htmlFor={CLASSIFIER_PLUGIN_TIMEOUT_ID} className="block font-semibold">
-        Classifier plugin timeout (ms)
+        {t("Classifier plugin timeout (ms)")}
       </Label>
       <Input
         id={CLASSIFIER_PLUGIN_TIMEOUT_ID}
@@ -40,7 +42,7 @@ const ClassifierPluginTimeoutField: React.FC<ClassifierPluginTimeoutFieldProps> 
         aria-invalid={Boolean(showValidationErrors && error)}
       />
       <p className="text-sm text-muted-foreground">
-        Time budget for the plugin call. On expiry the fallback path decides the tier.
+        {t("Time budget for the plugin call. On expiry the fallback path decides the tier.")}
       </p>
       {showValidationErrors && error && (
         <p className="text-sm text-destructive" role="alert">

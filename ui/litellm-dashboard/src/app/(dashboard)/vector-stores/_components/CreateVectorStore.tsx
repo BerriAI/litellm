@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useId, useState } from "react";
 import { toast } from "@/lib/toast";
 import { CircleCheck, CircleHelp, Inbox, X } from "lucide-react";
@@ -48,6 +49,7 @@ const providerItems = Object.entries(VectorStoreProviders)
 const asText = (value: unknown): string => (typeof value === "string" ? value : "");
 
 const IngestSuccessAlert: React.FC<{ ingestResults: RAGIngestResponse[] }> = ({ ingestResults }) => {
+  const { t } = useLanguage();
   const [dismissed, setDismissed] = useState(false);
 
   if (dismissed) {
@@ -57,19 +59,19 @@ const IngestSuccessAlert: React.FC<{ ingestResults: RAGIngestResponse[] }> = ({ 
   return (
     <Alert variant="success">
       <CircleCheck />
-      <AlertTitle>Vector Store Created Successfully</AlertTitle>
+      <AlertTitle>{t("Vector Store Created Successfully")}</AlertTitle>
       <AlertDescription>
         <div>
           <p>
-            <strong>Vector Store ID:</strong> {ingestResults[0]?.vector_store_id}
+            <strong>{t("Vector Store ID:")}</strong> {ingestResults[0]?.vector_store_id}
           </p>
           <p>
-            <strong>Documents Ingested:</strong> {ingestResults.length}
+            <strong>{t("Documents Ingested:")}</strong> {ingestResults.length}
           </p>
         </div>
       </AlertDescription>
       <AlertAction>
-        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => setDismissed(true)}>
+        <Button variant="ghost" size="icon-sm" aria-label={t("Close")} onClick={() => setDismissed(true)}>
           <X className="size-4" />
         </Button>
       </AlertAction>
@@ -93,6 +95,7 @@ interface CreateVectorStoreProps {
 }
 
 const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSuccess }) => {
+  const { t } = useLanguage();
   const [documents, setDocuments] = useState<DocumentUpload[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string>("bedrock");
@@ -104,11 +107,15 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
 
   const isSupportedDocument = (file: File): boolean => {
     if (!ACCEPTED_DOCUMENT_TYPES.includes(file.type)) {
-      toast.error(`${file.name} is not a supported file type. Please upload PDF, TXT, DOCX, or MD files.`);
+      toast.error(
+        t("{name} is not a supported file type. Please upload PDF, TXT, DOCX, or MD files.", {
+          name: String(file.name),
+        }),
+      );
       return false;
     }
     if (file.size >= MAX_DOCUMENT_BYTES) {
-      toast.error(`${file.name} must be smaller than 50MB!`);
+      toast.error(t("{name} must be smaller than 50MB!", { name: String(file.name) }));
       return false;
     }
     return true;
@@ -135,12 +142,12 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
 
   const handleCreateVectorStore = async () => {
     if (documents.length === 0) {
-      toast.warning("Please upload at least one document");
+      toast.warning(t("Please upload at least one document"));
       return;
     }
 
     if (!selectedProvider) {
-      toast.warning("Please select a provider");
+      toast.warning(t("Please select a provider"));
       return;
     }
 
@@ -148,7 +155,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
     const requiredFields = getProviderSpecificFields(selectedProvider).filter((field) => field.required);
     for (const field of requiredFields) {
       if (!providerParams[field.name]) {
-        toast.warning(`Please provide ${field.label}`);
+        toast.warning(t("Please provide {label}", { label: String(field.label) }));
         return;
       }
     }
@@ -158,17 +165,17 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       const bucketName = asText(providerParams.vector_bucket_name);
       const indexName = asText(providerParams.index_name);
       if (bucketName && bucketName.length < 3) {
-        toast.warning("Vector bucket name must be at least 3 characters");
+        toast.warning(t("Vector bucket name must be at least 3 characters"));
         return;
       }
       if (indexName && indexName.length > 0 && indexName.length < 3) {
-        toast.warning("Index name must be at least 3 characters if provided");
+        toast.warning(t("Index name must be at least 3 characters if provided"));
         return;
       }
     }
 
     if (!accessToken) {
-      toast.error("No access token available");
+      toast.error(t("No access token available"));
       return;
     }
 
@@ -221,12 +228,19 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       setIngestResults(results);
       if (failure) {
         toast.warning(
-          `Vector store ${vectorStoreId} was created with ${results.length} document(s), but ${failure.name} failed to ingest`,
+          t("Vector store {vectorStoreId} was created with {count} document(s), but {name} failed to ingest", {
+            vectorStoreId: String(vectorStoreId),
+            count: String(results.length),
+            name: String(failure.name),
+          }),
           { description: failure.error instanceof Error ? failure.error.message : String(failure.error) },
         );
       } else {
         toast.success(
-          `Successfully created vector store with ${results.length} document(s). Vector Store ID: ${vectorStoreId}`,
+          t("Successfully created vector store with {count} document(s). Vector Store ID: {vectorStoreId}", {
+            count: String(results.length),
+            vectorStoreId: String(vectorStoreId),
+          }),
         );
       }
 
@@ -245,7 +259,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       }, 3000);
     } catch (error) {
       console.error("Error creating vector store:", error);
-      toast.fromError(`Failed to create vector store: ${error}`);
+      toast.fromError(t("Failed to create vector store: {error}", { error: String(error) }));
     } finally {
       setIsCreating(false);
     }
@@ -255,9 +269,9 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
     <TooltipProvider>
       <div className="space-y-6">
         <div>
-          <h3 className="text-lg font-medium">Create Vector Store</h3>
+          <h3 className="text-lg font-medium">{t("Create Vector Store")}</h3>
           <p className="text-sm text-muted-foreground">
-            Upload documents and select a provider to create a new vector store with embedded content.
+            {t("Upload documents and select a provider to create a new vector store with embedded content.")}
           </p>
         </div>
 
@@ -265,9 +279,9 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
         <Card>
           <CardContent>
             <div className="mb-4">
-              <p className="font-medium">Step 1: Upload Documents</p>
+              <p className="font-medium">{t("Step 1: Upload Documents")}</p>
               <p className="text-sm text-muted-foreground block mt-1">
-                Upload one or more documents (PDF, TXT, DOCX, MD). Maximum file size: 50MB per file.
+                {t("Upload one or more documents (PDF, TXT, DOCX, MD). Maximum file size: 50MB per file.")}
               </p>
             </div>
             <label
@@ -280,9 +294,9 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
               }}
             >
               <Inbox className="size-12 text-primary" />
-              <span className="text-base">Click or drag files to this area to upload</span>
+              <span className="text-base">{t("Click or drag files to this area to upload")}</span>
               <span className="text-sm text-muted-foreground">
-                Support for single or bulk upload. Supported formats: PDF, TXT, DOCX, MD
+                {t("Support for single or bulk upload. Supported formats: PDF, TXT, DOCX, MD")}
               </span>
               <input
                 id={documentsInputId}
@@ -304,7 +318,10 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
           <Card>
             <CardContent>
               <div className="mb-4">
-                <p className="font-medium">Uploaded Documents ({documents.length})</p>
+                <p className="font-medium">
+                  {t("Uploaded Documents (")}
+                  {documents.length})
+                </p>
               </div>
               <DocumentsTable documents={documents} onRemove={handleRemoveDocument} />
             </CardContent>
@@ -315,41 +332,41 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
         <Card>
           <CardContent className="space-y-4">
             <div>
-              <p className="font-medium">Step 2: Configure Vector Store</p>
+              <p className="font-medium">{t("Step 2: Configure Vector Store")}</p>
               <p className="text-sm text-muted-foreground block mt-1">
-                Choose the provider and optionally provide a name and description for your vector store.
+                {t("Choose the provider and optionally provide a name and description for your vector store.")}
               </p>
             </div>
 
             <FieldGroup>
               <Field>
                 <FieldLabel htmlFor="vector-store-name">
-                  {labelWithHint("Vector Store Name", "Optional: Give your vector store a meaningful name")}
+                  {labelWithHint(t("Vector Store Name"), t("Optional: Give your vector store a meaningful name"))}
                 </FieldLabel>
                 <Input
                   id="vector-store-name"
                   value={vectorStoreName}
                   onChange={(e) => setVectorStoreName(e.target.value)}
-                  placeholder="e.g., Product Documentation, Customer Support KB"
+                  placeholder={t("e.g., Product Documentation, Customer Support KB")}
                 />
               </Field>
 
               <Field>
                 <FieldLabel htmlFor="vector-store-description">
-                  {labelWithHint("Description", "Optional: Describe what this vector store contains")}
+                  {labelWithHint(t("Description"), t("Optional: Describe what this vector store contains"))}
                 </FieldLabel>
                 <Textarea
                   id="vector-store-description"
                   value={vectorStoreDescription}
                   onChange={(e) => setVectorStoreDescription(e.target.value)}
-                  placeholder="e.g., Contains all product documentation and user guides"
+                  placeholder={t("e.g., Contains all product documentation and user guides")}
                   rows={2}
                 />
               </Field>
 
               <Field>
                 <FieldLabel htmlFor="vector-store-provider">
-                  {labelWithHint("Provider", "Select the provider for embedding and vector store operations")}
+                  {labelWithHint(t("Provider"), t("Select the provider for embedding and vector store operations"))}
                 </FieldLabel>
                 <Select
                   items={providerItems}
@@ -357,7 +374,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                   onValueChange={(value: string | null) => value !== null && setSelectedProvider(value)}
                 >
                   <SelectTrigger id="vector-store-provider" className="w-full">
-                    <SelectValue placeholder="Select a provider" />
+                    <SelectValue placeholder={t("Select a provider")} />
                   </SelectTrigger>
                   <SelectContent>
                     {providerItems.map((item) => (
@@ -404,7 +421,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                 disabled={isCreating || documents.length === 0 || !selectedProvider}
               >
                 {isCreating && <UiLoadingSpinner className="size-4" />}
-                {isCreating ? "Creating Vector Store..." : "Create Vector Store"}
+                {isCreating ? t("Creating Vector Store...") : t("Create Vector Store")}
               </Button>
             </div>
           </CardContent>

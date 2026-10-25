@@ -3,6 +3,7 @@
  * Handles modal visibility and layout, but delegates content to children
  */
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { ArrowRight } from "lucide-react";
 import React from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,6 +15,7 @@ interface AddFallbacksModalProps {
 }
 
 export function AddFallbacksModal({ open, onCancel, children }: AddFallbacksModalProps) {
+  const { t } = useLanguage();
   return (
     <Dialog open={open} onOpenChange={(open) => !open && onCancel()} disablePointerDismissal>
       <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[900px]">
@@ -24,9 +26,9 @@ export function AddFallbacksModal({ open, onCancel, children }: AddFallbacksModa
                 <ArrowRight className="w-5 h-5 text-indigo-600 dark:text-indigo-300" />
               </div>
               <div>
-                <DialogTitle className="text-lg font-bold m-0">Configure Model Fallbacks</DialogTitle>
+                <DialogTitle className="text-lg font-bold m-0">{t("Configure Model Fallbacks")}</DialogTitle>
                 <p className="text-sm text-muted-foreground font-normal m-0">
-                  Manage multiple fallback chains for different models (up to 5 groups at a time)
+                  {t("Manage multiple fallback chains for different models (up to 5 groups at a time)")}
                 </p>
               </div>
             </div>

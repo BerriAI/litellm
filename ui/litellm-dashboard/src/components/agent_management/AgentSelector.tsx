@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React, { useEffect, useState } from "react";
 import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
 import { getAgentsList } from "../networking";
@@ -29,6 +30,7 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
   placeholder = "Select agents",
   disabled = false,
 }) => {
+  const { t } = useLanguage();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [accessGroups, setAccessGroups] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -91,7 +93,7 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
         value={selectedValues}
         onValueChange={handleChange}
         placeholder={placeholder}
-        emptyText="No agents found"
+        emptyText={t("No agents found")}
         loading={loading}
         disabled={disabled}
         className={`w-full ${className ?? ""}`}

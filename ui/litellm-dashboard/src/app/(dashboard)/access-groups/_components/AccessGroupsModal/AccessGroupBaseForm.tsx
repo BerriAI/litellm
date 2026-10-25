@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { BotIcon, InfoIcon, LayersIcon, ServerIcon, SparklesIcon } from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
 import { z } from "zod";
@@ -80,6 +81,7 @@ export function AccessGroupBaseForm({
   onTabChange,
   initialServerIds,
 }: AccessGroupBaseFormProps) {
+  const { t } = useLanguage();
   const { accessToken } = useAuthorized();
   const { data: agentsData } = useAgents();
   const { data: mcpServersData } = useMCPServers();
@@ -98,56 +100,56 @@ export function AccessGroupBaseForm({
       <TabsList className="w-full">
         <TabsTrigger value={GENERAL_TAB}>
           <InfoIcon size={16} />
-          General Info
+          {t("General Info")}
         </TabsTrigger>
         <TabsTrigger value={MODELS_TAB}>
           <LayersIcon size={16} />
-          Models
+          {t("Models")}
         </TabsTrigger>
         <TabsTrigger value={MCP_SERVERS_TAB}>
           <ServerIcon size={16} />
-          MCP Servers
+          {t("MCP Servers")}
         </TabsTrigger>
         <TabsTrigger value={AGENTS_TAB}>
           <BotIcon size={16} />
-          Agents
+          {t("Agents")}
         </TabsTrigger>
         <TabsTrigger value={SKILLS_TAB}>
           <SparklesIcon size={16} />
-          Skills
+          {t("Skills")}
         </TabsTrigger>
       </TabsList>
 
       <TabsContent value={GENERAL_TAB} className="pt-4">
         <FieldGroup>
-          <FormField control={form.control} name="name" label="Group Name">
+          <FormField control={form.control} name="name" label={t("Group Name")}>
             {({ ref, ...field }) => (
-              <Input {...field} ref={ref} placeholder="e.g. Engineering Team" disabled={isNameDisabled} />
+              <Input {...field} ref={ref} placeholder={t("e.g. Engineering Team")} disabled={isNameDisabled} />
             )}
           </FormField>
-          <FormField control={form.control} name="description" label="Description">
+          <FormField control={form.control} name="description" label={t("Description")}>
             {({ ref, ...field }) => (
-              <Textarea {...field} ref={ref} rows={4} placeholder="Describe the purpose of this access group..." />
+              <Textarea {...field} ref={ref} rows={4} placeholder={t("Describe the purpose of this access group...")} />
             )}
           </FormField>
         </FieldGroup>
       </TabsContent>
 
       <TabsContent value={MODELS_TAB} className="pt-4">
-        <FormField control={form.control} name="modelIds" label="Allowed Models">
+        <FormField control={form.control} name="modelIds" label={t("Allowed Models")}>
           {(field) => <ModelSelect context="global" value={field.value} onChange={field.onChange} />}
         </FormField>
       </TabsContent>
 
       <TabsContent value={MCP_SERVERS_TAB} className="pt-4">
-        <FormField control={form.control} name="mcpServerIds" label="Allowed MCP Servers">
+        <FormField control={form.control} name="mcpServerIds" label={t("Allowed MCP Servers")}>
           {({ id, value, onChange }) => (
             <MultiSelect
               id={id}
               value={value}
               onValueChange={onChange}
               options={mcpServerOptions}
-              placeholder="Select MCP servers"
+              placeholder={t("Select MCP servers")}
             />
           )}
         </FormField>
@@ -160,14 +162,14 @@ export function AccessGroupBaseForm({
       </TabsContent>
 
       <TabsContent value={AGENTS_TAB} className="pt-4">
-        <FormField control={form.control} name="agentIds" label="Allowed Agents">
+        <FormField control={form.control} name="agentIds" label={t("Allowed Agents")}>
           {({ id, value, onChange }) => (
             <MultiSelect
               id={id}
               value={value}
               onValueChange={onChange}
               options={agentOptions}
-              placeholder="Select agents"
+              placeholder={t("Select agents")}
             />
           )}
         </FormField>
@@ -177,15 +179,17 @@ export function AccessGroupBaseForm({
         <FormField
           control={form.control}
           name="skillNames"
-          label="Allowed Skills"
-          description="Enabled skills are visible to everyone. Grant disabled (private) Claude Code plugins to the teams and keys in this group here."
+          label={t("Allowed Skills")}
+          description={t(
+            "Enabled skills are visible to everyone. Grant disabled (private) Claude Code plugins to the teams and keys in this group here.",
+          )}
         >
           {({ value, onChange }) => (
             <SkillSelector
               onChange={onChange}
               value={value}
               accessToken={accessToken || ""}
-              placeholder="Select skills (optional)"
+              placeholder={t("Select skills (optional)")}
             />
           )}
         </FormField>

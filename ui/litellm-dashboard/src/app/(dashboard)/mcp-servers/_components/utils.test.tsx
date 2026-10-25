@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { translate } from "@/i18n/language";
 import {
   extractMCPToken,
   maskUrl,
@@ -77,6 +78,15 @@ describe("getMaskedAndFullUrl", () => {
 });
 
 describe("validateMCPServerUrl", () => {
+  it("中文提示 URL 格式错误，保留英文默认错误与验证规则", async () => {
+    const t = (message: string) => translate("zh-CN", message);
+    await expect(validateMCPServerUrl("not-a-url", t)).rejects.toBe(
+      "请输入有效的 URL，例如 http://service-name.domain:1234/path 或 https://example.com",
+    );
+    await expect(validateMCPServerUrl("not-a-url")).rejects.toBe(
+      "Please enter a valid URL (e.g., http://service-name.domain:1234/path or https://example.com)",
+    );
+  });
   it("should resolve for a valid HTTP URL", async () => {
     await expect(validateMCPServerUrl("https://example.com/path")).resolves.toBeUndefined();
   });
@@ -91,6 +101,11 @@ describe("validateMCPServerUrl", () => {
 });
 
 describe("validateMCPServerName", () => {
+  it("中文提示名称格式错误，不改变有效业务名称", async () => {
+    const t = (message: string) => translate("zh-CN", message);
+    await expect(validateMCPServerName("my-server", t)).rejects.toBe("不能包含连字符或空格，请改用下划线。");
+    await expect(validateMCPServerName("Home", t)).resolves.toBeUndefined();
+  });
   it("should resolve for a valid underscore name", async () => {
     await expect(validateMCPServerName("my_server")).resolves.toBeUndefined();
   });

@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import React from "react";
 import { useForm, type Control } from "react-hook-form";
 import { CircleHelp } from "lucide-react";
@@ -49,6 +50,7 @@ const JsonArgumentControl: React.FC<{
   prop: InputSchemaProperty;
   control: FormFieldControlProps<ToolArgumentsFormValues, `args.${number}`>;
 }> = ({ field, prop, control }) => {
+  const { t } = useLanguage();
   const isObject = prop.type === "object";
   const fallbackPlaceholder = isObject ? `Enter JSON object for ${field.key}` : `Enter JSON array for ${field.key}`;
   return (
@@ -63,7 +65,7 @@ const JsonArgumentControl: React.FC<{
         className="rounded-lg font-mono"
       />
       <p className="text-xs text-muted-foreground">
-        {isObject ? "Provide a valid JSON object." : "Provide a valid JSON array."}
+        {isObject ? t("Provide a valid JSON object.") : t("Provide a valid JSON array.")}
       </p>
     </div>
   );
@@ -73,6 +75,7 @@ const ToolArgumentControl: React.FC<{
   field: ToolArgumentField;
   control: FormFieldControlProps<ToolArgumentsFormValues, `args.${number}`>;
 }> = ({ field, control }) => {
+  const { t } = useLanguage();
   const prop = resolveSchemaProperty(field.prop);
 
   if (prop.type === "string" && prop.enum) {
@@ -84,11 +87,11 @@ const ToolArgumentControl: React.FC<{
         className="w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm shadow-xs transition-colors focus:border-ring focus:ring-3 focus:ring-ring/50 focus:outline-hidden"
       >
         <option value={-1} disabled={field.required}>
-          Select {field.key}
+          {t("Select")} {field.key}
         </option>
         {prop.enum.map((option, index) => (
           <option key={option} value={index}>
-            {option === "" ? "Empty string" : option}
+            {option === "" ? t("Empty string") : option}
           </option>
         ))}
       </select>
@@ -121,12 +124,16 @@ const ToolArgumentControl: React.FC<{
           title={booleanTitle(control.value)}
           className="w-full"
         >
-          <SelectValue placeholder={`Select ${field.key}`} />
+          <SelectValue placeholder={t("Select {key}", { key: String(field.key) })} />
         </SelectTrigger>
         <SelectContent>
-          {!field.required && <SelectItem value={null}>Select {field.key}</SelectItem>}
-          <SelectItem value={true}>True</SelectItem>
-          <SelectItem value={false}>False</SelectItem>
+          {!field.required && (
+            <SelectItem value={null}>
+              {t("Select")} {field.key}
+            </SelectItem>
+          )}
+          <SelectItem value={true}>{t("True")}</SelectItem>
+          <SelectItem value={false}>{t("False")}</SelectItem>
         </SelectContent>
       </Select>
     );
@@ -151,6 +158,7 @@ const ToolArgumentFields: React.FC<{
   control: Control<ToolArgumentsFormValues>;
   singleInputFallback: boolean;
 }> = ({ fields, control, singleInputFallback }) => {
+  const { t } = useLanguage();
   if (singleInputFallback) {
     return (
       <FieldGroup>
@@ -159,7 +167,7 @@ const ToolArgumentFields: React.FC<{
           name="args.0"
           label={
             <span>
-              Input <span className="text-destructive">*</span>
+              {t("Input")} <span className="text-destructive">*</span>
             </span>
           }
         >
@@ -167,7 +175,7 @@ const ToolArgumentFields: React.FC<{
             <Input
               {...field}
               value={(field.value as string) ?? ""}
-              placeholder="Enter input for this tool"
+              placeholder={t("Enter input for this tool")}
               className="rounded-lg"
             />
           )}
@@ -180,8 +188,8 @@ const ToolArgumentFields: React.FC<{
     return (
       <div className="rounded-lg border border-border bg-muted py-6 text-center">
         <div className="mx-auto max-w-sm">
-          <h4 className="mb-1 text-sm font-medium text-foreground">No Parameters Required</h4>
-          <p className="text-xs text-muted-foreground">This tool can be called without any input parameters.</p>
+          <h4 className="mb-1 text-sm font-medium text-foreground">{t("No Parameters Required")}</h4>
+          <p className="text-xs text-muted-foreground">{t("This tool can be called without any input parameters.")}</p>
         </div>
       </div>
     );

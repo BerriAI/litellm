@@ -1,5 +1,6 @@
 "use client";
 
+import { useLanguage } from "@/contexts/LanguageContext";
 import { SortingState, Table } from "@tanstack/react-table";
 import { Inbox, SearchX } from "lucide-react";
 import React, { useMemo, useState } from "react";
@@ -21,42 +22,47 @@ interface TagTableProps {
 const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
 
 function EmptyState() {
+  const { t } = useLanguage();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <Inbox className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">No tags yet</div>
-      <div className="text-sm text-muted-foreground">Create a tag to start routing and restricting model usage.</div>
+      <div className="text-sm font-medium text-foreground">{t("No tags yet")}</div>
+      <div className="text-sm text-muted-foreground">
+        {t("Create a tag to start routing and restricting model usage.")}
+      </div>
     </div>
   );
 }
 
 function NoMatchingTags() {
+  const { t } = useLanguage();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <SearchX className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">No matching tags</div>
-      <div className="text-sm text-muted-foreground">Try a different tag name or description.</div>
+      <div className="text-sm font-medium text-foreground">{t("No matching tags")}</div>
+      <div className="text-sm text-muted-foreground">{t("Try a different tag name or description.")}</div>
     </div>
   );
 }
 
 function TagFilters({ table }: { table: Table<Tag> }) {
+  const { t } = useLanguage();
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Input
-        aria-label="Filter by tag name"
-        placeholder="Filter by tag name…"
+        aria-label={t("Filter by tag name")}
+        placeholder={t("Filter by tag name…")}
         className="h-8 w-56"
         value={(table.getColumn("name")?.getFilterValue() as string | undefined) ?? ""}
         onChange={(event) => table.getColumn("name")?.setFilterValue(event.target.value)}
       />
       <Input
-        aria-label="Filter by description"
-        placeholder="Filter by description…"
+        aria-label={t("Filter by description")}
+        placeholder={t("Filter by description…")}
         className="h-8 w-56"
         value={(table.getColumn("description")?.getFilterValue() as string | undefined) ?? ""}
         onChange={(event) => table.getColumn("description")?.setFilterValue(event.target.value)}
@@ -66,9 +72,13 @@ function TagFilters({ table }: { table: Table<Tag> }) {
 }
 
 const TagTable: React.FC<TagTableProps> = ({ data, onEdit, onDelete, onSelectTag, isLoading = false }) => {
+  const { t } = useLanguage();
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
 
-  const columns = useMemo(() => getTagTableColumns({ onSelectTag, onEdit, onDelete }), [onSelectTag, onEdit, onDelete]);
+  const columns = useMemo(() => {
+    const columnOptions = { onSelectTag, onEdit, onDelete, t };
+    return getTagTableColumns(columnOptions);
+  }, [onSelectTag, onEdit, onDelete, t]);
 
   return (
     <DataTable
@@ -81,7 +91,7 @@ const TagTable: React.FC<TagTableProps> = ({ data, onEdit, onDelete, onSelectTag
       sorting={sorting}
       onSortingChange={setSorting}
       isLoading={isLoading}
-      loadingMessage="Loading tags…"
+      loadingMessage={t("Loading tags…")}
       filterMode="client"
       toolbar={(table) => <TagFilters table={table} />}
       noDataMessage={data.length === 0 ? <EmptyState /> : <NoMatchingTags />}
