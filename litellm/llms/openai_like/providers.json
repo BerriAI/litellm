@@ -249,5 +249,11 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "stackit": {
+    "base_url": "https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1",
+    "api_key_env": "STACKIT_API_KEY",
+    "api_base_env": "STACKIT_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
