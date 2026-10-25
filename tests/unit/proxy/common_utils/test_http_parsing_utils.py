@@ -1,6 +1,7 @@
 import asyncio, gzip, importlib, os
 import io
 import json
+import tracemalloc
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, Literal, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -29,6 +30,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     numeric_form_fields,
     populate_request_with_path_params,
     read_raw_json_body,
+    rewrite_request_model,
 )
 from fastapi import Request as Request_http_parsing
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -139,6 +141,81 @@ async def test_protobuf_body_is_not_parsed_as_json(content_type):
 
     assert await read_request_body(request) == {}
     assert await request.body() == body  # body is still readable by the endpoint
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", ("application/json", "application/x-protobuf"))
+async def test_request_body_preserves_integer_precision_and_other_json_types(content_type: str):
+    body: Final = (
+        b'{"model":"integer-test","schema":{"maximum":12345678901234567890123,'
+        b'"minimum":-9223372036854775809,"enum":[9007199254740993,18446744073709551615,'
+        b'18446744073709551616,-9223372036854775808]},'
+        b'"float":1.2345678901234568e22,"decimal":12345678901234567890123.0,'
+        b'"text":"12345678901234567890123 \\ud83d\\ude00 \\\"escaped\\\"",'
+        b'"flags":[true,false,null]}'
+    )
+    request: Final = _starlette_request(body, content_type)
+    parsed: Final = await read_request_body(request)
+
+    assert parsed == json.loads(body)
+    assert isinstance(parsed["schema"]["maximum"], int)
+    assert isinstance(parsed["schema"]["minimum"], int)
+    assert all(isinstance(value, int) for value in parsed["schema"]["enum"])
+    assert isinstance(parsed["float"], float)
+    assert isinstance(parsed["decimal"], float)
+    assert await read_request_body(request) == parsed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    (b'{"n":1e400}', b'{"n":NaN}', b'{"text":"\\ud800"}', b'{"text":"\xff"}'),
+)
+async def test_binary_body_keeps_strict_json_validation(body: bytes):
+    assert await read_request_body(_starlette_request(body, "application/x-protobuf")) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", ("application/json", "application/x-protobuf"))
+async def test_deep_json_keeps_large_integers_above_the_repair_size_limit(
+    content_type: str, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 0.001)
+    body: Final = b'{"nested":' + b"[" * 800 + b"12345678901234567890123" + b"]" * 800 + b"}"
+
+    assert await read_request_body(_starlette_request(body, content_type)) == json.loads(body)
+
+
+@pytest.mark.asyncio
+async def test_escape_heavy_json_uses_memory_proportional_to_body_size():
+    payload: Final = {"text": "1234567890123456789" + '"' * 2_000_000}
+    body: Final = json.dumps(payload).encode()
+    request: Final = _starlette_request(body, "application/json")
+
+    tracemalloc.start()
+    try:
+        parsed: Final = await read_request_body(request)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert parsed == payload
+    assert peak < 16 * len(body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cached", (False, True))
+async def test_model_alias_rewrite_preserves_large_integers_in_every_body_reader(cached: bool):
+    payload: Final = {"model": "alias", "schema": {"maximum": 12345678901234567890123}}
+    request: Final = _starlette_request(json.dumps(payload).encode(), "application/json")
+    request_data: Final = await read_request_body(request) if cached else dict(payload)
+    rewrite_request_model(request_data, request, "integer-test")
+    expected: Final = {**payload, "model": "integer-test"}
+
+    assert request_data == expected
+    assert await read_request_body(request) == expected
+    assert await request.json() == expected
+    assert json.loads(await request.body()) == expected
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 import orjson
 from fastapi import Request, UploadFile, status
 from pydantic import TypeAdapter
+from pydantic_core import from_json
 from starlette._utils import get_route_path
 from starlette.requests import HTTPConnection
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
@@ -162,10 +163,20 @@ def coerce_numeric_form_fields(
     }
 
 
+def _decode_json_body(body: bytes) -> object:
+    # Preserve strict UTF-8, surrogate and non-finite-number validation without retaining rounded integers.
+    orjson.loads(body)
+    try:
+        return _DECODED_JSON.validate_python(from_json(body, cache_strings=False))
+    except ValueError:
+        # The native decoder has a lower nesting limit than orjson.
+        return _DECODED_JSON.validate_python(json.loads(body))
+
+
 def _parse_binary_body(body: bytes) -> dict:
     """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
     try:
-        parsed: Final = _DECODED_JSON.validate_python(orjson.loads(body))
+        parsed: Final = _decode_json_body(body)
         if isinstance(parsed, dict):
             return parsed
     except orjson.JSONDecodeError:
@@ -273,7 +284,7 @@ async def read_request_body(request: Request | None) -> dict:
                 parsed_body = {}
             else:
                 try:
-                    parsed_body = dict(_JSON_REQUEST_BODY.validate_python(orjson.loads(body)))
+                    parsed_body = dict(_JSON_REQUEST_BODY.validate_python(_decode_json_body(body)))
                 except orjson.JSONDecodeError as e:
                     # The surrogate-repair fallback below runs two full-body re.sub
                     # passes, which block the event loop on multi-MB malformed bodies.
@@ -421,7 +432,7 @@ def rewrite_request_model(
     )
     safe_set_request_parsed_body(request=request, parsed_body=body)
     request._json = body  # pyright: ignore[reportPrivateUsage]  # Starlette JSON cache
-    request._body = orjson.dumps(body)  # pyright: ignore[reportPrivateUsage]  # Starlette body cache
+    request._body = _JSON_REQUEST_BODY.dump_json(body)  # pyright: ignore[reportPrivateUsage]  # Starlette body cache
 
 
 def safe_get_request_headers(request: Request | None) -> dict:
