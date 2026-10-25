@@ -10,6 +10,7 @@ import copy
 import json
 from collections.abc import Mapping
 from importlib import import_module
+from pathlib import Path
 from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
@@ -852,3 +853,92 @@ def test_bridge_reasoning_effort_reads_only_a_string_or_mapping_effort_nested_in
     extra_body: JsonValue, expected: JsonValue
 ) -> None:
     assert bridge_reasoning_effort(None, extra_body) == expected
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("prefix", ["", "responses/"])
+@pytest.mark.parametrize("catalog_mode", [None, "chat", "responses"])
+@pytest.mark.asyncio
+async def test_chatgpt_completion_routes_to_responses_without_a_provider_catalog_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    respx_mock: respx.MockRouter,
+    asynchronous: bool,
+    stream: bool,
+    prefix: str,
+    catalog_mode: str | None,
+) -> None:
+    model: Final = "test-chatgpt-routing"
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_API_BASE", "https://chatgpt.example")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    (tmp_path / "auth.json").write_text(
+        json.dumps({"access_token": "fake-access-token", "expires_at": 253402300799, "account_id": "fake-account"})
+    )
+    monkeypatch.delitem(litellm.model_cost, f"chatgpt/{model}", raising=False)
+    monkeypatch.delitem(litellm.model_cost, model, raising=False)
+    if catalog_mode is not None:
+        monkeypatch.setitem(litellm.model_cost, model, {"mode": catalog_mode, "litellm_provider": "openai"})
+    litellm.get_model_info.cache_clear()
+    payload: Final = {
+        "id": "resp_test",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": model,
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_test",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    events: Final = (
+        {"type": "response.created", "response": {**payload, "status": "in_progress", "output": []}},
+        {
+            "type": "response.output_text.delta",
+            "delta": "hello",
+            "item_id": "msg_test",
+            "output_index": 0,
+            "content_index": 0,
+        },
+        {"type": "response.completed", "response": payload},
+    )
+    upstream: Final = respx_mock.post("https://chatgpt.example/responses").respond(
+        200,
+        headers={"content-type": "text/event-stream"},
+        text="".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events),
+    )
+    kwargs: Final = {
+        "model": f"chatgpt/{prefix}{model}",
+        "messages": [{"role": "user", "content": "Say hello"}],
+        "api_base": "https://chatgpt.example",
+        "stream": stream,
+        "num_retries": 0,
+    }
+    response: Final = await litellm.acompletion(**kwargs) if asynchronous else litellm.completion(**kwargs)
+    result: Final = (
+        litellm.stream_chunk_builder([chunk async for chunk in response] if asynchronous else list(response))
+        if stream
+        else response
+    )
+    assert result is not None
+    assert result.choices[0].message.content == "hello"
+    assert upstream.call_count == 1
+    sent: Final = json.loads(upstream.calls[0].request.content)
+    assert sent["model"] == model
+    assert sent["store"] is False
+    assert sent["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello"}]}
+    ]
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure", "xai", "github_copilot"])
+def test_missing_catalog_entry_does_not_force_other_providers_to_responses(provider: str) -> None:
+    info, model = responses_api_bridge_check(model="test-chatgpt-routing-control", custom_llm_provider=provider)
+    assert (info.get("mode"), model) == (None, "test-chatgpt-routing-control")

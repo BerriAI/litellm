@@ -175,7 +175,7 @@ def responses_api_bridge_check(
     pinned_mode: Final = (
         None if explicit_responses_prefix else deployment_routing_mode(deployment_model_info, custom_llm_provider)
     )
-    if explicit_responses_prefix or pinned_mode == "responses":
+    if custom_llm_provider == LlmProviders.CHATGPT or explicit_responses_prefix or pinned_mode == "responses":
         model = model.replace("responses/", "")
         model_info["mode"] = "responses"
     elif pinned_mode == "chat" and backend_serves_chat_completions(model_info):
