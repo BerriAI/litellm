@@ -1223,3 +1223,53 @@ def test_as_proxy_exception_keeps_jwt_scope_denial_message_shape():
 
     assert converted.to_dict() == plain.to_dict()
     assert converted.internal_message == denial.internal_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "non_dict_body",
+    [
+        pytest.param([], id="empty_list"),
+        pytest.param([1], id="list_of_ints"),
+        pytest.param(None, id="null"),
+        pytest.param("s", id="string"),
+        pytest.param(1, id="int"),
+        pytest.param(True, id="bool"),
+    ],
+)
+async def test_handle_authentication_error_non_dict_body_does_not_crash(non_dict_body) -> None:
+    """A non-dict JSON body (list, str, int, bool, null) on an unauthenticated
+    request should follow the normal 401 path, not crash with AttributeError."""
+    handler = UserAPIKeyAuthExceptionHandler()
+    auth_error = ProxyException(
+        message="Invalid API key",
+        type=ProxyErrorTypes.auth_error,
+        param="api_key",
+        code=status.HTTP_401_UNAUTHORIZED,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+        pytest.raises(ProxyException) as exc_info,
+    ):
+        await handler.handle_authentication_error(
+            auth_error,
+            MagicMock(),
+            non_dict_body,
+            "/v1/chat/completions",
+            None,
+            "sk-bad-key",
+        )
+
+    assert exc_info.value.code == str(status.HTTP_401_UNAUTHORIZED)
