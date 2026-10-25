@@ -1374,6 +1374,86 @@ def test_get_response_for_spend_logs_payload_strips_null_bytes(mock_should_store
     assert json.loads(response_json)["content"] == "answerhere"
 
 
+_GITHUB_TOKEN: Final = "ghp_" + "a1B2c3D4e5" * 3 + "F6g7H8"
+_TOKEN_SHAPED_SECRETS: Final = (
+    _GITHUB_TOKEN,
+    "github_pat_" + "A1b2C3d4E5" * 8 + "Z9",
+    "sk-ant-api03-" + "Qw3rTy" * 7,
+    "AKIAIOSFODNN7EXAMPLE",
+    "xoxb-1234567890-0987654321-AbCdEfGhIjKl",
+    "glpat-AbCdEfGhIj1234567890",
+    "hf_" + "AbCdEfGhIj" * 3 + "KlMn",
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----",
+)
+
+
+@pytest.mark.parametrize("secret", _TOKEN_SHAPED_SECRETS)
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
+def test_stored_request_masks_a_token_returned_in_an_anthropic_tool_result(mock_should_store, secret: str):
+    mock_should_store.return_value = True
+    tool_output: Final = json.dumps({"stdout": f"export TOKEN={secret}\ndone"})
+    request_body: Final = {
+        "model": "claude-sonnet-5-5",
+        "messages": [
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": tool_output}]}
+        ],
+    }
+
+    stored: Final = json.dumps(_sanitize_request_body_for_spend_logs_payload(request_body))
+
+    assert secret not in stored
+    assert secret[:12] not in stored
+    assert "export TOKEN=REDACTED_BY_LITELM" in json.loads(json.loads(stored)["messages"][0]["content"][0]["content"])[
+        "stdout"
+    ]
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
+def test_stored_response_masks_a_token_in_a_tool_call_argument(mock_should_store):
+    mock_should_store.return_value = True
+    payload: Final = cast(
+        StandardLoggingPayload,
+        {
+            "response": {
+                "content": [
+                    {"type": "text", "text": "Cloning now"},
+                    {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {"cmd": f"git clone https://{_GITHUB_TOKEN}@github.com/o/r"}},
+                ]
+            }
+        },
+    )
+
+    stored: Final = json.loads(_get_response_for_spend_logs_payload(payload))
+
+    assert stored["content"][0]["text"] == "Cloning now"
+    assert stored["content"][1]["input"]["cmd"] == "git clone https://REDACTED_BY_LITELM@github.com/o/r"
+
+
+def test_stored_request_masks_a_token_kept_in_the_head_of_a_truncated_string():
+    long_text: Final = f"{_GITHUB_TOKEN} " + "x" * 10_000
+
+    stored: Final = _sanitize_request_body_for_spend_logs_payload({"text": long_text}, max_string_length_prompt_in_db=200)
+
+    assert stored["text"].startswith("REDACTED_BY_LITELM x")
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored["text"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "Use basic auth with password: hunter2 and a Bearer header",
+        "The task-management-system and risk-assessment-framework docs",
+        "See https://github.com/BerriAI/litellm and ghp_short",
+        "A" * 5000,
+    ),
+)
+def test_stored_request_keeps_text_that_only_resembles_credentials(text: str):
+    stored: Final = _sanitize_request_body_for_spend_logs_payload({"text": text}, max_string_length_prompt_in_db=10_000)
+
+    assert stored["text"] == text
+
+
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_response_for_spend_logs_payload_truncates_large_embedding(
     mock_should_store,

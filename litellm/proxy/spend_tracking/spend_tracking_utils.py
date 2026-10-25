@@ -60,6 +60,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
+from litellm.litellm_core_utils.secret_redaction import redact_tokens
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.anthropic.common_utils import resolve_used_client_oauth_token
 from litellm.proxy._types import (
@@ -1204,7 +1205,7 @@ def _get_messages_for_spend_logs_payload(
                 messages: Final = standard_logging_payload.get("messages")
                 if messages is not None:
                     try:
-                        return safe_dumps(messages)
+                        return _without_tokens(safe_dumps(messages))
                     except Exception:
                         return "{}"
     return "{}"
@@ -1233,6 +1234,10 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
     )
 
 
+def _without_tokens(value: str) -> str:
+    return redact_tokens(value, REDACTED_BY_LITELM_STRING)
+
+
 def _truncated_for_db(value: str, max_length: int) -> str:
     if len(value) <= max_length:
         return value
@@ -1248,7 +1253,7 @@ def _truncated_for_db(value: str, max_length: int) -> str:
 
 def _compaction_summary_for_db(summary: str) -> str:
     return _truncated_for_db(
-        summary, max(_get_max_string_length_prompt_in_db(), MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB)
+        _without_tokens(summary), max(_get_max_string_length_prompt_in_db(), MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB)
     )
 
 
@@ -1277,7 +1282,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
     which holds raw HTTP headers including Authorization tokens), and replaces string values under keys
     SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
-    and logprobs.
+    and logprobs. Token-shaped substrings (e.g. a GitHub token in a tool result) are masked everywhere.
     """
     if visited is None:
         visited = set()
@@ -1298,7 +1303,7 @@ def _sanitize_request_body_for_spend_logs_payload(
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
         elif isinstance(value, str):
-            return _truncated_for_db(value, max_string_length_prompt_in_db)
+            return _truncated_for_db(_without_tokens(value), max_string_length_prompt_in_db)
         return value
 
     def _stored_value(key: str, value: object) -> object:
