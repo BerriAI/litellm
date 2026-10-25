@@ -1,4 +1,4 @@
-use strum::{EnumString, IntoStaticStr};
+use strum::{EnumString, IntoStaticStr, VariantArray};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomLlmProvider<'a> {
@@ -6,7 +6,7 @@ pub struct CustomLlmProvider<'a> {
     pub custom_llm_provider: &'a str,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr, VariantArray)]
 pub enum LlmProviders {
     #[strum(serialize = "anthropic")]
     Anthropic,
@@ -24,6 +24,8 @@ pub enum LlmProviders {
     Deepseek,
     #[strum(serialize = "edenai")]
     Edenai,
+    #[strum(serialize = "hosted_vllm")]
+    HostedVllm,
     #[strum(serialize = "minimax")]
     Minimax,
     #[strum(serialize = "mistral")]
@@ -40,6 +42,8 @@ pub enum LlmProviders {
     Tencent,
     #[strum(serialize = "vertex_ai")]
     VertexAi,
+    #[strum(serialize = "watsonx")]
+    Watsonx,
 }
 
 pub fn get_custom_llm_provider<'a>(
