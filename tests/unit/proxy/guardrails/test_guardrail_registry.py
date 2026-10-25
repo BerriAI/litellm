@@ -1274,6 +1274,8 @@ class TestLoggingOnlyScopeValidation:
         reject_invalid_logging_only_scope: bool = False,
         assert_registered: bool = False,
         continue_on_input_failure: bool | None = None,
+        input_timing: str | None = None,
+        verdict_timeout: float | None = None,
     ) -> CustomGuardrail:
         import litellm
         from litellm.proxy.guardrails import guardrail_registry as registry_module
@@ -1308,6 +1310,8 @@ class TestLoggingOnlyScopeValidation:
                         "mode": mode,
                         "logging_only_scope": scope,
                         "logging_only_continue_on_input_failure": continue_on_input_failure,
+                        "logging_only_input_timing": input_timing,
+                        "logging_only_verdict_timeout": verdict_timeout,
                     },
                 },
                 reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
@@ -1398,6 +1402,112 @@ class TestLoggingOnlyScopeValidation:
         )
 
         assert callback.logging_only_scope == "output"
+
+    def test_on_arrival_with_input_scope_applies_timing_and_timeout(self) -> None:
+        callback: Final = self._initialize(
+            mode="logging_only", scope="input", input_timing="on_arrival", verdict_timeout=5
+        )
+
+        assert (callback.logging_only_input_timing, callback.logging_only_verdict_timeout) == ("on_arrival", 5)
+
+    def test_on_arrival_without_a_timeout_waits_the_default(self) -> None:
+        callback: Final = self._initialize(mode="logging_only", scope="input", input_timing="on_arrival")
+
+        assert (callback.logging_only_input_timing, callback.logging_only_verdict_timeout) == ("on_arrival", 3.0)
+
+    @pytest.mark.parametrize(
+        ("mode", "scope", "input_timing", "verdict_timeout", "callback_type", "message"),
+        (
+            (
+                "logging_only",
+                "output",
+                "on_arrival",
+                None,
+                _LoggingOnlyScopeSupportedGuardrail,
+                "logging_only_input_timing=on_arrival only applies with logging_only_scope: input. Set "
+                "logging_only_scope: input or remove logging_only_input_timing.",
+            ),
+            (
+                "logging_only",
+                None,
+                "on_arrival",
+                None,
+                _LoggingOnlyScopeSupportedGuardrail,
+                "logging_only_input_timing=on_arrival only applies with logging_only_scope: input. Set "
+                "logging_only_scope: input or remove logging_only_input_timing.",
+            ),
+            (
+                "pre_call",
+                None,
+                "on_arrival",
+                None,
+                _LoggingOnlyScopeSupportedGuardrail,
+                "logging_only_input_timing is on_arrival, but mode does not include logging_only, so it would "
+                "never apply. Add logging_only to mode or remove logging_only_input_timing.",
+            ),
+            (
+                "logging_only",
+                "input",
+                None,
+                5,
+                _LoggingOnlyScopeSupportedGuardrail,
+                "logging_only_verdict_timeout is set, but logging_only_input_timing is not on_arrival, so it would "
+                "never apply. Set logging_only_input_timing: on_arrival or remove logging_only_verdict_timeout.",
+            ),
+            (
+                "logging_only",
+                None,
+                "on_arrival",
+                None,
+                _LoggingOnlyScopeUnsupportedGuardrail,
+                "logging_only_input_timing=on_arrival is not supported by this guardrail, whose logging_only hook "
+                "scans on its own. Remove logging_only_input_timing.",
+            ),
+        ),
+        ids=("output_scope", "both_directions", "mode_without_logging_only", "timeout_alone", "own_logging_hook"),
+    )
+    def test_on_arrival_outside_its_rules_is_ignored_at_load_and_rejected_for_api_writes(
+        self,
+        mode: str,
+        scope: LoggingOnlyScope | None,
+        input_timing: str | None,
+        verdict_timeout: float | None,
+        callback_type: type[CustomGuardrail],
+        message: str,
+    ) -> None:
+        callback: Final = self._initialize(
+            mode=mode,
+            scope=scope,
+            input_timing=input_timing,
+            verdict_timeout=verdict_timeout,
+            callback_type=callback_type,
+            assert_registered=True,
+        )
+        with pytest.raises(ValueError, match="logging_only_") as exc_info:
+            self._initialize(
+                mode=mode,
+                scope=scope,
+                input_timing=input_timing,
+                verdict_timeout=verdict_timeout,
+                callback_type=callback_type,
+                reject_invalid_logging_only_scope=True,
+            )
+
+        assert (callback.logging_only_input_timing, callback.logging_only_verdict_timeout) == ("after_call", 3.0)
+        assert str(exc_info.value) == f"Guardrail logging-only-scope-guardrail: {message}"
+
+    def test_a_verdict_timeout_below_the_minimum_is_ignored_at_load(self) -> None:
+        params: Final = {
+            "guardrail": "litellm_content_filter",
+            "mode": "logging_only",
+            "logging_only_scope": "input",
+            "logging_only_input_timing": "on_arrival",
+            "logging_only_verdict_timeout": 0.5,
+        }
+
+        parsed: Final = parse_tolerant_litellm_params(params, "test-content-filter")
+
+        assert (parsed.logging_only_input_timing, parsed.logging_only_verdict_timeout) == ("on_arrival", None)
 
     @pytest.mark.parametrize("scope", ("request", "both"))
     def test_invalid_scope_fails_litellm_params_validation(self, scope: str) -> None:

@@ -1687,6 +1687,37 @@ async def test_patch_guardrail_clears_scope_when_logging_only_mode_is_removed(
 
 
 @pytest.mark.asyncio
+async def test_patch_guardrail_clears_on_arrival_timing_when_logging_only_mode_is_removed(
+    mocker, monkeypatch, mock_guardrail_registry
+):
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchScopeSupportedGuardrail,
+        "patch_on_arrival_test",
+        {
+            "mode": ["pre_call", "logging_only"],
+            "logging_only_scope": "input",
+            "logging_only_input_timing": "on_arrival",
+            "logging_only_verdict_timeout": 5,
+            "default_on": True,
+        },
+    )
+    request = PatchGuardrailRequest(litellm_params=BaseLitellmParams(mode=["pre_call"]))
+
+    try:
+        await patch_guardrail(stored_guardrail["guardrail_id"], request, user_api_key_dict=MOCK_ADMIN_USER)
+
+        persisted = mock_guardrail_registry.update_guardrail_in_db.call_args.kwargs["guardrail"]["litellm_params"]
+        assert (persisted.logging_only_input_timing, persisted.logging_only_verdict_timeout) == (None, None)
+        callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
+        assert callback.logging_only_input_timing == "after_call"
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
 async def test_patch_guardrail_with_blank_value_clears_the_stored_value(mocker, monkeypatch, mock_guardrail_registry):
     """
     Regression: blank litellm_params were dropped before validation, so a PATCH that cleared

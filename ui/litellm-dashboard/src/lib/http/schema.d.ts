@@ -27111,10 +27111,20 @@ export interface components {
              */
             logging_only_continue_on_input_failure?: boolean | null;
             /**
+             * Logging Only Input Timing
+             * @description when a logging_only request scan runs: 'after_call' (default) scans a copy of the logged request once the call ends; 'on_arrival' sends the request to the guardrail in the background once it passes the pre_call guardrails, in parallel with the model call, and the call's log records the verdict. 'on_arrival' needs mode logging_only, logging_only_scope 'input' and a guardrail without its own logging hook; otherwise API writes are rejected and a config file value is ignored with an error log. Failed model calls are scanned too, without delaying the error or a retry: an 'on_arrival' verdict is logged only if it is already back, and an 'after_call' scan runs in the background without a logged verdict. Requests the proxy rejects before reaching a model (auth, rate limits, budgets, guardrail blocks) are not scanned.
+             */
+            logging_only_input_timing?: ("after_call" | "on_arrival") | null;
+            /**
              * Logging Only Scope
              * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
              */
             logging_only_scope?: ("input" | "output") | null;
+            /**
+             * Logging Only Verdict Timeout
+             * @description seconds a successful call's log waits for an 'on_arrival' verdict that is not back yet (default 3, minimum 1). When it runs out, the scan is cancelled and logged as not_run. A failed call's log never waits. Only applies with logging_only_input_timing 'on_arrival'.
+             */
+            logging_only_verdict_timeout?: number | null;
             /**
              * Mask Request Content
              * @description Will mask request content if guardrail makes any changes
@@ -36837,10 +36847,20 @@ export interface components {
              */
             logging_only_continue_on_input_failure?: boolean | null;
             /**
+             * Logging Only Input Timing
+             * @description when a logging_only request scan runs: 'after_call' (default) scans a copy of the logged request once the call ends; 'on_arrival' sends the request to the guardrail in the background once it passes the pre_call guardrails, in parallel with the model call, and the call's log records the verdict. 'on_arrival' needs mode logging_only, logging_only_scope 'input' and a guardrail without its own logging hook; otherwise API writes are rejected and a config file value is ignored with an error log. Failed model calls are scanned too, without delaying the error or a retry: an 'on_arrival' verdict is logged only if it is already back, and an 'after_call' scan runs in the background without a logged verdict. Requests the proxy rejects before reaching a model (auth, rate limits, budgets, guardrail blocks) are not scanned.
+             */
+            logging_only_input_timing?: ("after_call" | "on_arrival") | null;
+            /**
              * Logging Only Scope
              * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
              */
             logging_only_scope?: ("input" | "output") | null;
+            /**
+             * Logging Only Verdict Timeout
+             * @description seconds a successful call's log waits for an 'on_arrival' verdict that is not back yet (default 3, minimum 1). When it runs out, the scan is cancelled and logged as not_run. A failed call's log never waits. Only applies with logging_only_input_timing 'on_arrival'.
+             */
+            logging_only_verdict_timeout?: number | null;
             /**
              * Mask
              * @description Enable content masking using Lasso classifix API

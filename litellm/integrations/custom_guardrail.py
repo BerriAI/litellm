@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
@@ -26,6 +27,7 @@ from litellm.types.guardrails import (
     GuardrailEventHooks,
     GuardrailStreamScope,
     LitellmParams,
+    LoggingOnlyInputTiming,
     LoggingOnlyScope,
     Mode,
     runtime_stream_scope,
@@ -50,6 +52,7 @@ dc: Final = DualCache()
 
 from litellm.constants import (
     GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
+    LOGGING_ONLY_VERDICT_TIMEOUT_SECONDS,
     LOGS_GUARDRAIL_INFORMATION_MARKER,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     SERVER_STREAMING_CLASSIFICATION_KEY,
@@ -207,6 +210,35 @@ def guardrail_request_data_with_streaming(
     }
 
 
+_STRING_KEYED: Final = TypeAdapter(dict[str, object])
+_GUARDRAIL_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+
+
+def guardrail_entries(recorded: object) -> tuple[object, ...]:
+    if isinstance(recorded, list):
+        return _GUARDRAIL_ENTRIES.validate_python(recorded)
+    return (recorded,) if recorded else ()
+
+
+def _logged_proxy_server_request(kwargs: Mapping[str, object]) -> object:
+    litellm_params: Final = kwargs.get("litellm_params")
+    if not isinstance(litellm_params, dict):
+        return None
+    return _STRING_KEYED.validate_python(litellm_params).get("proxy_server_request")
+
+
+def with_guardrail_information(
+    kwargs: dict[str, object],  # mutable-ok: CustomLogger.async_logging_hook contract
+    entries: Sequence[object],
+) -> dict[str, object]:  # mutable-ok: CustomLogger.async_logging_hook contract
+    standard_logging_object: Final = kwargs.get("standard_logging_object")
+    if not entries or not isinstance(standard_logging_object, dict):
+        return kwargs
+    payload: Final = _STRING_KEYED.validate_python(standard_logging_object)
+    existing: Final = guardrail_entries(payload.get("guardrail_information"))
+    return {**kwargs, "standard_logging_object": {**payload, "guardrail_information": [*existing, *entries]}}
+
+
 def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None = None) -> bool:
     if event_type in _REALTIME_STREAMING_HOOKS:
         return True
@@ -228,6 +260,8 @@ class CustomGuardrail(CustomLogger):
     records_own_guardrail_information: ClassVar[bool] = False
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
+    logging_only_input_timing: LoggingOnlyInputTiming
+    logging_only_verdict_timeout: float
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
     stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
@@ -311,6 +345,8 @@ class CustomGuardrail(CustomLogger):
         self.apply_stream_scope(stream_scope_arg)
         self.logging_only_scope = None
         self.logging_only_continue_on_input_failure = False
+        self.logging_only_input_timing = "after_call"
+        self.logging_only_verdict_timeout = LOGGING_ONLY_VERDICT_TIMEOUT_SECONDS
         if timeout is not None:
             self.timeout = timeout
 
@@ -875,6 +911,10 @@ class CustomGuardrail(CustomLogger):
     def accepts_logging_only_mode(cls) -> bool:
         return cls.uses_apply_guardrail_interface() and not cls.use_native_lifecycle_hooks
 
+    def configure_logging_only_input_timing(self, timing: LoggingOnlyInputTiming, verdict_timeout: float) -> None:
+        self.logging_only_input_timing = timing
+        self.logging_only_verdict_timeout = verdict_timeout
+
     @classmethod
     def supports_logging_only_scope(cls) -> bool:
         return (
@@ -1051,16 +1091,10 @@ class CustomGuardrail(CustomLogger):
             await self._scan_logged_call(kwargs, response, translation, output_translation, scratch_metadata)
         except Exception as e:
             verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
-        recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
-        standard_logging_object: Final = kwargs.get("standard_logging_object")
-        if not recorded or not isinstance(standard_logging_object, dict):
-            return kwargs, result
-        entries: Final = recorded if isinstance(recorded, list) else [recorded]
-        existing: Final = standard_logging_object.get("guardrail_information") or []
-        return {
-            **kwargs,
-            "standard_logging_object": {**standard_logging_object, "guardrail_information": [*existing, *entries]},
-        }, result
+        return with_guardrail_information(
+            kwargs,  # pyright: ignore[reportUnknownArgumentType]  # async_logging_hook's kwargs is the untyped CustomLogger contract
+            guardrail_entries(scratch_metadata.get("standard_logging_guardrail_information")),
+        ), result
 
     def _copy_scratch_request_fields(
         self,
@@ -1101,6 +1135,7 @@ class CustomGuardrail(CustomLogger):
             "tools": scratch_tools,
             "litellm_call_id": kwargs.get("litellm_call_id"),
             "metadata": scratch_metadata,
+            "proxy_server_request": _logged_proxy_server_request(kwargs),
         }
         if self.logging_only_scope != "output" and scratch_fields is not None:
             if self.logging_only_continue_on_input_failure:

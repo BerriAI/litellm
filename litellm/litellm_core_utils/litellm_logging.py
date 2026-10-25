@@ -63,10 +63,18 @@ from litellm.exceptions import (
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.arize.arize import ArizeLogger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, with_guardrail_information
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.langtrace import langtrace_trace_endpoint
+from litellm.integrations.logging_only_input_scan import (
+    InputScans,
+    collect_input_scan,
+    logging_only_decision_data,
+    never_reached_a_model,
+    peek_input_scan,
+    spawn_scan,
+)
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.classifier_logging import (
@@ -135,6 +143,7 @@ from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
 from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
 from litellm.types.extraction import ExtractionResponse
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.interactions import (
     InteractionsAPIResponse,
@@ -636,6 +645,7 @@ class Logging(LiteLLMLoggingBaseClass):
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
     _on_failure_payload_built: "Callable[[], None] | None" = None
+    logging_only_input_scans: InputScans = MappingProxyType({})
 
     @property
     def _defer_async_logging(self) -> bool:
@@ -2481,6 +2491,59 @@ class Logging(LiteLLMLoggingBaseClass):
         self.record_partial_usage_for_failure(spend.usage, spend.cost)
         self.cost_breakdown = spend.cost_breakdown
 
+    def track_logging_only_input_scans(self, scans: InputScans) -> None:
+        if scans:
+            self.logging_only_input_scans = MappingProxyType({**self.logging_only_input_scans, **scans})
+
+    async def _run_guardrail_logging_hook(
+        self, guardrail: CustomGuardrail, result: object
+    ) -> tuple[dict[str, object], object]:  # mutable-ok: model_call_details is the logging kwargs dict
+        input_scan: Final = self.logging_only_input_scans.get(guardrail)
+        if input_scan is not None and guardrail.logging_only_input_timing == "on_arrival":
+            return with_guardrail_information(
+                self.model_call_details, await collect_input_scan(guardrail, input_scan)
+            ), result
+        return await guardrail.async_logging_hook(
+            kwargs=self.model_call_details,
+            result=result,
+            call_type=self.call_type,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # call_type is untyped on Logging
+        )
+
+    def _run_logging_only_guardrails_on_failure(self, callbacks: Sequence[object]) -> None:
+        """Send a failed LLM call's request to generic logging_only guardrails without delaying the error or a retry.
+
+        Proxy-only rejections (auth, rate limits, budgets, guardrail blocks) never reached a model and are skipped, so an
+        unauthenticated caller cannot make the proxy send its text to a vendor. An on_arrival verdict is logged only if it
+        is already back; an after_call scan runs in the background and its verdict is not logged."""
+        if never_reached_a_model(self.model_call_details):
+            return
+        for callback in dict.fromkeys(callbacks):
+            if not isinstance(callback, CustomGuardrail) or not callback.supports_logging_only_scope():
+                continue
+            if (
+                callback.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType]  # data is untyped on every guardrail override
+                    data=logging_only_decision_data(callback, self.model_call_details),
+                    event_type=GuardrailEventHooks.logging_only,
+                )
+                is not True
+            ):
+                continue
+            if (
+                input_scan := self.logging_only_input_scans.get(callback)
+            ) is not None and callback.logging_only_input_timing == "on_arrival":
+                self.model_call_details = with_guardrail_information(
+                    self.model_call_details, peek_input_scan(callback, input_scan)
+                )
+                continue
+            spawn_scan(
+                callback.async_logging_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped kwargs contract
+                    kwargs=dict(self.model_call_details),
+                    result=None,
+                    call_type=self.call_type,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # call_type is untyped on Logging
+                ),
+                f"Guardrail {callback.guardrail_name} logging_only scan of a failed call",
+            )
+
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves
         the state the request's other attempts share untouched."""
@@ -3338,11 +3401,9 @@ class Logging(LiteLLMLoggingBaseClass):
             hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
             for callback in hook_callbacks:
                 if isinstance(callback, CustomGuardrail):
-                    from litellm.types.guardrails import GuardrailEventHooks
-
                     if (
                         callback.should_run_guardrail(
-                            data=call_details,
+                            data=logging_only_decision_data(callback, call_details),
                             event_type=GuardrailEventHooks.logging_only,
                         )
                         is not True
@@ -3934,11 +3995,9 @@ class Logging(LiteLLMLoggingBaseClass):
         for callback in hook_callbacks:
             try:
                 if isinstance(callback, CustomGuardrail):
-                    from litellm.types.guardrails import GuardrailEventHooks
-
                     if (
                         callback.should_run_guardrail(
-                            data=self.model_call_details,
+                            data=logging_only_decision_data(callback, self.model_call_details),
                             event_type=GuardrailEventHooks.logging_only,
                         )
                         is not True
@@ -3946,11 +4005,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         continue
 
                     self.shadow_eval_request_snapshot = None
-                    self.model_call_details, result = await callback.async_logging_hook(
-                        kwargs=self.model_call_details,
-                        result=result,
-                        call_type=self.call_type,
-                    )
+                    self.model_call_details, result = await self._run_guardrail_logging_hook(callback, result)
                 elif isinstance(callback, CustomLogger):
                     result = redact_message_input_output_from_custom_logger(
                         result=result, litellm_logging_obj=self, custom_logger=callback
@@ -4461,12 +4516,13 @@ class Logging(LiteLLMLoggingBaseClass):
             start_time=start_time,
             end_time=end_time,
         )
-        if self._on_failure_payload_built is not None:
-            self._on_failure_payload_built()
         callbacks: Final = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
             global_callbacks=litellm._async_failure_callback,
         )
+        self._run_logging_only_guardrails_on_failure(callbacks)
+        if self._on_failure_payload_built is not None:
+            self._on_failure_payload_built()
 
         result: Final = None  # result sent to all loggers, init this to None incase it's not created
 
