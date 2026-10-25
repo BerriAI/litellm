@@ -97,8 +97,11 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     is_unbilled_non_inference_call,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
+    bedrock_guardrail_trace,
     cost_breakdown_with_guardrail,
     guardrail_information_cost,
+    native_bedrock_guardrail_information,
+    with_guardrail_entry,
 )
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -2725,6 +2728,33 @@ class Logging(LiteLLMLoggingBaseClass):
             return
         self.model_call_details["response_headers"] = headers
 
+    def record_native_bedrock_guardrail(self, result: object) -> None:
+        """Bill the guardrail trace a Bedrock response carries when the deployment's ``guardrailConfig`` ran it, by
+        recording it as guardrail information on this call, the same entry the proxy-side Bedrock guardrail writes."""
+        trace: Final = bedrock_guardrail_trace(result)
+        if trace is None:
+            return
+        raw_optional_params: Final = getattr(self, "optional_params", None)
+        optional_params: Final = raw_optional_params if isinstance(raw_optional_params, dict) else {}
+        guardrail_config: Final = optional_params.get("guardrailConfig")
+        identifier: Final = guardrail_config.get("guardrailIdentifier") if isinstance(guardrail_config, dict) else None
+        litellm_params_in: Final = getattr(self, "litellm_params", None)
+        region: Final = optional_params.get("aws_region_name") or (
+            litellm_params_in.get("aws_region_name") if isinstance(litellm_params_in, dict) else None
+        )
+        entry: Final = native_bedrock_guardrail_information(
+            trace,
+            aws_region_name=region if isinstance(region, str) else None,
+            guardrail_identifier=identifier if isinstance(identifier, str) else None,
+        )
+        litellm_params: Final = self.model_call_details.get("litellm_params")
+        if entry is None or not isinstance(litellm_params, dict):
+            return
+        metadata: Final = litellm_params.get("metadata")
+        if not isinstance(metadata, dict):
+            litellm_params["metadata"] = {}
+        with_guardrail_entry(litellm_params["metadata"], entry)
+
     def _merge_hidden_params_from_response_into_metadata(self, logging_result: object) -> None:
         """
         Copy response._hidden_params into litellm_params.metadata['hidden_params'].
@@ -2939,6 +2969,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 result = self._handle_a2a_response_logging(result=result)
 
             logging_result: Final = self.normalize_logging_result(result=result)
+            self.record_native_bedrock_guardrail(logging_result)
             if cache_hit is None and _served_from_cache_at_no_charge(logging_result):
                 self.model_call_details["cache_hit"] = True
 

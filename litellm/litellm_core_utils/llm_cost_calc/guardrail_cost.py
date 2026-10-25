@@ -1,15 +1,19 @@
 import math
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, Sequence
+from itertools import chain
 from typing import Annotated, Final
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.utils import CostBreakdown
+from litellm.types.utils import CostBreakdown, GuardrailStatus, StandardLoggingGuardrailInformation
 
 BEDROCK_GUARDRAIL_PRICING_KEY: Final = "bedrock/guardrails"
+BEDROCK_TRACE_FIELDS: Final = ("trace", "amazon-bedrock-trace")
+_INTERVENING_ACTIONS: Final = frozenset({"BLOCKED", "ANONYMIZED"})
 
 
 class GuardrailPricing(LiteLLMBaseModel):
@@ -94,6 +98,107 @@ def guardrail_cost_total(cost_by_unit: Mapping[str, float | None] | None) -> flo
 
 def bedrock_guardrail_cost(usage_units: Mapping[str, int], aws_region_name: str | None) -> float:
     return guardrail_cost_total(bedrock_guardrail_cost_by_unit(usage_units, aws_region_name))
+
+
+def bedrock_guardrail_trace(response: object) -> Mapping[str, object] | None:
+    """The guardrail trace a Bedrock response carries: Converse puts it under ``trace``, Invoke under
+    ``amazon-bedrock-trace``. Returned as is, or None when the response has no guardrail section."""
+    for field in BEDROCK_TRACE_FIELDS:
+        trace: object = response.get(field) if isinstance(response, Mapping) else getattr(response, field, None)
+        if isinstance(trace, Mapping) and isinstance(trace.get("guardrail"), Mapping):
+            return trace
+    return None
+
+
+def _keyed_assessments(by_id: object) -> Iterator[tuple[str, Mapping[str, object]]]:
+    if not isinstance(by_id, Mapping):
+        return
+    for guardrail_id, assessment in by_id.items():
+        if isinstance(assessment, Mapping):
+            yield str(guardrail_id), assessment
+
+
+def _assessments(guardrail: Mapping[str, object]) -> Iterator[tuple[str, Mapping[str, object]]]:
+    """(guardrail id, assessment) pairs in both trace shapes: Converse ``inputAssessment`` {id: a} and
+    ``outputAssessments`` {id: [a, ...]}, Invoke ``input`` {id: a} and ``outputs`` [{id: a}, ...]."""
+    yield from _keyed_assessments(guardrail.get("inputAssessment"))
+    yield from _keyed_assessments(guardrail.get("input"))
+    output_assessments: Final = guardrail.get("outputAssessments")
+    if isinstance(output_assessments, Mapping):
+        for guardrail_id, assessments in output_assessments.items():
+            if isinstance(assessments, list):
+                yield from ((str(guardrail_id), a) for a in assessments if isinstance(a, Mapping))
+    outputs: Final = guardrail.get("outputs")
+    if isinstance(outputs, list):
+        yield from chain.from_iterable(map(_keyed_assessments, outputs))
+
+
+def _assessment_usage(assessment: Mapping[str, object]) -> Mapping[str, int]:
+    metrics: Final = assessment.get("invocationMetrics")
+    usage: Final = metrics.get("usage") if isinstance(metrics, Mapping) else None
+    if not isinstance(usage, Mapping):
+        return {}
+    return {str(k): v for k, v in usage.items() if str(k).endswith("Units") and isinstance(v, int) and not isinstance(v, bool)}
+
+
+def _summed_usage(usages: Sequence[Mapping[str, int]]) -> Mapping[str, int]:
+    counters: Final = tuple(dict.fromkeys(chain.from_iterable(usages)))
+    return {counter: sum(usage.get(counter, 0) for usage in usages) for counter in counters}
+
+
+def _actions(node: object) -> Iterator[str]:
+    if isinstance(node, Mapping):
+        action: Final = node.get("action")
+        if isinstance(action, str):
+            yield action
+        yield from chain.from_iterable(map(_actions, node.values()))
+    elif isinstance(node, list):
+        yield from chain.from_iterable(map(_actions, node))
+
+
+def native_bedrock_guardrail_information(
+    trace: Mapping[str, object], aws_region_name: str | None, guardrail_identifier: str | None
+) -> StandardLoggingGuardrailInformation | None:
+    """The guardrail entry for a trace Bedrock returned because the deployment's ``guardrailConfig`` ran with
+    ``trace: enabled``: every assessment's ``invocationMetrics.usage`` summed and priced like the proxy-side Bedrock
+    guardrail. None when the trace carries no usage, which is what ``trace: disabled`` leaves."""
+    guardrail: Final = trace.get("guardrail")
+    if not isinstance(guardrail, Mapping):
+        return None
+    pairs: Final = tuple(_assessments(guardrail))
+    usage: Final = _summed_usage(tuple(_assessment_usage(assessment) for _, assessment in pairs))
+    if not usage:
+        return None
+    cost_by_unit: Final = bedrock_guardrail_cost_by_unit(usage, aws_region_name)
+    name: Final = guardrail_identifier or pairs[0][0]
+    status: Final[GuardrailStatus] = (
+        "guardrail_intervened" if any(action in _INTERVENING_ACTIONS for action in _actions(guardrail)) else "success"
+    )
+    priced: Final[StandardLoggingGuardrailInformation] = (
+        {"guardrail_cost_by_unit": cost_by_unit} if cost_by_unit is not None else {}
+    )
+    return {
+        "guardrail_name": name,
+        "guardrail_id": name,
+        "guardrail_provider": "bedrock",
+        "guardrail_mode": GuardrailEventHooks.during_call,
+        "guardrail_response": dict(guardrail),
+        "guardrail_status": status,
+        "guardrail_usage": usage,
+        "guardrail_cost": guardrail_cost_total(cost_by_unit),
+        **priced,
+    }
+
+
+def with_guardrail_entry(metadata: dict, entry: StandardLoggingGuardrailInformation) -> None:
+    """Append ``entry`` to the metadata's ``standard_logging_guardrail_information`` once, so the same trace recorded
+    from the response headers path and again from the success handler bills a single time."""
+    existing: Final = metadata.get("standard_logging_guardrail_information")
+    if isinstance(existing, list):
+        if entry not in existing:
+            existing.append(entry)
+        return
+    metadata["standard_logging_guardrail_information"] = [existing, entry] if isinstance(existing, dict) else [entry]
 
 
 AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT: Final = "text_records"

@@ -14,6 +14,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
@@ -1484,6 +1485,25 @@ def _simple_text_part(choices: Sequence[object]) -> str | None:
     return content if isinstance(content, str) else ""
 
 
+def _carry_bedrock_guardrail_trace(chunks: Sequence[object], response: ModelResponse) -> None:
+    """Bedrock reports a guardrail trace once per stream, on the final metadata chunk, so the built response carries it
+    under the same field as the non-streaming response (``trace`` on Converse, ``amazon-bedrock-trace`` on Invoke)."""
+    for chunk in reversed(chunks):
+        fields: object = (
+            chunk.get("provider_specific_fields")
+            if isinstance(chunk, dict)
+            else getattr(chunk, "provider_specific_fields", None)
+        )
+        if not isinstance(fields, Mapping):
+            continue
+        carried: Final = {field: fields[field] for field in BEDROCK_TRACE_FIELDS if field in fields}
+        if not carried:
+            continue
+        for field, trace in carried.items():
+            setattr(response, field, trace)
+        return
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: Sequence | None = None,
@@ -1565,6 +1585,9 @@ def stream_chunk_builder(
                     )
                     break
 
+            _carry_bedrock_guardrail_trace(chunks, response)
+            if logging_obj is not None:
+                logging_obj.record_native_bedrock_guardrail(response)
             _stamp_streaming_usage_cost(usage, response, logging_obj)
             _set_stream_builder_response_cost(
                 response,

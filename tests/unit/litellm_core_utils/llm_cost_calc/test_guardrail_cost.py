@@ -1,7 +1,9 @@
+from typing import Final
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.llm_cost_calc import guardrail_cost
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_cost,
     bedrock_guardrail_cost_by_unit,
@@ -230,3 +232,101 @@ def test_guardrail_information_cost_skips_malformed_entry_keeps_siblings():
     ]
     assert guardrail_information_cost(entries) == pytest.approx(0.0003)
     assert guardrail_information_cost({"guardrail_cost": 0.5, "guardrail_cost_in_spend": "maybe"}) == 0.0
+
+
+_TRACE_USAGE_IN: Final = {
+    "topicPolicyUnits": 1,
+    "contentPolicyUnits": 1,
+    "wordPolicyUnits": 1,
+    "sensitiveInformationPolicyUnits": 0,
+    "contextualGroundingPolicyUnits": 0,
+    "automatedReasoningPolicies": 0,
+}
+_TRACE_USAGE_OUT: Final = {
+    **_TRACE_USAGE_IN,
+    "topicPolicyUnits": 2,
+    "contentPolicyUnits": 2,
+    "sensitiveInformationPolicyUnits": 2,
+}
+_TRACE_PRICING: Final = {
+    "bedrock/guardrails": {
+        "litellm_provider": "bedrock",
+        "mode": "guardrails",
+        "guardrail_cost_per_unit": {
+            "topicPolicyUnits": 0.00015,
+            "contentPolicyUnits": 0.00015,
+            "wordPolicyUnits": 0.0,
+            "sensitiveInformationPolicyUnits": 0.0001,
+        },
+    }
+}
+
+
+def _converse_trace(action: str = "NONE") -> dict:
+    return {
+        "guardrail": {
+            "inputAssessment": {"gid": {"invocationMetrics": {"usage": _TRACE_USAGE_IN}}},
+            "outputAssessments": {
+                "gid": [
+                    {
+                        "topicPolicy": {"topics": [{"name": "t", "type": "DENY", "action": action}]},
+                        "invocationMetrics": {"usage": _TRACE_USAGE_OUT},
+                    }
+                ]
+            },
+        }
+    }
+
+
+def _invoke_trace() -> dict:
+    return {
+        "guardrail": {
+            "input": {"gid": {"invocationMetrics": {"usage": _TRACE_USAGE_IN}}},
+            "outputs": [{"gid": {"invocationMetrics": {"usage": _TRACE_USAGE_OUT}}}],
+        }
+    }
+
+
+@pytest.mark.parametrize("trace", [_converse_trace(), _invoke_trace()], ids=["converse", "invoke"])
+def test_native_trace_sums_every_assessment_and_prices_it_like_the_proxy_guardrail(monkeypatch, trace) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _TRACE_PRICING)
+    entry = guardrail_cost.native_bedrock_guardrail_information(trace, aws_region_name=None, guardrail_identifier=None)
+    assert entry is not None
+    assert entry["guardrail_usage"] == {
+        "topicPolicyUnits": 3,
+        "contentPolicyUnits": 3,
+        "wordPolicyUnits": 2,
+        "sensitiveInformationPolicyUnits": 2,
+        "contextualGroundingPolicyUnits": 0,
+    }
+    assert entry["guardrail_cost"] == pytest.approx(3 * 0.00015 + 3 * 0.00015 + 2 * 0.0001)
+    assert entry["guardrail_cost_by_unit"]["contextualGroundingPolicyUnits"] is None
+    assert entry["guardrail_name"] == "gid"
+    assert entry["guardrail_provider"] == "bedrock"
+    assert entry["guardrail_status"] == "success"
+    assert guardrail_cost.guardrail_information_cost([entry]) == pytest.approx(entry["guardrail_cost"])
+
+
+def test_native_trace_marks_a_blocked_assessment_intervened_and_prefers_the_configured_identifier(monkeypatch) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _TRACE_PRICING)
+    entry = guardrail_cost.native_bedrock_guardrail_information(
+        _converse_trace("BLOCKED"), aws_region_name="us-east-1", guardrail_identifier="configured-id"
+    )
+    assert entry is not None
+    assert entry["guardrail_status"] == "guardrail_intervened"
+    assert entry["guardrail_name"] == "configured-id"
+
+
+def test_native_trace_without_usage_is_not_billed(monkeypatch) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _TRACE_PRICING)
+    unpriced = {"guardrail": {"inputAssessment": {"gid": {"topicPolicy": {"topics": []}}}}}
+    assert guardrail_cost.native_bedrock_guardrail_information(unpriced, None, None) is None
+    assert guardrail_cost.bedrock_guardrail_trace({"usage": {}}) is None
+
+
+def test_with_guardrail_entry_records_the_same_trace_once() -> None:
+    entry = {"guardrail_name": "gid", "guardrail_cost": 0.001}
+    metadata: dict = {"standard_logging_guardrail_information": {"guardrail_name": "hook"}}
+    guardrail_cost.with_guardrail_entry(metadata, entry)  # pyright: ignore[reportArgumentType]  # partial entry
+    guardrail_cost.with_guardrail_entry(metadata, entry)  # pyright: ignore[reportArgumentType]  # partial entry
+    assert metadata["standard_logging_guardrail_information"] == [{"guardrail_name": "hook"}, entry]

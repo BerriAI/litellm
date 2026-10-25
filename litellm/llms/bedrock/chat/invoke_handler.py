@@ -22,6 +22,7 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.anthropic.chat.transformation import JsonModeRequest
 from litellm.llms.base_llm import base_model_iterator
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema
+from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -963,7 +964,18 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
         )
 
     def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
-        return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
+        parsed: Final = self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
+        trace: Final = chunk_data.get(BEDROCK_INVOKE_TRACE_FIELD)
+        if not isinstance(trace, dict):
+            return parsed
+        return parsed.model_copy(
+            update={
+                "provider_specific_fields": {
+                    **(parsed.provider_specific_fields or {}),
+                    BEDROCK_INVOKE_TRACE_FIELD: trace,
+                }
+            }
+        )
 
     def _stream_end_chunk(self) -> ModelResponseStream | None:
         return self.anthropic_model_response_iterator.cut_stream_chunk()

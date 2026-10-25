@@ -8,6 +8,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -133,6 +134,9 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
             **acompletion_args,
         )
+        logging_obj: Final = kwargs.get("litellm_logging_obj")
+        if isinstance(litellm_completion_response, ModelResponse) and isinstance(logging_obj, LiteLLMLoggingObj):
+            logging_obj.record_native_bedrock_guardrail(litellm_completion_response)
 
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (

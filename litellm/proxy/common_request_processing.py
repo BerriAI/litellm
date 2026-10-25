@@ -6,6 +6,7 @@ import math
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -303,6 +304,27 @@ async def close_guarded_stream(stream: object) -> None:
             verbose_proxy_logger.warning(
                 "Closing the guarded stream after a client disconnect raised %s", type(e).__name__
             )
+
+
+def _guardrail_entries_for_headers(request_metadata_bucket: dict, logging_obj: LiteLLMLoggingObj) -> tuple[object, ...]:
+    """Guardrail entries the proxy hooks wrote on the request plus the ones the call recorded on its own logging
+    object (a Bedrock deployment's native guardrail trace), each once: the hooks copy theirs into the logging object."""
+    litellm_params: Final = logging_obj.model_call_details.get("litellm_params")
+    logging_metadata: Final = litellm_params.get("metadata") if isinstance(litellm_params, dict) else None
+    entries: Final = tuple(
+        chain.from_iterable(
+            _guardrail_entries(metadata.get("standard_logging_guardrail_information"))
+            for metadata in (request_metadata_bucket, logging_metadata)
+            if isinstance(metadata, dict)
+        )
+    )
+    return tuple(entry for index, entry in enumerate(entries) if entry not in entries[:index])
+
+
+def _guardrail_entries(raw: object) -> tuple[object, ...]:
+    if isinstance(raw, (list, tuple)):
+        return tuple(raw)
+    return (raw,) if isinstance(raw, dict) else ()
 
 
 def resolve_litellm_call_id(client_call_id: str | None) -> str:
@@ -3235,9 +3257,10 @@ class ProxyBaseLLMRequestProcessing:
             if is_unbilled_non_inference_call_from_params(logging_obj.call_type, logging_obj.litellm_params, response)
             else computed_cost_for_headers
         )
+        logging_obj.record_native_bedrock_guardrail(response)
         _, request_metadata_bucket = get_or_create_metadata_bucket(self.data)
         guardrail_cost_for_headers: Final = guardrail_information_cost(
-            request_metadata_bucket.get("standard_logging_guardrail_information")
+            _guardrail_entries_for_headers(request_metadata_bucket, logging_obj)
         )
         response_cost_for_headers: Final = (
             (llm_cost_for_headers if isinstance(llm_cost_for_headers, (int, float)) else 0.0)
