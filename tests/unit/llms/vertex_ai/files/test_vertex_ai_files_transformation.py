@@ -5,7 +5,7 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 
 import json
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock
@@ -17,6 +17,7 @@ from openai.types.file_deleted import FileDeleted
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
     _get_litellm_batch_custom_id_from_labels,
@@ -2069,3 +2070,64 @@ def test_batch_row_for_a_gemini_4_batch_deployment_drops_the_knobs_under_global_
     monkeypatch.setattr(litellm, "drop_params", True)
     (row,) = _wrap_entries([_chat_entry("vertex_ai/gemini-4-zeta", _SAMPLING_KNOBS)])
     assert _generation_config(row) == {"max_output_tokens": 5}
+
+
+def _google_rows_flagged_only_on_vertex(monkeypatch: pytest.MonkeyPatch, model_name: str) -> None:
+    monkeypatch.setitem(litellm.model_cost, f"gemini/{model_name}", {"litellm_provider": "gemini", "mode": "chat"})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"vertex_ai/{model_name}",
+        {"litellm_provider": "vertex_ai", "mode": "chat", "supports_sampling_params": False},
+    )
+
+
+def _upload_rows(entries: Iterable[Mapping[str, object]], deployment_model: str | None) -> list[object]:
+    """The Vertex rows a jsonl upload stores, built through the create-file transform the way the proxy's
+    `?model=<deployment>` branch runs it, with the deployment's model in litellm_params"""
+    jsonl: Final = "\n".join(json.dumps(dict(entry)) for entry in entries).encode()
+    request: Final = VertexAIFilesConfig().transform_create_file_request(
+        model="",
+        create_file_data={"file": ("batch.jsonl", jsonl, "application/jsonl"), "purpose": "batch"},
+        optional_params={},
+        litellm_params={"model": deployment_model} if deployment_model else {},
+    )
+    assert isinstance(request, dict)
+    body: Final = b"".join(request["streaming_media_upload"]["body_stream"].iter_bytes())
+    return [json.loads(line) for line in body.decode().splitlines()]
+
+
+@pytest.mark.parametrize("deployment_model", ["vertex_ai/gemini-zeta-9", None], ids=["proxy_deployment", "sdk_upload"])
+def test_batch_row_keeping_a_gemini_prefix_is_judged_by_its_vertex_row(
+    deployment_model: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row copied from an AI Studio call keeps its `gemini/` prefix but runs on Vertex, so the Vertex row's flag
+    decides. Looked up under that prefix on the Vertex route it found no row and fell open, so the knobs were
+    stored even though the model ignores them"""
+    _google_rows_flagged_only_on_vertex(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(VertexAIError, match=r"temperature, top_p, top_k.*drop_params"):
+        _upload_rows([_chat_entry("gemini/gemini-zeta-9", _SAMPLING_KNOBS)], deployment_model)
+
+
+@pytest.mark.parametrize("deployment_model", ["vertex_ai/gemini-zeta-9", None], ids=["proxy_deployment", "sdk_upload"])
+def test_batch_row_keeping_a_gemini_prefix_drops_the_knobs_under_global_drop_params(
+    deployment_model: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _google_rows_flagged_only_on_vertex(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", True)
+    (row,) = _upload_rows([_chat_entry("gemini/gemini-zeta-9", _SAMPLING_KNOBS)], deployment_model)
+    assert _generation_config(TypeAdapter(Mapping[str, object]).validate_python(row)) == {"max_output_tokens": 5}
+
+
+def test_batch_row_is_judged_by_the_deployment_model_it_runs_on_not_the_id_it_was_written_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stored GCS path binds the batch job to the deployment's model, so a row written for an older id that
+    still takes the knobs is gated for the model that actually executes it"""
+    _google_rows_flagged_only_on_vertex(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setitem(
+        litellm.model_cost, "vertex_ai/gemini-zeta-1", {"litellm_provider": "vertex_ai", "mode": "chat"}
+    )
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(VertexAIError, match=r"gemini-zeta-9 does not support temperature, top_p, top_k"):
+        _upload_rows([_chat_entry("gemini-zeta-1", _SAMPLING_KNOBS)], "vertex_ai/gemini-zeta-9")

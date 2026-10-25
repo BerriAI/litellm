@@ -679,9 +679,28 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
     )
 
 
+_GOOGLE_MODEL_NAMESPACES: Final = ("vertex_ai/", "gemini/")
+
+
+def _configured_deployment_model(litellm_params: Mapping[str, object]) -> str | None:
+    configured_model: Final = litellm_params.get("model")
+    return configured_model if isinstance(configured_model, str) else None
+
+
+def _batch_row_model(deployment_model: str | None, row_model: object) -> str:
+    """The Gemini id a batch row is shaped and gated for: the deployment's model, which the stored GCS path
+    binds the job to, else the row's own id for a direct SDK upload that names no deployment. The Google
+    namespace comes off either way, as ``get_llm_provider`` does for a live call, so a ``gemini/`` id copied
+    from an AI Studio call lands on its Vertex row instead of past every row."""
+    chosen: Final = deployment_model if deployment_model else row_model if isinstance(row_model, str) else ""
+    namespace: Final = next((ns for ns in _GOOGLE_MODEL_NAMESPACES if chosen.startswith(ns)), "")
+    return chosen.removeprefix(namespace)
+
+
 def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_entry: dict[str, Any],
     map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
+    deployment_model: str | None = None,
 ) -> tuple[Mapping[str, object], ...]:
     """
     Transforms a single OpenAI JSONL batch entry into the Vertex rows it maps to.
@@ -701,10 +720,11 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         if _is_responses_batch_entry(openai_entry)
         else openai_request_body
     )
+    row_body: Final = {**chat_request_body, "model": _batch_row_model(deployment_model, chat_request_body.get("model"))}
     vertex_request_body: Final = transform_request_body(
-        messages=map_developer_role_to_system_role(chat_request_body.get("messages", [])),
-        model=chat_request_body.get("model", ""),
-        optional_params=map_openai_to_vertex_params(chat_request_body),
+        messages=map_developer_role_to_system_role(row_body.get("messages", [])),
+        model=row_body["model"],
+        optional_params=map_openai_to_vertex_params(row_body),
         custom_llm_provider="vertex_ai",
         litellm_params={},
         cached_content=None,
@@ -854,15 +874,19 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
         self,
         openai_file_content: FileTypes,
         map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
+        deployment_model: str | None,
     ) -> None:
         self._openai_file_content = openai_file_content
         self._map_openai_to_vertex_params = map_openai_to_vertex_params
+        self._deployment_model = deployment_model
 
     def _iter_vertex_jsonl_chunks(self) -> Iterator[bytes]:
         first = True
         for lineno, entry in _iter_openai_jsonl_entries(self._openai_file_content):
             try:
-                vertex_rows = _openai_batch_jsonl_entry_to_vertex_rows(entry, self._map_openai_to_vertex_params)
+                vertex_rows = _openai_batch_jsonl_entry_to_vertex_rows(
+                    entry, self._map_openai_to_vertex_params, self._deployment_model
+                )
             except Exception as e:
                 raise VertexAIError(
                     status_code=400,
@@ -1047,7 +1071,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         data: CreateFileRequest,
     ) -> str:
         """
@@ -1071,11 +1095,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file is required")
         if purpose is None:
             raise ValueError("purpose is required")
-        configured_model: Final = litellm_params.get("model")
         object_name = self.get_object_name(
             file_data,
             purpose,
-            deployment_model=configured_model if isinstance(configured_model, str) else None,
+            deployment_model=_configured_deployment_model(litellm_params),
             passthrough=is_passthrough_batch_upload(data, litellm_params),
         )
         if object_prefix:
@@ -1131,7 +1154,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         model: str,
         create_file_data: CreateFileRequest,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> bytes | str | dict:
         """
         2 Cases:
@@ -1162,6 +1185,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                     body_stream=_OpenAIToVertexBatchUploadStream(
                         file_data,
                         self._map_openai_to_vertex_params,
+                        _configured_deployment_model(litellm_params),
                     ),
                     content_type="application/json",
                 )
